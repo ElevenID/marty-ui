@@ -113,12 +113,18 @@ async fn signed_ob2_uses_governed_key_but_preserves_badge_reference_resolution()
     let verified = RustCredentialKernel.verify(&input).await.unwrap();
     assert!(verified.verified);
     assert_eq!(verified.claims["badge_id"], "urn:uuid:badge-1");
-    input.token["document_store"]["urn:uuid:badge-1"]["id"] = json!("urn:uuid:forged-badge");
-    input.token["document_store"]["did:example:issuer"]["id"] = json!("did:example:forged");
-    let untrusted_metadata = RustCredentialKernel.verify(&input).await.unwrap();
-    assert!(untrusted_metadata.verified);
-    assert_eq!(untrusted_metadata.claims["badge_id"], "urn:uuid:badge-1");
-    assert_eq!(untrusted_metadata.claims["issuer_id"], "did:example:issuer");
+    for (reference, forged_id) in [
+        ("urn:uuid:badge-1", "urn:uuid:forged-badge"),
+        ("did:example:issuer", "did:example:forged"),
+    ] {
+        input.token["document_store"][reference]["id"] = json!(forged_id);
+        let untrusted_metadata = RustCredentialKernel.verify(&input).await.unwrap();
+        assert!(!untrusted_metadata.verified);
+        assert!(untrusted_metadata.claims.is_empty());
+        input.token["document_store"] = fixture["document_store"].clone();
+    }
+
+    // Check the governed-key failures with otherwise valid reference metadata.
 
     input.trust_profile.as_mut().unwrap().document["resolved_verification_methods"][0]
         ["public_jwk"]["x"] = json!("ebVWLo_mVPlAeLES6KmLp5AfhTrmlb7X4OORC60ElmQ");

@@ -39,6 +39,7 @@ env:
   IMAGE: ghcr.io/elevenid/marty-ui-oss/ui
   SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
   MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
+  OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
   SELFHOST_UI_IMAGE: ghcr.io/elevenid/marty-ui-oss/ui-selfhost
   CLOUDFLARED_WRAPPER_IMAGE: ghcr.io/elevenid/marty-ui-oss/cloudflared-wrapper
 
@@ -58,6 +59,7 @@ jobs:
       ui_digest: ${{ steps.identity.outputs.ui_digest }}
       services_digest: ${{ steps.identity.outputs.services_digest }}
       migrations_digest: ${{ steps.identity.outputs.migrations_digest }}
+      openbao_didcomm_digest: ${{ steps.identity.outputs.openbao_didcomm_digest }}
     steps:
       - name: Download the exact claim or resume checkpoint
         env:
@@ -163,6 +165,7 @@ jobs:
             echo "ui_digest=$(jq -r '.images.ui.digest // ""' release-transaction.json)"
             echo "services_digest=$(jq -r '.images.services.digest // ""' release-transaction.json)"
             echo "migrations_digest=$(jq -r '.images.migrations.digest // ""' release-transaction.json)"
+            echo "openbao_didcomm_digest=$(jq -r '.images.openbao_didcomm.digest // ""' release-transaction.json)"
           } >> "$GITHUB_OUTPUT"
 
       - name: Stage the authenticated transaction for this run
@@ -205,9 +208,6 @@ jobs:
       marty_iso18013_version: ${{ steps.components.outputs.marty_iso18013 }}
       marty_iso18013_uri: ${{ steps.components.outputs.marty_iso18013_uri }}
       marty_iso18013_digest: ${{ steps.components.outputs.marty_iso18013_digest }}
-      marty_common_version: ${{ steps.components.outputs.marty_common }}
-      marty_common_uri: ${{ steps.components.outputs.marty_common_uri }}
-      marty_common_digest: ${{ steps.components.outputs.marty_common_digest }}
       cli_version: ${{ steps.components.outputs.cli }}
       cli_uri: ${{ steps.components.outputs.cli_uri }}
       cli_digest: ${{ steps.components.outputs.cli_digest }}
@@ -263,9 +263,6 @@ jobs:
             echo "marty_iso18013=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .version' "$LOCK_FILE")"
             echo "marty_iso18013_uri=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
             echo "marty_iso18013_digest=$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
-            echo "marty_common=$(jq -er '.components[] | select(.name == "marty-common") | .version' "$LOCK_FILE")"
-            echo "marty_common_uri=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .uri' "$LOCK_FILE")"
-            echo "marty_common_digest=$(jq -er '.components[] | select(.name == "marty-common") | .artifacts[] | select(.type == "python") | .digest' "$LOCK_FILE")"
             echo "cli=$(jq -er '.components[] | select(.name == "marty-cli") | .version' "$LOCK_FILE")"
             echo "cli_uri=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .uri' "$LOCK_FILE")"
             echo "cli_digest=$(jq -er '.components[] | select(.name == "marty-cli") | .artifacts[] | select(.type == "npm") | .digest' "$LOCK_FILE")"
@@ -468,9 +465,6 @@ jobs:
           build-args: |
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ github.sha }}
-            MARTY_COMMON_VERSION=${{ needs.validate-stack.outputs.marty_common_version }}
-            MARTY_COMMON_URI=${{ needs.validate-stack.outputs.marty_common_uri }}
-            MARTY_COMMON_DIGEST=${{ needs.validate-stack.outputs.marty_common_digest }}
             MARTY_RS_VERSION=${{ needs.validate-stack.outputs.marty_rs_version }}
             MARTY_RS_URI=${{ needs.validate-stack.outputs.marty_rs_uri }}
             MARTY_RS_DIGEST=${{ needs.validate-stack.outputs.marty_rs_digest }}
@@ -550,8 +544,74 @@ jobs:
             --source-digest "$SOURCE_SHA" \
             --source-ref refs/heads/main --deny-self-hosted-runners
 
+  build-openbao-didcomm:
+    needs: [validate-stack, resolve-transaction]
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.digest.outputs.digest }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - id: build
+        if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: openbao/didcomm-authcrypt/Dockerfile
+          outputs: type=image,name=${{ env.OPENBAO_DIDCOMM_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+      - id: digest
+        name: Bind the new or previously recorded OpenBao DIDComm digest
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          RECORDED_DIGEST: ${{ needs.resolve-transaction.outputs.openbao_didcomm_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          digest="${RECORDED_DIGEST:-$BUILT_DIGEST}"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        with:
+          subject-name: ${{ env.OPENBAO_DIDCOMM_IMAGE }}
+          subject-digest: ${{ steps.digest.outputs.digest }}
+          push-to-registry: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
+      - if: needs.resolve-transaction.outputs.openbao_didcomm_digest == ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: cosign sign --yes "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+      - name: Verify a resumed OpenBao DIDComm digest
+        if: needs.resolve-transaction.outputs.openbao_didcomm_digest != ''
+        env:
+          DIGEST: ${{ steps.digest.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: >-
+          gh attestation verify
+          "oci://$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+          --repo "$GITHUB_REPOSITORY"
+          --source-digest "$SOURCE_SHA"
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
+
   record-digests:
-    needs: [resolve-transaction, build-ui, build-services]
+    needs: [resolve-transaction, build-ui, build-services, build-openbao-didcomm]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -571,6 +631,7 @@ jobs:
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
         shell: bash
         run: >-
           python scripts/release_transaction.py record-digests
@@ -578,6 +639,7 @@ jobs:
           --digest "ui=$UI_DIGEST"
           --digest "services=$SERVICES_DIGEST"
           --digest "migrations=$MIGRATIONS_DIGEST"
+          --digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"
           --build-run-id "$GITHUB_RUN_ID"
           --output release-transaction.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -588,7 +650,7 @@ jobs:
           retention-days: 90
 
   public-stack-smoke:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, record-digests]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, record-digests]
     runs-on: ubuntu-latest
     env:
       # This deletion candidate must exercise the canonical Rust revocation
@@ -631,6 +693,7 @@ jobs:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         working-directory: marty-ui
         shell: bash
@@ -640,7 +703,8 @@ jobs:
             --arg version "$VERSION" \
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
-            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" '
             .components += [{
               name: "marty-ui",
               repository: "ElevenID/marty-ui",
@@ -654,6 +718,9 @@ jobs:
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
                 {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
@@ -766,6 +833,7 @@ jobs:
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -775,10 +843,12 @@ jobs:
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
             --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
             --arg run_id "$GITHUB_RUN_ID" \
             '{schema:"elevenid.stack-release-public-gate/v1",status:"passed",
               source_sha:$source_sha,run_id:$run_id,
-              images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest}}' \
+              images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
+                      openbao_didcomm:$openbao_didcomm_digest}}' \
             > work/release-evidence/public-stack.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -900,8 +970,119 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
+  native-schema-image-qualification:
+    needs: [resolve-transaction, build-services, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify and qualify exact released Rust schema images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
+          MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$SERVICES_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          [[ "$MIGRATIONS_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          services_image="$SERVICES_IMAGE@$SERVICES_DIGEST"
+          migrations_image="$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST"
+          for image in "$services_image" "$migrations_image"; do
+            gh attestation verify "oci://$image" \
+              --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+          done
+          infra=deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          postgres_image="$(jq -er '.images.postgres.reference' "$infra")"
+          redis_image="$(jq -er '.images.redis.reference' "$infra")"
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python scripts/qualify_selfhost_migrations.py \
+            --migrations-image "$migrations_image" \
+            --services-image "$services_image" \
+            --postgres-image "$postgres_image" \
+            --redis-image "$redis_image" \
+            --openbao-image "$openbao_image" > native-schema.json
+          jq -e --arg migrations "$migrations_image" --arg services "$services_image" '
+            .schema == "marty.selfhost-migrations-qualification/v2" and
+            .migrations_image == $migrations and .services_image == $services and
+            .native_schemas == "verified" and .private_key_storage == "absent" and
+            .profile == "selfhost-production" and .runs == "2"
+          ' native-schema.json >/dev/null
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: native-schema.json
+          if-no-files-found: error
+          retention-days: 90
+
+  didcomm-plugin-image-qualification:
+    needs: [resolve-transaction, build-openbao-didcomm, record-digests]
+    runs-on: ubuntu-latest
+    permissions:
+      attestations: read
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Verify and exercise the exact published OpenBao DIDComm image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$OPENBAO_DIDCOMM_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image="$OPENBAO_DIDCOMM_IMAGE@$OPENBAO_DIDCOMM_DIGEST"
+          gh attestation verify "oci://$image" \
+            --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
+            --source-ref refs/heads/main --deny-self-hosted-runners
+          docker pull "$image"
+          docker run --rm --entrypoint /bin/sh "$image" -ec \
+            'test -x /plugins/openbao-didcomm-authcrypt'
+          export MARTY_OPENBAO_PROBE_IMAGE="$image"
+          python scripts/probe_didcomm_issuance_token.py
+          python scripts/probe_didcomm_openbao_ha.py
+          pwsh ./scripts/test_openbao_raft_recovery.ps1
+          jq -n --arg image "$image" --arg source "$SOURCE_SHA" \
+            '{schema:"marty.stack-didcomm-plugin-qualification/v1",image:$image,
+              source_sha:$source,scoped_token:"passed",raft_failover:"passed",
+              raft_snapshot_recovery:"passed"}' > didcomm-plugin.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
+          path: didcomm-plugin.json
+          if-no-files-found: error
+          retention-days: 90
+
   qualify-release:
-    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential]
+    needs: [resolve-transaction, record-digests, public-stack-smoke, verifier-differential, native-schema-image-qualification, didcomm-plugin-image-qualification]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -924,6 +1105,14 @@ jobs:
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: gates/verifier
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-native-schema-gate-${{ github.run_id }}
+          path: gates/native
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
+          path: gates/didcomm
       - name: Persist exact gate evidence
         shell: bash
         run: |
@@ -933,10 +1122,14 @@ jobs:
           else
             public_digest="sha256:$(sha256sum gates/public/public-stack.json | cut -d' ' -f1)"
             verifier_digest="sha256:$(sha256sum gates/verifier/verifier-differential.json | cut -d' ' -f1)"
+            native_digest="sha256:$(sha256sum gates/native/native-schema.json | cut -d' ' -f1)"
+            didcomm_digest="sha256:$(sha256sum gates/didcomm/didcomm-plugin.json | cut -d' ' -f1)"
             python scripts/release_transaction.py qualify \
               --input transaction/release-transaction.json \
               --gate "public_stack=$GITHUB_RUN_ID:$public_digest" \
               --gate "verifier_differential=$GITHUB_RUN_ID:$verifier_digest" \
+              --gate "native_schema=$GITHUB_RUN_ID:$native_digest" \
+              --gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest" \
               --output release-transaction.json
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -948,7 +1141,7 @@ jobs:
 
   build-selfhost-lock-roles:
     # Explicit official-release preparation only. These digest-only artifacts
-    # cannot be promoted or included in the three-role stack publication.
+    # cannot be promoted or included in the four-role stack publication.
     if: inputs.prepare_selfhost_lock == true
     needs: [resolve-transaction, validate-stack, qualify-release]
     runs-on: ubuntu-latest
@@ -1120,7 +1313,7 @@ jobs:
             --output validated-transaction.json
           jq -e '
             (.state == "qualified" or .state == "promoting" or .state == "promoted")
-            and (.gates | length == 2)
+            and (.gates | length == 4)
           ' validated-transaction.json >/dev/null
           printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
             if type == "object" and length > 0
@@ -1159,7 +1352,8 @@ jobs:
             "$SERVICES_IMAGE@$SERVICES_DIGEST" \
             "$MIGRATIONS_IMAGE@$MIGRATIONS_DIGEST" \
             "$SELFHOST_UI_IMAGE@$UI_DIGEST" \
-            "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST"; do
+            "$CLOUDFLARED_WRAPPER_IMAGE@$CLOUDFLARED_DIGEST" \
+            "$(jq -er '.images.openbao_didcomm | .uri + "@" + .digest' validated-transaction.json)"; do
             gh attestation verify "oci://$image" \
               --repo "$GITHUB_REPOSITORY" --source-digest "$SOURCE_SHA" \
               --source-ref refs/heads/main --deny-self-hosted-runners
@@ -1179,7 +1373,7 @@ jobs:
         run: |
           set -euo pipefail
           docker logout ghcr.io >/dev/null 2>&1 || true
-          jq -r '.services[]' prepared-selfhost-images.json | LC_ALL=C sort -u |
+          jq -r '.services[], .openbao_didcomm_image' prepared-selfhost-images.json | LC_ALL=C sort -u |
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
@@ -1272,7 +1466,7 @@ jobs:
           jq -e '
             (.state == "qualified" or .state == "promoting" or
              .state == "promoted") and
-            (.gates | length == 2)
+            (.gates | length == 4)
           ' "$RUNNER_TEMP/selfhost-consumer-transaction.json" >/dev/null
           python scripts/check_prepared_selfhost_consumer.py \
             --archive prepared/prepared-selfhost-bundle.zip \
@@ -1321,7 +1515,7 @@ jobs:
 
   notify-release-approval:
     # This is a parallel handoff, never a prerequisite for publication.
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -1380,7 +1574,7 @@ jobs:
           This issue comment is only a notification. Approval must happen in the GitHub Actions deployment review."
 
   publish-manifest:
-    needs: [resolve-transaction, validate-stack, build-ui, build-services, qualify-release]
+    needs: [resolve-transaction, validate-stack, build-ui, build-services, build-openbao-didcomm, qualify-release]
     runs-on: ubuntu-latest
     environment: stack-release
     env:
@@ -1495,6 +1689,29 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role migrations --digest "$DIGEST" \
             --output transaction/release-transaction.json
+      - name: Promote the OpenBao DIDComm version tag from its exact qualified digest
+        env:
+          DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          VERSION: ${{ needs.validate-stack.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$SOURCE_SHA"
+          tag_state="$(python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json --role openbao_didcomm)"
+          test "$DIGEST" = "$(jq -er '.images.openbao_didcomm.digest' transaction/release-transaction.json)"
+          if ! jq -e '.promoted_roles | index("openbao_didcomm") != null' transaction/release-transaction.json >/dev/null; then
+            if [ "$tag_state" = absent ]; then
+              docker buildx imagetools create --tag "$OPENBAO_DIDCOMM_IMAGE:$VERSION" "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"
+            else
+              test "$tag_state" = present
+            fi
+            resolved="sha256:$(docker buildx imagetools inspect --raw "$OPENBAO_DIDCOMM_IMAGE:$VERSION" | sha256sum | cut -d' ' -f1)"
+            test "$resolved" = "$DIGEST"
+          fi
+          python scripts/release_transaction.py record-promotion \
+            --input transaction/release-transaction.json --role openbao_didcomm --digest "$DIGEST" \
+            --output transaction/release-transaction.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-promotion-complete-${{ github.run_id }}
@@ -1516,12 +1733,18 @@ jobs:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
+      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+        with:
+          image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
+          format: cyclonedx-json
+          output-file: marty-ui-openbao-didcomm-sbom.cdx.json
       - name: Add immutable UI evidence
         env:
           LOCK_FILE: release/stack-lock.json
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
@@ -1531,7 +1754,8 @@ jobs:
             --arg version "$VERSION" \
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
-            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" '
             .components += [{
               name: "marty-ui",
               repository: "ElevenID/marty-ui",
@@ -1546,6 +1770,9 @@ jobs:
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
                 {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
                  sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-migrations-sbom.cdx.json"),
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
+                 sbom: ("https://github.com/ElevenID/marty-ui/releases/download/v" + $version + "/marty-ui-openbao-didcomm-sbom.cdx.json"),
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
             }]
@@ -1556,7 +1783,7 @@ jobs:
       - name: Sign and checksum manifest evidence
         shell: bash
         run: |
-          for file in stack-manifest.json release-transaction.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json; do
+          for file in stack-manifest.json release-transaction.json marty-ui-sbom.cdx.json marty-ui-services-sbom.cdx.json marty-ui-migrations-sbom.cdx.json marty-ui-openbao-didcomm-sbom.cdx.json; do
             signed=false
             for attempt in 1 2 3 4; do
               rm -f "${file}.sigstore.json"
@@ -1582,6 +1809,7 @@ jobs:
             marty-ui-sbom.cdx.json
             marty-ui-services-sbom.cdx.json
             marty-ui-migrations-sbom.cdx.json
+            marty-ui-openbao-didcomm-sbom.cdx.json
       - name: Create or verify the late annotated source tag
         env:
           CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}

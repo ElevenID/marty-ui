@@ -232,16 +232,11 @@ struct BiometricRequest {
     biometric_type: String,
     template_data_base64: String,
     image_data_base64: Option<String>,
-    #[serde(default = "default_true")]
-    is_live_capture: bool,
     capture_device_id: Option<String>,
 }
 
 fn default_biometric_type() -> String {
     "FACIAL".into()
-}
-const fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Deserialize)]
@@ -450,7 +445,6 @@ async fn enroll_biometric(
                 biometric_type: body.biometric_type,
                 template_data_base64: body.template_data_base64,
                 image_data_base64: body.image_data_base64,
-                is_live_capture: body.is_live_capture,
                 capture_device_id: body.capture_device_id,
                 created_at: Utc::now(),
             },
@@ -1504,7 +1498,9 @@ fn biometric_json(value: &Biometric) -> Value {
         "template_hash": format!("{:x}", Sha256::digest(value.template_data_base64.as_bytes())),
         "hash_algorithm": "sha-256",
         "capture_device": value.capture_device_id,
-        "liveness_verified": value.is_live_capture,
+        // Capture is not a verified liveness proof. A future server-issued
+        // challenge must be checked before this can become true.
+        "liveness_verified": false,
         "status": "ACTIVE",
         "created_at": value.created_at.to_rfc3339(),
     })
@@ -1608,6 +1604,33 @@ async fn metrics() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biometric_enrollment_cannot_assert_unverified_liveness() {
+        let request = json!({
+            "template_data_base64": "aW1hZ2U=",
+            "biometric_type": "FACIAL"
+        });
+        assert!(serde_json::from_value::<BiometricRequest>(request.clone()).is_ok());
+        let mut claimed = request;
+        claimed["is_live_capture"] = json!(true);
+        assert!(serde_json::from_value::<BiometricRequest>(claimed).is_err());
+
+        let biometric = Biometric {
+            id: "bio-1".into(),
+            applicant_id: "applicant-1".into(),
+            biometric_type: "FACIAL".into(),
+            template_data_base64: "aW1hZ2U=".into(),
+            image_data_base64: None,
+            capture_device_id: None,
+            created_at: Utc::now(),
+        };
+        assert_eq!(biometric_json(&biometric)["liveness_verified"], false);
+        assert!(serde_json::to_value(biometric)
+            .expect("biometric serialization")
+            .get("is_live_capture")
+            .is_none());
+    }
 
     #[test]
     fn review_events_require_a_gateway_request_uuid() {

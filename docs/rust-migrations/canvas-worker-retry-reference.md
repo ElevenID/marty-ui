@@ -43,8 +43,8 @@ not this scenario's retry requirement. Earlier preliminary capture A is diagnost
 only; final captures C/D use the stable range projection. No jitter source or
 transport policy is mocked or weakened.
 
-`worker_retry_reference_matches_published_process` is required by the configured
-CI runner. Reference validation passed 7 entries in 75.92 seconds: all
+At the original capture checkpoint, `worker_retry_reference_matches_published_process`
+was required by the configured CI runner. Reference validation passed 7 entries in 75.92 seconds: all
 three reference regenerations and startup, plus three Linux-only parent/helper
 entries that do not establish native HTTPS execution on Windows. The 36 unrelated
 entries were filtered here; fresh full Linux CI remains required. Strict lint,
@@ -57,6 +57,11 @@ and preserves all original durable-state and issued-row assertions. The new
 `worker_retry_matches_frozen_published_process` parent is mandatory in full Linux
 CI; compilation is not an execution pass. Neither frozen expectations nor runtime
 behavior were changed to implement this replay.
+
+The later K8 hardening batch retires that live Python regeneration test and its
+preparer/capture selector. The native five-stage gate remains mandatory, with
+the frozen scenario and corpus bytes pinned by the tier inventory. Hosted
+exact-head qualification of this retirement is still pending.
 
 This proves neither every retry/header form nor OAuth refresh/remote revocation,
 active-I/O shutdown, lease races or full privacy behavior. Continue the complete

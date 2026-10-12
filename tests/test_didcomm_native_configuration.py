@@ -9,7 +9,7 @@ import yaml
 
 
 ROOT = Path(__file__).resolve().parents[1]
-AUTHCRYPT = "docker-compose.profile.didcomm-native-authcrypt.yml"
+AUTHCRYPT = "docker-compose.profile.issuance-native-authcrypt.yml"
 CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 
 
@@ -115,22 +115,49 @@ def test_initiation_binding_guard_rejects_consumer_drift(service, key, value) ->
 
 def test_native_authcrypt_mount_is_exact_read_only_and_explicit() -> None:
     overlay = yaml.safe_load((ROOT / AUTHCRYPT).read_text())
-    assert set(overlay) == {"services"}
-    assert set(overlay["services"]) == {"issuance-native"}
+    assert set(overlay) == {"services", "volumes", "x-native-issuance-policy"}
+    assert set(overlay["services"]) == {"openbao", "openbao-init", "issuance-native"}
     native = overlay["services"]["issuance-native"]
-    assert set(native) == {"environment", "volumes"}
+    assert set(native) == {"environment", "volumes", "depends_on"}
     assert native["environment"] == {
-        "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+        "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+        "DIDCOMM_KMS_ADDR": "http://openbao:8200",
+        "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
     }
-    assert native["volumes"] == [
-        {
-            "type": "bind",
-            "source": "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}",
-            "target": "/run/secrets/didcomm-authcrypt",
-            "read_only": True,
-            "bind": {"create_host_path": False},
-        }
+    assert [mount["target"] for mount in native["volumes"]] == [
+        "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+        "/run/secrets/didcomm-kms",
     ]
+    assert native["volumes"][0]["read_only"] is True and native["volumes"][0][
+        "bind"
+    ] == {"create_host_path": False}
+    assert native["volumes"][1] == {
+        "type": "volume",
+        "source": "didcomm_issuance_token",
+        "target": "/run/secrets/didcomm-kms",
+        "read_only": True,
+    }
+    assert (
+        native["depends_on"]["openbao-init"]["condition"]
+        == "service_completed_successfully"
+    )
+    assert overlay["volumes"] == {"didcomm_issuance_token": None}
+    assert (
+        overlay["services"]["openbao-init"]["environment"][
+            "DIDCOMM_KMS_PLUGIN_REQUIRED"
+        ]
+        == "true"
+    )
+    assert (
+        overlay["services"]["openbao-init"]["environment"][
+            "DIDCOMM_ISSUANCE_TOKEN_FILE"
+        ]
+        == "/run/didcomm-token/openbao-token"
+    )
+    assert (
+        overlay["services"]["openbao"]["image"]
+        == overlay["services"]["openbao-init"]["image"]
+    )
 
 
 def test_native_conformance_trust_and_host_access_are_explicit() -> None:
@@ -176,10 +203,12 @@ def test_native_profiles_follow_the_explicit_conformance_owner() -> None:
     assert all(
         AUTHCRYPT not in part and CONFORMANCE not in part for part in legacy_command
     )
-    legacy = yaml.safe_load(
-        (ROOT / "docker-compose.profile.didcomm-authcrypt.yml").read_text()
-    )
-    assert set(legacy["services"]) == {"issuance"}
+    with pytest.raises(ValueError, match="requires the native"):
+        stack["compose_command"](
+            "marty-conformance-reference",
+            issuance_owner="legacy",
+            include_didcomm_authcrypt=True,
+        )
 
 
 def test_native_compose_gate_is_required_before_image_builds() -> None:
@@ -210,7 +239,7 @@ def test_configured_native_policy_retains_missing_issuer_fail_closed_guard() -> 
         encoding="utf-8"
     )
     loader = source.split("fn load_active_policy(", 1)[1].split(
-        "fn decode_sender_private_key(", 1
+        "fn preflight_plaintext(", 1
     )[0]
     assert "active.ok_or(NativeDidcommError::EncryptionPolicyUnavailable)" in loader
     assert "fn configured_policy_requires_the_active_issuer()" in source
@@ -219,25 +248,11 @@ def test_configured_native_policy_retains_missing_issuer_fail_closed_guard() -> 
 @pytest.mark.parametrize(
     "mutation", ("policy", "source", "writable", "auto-create", "unrelated-service")
 )
-def test_pairing_and_full_model_guards_reject_configuration_loss(mutation) -> None:
+def test_native_kms_and_full_model_guards_reject_configuration_loss(mutation) -> None:
     gate = runpy.run_path(str(ROOT / "scripts/test_didcomm_native_compose.py"))
-    previous = {
-        "services": {
-            "issuance": {
-                "environment": {
-                    "DIDCOMM_ENCRYPTION_POLICY_FILE": gate["POLICY_TARGET"]
-                    + "/didcomm-encryption-policy.json"
-                },
-                "volumes": [
-                    gate["mount"](gate["POLICY_DIRECTORY"], gate["POLICY_TARGET"])
-                ],
-            },
-            "issuance-native": {"environment": {}},
-            "gateway": {"environment": {"UNCHANGED": "synthetic"}},
-        },
-    }
+    _, _, previous = _source_initiation_model()
     expected = gate["expected_model"](previous, authcrypt=True, conformance=False)
-    gate["assert_native_policy_pairing"](expected)
+    gate["assert_native_kms_policy"](expected)
     actual = deepcopy(expected)
     native = actual["services"]["issuance-native"]
     if mutation == "policy":
@@ -249,9 +264,8 @@ def test_pairing_and_full_model_guards_reject_configuration_loss(mutation) -> No
     elif mutation == "auto-create":
         native["volumes"][0]["bind"]["create_host_path"] = True
     else:
-        actual["services"]["gateway"]["environment"]["UNCHANGED"] = "changed"
+        actual["services"]["gateway"]["volumes"] = [deepcopy(native["volumes"][0])]
     with pytest.raises(AssertionError):
         gate["assert_model"](actual, expected)
-    if mutation != "unrelated-service":
-        with pytest.raises(gate["DidcommConfigurationError"]):
-            gate["assert_native_policy_pairing"](actual)
+    with pytest.raises(gate["DidcommConfigurationError"]):
+        gate["assert_native_kms_policy"](actual)

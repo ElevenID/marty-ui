@@ -1,11 +1,13 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
 use marty_organization::{
+    migration::{migrate_organization_schema, validate_organization_schema},
     organization_core_router,
     organization_proto::organization_service_server::OrganizationServiceServer,
-    postgres::PostgresOrganizationStore, reconcile_organization_startup, EventStreamTransport,
-    MembershipPolicy, OrganizationApplication, OrganizationCache, OrganizationDependency,
-    OrganizationGrpcService, OrganizationHttpState, OrganizationRuntime, OrganizationServiceConfig,
+    postgres::PostgresOrganizationStore,
+    reconcile_organization_startup, EventStreamTransport, MembershipPolicy,
+    OrganizationApplication, OrganizationCache, OrganizationDependency, OrganizationGrpcService,
+    OrganizationHttpState, OrganizationRuntime, OrganizationServiceConfig,
     ORGANIZATION_CEDAR_SCHEMA,
 };
 use mmf_data::{CacheBackend, CacheConfig, RedisCache};
@@ -26,6 +28,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
+
+    let arguments: Vec<String> = std::env::args().skip(1).collect();
+    if let [command] = arguments.as_slice() {
+        if command == "migrate" || command == "verify-owned-schema" {
+            let database_url = std::env::var("DATABASE_URL")?;
+            let pool = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(&database_url)
+                .await?;
+            if command == "migrate" {
+                migrate_organization_schema(&pool).await?;
+            } else {
+                validate_organization_schema(&pool).await?;
+            }
+            pool.close().await;
+            return Ok(());
+        }
+    }
+    if !arguments.is_empty() {
+        return Err("unsupported Organization command".into());
+    }
 
     let config = OrganizationServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid Organization configuration");

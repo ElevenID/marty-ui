@@ -74,17 +74,21 @@ def validate_model(model: dict, images: dict[str, str], image: str,
             "Signing runtime Compose model is invalid")
     baseline = deepcopy(model)
     service = baseline["services"].pop("signing-keys", None)
-    secret = baseline["secrets"].pop("issuance_api_key", None)
-    require(isinstance(service, dict) and isinstance(secret, dict),
+    signing_secrets = {
+        name: baseline["secrets"].pop(name, None)
+        for name in ("issuance_api_key", "signing_service_key", "signing_issuer_key",
+                     "sign_grant_verify_token", "signing_keys_openbao_token")
+    }
+    require(isinstance(service, dict) and all(isinstance(item, dict) for item in signing_secrets.values()),
             "Signing runtime service or secret is missing")
     migrations.validate_scoped_model(baseline, images, secret_dir, install_root,
                                      project)
-    require(set(secret) == {"name", "file"}
-            and secret["name"] == f"{project}_issuance_api_key"
-            and isinstance(secret["file"], str)
-            and Path(secret["file"]).resolve() ==
-            (secret_dir / "issuance_api_key").resolve(),
-            "Signing runtime API key is not disposable")
+    for name, secret in signing_secrets.items():
+        require(set(secret) == {"name", "file"}
+                and secret["name"] == f"{project}_{name}"
+                and isinstance(secret["file"], str)
+                and Path(secret["file"]).resolve() == (secret_dir / name).resolve(),
+                "Signing runtime credential is not disposable")
     require(service == {
         "image": image,
         "platform": "linux/amd64",
@@ -96,14 +100,20 @@ def validate_model(model: dict, images: dict[str, str], image: str,
             "MARTY_RELEASE_VERSION": "scoped-probe",
             "SIGNING_KEYS_SERVICE_PORT": "8017",
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/issuance_api_key",
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE": "/run/secrets/signing_service_key",
+            "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE": "/run/secrets/signing_issuer_key",
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/run/secrets/sign_grant_verify_token",
             "SIGNING_KEYS_REDIS_URL": "redis://redis:6379/2",
             "BAO_ADDR": "http://openbao:8200",
-            "BAO_TOKEN_FILE": "/run/secrets/bao_service_token",
+            "BAO_TOKEN_FILE": "/run/secrets/signing_keys_openbao_token",
             "PUBLIC_DOMAIN": "migration.invalid",
         },
         "secrets": [
             {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"},
-            {"source": "bao_service_token", "target": "/run/secrets/bao_service_token"},
+            {"source": "signing_service_key", "target": "/run/secrets/signing_service_key"},
+            {"source": "signing_issuer_key", "target": "/run/secrets/signing_issuer_key"},
+            {"source": "sign_grant_verify_token", "target": "/run/secrets/sign_grant_verify_token"},
+            {"source": "signing_keys_openbao_token", "target": "/run/secrets/signing_keys_openbao_token"},
         ],
         "depends_on": {
             "redis": {"condition": "service_healthy", "required": True},
@@ -145,13 +155,16 @@ def run_signing_runtime(
     run: Callable[..., subprocess.CompletedProcess[str]], *,
     images: dict[str, str], image: str, install_root: Path,
 ) -> dict:
-    api_key = secret_dir / "issuance_api_key"
-    api_key.write_text(secrets.token_hex(32), encoding="ascii")
-    if os.name == "posix":
-        api_key.chmod(0o600)
-    require(api_key.read_text(encoding="ascii") !=
-            (secret_dir / "bao_service_token").read_text(encoding="ascii"),
-            "Signing API key must differ from OpenBao token")
+    values = [(secret_dir / name).read_text(encoding="ascii")
+              for name in ("bao_service_token", "signing_keys_openbao_token",
+                           "sign_grant_verify_token")]
+    for name in ("issuance_api_key", "signing_service_key", "signing_issuer_key"):
+        path = secret_dir / name
+        path.write_text(secrets.token_hex(32), encoding="ascii")
+        if os.name == "posix":
+            path.chmod(0o600)
+        values.append(path.read_text(encoding="ascii"))
+    require(len(set(values)) == len(values), "Signing credentials must be distinct")
     runtime_env = {**environment, "PROBE_SERVICES_IMAGE": image}
     runtime_compose = [*compose, "-f", str(COMPOSE)]
     rendered = migrations._checked(

@@ -22,6 +22,13 @@ services:
       ALLOWED_REDIRECT_URIS: ${ALLOWED_REDIRECT_URIS:-}
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
+      BAO_ADDR: http://openbao:8200
+      ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-credential-grant/token
+      ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
+      ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-readiness-grant/token
+      ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-passport-grant/token
+      SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
       PASSPORT_NATIVE_HTTP_ENABLED: ${PASSPORT_NATIVE_HTTP_ENABLED:-false}
       PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED: ${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}
       PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED: ${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}
@@ -29,17 +36,13 @@ services:
       PASSPORT_KMS_CALLBACKS_ENABLED: ${PASSPORT_KMS_CALLBACKS_ENABLED:-false}
       PASSPORT_TENANT_API_KEYS: ${PASSPORT_TENANT_API_KEYS:-}
       PASSPORT_TENANT_API_KEYS_FILE: ${PASSPORT_TENANT_API_KEYS_FILE:-}
-      PHYSICAL_DOCUMENT_ARTIFACT_KEY: ${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}
-      ICAO_DOCUMENT_SIGNER_URL: ${ICAO_DOCUMENT_SIGNER_URL:-}
-      ICAO_DOCUMENT_SIGNER_API_KEY: ${ICAO_DOCUMENT_SIGNER_API_KEY:-}
-      PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED: ${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       PERSONALIZATION_BUREAU_API_KEY: ${PERSONALIZATION_BUREAU_API_KEY:-}
       PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}
-      PERSONALIZATION_BUREAU_WEBHOOK_SECRET: ${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}
       TOKEN_HMAC_KEY: ${TOKEN_HMAC_KEY:-dev-only-token-hmac-key-change-me}
-      INTEGRATION_SECRET_MASTER_KEY: ${INTEGRATION_SECRET_MASTER_KEY:-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=}
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       ORG_GRPC_TARGET: organization:9002
       CT_GRPC_TARGET: credential-template:9003
@@ -98,6 +101,13 @@ services:
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
+    secrets:
+      - dev_integration_secret_ca
+    volumes:
+      - openbao_issuance_credential_grant:/bao/issuance-credential-grant:ro
+      - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
+      - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant:ro
+      - openbao_issuance_passport_grant:/bao/issuance-passport-grant:ro
     networks:
       - marty-network
   gateway:

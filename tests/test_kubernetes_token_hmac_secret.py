@@ -90,6 +90,8 @@ def harness(tmp_path):
         "REGISTRY_HOST": "registry.example.invalid",
         "IMAGE_PULL_SECRET_NAME": "synthetic-pull-secret",
         "FLOW_WEBHOOK_SECRET": "synthetic-flow-webhook-at-least-thirty-two-bytes",
+        "SIGNING_KEYS_WORKLOAD_SERVER_CERT": "synthetic-signing-keys-server-certificate",
+        "SIGNING_KEYS_WORKLOAD_SERVER_KEY": "synthetic-signing-keys-server-private-key",
         "PYTHONPATH": str(ROOT / "packages"),
     }
     if os.name == "nt":
@@ -99,6 +101,30 @@ def harness(tmp_path):
             env.setdefault(
                 entry["env"], "synthetic-required-value-at-least-thirty-two-bytes"
             )
+    env["DEVICE_REGISTRATION_GATEWAY_KEY"] = (
+        "synthetic-distinct-device-gateway-key-at-least-thirty-two-bytes"
+    )
+    env["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = (
+        "synthetic-distinct-device-signing-key-at-least-thirty-two-bytes"
+    )
+    env["ISSUANCE_API_KEY"] = "synthetic-distinct-issuance-api-key-at-least-thirty-two-bytes"
+    env["SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"] = (
+        "synthetic-distinct-service-sign-gateway-key-at-least-thirty-two-bytes"
+    )
+    env["SIGNING_KEYS_ISSUER_SIGN_KEY"] = (
+        "synthetic-distinct-issuer-sign-key-at-least-thirty-two-bytes"
+    )
+    for role in (
+        "FLOW_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN",
+        "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN",
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN",
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN",
+    ):
+        env[role] = f"synthetic-distinct-{role.lower()}-credential"
     env.pop("TOKEN_HMAC_KEY")
     prelude = r"""
 set -euo pipefail
@@ -136,7 +162,7 @@ kubectl() {
       [[ "$4" == synthetic-pull-secret ]] || return 92 ;;
     create:secret:generic)
       case "$4" in
-        marty-secrets|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
+        marty-secrets|signing-keys-integration-secret-server-tls|signing-keys-integration-secret-ca|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
         *) return 93 ;;
       esac ;;
     apply:-f:-) [[ $# == 3 ]] || return 94 ;;
@@ -193,6 +219,32 @@ def applications(calls):
     ]
 
 
+@pytest.mark.parametrize(
+    "first,second",
+    [
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "GATEWAY_SIGN_GRANT_MINT_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN"),
+        ("GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
+        ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_OPENBAO_TOKEN"),
+        ("SIGNING_KEYS_GRANT_VERIFY_TOKEN", "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"),
+    ],
+)
+def test_signing_grant_roles_reject_shared_openbao_credentials(harness, first, second):
+    shared = f"synthetic-shared-{first.lower()}-credential"
+    result, calls = harness({"TOKEN_HMAC_KEY": TOKEN, first: shared, second: shared})
+    assert result.returncode != 0
+    assert "must be distinct" in result.stderr or "must differ" in result.stderr
+    assert not applications(calls)
+
+
 @pytest.mark.parametrize("source", ["environment", "file", "empty-env-with-file"])
 def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     if source == "environment":
@@ -223,7 +275,7 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-        == 9
+        == 11
     )
 
 

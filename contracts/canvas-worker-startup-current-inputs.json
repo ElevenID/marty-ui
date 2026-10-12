@@ -1,10 +1,10 @@
 {
-  "schema": "marty.canvas-worker-startup-current-inputs/v1",
-  "purpose": "Current repository source-input inventory only. The single-cycle child is a conditional potential input, not executed by the eight current startup scenarios. These hashes do not attest the historical startup corpus, qualify a release, or authorize skipping a live oracle.",
+  "schema": "marty.canvas-worker-startup-current-inputs/v2",
+  "purpose": "Current repository inputs for the native startup replay. Full-main attestation additionally binds the checked-out commit, compiled worker and test executable, image fixture, and successful real-process/database assertions.",
   "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
   "sha256": {
+    "contracts/canvas-worker-startup-expected.json": "21cf8bfe0555f92e4f4891fa2866a872e1aa4cba0f3f267e87a620e95a52627f",
     "contracts/canvas-worker-startup-scenarios.json": "7459f28b9e878ed8a228375af54fc958e82b597ef4b152f0efd129089133d8f6",
-    "scripts/run_canvas_worker_single_cycle.py": "0019ef98065d5db1e356a140cd6dfb09bb351211bcd61beb934c82315357f6c0",
-    "scripts/run_canvas_worker_startup_oracle.py": "93147a1fe03cce598c380a5f9ceb1b366699b79063392fb299c52adb33512e37"
+    "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs": "09c122125c0ed2629478ed16b98af6af5087d9f3e17eff8a9f8d48825aaaad7a"
   }
 }

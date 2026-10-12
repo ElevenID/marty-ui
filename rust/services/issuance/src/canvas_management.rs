@@ -21,6 +21,8 @@ const REVIEW_NOTES_MAX: usize = 4_000;
 
 #[derive(Debug, Error, PartialEq)]
 pub enum CanvasRequestValidationError {
+    #[error("Canvas request contains private key material")]
+    PrivateMaterial,
     #[error("{field} must not be empty")]
     Empty { field: &'static str },
     #[error("{field} must contain at most {max} characters")]
@@ -255,7 +257,7 @@ pub enum CanvasDeliveryMode {
     WalletPlusCanvasMirror,
 }
 
-#[derive(Debug, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct CanvasProgramBindingRequest {
     pub application_template_id: String,
@@ -293,6 +295,11 @@ impl CanvasProgramBindingRequest {
 
 impl ValidateCanvasRequest for CanvasProgramBindingRequest {
     fn validate(&self) -> Result<(), CanvasRequestValidationError> {
+        let value = serde_json::to_value(self)
+            .map_err(|_| CanvasRequestValidationError::PrivateMaterial)?;
+        if marty_key_material_policy::contains_private_key(&value) {
+            return Err(CanvasRequestValidationError::PrivateMaterial);
+        }
         validate_required(
             "application_template_id",
             &self.application_template_id,
@@ -430,7 +437,7 @@ impl fmt::Debug for CanvasIntegrationSecretCreate {
             .field("provider", &self.provider)
             .field("purpose", &self.purpose)
             .field("secret_value", &self.secret_value)
-            .field("metadata", &self.metadata)
+            .field("metadata", &"[REDACTED]")
             .field("enabled", &self.enabled)
             .finish()
     }
@@ -438,6 +445,11 @@ impl fmt::Debug for CanvasIntegrationSecretCreate {
 
 impl ValidateCanvasRequest for CanvasIntegrationSecretCreate {
     fn validate(&self) -> Result<(), CanvasRequestValidationError> {
+        if marty_key_material_policy::contains_private_key_map(&self.metadata)
+            || crate::integration_secret::contains_private_key_value(self.secret_value.expose())
+        {
+            return Err(CanvasRequestValidationError::PrivateMaterial);
+        }
         validate_required(
             "organization_id",
             &self.organization_id,
@@ -469,13 +481,29 @@ pub struct CanvasIntegrationSecretUpdate {
     pub enabled: Option<bool>,
 }
 
+impl ValidateCanvasRequest for CanvasIntegrationSecretUpdate {
+    fn validate(&self) -> Result<(), CanvasRequestValidationError> {
+        if self
+            .metadata
+            .as_ref()
+            .is_some_and(marty_key_material_policy::contains_private_key_map)
+            || self.secret_value.as_ref().is_some_and(|value| {
+                crate::integration_secret::contains_private_key_value(value.expose())
+            })
+        {
+            return Err(CanvasRequestValidationError::PrivateMaterial);
+        }
+        Ok(())
+    }
+}
+
 impl fmt::Debug for CanvasIntegrationSecretUpdate {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("CanvasIntegrationSecretUpdate")
             .field("name", &self.name)
             .field("secret_value", &self.secret_value)
-            .field("metadata", &self.metadata)
+            .field("metadata", &"[REDACTED]")
             .field("enabled", &self.enabled)
             .finish()
     }
@@ -594,6 +622,26 @@ mod tests {
     }
 
     #[test]
+    fn binding_rejects_private_material_and_accepts_remote_secret_reference() {
+        let mut value = json!({
+            "application_template_id": "application-template",
+            "evidence_requirements": [evidence_requirement()],
+            "canvas_scope": {"course_id": "-----BEGIN PRIVATE KEY-----synthetic-----END PRIVATE KEY-----"}
+        });
+        let request: CanvasProgramBindingRequest = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            request.validate(),
+            Err(CanvasRequestValidationError::PrivateMaterial)
+        );
+        value["canvas_scope"]["course_id"] = json!("course-1");
+        value["canvas_credentials"] = json!({
+            "api_token_secret_id": "transit/keys/canvas-token-v4"
+        });
+        let request: CanvasProgramBindingRequest = serde_json::from_value(value).unwrap();
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
     fn evidence_enforces_closed_enums_lengths_and_score_range() {
         let invalid_enum = json!({
             "source": "caller_plugin",
@@ -623,7 +671,8 @@ mod tests {
             "name": "Canvas client",
             "provider": "canvas",
             "purpose": "api_token",
-            "secret_value": "do-not-log-me"
+            "secret_value": "do-not-log-me",
+            "metadata": {"audit_note": "do-not-log-metadata"}
         }))
         .unwrap();
         assert_eq!(
@@ -635,7 +684,59 @@ mod tests {
         );
         let debug = format!("{request:?}");
         assert!(!debug.contains("do-not-log-me"));
+        assert!(!debug.contains("do-not-log-metadata"));
         assert!(debug.contains("[REDACTED]"));
+        let update: CanvasIntegrationSecretUpdate = serde_json::from_value(json!({
+            "metadata": {"audit_note": "do-not-log-update-metadata"}
+        }))
+        .unwrap();
+        assert!(!format!("{update:?}").contains("do-not-log-update-metadata"));
+    }
+
+    #[test]
+    fn integration_secret_requests_reject_private_keys_and_keep_api_tokens() {
+        let create = |secret_value, metadata| -> CanvasIntegrationSecretCreate {
+            serde_json::from_value(json!({
+                "organization_id": "org-1",
+                "name": "Canvas client",
+                "provider": "canvas_credentials",
+                "purpose": "api_token",
+                "secret_value": secret_value,
+                "metadata": metadata
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            create("-----BEGIN PRIVATE KEY-----", json!({})).validate(),
+            Err(CanvasRequestValidationError::PrivateMaterial)
+        );
+        assert_eq!(
+            create(
+                "ordinary-api-token",
+                json!({"private_jwk": {"kty": "EC", "d": "synthetic"}})
+            )
+            .validate(),
+            Err(CanvasRequestValidationError::PrivateMaterial)
+        );
+        assert!(create(
+            "ordinary-api-token",
+            json!({"key_reference": "transit/keys/canvas-v4"})
+        )
+        .validate()
+        .is_ok());
+        let update: CanvasIntegrationSecretUpdate = serde_json::from_value(json!({
+            "secret_value": "{\"kty\":\"OKP\",\"d\":\"synthetic\"}"
+        }))
+        .unwrap();
+        assert_eq!(
+            update.validate(),
+            Err(CanvasRequestValidationError::PrivateMaterial)
+        );
+        let update: CanvasIntegrationSecretUpdate = serde_json::from_value(json!({
+            "metadata": {"key_reference": "transit/keys/canvas-v4"}
+        }))
+        .unwrap();
+        assert!(update.validate().is_ok());
     }
 
     #[test]

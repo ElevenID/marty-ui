@@ -4,7 +4,7 @@ use crate::{
         NotificationTemplate, NotificationType, Subscription, WebhookDelivery, WebhookEndpoint,
     },
     outbox::WebhookOutboxEvent,
-    repository::{NotificationRepository, RepositoryError},
+    repository::{reject_private_record, NotificationRepository, RepositoryError},
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -75,12 +75,9 @@ fn compose_notification_data(item: &Notification) -> Result<Value, RepositoryErr
 }
 
 fn row_notification(row: PgRow) -> Result<Notification, RepositoryError> {
-    let mut data = row
-        .try_get::<Value, _>("data")
-        .map_err(database)?
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
+    let stored_data: Value = row.try_get("data").map_err(database)?;
+    reject_private_record(&stored_data)?;
+    let mut data = stored_data.as_object().cloned().unwrap_or_default();
     let metadata = data
         .remove("__mip")
         .and_then(|value| value.as_object().cloned())
@@ -167,6 +164,8 @@ fn row_template(row: PgRow) -> Result<NotificationTemplate, RepositoryError> {
 }
 
 fn row_subscription(row: PgRow) -> Result<Subscription, RepositoryError> {
+    let stored_filter: Value = row.try_get("filter_config").map_err(database)?;
+    reject_private_record(&stored_filter)?;
     Ok(Subscription {
         id: row.try_get("id").map_err(database)?,
         organization_id: row.try_get("organization_id").map_err(database)?,
@@ -176,12 +175,7 @@ fn row_subscription(row: PgRow) -> Result<Subscription, RepositoryError> {
             row.try_get::<Value, _>("event_types").map_err(database)?,
         )
         .map_err(invalid)?,
-        filter_config: row
-            .try_get::<Value, _>("filter_config")
-            .map_err(database)?
-            .as_object()
-            .cloned()
-            .unwrap_or_default(),
+        filter_config: stored_filter.as_object().cloned().unwrap_or_default(),
         retry_policy: serde_json::from_value(
             row.try_get::<Value, _>("retry_policy").map_err(database)?,
         )
@@ -238,6 +232,8 @@ fn row_delivery(row: PgRow) -> Result<WebhookDelivery, RepositoryError> {
 }
 
 fn row_outbox(row: PgRow) -> Result<WebhookOutboxEvent, RepositoryError> {
+    let stored_payload: Value = row.try_get("payload").map_err(database)?;
+    reject_private_record(&stored_payload)?;
     Ok(WebhookOutboxEvent {
         id: row.try_get("id").map_err(database)?,
         organization_id: row.try_get("organization_id").map_err(database)?,
@@ -245,12 +241,7 @@ fn row_outbox(row: PgRow) -> Result<WebhookOutboxEvent, RepositoryError> {
         subscription_id: row.try_get("subscription_id").map_err(database)?,
         event_id: row.try_get("event_id").map_err(database)?,
         event_type: row.try_get("event_type").map_err(database)?,
-        payload: row
-            .try_get::<Value, _>("payload")
-            .map_err(database)?
-            .as_object()
-            .cloned()
-            .unwrap_or_default(),
+        payload: stored_payload.as_object().cloned().unwrap_or_default(),
         max_attempts: row.try_get("max_attempts").map_err(database)?,
         initial_backoff_seconds: row.try_get("initial_backoff_seconds").map_err(database)?,
         max_backoff_seconds: row.try_get("max_backoff_seconds").map_err(database)?,
@@ -270,6 +261,7 @@ fn row_outbox(row: PgRow) -> Result<WebhookOutboxEvent, RepositoryError> {
 #[async_trait]
 impl NotificationRepository for PgNotificationRepository {
     async fn save_notification(&self, item: Notification) -> Result<(), RepositoryError> {
+        reject_private_record(&item)?;
         sqlx::query("INSERT INTO notification_service.notifications (id,organization_id,recipient_id,recipient_email,recipient_phone,notification_type,template_id,subject,body,severity,link,data,status,priority,attempts,last_attempt_at,delivered_at,error_message,created_at,scheduled_at,read_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) ON CONFLICT(id) DO UPDATE SET organization_id=EXCLUDED.organization_id,recipient_id=EXCLUDED.recipient_id,recipient_email=EXCLUDED.recipient_email,recipient_phone=EXCLUDED.recipient_phone,notification_type=EXCLUDED.notification_type,template_id=EXCLUDED.template_id,subject=EXCLUDED.subject,body=EXCLUDED.body,severity=EXCLUDED.severity,link=EXCLUDED.link,data=EXCLUDED.data,status=EXCLUDED.status,priority=EXCLUDED.priority,attempts=EXCLUDED.attempts,last_attempt_at=EXCLUDED.last_attempt_at,delivered_at=EXCLUDED.delivered_at,error_message=EXCLUDED.error_message,scheduled_at=EXCLUDED.scheduled_at,read_at=EXCLUDED.read_at")
             .bind(&item.id).bind(&item.organization_id).bind(&item.recipient_id).bind(&item.recipient_email).bind(&item.recipient_phone).bind(type_name(item.notification_type))
             .bind(&item.template_id).bind(&item.subject).bind(&item.body).bind(&item.severity).bind(&item.link).bind(compose_notification_data(&item)?)
@@ -349,6 +341,7 @@ impl NotificationRepository for PgNotificationRepository {
         rows.into_iter().map(row_template).collect()
     }
     async fn save_subscription(&self, item: Subscription) -> Result<(), RepositoryError> {
+        reject_private_record(&item)?;
         sqlx::query("INSERT INTO notification_service.subscriptions (id,organization_id,name,description,event_types,delivery_channel,filter_config,retry_policy,delivery_target_id,enabled,created_at,updated_at) VALUES ($1,$2,$3,$4,$5,'WEBHOOK',$6,$7,$8,$9,$10,$11) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,event_types=EXCLUDED.event_types,delivery_channel=EXCLUDED.delivery_channel,filter_config=EXCLUDED.filter_config,retry_policy=EXCLUDED.retry_policy,delivery_target_id=EXCLUDED.delivery_target_id,enabled=EXCLUDED.enabled,updated_at=EXCLUDED.updated_at")
             .bind(item.id).bind(item.organization_id).bind(item.name).bind(item.description).bind(json!(item.event_types)).bind(Value::Object(item.filter_config)).bind(json!(item.retry_policy)).bind(item.delivery_target_id).bind(item.enabled).bind(item.created_at).bind(item.updated_at).execute(&self.pool).await.map_err(database)?;
         Ok(())
@@ -434,6 +427,7 @@ impl NotificationRepository for PgNotificationRepository {
         &self,
         item: WebhookOutboxEvent,
     ) -> Result<bool, RepositoryError> {
+        reject_private_record(&item)?;
         let result=sqlx::query("INSERT INTO notification_service.webhook_outbox (id,organization_id,webhook_id,subscription_id,event_id,event_type,payload,max_attempts,initial_backoff_seconds,max_backoff_seconds,status,attempt_count,next_attempt_at,lease_token,lease_expires_at,delivered_at,last_error_code,response_status_code,created_at,expires_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) ON CONFLICT(event_id,subscription_id,webhook_id) DO NOTHING") .bind(item.id).bind(item.organization_id).bind(item.webhook_id).bind(item.subscription_id).bind(item.event_id).bind(item.event_type).bind(Value::Object(item.payload)).bind(item.max_attempts).bind(item.initial_backoff_seconds).bind(item.max_backoff_seconds).bind(item.status).bind(item.attempt_count).bind(item.next_attempt_at).bind(item.lease_token).bind(item.lease_expires_at).bind(item.delivered_at).bind(item.last_error_code).bind(item.response_status_code).bind(item.created_at).bind(item.expires_at).execute(&self.pool).await.map_err(database)?;
         Ok(result.rows_affected() == 1)
     }

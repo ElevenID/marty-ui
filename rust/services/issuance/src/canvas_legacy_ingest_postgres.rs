@@ -329,6 +329,31 @@ async fn commit_atomic(
     snapshot: &CanvasLegacyApplicationSnapshot,
     commit: &CanvasLegacyCommit,
 ) -> Result<CanvasLegacyCommitOutcome, CanvasLegacyIngestError> {
+    if marty_key_material_policy::contains_private_key_map(&commit.application)
+        || [
+            &commit.fact,
+            &commit.safe_fact,
+            &commit.mip_primitives,
+            &commit.evidence,
+            &commit.evidence_submission,
+        ]
+        .into_iter()
+        .any(marty_key_material_policy::contains_private_key)
+        || commit
+            .requirements
+            .iter()
+            .any(marty_key_material_policy::contains_private_key)
+        || commit
+            .evaluated_policy_decision
+            .as_ref()
+            .is_some_and(marty_key_material_policy::contains_private_key)
+        || commit
+            .policy_decision
+            .as_ref()
+            .is_some_and(marty_key_material_policy::contains_private_key)
+    {
+        return Err(CanvasLegacyIngestError::RepositoryUnavailable);
+    }
     let mut database = pool.begin().await.map_err(legacy_repository_error)?;
     let claimed = sqlx::query(
         "INSERT INTO issuance_service.canvas_event_receipts (
@@ -819,6 +844,9 @@ async fn insert_legacy_event(
     metadata: Value,
     created_at: DateTime<Utc>,
 ) -> Result<(), CanvasLegacyIngestError> {
+    if marty_key_material_policy::contains_private_key(&metadata) {
+        return Err(CanvasLegacyIngestError::RepositoryUnavailable);
+    }
     sqlx::query(
         "INSERT INTO issuance_service.issuance_events (
             id, transaction_id, application_id, event_type, metadata, created_at

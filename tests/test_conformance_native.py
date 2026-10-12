@@ -155,53 +155,98 @@ def test_token_capacity_is_paired_without_rejecting_legacy_zero(rate):
 )
 def test_beta_shared_setting_guard_accepts_only_source_derived_deltas(fault):
     import runpy
+    import yaml
 
     gate = runpy.run_path(
         str(native.ROOT / "scripts/test_conformance_native_compose.py")
     )
-    previous = model()
-    previous["services"]["issuance"]["environment"]["TOKEN_RATE_LIMIT"] = "1200"
-    previous["services"]["issuance-native"]["environment"]["DATABASE_URL"] = (
-        "postgresql+asyncpg://marty:synthetic@postgres:5432/marty"
-    )
-    for setting in gate["SHARED_SETTING_REPAIRS"]:
-        previous["services"]["issuance"]["environment"].setdefault(
-            setting,
-            "false" if setting == "CANVAS_MIRROR_WORKER_ENABLED" else f"synthetic-{setting.lower()}",
+
+    def source(path):
+        return yaml.safe_load((native.ROOT / path).read_text(encoding="utf-8"))
+
+    common = gate["complete_common"](source(gate["COMMON"]), source(gate["RUNTIME"]))
+    approved = source(gate["APPROVED_COMMON"])
+    base = source("docker-compose.base.yml")
+
+    def check():
+        gate["assert_native_inputs"](common, base)
+        assert common == approved, (
+            "Shared native service changed outside the KMS-only model"
         )
-        previous["services"]["issuance-native"]["environment"].pop(setting, None)
-    actual = deepcopy(previous)
-    actual["services"]["issuance-native"]["environment"]["DATABASE_URL"] = (
-        "postgresql://marty:synthetic@postgres:5432/marty"
-    )
-    for setting in gate["SHARED_SETTING_REPAIRS"]:
-        actual["services"]["issuance-native"]["environment"][setting] = previous[
-            "services"
-        ]["issuance"]["environment"].get(setting, f"synthetic-{setting.lower()}")
-    gate["assert_beta_shared_setting_repairs"](previous, actual)
+
+    check()
+    current = common["services"]["issuance-native"]["environment"]
     if fault == "rate":
-        actual["services"]["issuance-native"]["environment"]["TOKEN_RATE_LIMIT"] = "30"
+        current["TOKEN_RATE_LIMIT"] = "${TOKEN_RATE_LIMIT:-1200}"
     elif fault == "authorization":
-        actual["services"]["issuance-native"]["environment"][
-            "ISSUANCE_AUTH_SESSION_TTL_MINUTES"
-        ] = "different"
+        current["ISSUANCE_AUTH_SESSION_TTL_MINUTES"] = "different"
     elif fault == "mirror-setting":
-        actual["services"]["issuance-native"]["environment"][
-            "CANVAS_MIRROR_WORKER_BATCH_LIMIT"
-        ] = "different"
+        current["CANVAS_MIRROR_WORKER_BATCH_LIMIT"] = "different"
     elif fault == "missing-mirror":
-        actual["services"]["issuance-native"]["environment"].pop(
-            "CANVAS_MIRROR_WORKER_BATCH_LIMIT"
-        )
+        current.pop("CANVAS_MIRROR_WORKER_BATCH_LIMIT")
     elif fault == "other-field":
-        actual["services"]["gateway"]["environment"]["ISSUANCE_API_KEY"] = "changed"
+        current["UNREVIEWED_SETTING"] = "synthetic"
     elif fault == "rewritten-before":
-        previous["services"]["issuance-native"]["environment"][
-            "ALLOWED_REDIRECT_URIS"
-        ] = "already-present"
+        base["services"]["issuance"]["environment"]["ALLOWED_REDIRECT_URIS"] = (
+            "different"
+        )
     if fault:
         with pytest.raises(AssertionError):
-            gate["assert_beta_shared_setting_repairs"](previous, actual)
+            check()
+
+
+@pytest.mark.parametrize("owner", ["issuance", "issuance-native"])
+@pytest.mark.parametrize(
+    "secret_source",
+    ["INTEGRATION_SECRET_MASTER_KEY", "INTEGRATION_SECRET_MASTER_KEY_FILE"],
+)
+def test_native_conformance_rejects_local_master_key_sources(owner, secret_source):
+    value = model()
+    value["services"][owner]["environment"][secret_source] = "synthetic-forbidden"
+    with pytest.raises(ValueError, match="Local integration-secret master-key custody"):
+        native.validate_model(
+            value, project=PROJECT, authcrypt=False, local_build=False
+        )
+
+
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing-url",
+        "downgraded-url",
+        "missing-ca",
+        "missing-mount",
+        "reused-key",
+        "missing-issuer-key",
+        "reused-issuer-key",
+    ],
+)
+def test_native_conformance_requires_remote_envelope_custody(fault):
+    value = model()
+    service = value["services"]["issuance-native"]
+    environment = service["environment"]
+    if fault == "missing-url":
+        environment.pop("INTEGRATION_SECRET_KMS_URL")
+    elif fault == "downgraded-url":
+        environment["INTEGRATION_SECRET_KMS_URL"] = "http://signing-keys:8017/internal"
+    elif fault == "missing-ca":
+        environment.pop("INTEGRATION_SECRET_KMS_CA_FILE")
+    elif fault == "missing-mount":
+        service["secrets"] = []
+    elif fault == "reused-key":
+        environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] = environment[
+            "ISSUANCE_API_KEY"
+        ]
+    elif fault == "missing-issuer-key":
+        environment.pop("SIGNING_KEYS_ISSUER_SIGN_KEY")
+    elif fault == "reused-issuer-key":
+        environment["SIGNING_KEYS_ISSUER_SIGN_KEY"] = environment[
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY"
+        ]
+    with pytest.raises(ValueError, match="Native remote"):
+        native.validate_model(
+            value, project=PROJECT, authcrypt=False, local_build=False
+        )
 
 
 def model(*, local=False, authcrypt=False):
@@ -211,7 +256,6 @@ def model(*, local=False, authcrypt=False):
             "DATABASE_URL",
             "TOKEN_HMAC_KEY",
             "ISSUANCE_API_KEY",
-            "INTEGRATION_SECRET_MASTER_KEY",
             "SIGNING_KEYS_INTERNAL_URL",
             "SIGNING_KEYS_INTERNAL_API_KEY",
             "ORG_GRPC_TARGET",
@@ -253,7 +297,20 @@ def model(*, local=False, authcrypt=False):
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
     }
     candidate = {
-        "environment": {**env, "SERVICE_NAME": "issuance_native"},
+        "environment": {
+            **env,
+            "SERVICE_NAME": "issuance_native",
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY": "synthetic-dedicated-integration-secret-key-00000001",
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": "synthetic-dedicated-issuer-sign-key-0000000000001",
+            "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+            "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
+        },
+        "secrets": [
+            {
+                "source": "dev_integration_secret_ca",
+                "target": "/run/secrets/dev_integration_secret_ca",
+            }
+        ],
         "volumes": [ca],
         "entrypoint": ["/app/services/entrypoint.sh"],
         "command": [],
@@ -266,6 +323,12 @@ def model(*, local=False, authcrypt=False):
             "postgres": {"condition": "service_healthy"},
         },
     }
+    legacy["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://signing-keys:8017/internal"
+    )
+    candidate["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
+        "http://gateway:8000/internal/signing-keys"
+    )
     if local:
         candidate["build"] = {
             "dockerfile": "services/Dockerfile",
@@ -274,39 +337,85 @@ def model(*, local=False, authcrypt=False):
     else:
         candidate["pull_policy"] = "always"
     if authcrypt:
-        for service in (legacy, candidate):
-            service["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = (
-                "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
-            )
-            service["volumes"].append(
+        candidate["environment"].update(
+            {
+                "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
+                "DIDCOMM_KMS_ADDR": "http://openbao:8200",
+                "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
+            }
+        )
+        candidate["volumes"].extend(
+            {
+                "type": "bind",
+                "source": f"/synthetic/policy/{name}",
+                "target": f"/run/secrets/didcomm-authcrypt/{name}",
+                "read_only": True,
+                "bind": {"create_host_path": False},
+            }
+            for name in ("didcomm-encryption-policy.json",)
+        )
+        candidate["volumes"].append(
+            {
+                "type": "volume",
+                "source": "didcomm_issuance_token",
+                "target": "/run/secrets/didcomm-kms",
+                "read_only": True,
+            }
+        )
+        candidate["depends_on"]["openbao-init"] = {
+            "condition": "service_completed_successfully"
+        }
+    services = {
+        **{
+            name: {"environment": {"GRPC_SERVICE_TOKEN": env["GRPC_SERVICE_TOKEN"]}}
+            for name in native.TOKEN_CONSUMERS
+        },
+        "issuance": legacy,
+        "issuance-native": candidate,
+        "gateway": {
+            "image": IMAGE,
+            "environment": {
+                "GRPC_SERVICE_TOKEN": env["GRPC_SERVICE_TOKEN"],
+                "ISSUANCE_NATIVE_SERVICE_URL": native.NATIVE_URL,
+                "ISSUANCE_SERVICE_URL": native.LEGACY_URL,
+                "ISSUANCE_API_KEY": "synthetic",
+                "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic",
+            },
+            "depends_on": {"issuance-native": {"condition": "service_healthy"}},
+        },
+    }
+    if authcrypt:
+        plugin_image = "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
+        services["openbao"] = {
+            "image": plugin_image,
+            "command": ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"],
+            "volumes": [
                 {
                     "type": "bind",
-                    "source": "/synthetic/policy",
-                    "target": "/run/secrets/didcomm-authcrypt",
+                    "source": "/synthetic/docker/openbao-didcomm-dev.hcl",
+                    "target": "/bao/config/didcomm-plugin.hcl",
                     "read_only": True,
                     "bind": {"create_host_path": False},
                 }
-            )
-    return {
-        "services": {
-            **{
-                name: {"environment": {"GRPC_SERVICE_TOKEN": env["GRPC_SERVICE_TOKEN"]}}
-                for name in native.TOKEN_CONSUMERS
-            },
-            "issuance": legacy,
-            "issuance-native": candidate,
-            "gateway": {
-                "image": IMAGE,
-                "environment": {
-                    "GRPC_SERVICE_TOKEN": env["GRPC_SERVICE_TOKEN"],
-                    "ISSUANCE_NATIVE_SERVICE_URL": native.NATIVE_URL,
-                    "ISSUANCE_SERVICE_URL": native.LEGACY_URL,
-                    "ISSUANCE_API_KEY": "synthetic",
-                    "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic",
-                },
-                "depends_on": {"issuance-native": {"condition": "service_healthy"}},
-            },
+            ],
         }
+        services["openbao-init"] = {
+            "image": plugin_image,
+            "environment": {
+                "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
+                "DIDCOMM_ISSUANCE_TOKEN_FILE": "/run/didcomm-token/openbao-token",
+            },
+            "volumes": [
+                {
+                    "type": "volume",
+                    "source": "didcomm_issuance_token",
+                    "target": "/run/didcomm-token",
+                }
+            ],
+        }
+    return {
+        "services": services,
+        "volumes": {"didcomm_issuance_token": {}} if authcrypt else {},
     }
 
 
@@ -324,8 +433,9 @@ def test_explicit_owner_pairs_files_and_models(local, authcrypt):
     for path in (stack.NATIVE_FILE, stack.NATIVE_CA_FILE):
         assert sum(item.endswith(path) for item in files) == 1
     assert any(item.endswith(stack.NATIVE_IMAGES_FILE) for item in files) is (not local)
-    for path in (stack.DIDCOMM_AUTHCRYPT_FILE, stack.NATIVE_AUTHCRYPT_FILE):
-        assert any(item.endswith(path) for item in files) is authcrypt
+    assert (
+        any(item.endswith(stack.DIDCOMM_AUTHCRYPT_FILE) for item in files) is authcrypt
+    )
     native.validate_model(
         model(local=local, authcrypt=authcrypt),
         project=PROJECT,

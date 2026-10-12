@@ -17,11 +17,16 @@ def test_consumer_preflight_exact_artifact_and_fail_closed_model(tmp_path, monke
     image = "example.org/app@sha256:" + "a" * 64
     lock = tmp_path / "lock.json"
     lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
-                                "release": "marty-ui@1.2.3", "services": {"app": image}}))
+                                "release": "marty-ui@1.2.3",
+                                "openbao_didcomm_image": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64,
+                                "services": {"app": image}}))
     transaction = tmp_path / "transaction.json"
     transaction.write_text("{}")
     files = {".marty-selfhost-images.json": lock.read_bytes(),
              "asset.txt": b"downloaded asset",
+             "docker-compose.selfhost.openbao.yml": (
+                 "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+                 "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode(),
              "docker-compose.yml": f"services:\n  app:\n    image: {image}\n".encode()}
     inventory = {"schema": "marty.selfhost-bundle-files/v1", "directories": [""],
                  "files": {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}}

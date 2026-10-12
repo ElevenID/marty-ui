@@ -761,9 +761,10 @@ def collect(
     oci = [item for item in artifacts if isinstance(item, dict)
            and item.get("type") == "oci"]
     images = {item.get("uri"): item.get("digest") for item in oci}
-    require(len(oci) == 3 and len(images) == 3 and set(images) == {
+    require(len(oci) == 4 and len(images) == 4 and set(images) == {
         "ghcr.io/elevenid/marty-ui-oss/ui", "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
     } and all(isinstance(value, str) and DIGEST.fullmatch(value) is not None
               for value in images.values()), "Released UI image roles are incomplete")
     signed = attest(manifest_path, images, source_commit)

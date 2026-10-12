@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from scripts import check_passport_beta_fence_authority as authority
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.probe_passport_beta_host import HostProbeError
-
 
 HEAD = "a" * 40
 TAG_OBJECT = "b" * 40
@@ -349,6 +354,15 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     planned_dir.mkdir()
     manifest = planned_dir / "stack-manifest.json"
     def component(name: str, repository: str) -> dict:
+        if name in CORE_WHEEL_PREFIXES:
+            prefix = CORE_WHEEL_PREFIXES[name]
+            return {
+                "name": name, "repository": "ElevenID/marty-core",
+                "commit": CORE_REVISION, "version": CORE_VERSION,
+                "artifacts": [{"type": "python",
+                               "uri": f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl",
+                               "digest": DIGEST}],
+            }
         return {
             "name": name, "repository": repository, "commit": "3" * 40,
             "version": "1.0.0", "artifacts": [{
@@ -364,7 +378,6 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             component("marty-core-python", "ElevenID/marty-core"),
             component("marty-verification-python", "ElevenID/marty-core"),
             component("marty-iso18013-python", "ElevenID/marty-core"),
-            component("marty-common", "ElevenID/Marty"),
             component("marty-cli", "ElevenID/marty-cli"),
             component("marty-integration-tests", "ElevenID/marty-integration-tests"),
             {**component("marty-credentials-issuance", "ElevenID/marty-credentials"),
@@ -391,7 +404,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         component for component in planned["components"]
         if component["name"] != "marty-credentials-issuance"
     ]
-    planned["components"][-1]["artifacts"][1]["digest"] = "sha256:" + "4" * 64
+    next(artifact for artifact in planned["components"][-1]["artifacts"]
+         if artifact["uri"] == "ghcr.io/elevenid/marty-ui-oss/services")["digest"] = "sha256:" + "5" * 64
     manifest.write_text(json.dumps(planned), encoding="utf-8")
     (planned_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
     (baseline_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
@@ -537,7 +551,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
             "ui_service": {"configured_image":
-                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "3" * 64},
+                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "4" * 64},
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
             "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
@@ -548,7 +562,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     target["beta"]["services"].update({
         "issuance": {"configured_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64},
-        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64}
+        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "3" * 64}
            for name in ("gateway", "flow", "issuance-native", "signing-keys")},
     })
     return approval, manifest, values, target, runner
@@ -565,8 +579,7 @@ def test_authority_plan_binds_all_four_sources(
     assert plan["deployed_beta_baseline"]["source_commit"] == "9" * 40
     assert plan["source"]["services_image"] != plan["deployed_beta_baseline"]["services_image"]
     assert plan["source"]["signed_manifest_verified"] is True
-    assert plan["source"]["build_only_artifacts"]["MARTY_COMMON_URI"] == (
-        "https://example.test/artifact.whl")
+    assert "MARTY_COMMON_URI" not in plan["source"]["build_only_artifacts"]
     assert plan["source"]["build_only_artifacts"]["MARTY_RS_DIGEST"] == DIGEST
     assert plan["credentials_deletion_head"] == DELETION_HEAD
     assert plan["target_observation_sha256"] == OBSERVATION
@@ -649,6 +662,19 @@ def test_hidden_worktree_change_cannot_replace_verifier(
 ) -> None:
     approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
     (authority.ROOT / "scripts/sql/passport-beta-fence-verify.sql").write_text(
+        "altered", encoding="utf-8"
+    )
+    with pytest.raises(HostProbeError, match="content differs"):
+        authority.check_authority(approval, manifest, values["baseline"], runner, lambda: target,
+                                  lambda path, digests, commit: True,
+                                  lambda image, commit, version: True)
+
+
+def test_hidden_worktree_change_cannot_replace_kms_release_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    approval, manifest, values, target, runner = fixture(tmp_path, monkeypatch)
+    (authority.ROOT / "scripts/kms_core_release.py").write_text(
         "altered", encoding="utf-8"
     )
     with pytest.raises(HostProbeError, match="content differs"):

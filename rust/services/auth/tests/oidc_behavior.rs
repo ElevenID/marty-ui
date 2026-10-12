@@ -4,14 +4,10 @@ use std::{
 };
 
 use async_trait::async_trait;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use chrono::Utc;
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use marty_auth::{
     KeycloakOidcProvider, OidcAuthorizationRequest, OidcCodeExchange, OidcConfig, OidcHttpClient,
     OidcLogoutRequest, OidcProvider, PortError,
 };
-use p256::{elliptic_curve::sec1::ToEncodedPoint as _, pkcs8::EncodePrivateKey as _, SecretKey};
 use serde_json::{json, Value};
 use url::Url;
 
@@ -87,35 +83,13 @@ fn provider(http: Arc<FakeHttp>) -> KeycloakOidcProvider {
 }
 
 fn signed_token() -> (String, Value) {
-    let secret = SecretKey::from_slice(&[7_u8; 32]).expect("valid deterministic test key");
-    let public = secret.public_key().to_encoded_point(false);
-    let kid = "provider-key-1";
-    let jwk = json!({
-        "kty": "EC",
-        "crv": "P-256",
-        "alg": "ES256",
-        "use": "sig",
-        "key_ops": ["verify"],
-        "kid": kid,
-        "x": URL_SAFE_NO_PAD.encode(public.x().expect("x coordinate")),
-        "y": URL_SAFE_NO_PAD.encode(public.y().expect("y coordinate"))
-    });
-    let now = Utc::now().timestamp();
-    let claims = json!({
-        "iss": "https://identity.example/realms/marty",
-        "sub": "user-1",
-        "email": "alice@example.com",
-        "aud": "marty-ui",
-        "exp": now + 300,
-        "iat": now - 10,
-        "nonce": "nonce-1"
-    });
-    let mut header = Header::new(Algorithm::ES256);
-    header.kid = Some(kid.to_owned());
-    let der = secret.to_pkcs8_der().expect("PKCS#8 key");
-    let token =
-        encode(&header, &claims, &EncodingKey::from_ec_der(der.as_bytes())).expect("signed token");
-    (token, json!({"keys": [jwk]}))
+    let fixture: Value = serde_json::from_str(include_str!("fixtures/oidc_public_id_token.json"))
+        .expect("public OIDC ID token fixture");
+    let token = fixture["id_token"]
+        .as_str()
+        .expect("signed public ID token")
+        .to_owned();
+    (token, fixture["jwks"].clone())
 }
 
 #[test]
@@ -143,6 +117,7 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
         query.get("prompt").map(AsRef::as_ref),
         Some("consent login")
     );
+    assert_eq!(query.get("max_age").map(AsRef::as_ref), Some("0"));
     assert_eq!(
         query.get("code_challenge_method").map(AsRef::as_ref),
         Some("S256")
@@ -163,6 +138,9 @@ fn authorization_registration_and_logout_urls_preserve_keycloak_contract() {
         "/realms/marty/protocol/openid-connect/registrations"
     );
     assert!(!registration.query_pairs().any(|(name, _)| name == "prompt"));
+    assert!(!registration
+        .query_pairs()
+        .any(|(name, _)| name == "max_age"));
 
     let logout = provider
         .logout_url(&OidcLogoutRequest {

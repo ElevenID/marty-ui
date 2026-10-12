@@ -5,7 +5,6 @@ use axum::{
     body::{to_bytes, Body},
     http::{Request, StatusCode},
 };
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{TimeZone, Utc};
 use marty_issuance_service::{
     credential_management::{
@@ -25,7 +24,6 @@ use marty_issuance_service::{
     },
     oid4vci_management_http,
 };
-use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -247,14 +245,12 @@ async fn response(request: Request<Body>, app: axum::Router) -> (StatusCode, Val
 }
 
 fn public_jwks() -> Value {
-    let public = SecretKey::from_slice(&[7_u8; 32])
-        .unwrap()
-        .public_key()
-        .to_encoded_point(false);
+    let public: Value =
+        serde_json::from_str(include_str!("fixtures/registered_client_p256_public.json")).unwrap();
     json!({"keys":[{
         "kty":"EC", "crv":"P-256", "alg":"ES256", "use":"sig", "kid":"key-a",
-        "x":URL_SAFE_NO_PAD.encode(public.x().unwrap()),
-        "y":URL_SAFE_NO_PAD.encode(public.y().unwrap())
+        "x":public["x"],
+        "y":public["y"]
     }]})
 }
 

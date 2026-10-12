@@ -134,6 +134,8 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `marty_api_client_secret`
 - `issuance_api_key`
 - `grpc_service_token`
+- `device_registration_gateway_key` (distinct random value, at least 32 characters)
+- `device_registration_signing_keys_key` (separate random value, at least 32 characters)
 - `workload_identity_ca_cert`
 - `pp_workload_server_cert`
 - `pp_workload_server_key`

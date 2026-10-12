@@ -31,9 +31,13 @@ def probe(lock_path: Path) -> dict:
     if any(not isinstance(name, str) or not name or not isinstance(ref, str)
            or EXACT_IMAGE.fullmatch(ref) is None for name, ref in services.items()):
         raise ValueError("self-host image lock requires exact service digests")
+    plugin = lock.get("openbao_didcomm_image")
+    if (not isinstance(plugin, str) or EXACT_IMAGE.fullmatch(plugin) is None
+            or not plugin.startswith("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@")):
+        raise ValueError("self-host image lock requires the exact OpenBao DIDComm image")
 
     platforms = {}
-    for ref in sorted(set(services.values())):
+    for ref in sorted({*services.values(), plugin}):
         try:
             subprocess.run(["docker", "pull", "--platform", "linux/amd64", ref],
                            check=True, capture_output=True, text=True)

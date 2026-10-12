@@ -1,4 +1,4 @@
-# Legacy optional physical bureau callback K8s binding
+# Optional physical bureau callback K8s binding
 
 This opt-in external-provider manifest is outside Marty's Rust-only simulator acceptance and is not deployed by the disposable flow below.
 
@@ -7,13 +7,16 @@ ingress and a separate production-mode KMS callback signer. The normal
 `deploy-kubernetes.sh` path does not apply this opt-in manifest. The Gateway
 provider selector remains false by default.
 
-Provision three distinct Secrets in `marty-prod`: `passport-provider-webhook`
-with key `secret`, `passport-callback-signer-api` with key `api_key`, and
+Import the registered provider's HMAC key into OpenBao with
+`scripts/import_passport_provider_hmac.sh`. Set the returned version as
+`PASSPORT_PROVIDER_HMAC_KEY_VERSION` in `marty-config`. Provision two distinct
+Secrets in `marty-prod`: `passport-callback-signer-api` with key `api_key` and
 `passport-callback-signer-bao-token` with key `token`. Only the signer mounts
-the OpenBao token; only ingress mounts the provider webhook secret. The signer
-API key must be at least 32 characters and differ from both the provider
-secret and ordinary signing credential. Verify the actual token has only the
-`passport-callback-hmac-service` policy and the intended HMAC capability.
+the OpenBao token; ingress never mounts the provider key. The signer API key
+must be at least 32 characters and differ from the ordinary signing
+credential. Verify the actual token has only the
+`passport-provider-callback-service` policy: internal callback HMAC generation
+and provider-key verification, with no provider HMAC generation or key export.
 
 The registered physical provider profile ID in `marty-config`, the native
 `marty-secrets` database URL, and an immutable `MARTY_SERVICES_IMAGE` digest

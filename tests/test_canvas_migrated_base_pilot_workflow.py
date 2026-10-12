@@ -49,6 +49,7 @@ def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> Non
     assert "if" not in group
     assert not group.get("continue-on-error", False)
     assert group["env"] == {
+        "MARTY_CANVAS_OPENBAO_IMAGE": "marty-openbao-didcomm:canvas",
         SWITCH: (
             "${{ github.event_name == 'workflow_dispatch' && "
             "inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas' "

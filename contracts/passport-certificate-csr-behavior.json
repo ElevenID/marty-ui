@@ -3,7 +3,7 @@
   "public_route": {
     "method": "PUT",
     "path": "/v1/signing-keys/issuer-identities/certificate-csr",
-    "authentication": "gateway-authenticated organization context",
+    "authentication": "gateway-authenticated organization context, dedicated issuer action credential, and one-use GatewayIssuerDid OpenBao grant",
     "request_fields": [
       "organization_id",
       "issuer_did",
@@ -22,6 +22,7 @@
     "key_reference_from_active_profile_only": true,
     "reject_unknown_request_fields": true,
     "compare_did_and_current_kms_public_keys": true,
+    "bind_grant_to_profile_resolved_key_and_exact_csr_bytes": true,
     "sign_pkcs10_info_in_kms": true,
     "verify_signature_before_returning_csr": true,
     "private_key_export": false

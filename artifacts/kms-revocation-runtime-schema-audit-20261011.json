@@ -1,0 +1,17 @@
+{
+  "catalog_inventory_sha256": "ece46207d3d856ebabba1302e629e136427122daa7c89c1a5da193d13ba07121",
+  "column_count": 60,
+  "database": "fresh loopback PostgreSQL 16; named marty_revocation_migration_test",
+  "json_text_content_scan": "passed after Rust migration and seed",
+  "limits": [
+    "local source-built executable, not signed release artifact",
+    "other services and runtime writes not exercised by this receipt"
+  ],
+  "migration_executable": "marty-revocation-profile with RP_MIGRATE_ONLY=true",
+  "private_key_catalog_entries": 0,
+  "qualification": "local-disposable-runtime-only",
+  "schema": "marty.kms-revocation-runtime-schema-audit/v1",
+  "table_count": 7,
+  "test_result": "1 passed; 0 failed",
+  "test_target": "marty-revocation-profile --test contracts migration_contract::rust_migrations_bootstrap_and_upgrade_the_released_schema -- --ignored --exact"
+}

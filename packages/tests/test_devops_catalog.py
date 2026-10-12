@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+import yaml
+
 from marty_devops import DeploymentCatalog
 
 
@@ -46,9 +48,39 @@ def test_selfhost_secret_templates_cover_compose_references():
     required = set(catalog.stacks["selfhost-production"]["required_secrets"])
     assert required <= names
     for name in required:
-        assert (template_dir / name).read_text(encoding="utf-8").strip().startswith(
-            "change-me"
-        )
+        placeholder = (template_dir / name).read_text(encoding="utf-8").strip()
+        assert placeholder.lower().replace("_", "-").startswith("change-me")
+
+
+def test_dedicated_service_signing_credential_is_mounted_only_on_gateway_and_signing_keys():
+    key = "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY"
+    manifests = [
+        REPO_ROOT / "k8s/oracle/07-microservices.yaml",
+        REPO_ROOT / "k8s/oracle/07b-signing-keys.yaml",
+    ]
+    holders = set()
+    for manifest in manifests:
+        for resource in yaml.safe_load_all(manifest.read_text(encoding="utf-8")):
+            if not isinstance(resource, dict) or resource.get("kind") != "Deployment":
+                continue
+            for container in resource["spec"]["template"]["spec"]["containers"]:
+                if any(item.get("name") == key for item in container.get("env", [])):
+                    holders.add(resource["metadata"]["name"])
+    assert holders == {"gateway", "signing-keys"}
+
+
+def test_issuer_signing_credential_is_only_on_signing_workloads():
+    key = "SIGNING_KEYS_ISSUER_SIGN_KEY"
+    holders = set()
+    for name in ("07-microservices.yaml", "07a-issuance-native.yaml", "07b-signing-keys.yaml"):
+        manifest = REPO_ROOT / "k8s/oracle" / name
+        for resource in yaml.safe_load_all(manifest.read_text(encoding="utf-8")):
+            if not isinstance(resource, dict) or resource.get("kind") != "Deployment":
+                continue
+            for container in resource["spec"]["template"]["spec"]["containers"]:
+                if any(item.get("name") == key for item in container.get("env", [])):
+                    holders.add(resource["metadata"]["name"])
+    assert holders == {"gateway", "signing-keys", "issuance", "issuance-native", "canvas-sync-worker", "flow"}
 
 
 def test_selfhost_example_declares_required_compose_settings():

@@ -1,4 +1,4 @@
-//! Fresh-run evidence only; never a retrofit of the original frozen capture.
+//! Fresh-run evidence for the native startup process and database checks.
 
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -12,9 +12,9 @@ use std::{
 
 const ARTIFACT: &str = "canvas-startup-fresh-run.json";
 const INPUTS: [&str; 3] = [
+    "contracts/canvas-worker-startup-expected.json",
     "contracts/canvas-worker-startup-scenarios.json",
-    "scripts/run_canvas_worker_single_cycle.py",
-    "scripts/run_canvas_worker_startup_oracle.py",
+    "rust/services/issuance/tests/support/canvas_worker_startup_replay.rs",
 ];
 
 pub(super) fn valid_sha(value: &str, length: usize) -> bool {
@@ -29,14 +29,14 @@ pub(super) fn main_run_from(env: impl Fn(&str) -> Option<String>) -> Option<Valu
         return None;
     }
     let required = |name| {
-        env(name).unwrap_or_else(|| panic!("Missing startup attestation run identity: {name}"))
+        env(name).unwrap_or_else(|| panic!("Missing Canvas attestation run identity: {name}"))
     };
     let event = required("GITHUB_EVENT_NAME");
     assert!(matches!(event.as_str(), "schedule" | "workflow_dispatch"));
     let repository = required("GITHUB_REPOSITORY");
     assert_eq!(repository, "ElevenID/marty-ui");
     let sha = required("GITHUB_SHA");
-    assert!(valid_sha(&sha, 40), "Invalid startup attestation main SHA");
+    assert!(valid_sha(&sha, 40), "Invalid Canvas attestation main SHA");
     let run_id = required("GITHUB_RUN_ID");
     let attempt = required("GITHUB_RUN_ATTEMPT");
     assert!(run_id.parse::<u64>().is_ok_and(|number| number > 0));
@@ -62,13 +62,13 @@ fn git_rev_parse(root: &Path, args: &[&str]) -> String {
         .arg("rev-parse")
         .args(args)
         .output()
-        .expect("Startup attestation cannot invoke Git for checkout identity");
+        .expect("Canvas attestation cannot invoke Git for checkout identity");
     assert!(
         output.status.success(),
-        "Startup attestation cannot verify Git checkout identity"
+        "Canvas attestation cannot verify Git checkout identity"
     );
     String::from_utf8(output.stdout)
-        .expect("Startup attestation Git checkout identity is not UTF-8")
+        .expect("Canvas attestation Git checkout identity is not UTF-8")
         .trim()
         .to_owned()
 }
@@ -78,25 +78,25 @@ fn verify_checkout_identity(root: &Path, run: &Value) {
     assert_eq!(
         Path::new(&checkout_root)
             .canonicalize()
-            .expect("Startup attestation Git root is unavailable"),
+            .expect("Canvas attestation Git root is unavailable"),
         root.canonicalize()
-            .expect("Startup attestation repository root is unavailable"),
-        "Startup attestation input root is not the checked-out repository root"
+            .expect("Canvas attestation repository root is unavailable"),
+        "Canvas attestation input root is not the checked-out repository root"
     );
     let head = git_rev_parse(root, &["--verify", "HEAD"]);
     assert!(
         valid_sha(&head, 40),
-        "Invalid startup attestation checkout SHA"
+        "Invalid Canvas attestation checkout SHA"
     );
     assert_eq!(
         run["sha"].as_str(),
         Some(head.as_str()),
-        "Startup attestation GITHUB_SHA does not match checked-out HEAD"
+        "Canvas attestation GITHUB_SHA does not match checked-out HEAD"
     );
 }
 
 pub(super) fn normalized_sha(path: &Path) -> String {
-    let source = fs::read_to_string(path).expect("Startup capture input is missing or not UTF-8");
+    let source = fs::read_to_string(path).expect("Canvas input is missing or not UTF-8");
     format!(
         "{:x}",
         Sha256::digest(source.replace("\r\n", "\n").replace('\r', "\n").as_bytes())
@@ -104,13 +104,13 @@ pub(super) fn normalized_sha(path: &Path) -> String {
 }
 
 pub(super) fn file_sha(path: &Path) -> String {
-    let mut source = File::open(path).expect("Startup attestation executable is unavailable");
+    let mut source = File::open(path).expect("Canvas attestation executable is unavailable");
     let mut digest = Sha256::new();
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let count = source
             .read(&mut buffer)
-            .expect("Startup attestation executable read failed");
+            .expect("Canvas attestation executable read failed");
         if count == 0 {
             break;
         }
@@ -119,31 +119,25 @@ pub(super) fn file_sha(path: &Path) -> String {
     format!("{:x}", digest.finalize())
 }
 
-fn verified_worker_binary_sha(path: &Path, before: &str, resolved: &Path) -> String {
+pub(super) fn verified_worker_binary_sha(path: &Path, before: &str, resolved: &Path) -> String {
     assert!(
         path == resolved,
-        "Startup replay worker binary identity changed"
+        "Native replay worker binary identity changed"
     );
-    assert!(
-        valid_sha(before, 64),
-        "Invalid startup worker binary digest"
-    );
+    assert!(valid_sha(before, 64), "Invalid native worker binary digest");
     let after = file_sha(path);
-    assert!(
-        after == before,
-        "Startup replay worker binary bytes changed"
-    );
+    assert!(after == before, "Native replay worker binary bytes changed");
     after
 }
 
 fn source_inputs(root: &Path, sidecar: &Value) -> BTreeMap<String, String> {
     assert_eq!(
         sidecar["schema"],
-        "marty.canvas-worker-startup-current-inputs/v1"
+        "marty.canvas-worker-startup-current-inputs/v2"
     );
     assert!(sidecar["purpose"]
         .as_str()
-        .is_some_and(|purpose| purpose.contains("do not attest the historical startup corpus")));
+        .is_some_and(|purpose| purpose.contains("native startup replay")));
     let pins = sidecar["sha256"].as_object().expect("Input pins missing");
     assert_eq!(pins.len(), INPUTS.len(), "Unreviewed startup input pins");
     INPUTS
@@ -165,13 +159,7 @@ pub(super) fn image_digest(reference: &Value) -> &str {
     image
 }
 
-fn startup_evidence(
-    root: &Path,
-    observed: &Value,
-    run: Value,
-    executable: &Path,
-    worker_binary_sha: &str,
-) -> Value {
+fn startup_evidence(root: &Path, run: Value, executable: &Path, worker_binary_sha: &str) -> Value {
     let sidecar: Value = serde_json::from_slice(
         &fs::read(root.join("contracts/canvas-worker-startup-current-inputs.json"))
             .expect("Startup input sidecar missing"),
@@ -189,56 +177,45 @@ fn startup_evidence(
     assert!(revisions
         .as_array()
         .is_some_and(|items| items.len() == 1 && items[0] == "merge_issuance_heads"));
-    let corpus = fs::read(root.join("contracts/canvas-worker-startup-oracle.json"))
-        .expect("Frozen startup corpus missing");
-    let expected: Value = serde_json::from_slice(&corpus).expect("Frozen startup corpus invalid");
-    assert_eq!(
-        observed, &expected,
-        "Startup evidence must match the live comparison"
-    );
-    assert_eq!(observed["schema"], "marty.canvas-worker-startup-oracle/v1");
-    assert!(observed["python"]
-        .as_str()
-        .is_some_and(|version| !version.is_empty()));
-    assert!(observed["source_sha256"]
-        .as_object()
-        .is_some_and(|sources| !sources.is_empty()
-            && sources
-                .values()
-                .all(|digest| digest.as_str().is_some_and(|value| valid_sha(value, 64)))));
-    let corpus_sha = format!("{:x}", Sha256::digest(&corpus));
     let scenarios: Value = serde_json::from_slice(
         &fs::read(root.join("contracts/canvas-worker-startup-scenarios.json"))
             .expect("Startup scenarios missing"),
     )
     .expect("Startup scenarios invalid");
-    let conditional_child = scenarios["cases"]
+    let cases = scenarios["cases"]
         .as_array()
-        .expect("Startup cases missing")
+        .expect("Startup cases missing");
+    assert_eq!(cases.len(), 8, "Startup case count changed");
+    let case_names: Vec<&str> = cases
         .iter()
-        .any(|case| case["observe_cycle_result"] == true);
+        .map(|case| case["name"].as_str().expect("Startup case name missing"))
+        .collect();
+    assert_eq!(
+        case_names
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        case_names.len(),
+        "Duplicate startup case name"
+    );
     let executable = file_sha(executable);
     assert!(valid_sha(worker_binary_sha, 64));
     json!({
-        "schema": "marty.canvas-worker-startup-fresh-run/v1",
-        "scope": "fresh live full-main startup comparison and native replay, not original-capture attestation or qualification reuse",
+        "schema": "marty.canvas-worker-startup-fresh-run/v2",
+        "scope": "fresh full-main native worker startup on a published-schema database; no legacy Python worker oracle",
         "workflow_result_required": "success for this run and attempt before external use",
         "run": run,
         "test": "worker_startup_matches_published_process_and_idle_heartbeat",
         "source_inputs_sha256": inputs,
         "input_inventory_sha256": normalized_sha(&root.join("contracts/canvas-worker-startup-current-inputs.json")),
-        "script_graph_sha256": normalized_sha(&root.join("contracts/canvas-worker-oracle-script-imports.json")),
         "image_fixture_sha256": normalized_sha(&root.join("contracts/canvas-worker-consumer-range-oracle.json")),
-        "conditional_child_requested": conditional_child,
-        "corpus_sha256": corpus_sha,
-        "observed_python": observed["python"],
-        "observed_source_sha256": observed["source_sha256"],
+        "case_names": case_names,
         "issuance_image": issuance,
         "postgres_image": postgres,
         "verified_migration_revisions": revisions,
         "test_executable_sha256": executable,
         "worker_binary_sha256": worker_binary_sha,
-        "published_comparison": "passed",
         "native_replay": "passed",
         "owned_cleanup": "passed",
     })
@@ -246,7 +223,6 @@ fn startup_evidence(
 
 pub(super) fn emit_after_startup_pass(
     root: &Path,
-    observed: &Value,
     worker_binary: &Path,
     worker_binary_before: &str,
 ) {
@@ -261,13 +237,7 @@ pub(super) fn emit_after_startup_pass(
     let output = Path::new(&runner_temp).join(ARTIFACT);
     persist_verified_evidence(root, &output, &run, || {
         let executable = std::env::current_exe().expect("Test executable path missing");
-        startup_evidence(
-            root,
-            observed,
-            run.clone(),
-            &executable,
-            &worker_binary_after,
-        )
+        startup_evidence(root, run.clone(), &executable, &worker_binary_after)
     });
 }
 
@@ -286,11 +256,11 @@ fn persist_evidence(output: &Path, evidence: &Value) {
         .write(true)
         .create_new(true)
         .open(output)
-        .expect("Refusing to overwrite startup attestation");
-    serde_json::to_writer_pretty(&mut file, evidence).expect("Startup attestation write failed");
+        .expect("Refusing to overwrite Canvas attestation");
+    serde_json::to_writer_pretty(&mut file, evidence).expect("Canvas attestation write failed");
     file.write_all(b"\n")
-        .expect("Startup attestation write failed");
-    file.sync_all().expect("Startup attestation sync failed");
+        .expect("Canvas attestation write failed");
+    file.sync_all().expect("Canvas attestation sync failed");
 }
 
 #[cfg(test)]
@@ -403,8 +373,8 @@ mod tests {
             })
             .collect();
         let sidecar = json!({
-            "schema": "marty.canvas-worker-startup-current-inputs/v1",
-            "purpose": "These hashes do not attest the historical startup corpus",
+            "schema": "marty.canvas-worker-startup-current-inputs/v2",
+            "purpose": "Inputs to the native startup replay",
             "sha256": pins,
         });
         assert_eq!(source_inputs(root.path(), &sidecar).len(), INPUTS.len());
@@ -428,20 +398,32 @@ mod tests {
     }
 
     #[test]
-    fn evidence_binds_observed_corpus_inputs_images_and_executable() {
+    fn evidence_binds_native_inputs_images_and_executable() {
         let root = tempfile::tempdir().unwrap();
+        let cases: Vec<Value> = (0..8)
+            .map(|index| json!({"name": format!("case_{index}")}))
+            .collect();
         for name in INPUTS {
             let target = root.path().join(name);
             fs::create_dir_all(target.parent().unwrap()).unwrap();
-            fs::write(
-                &target,
-                if name.ends_with(".json") {
-                    "{\"cases\":[{}]}\n"
-                } else {
-                    "# input\n"
-                },
-            )
-            .unwrap();
+            if name.ends_with("-expected.json") {
+                fs::write(
+                    &target,
+                    serde_json::to_vec(
+                        &json!({"schema":"marty.canvas-worker-startup-expected/v1"}),
+                    )
+                    .unwrap(),
+                )
+                .unwrap();
+            } else if name.ends_with(".json") {
+                fs::write(
+                    &target,
+                    serde_json::to_vec(&json!({"cases": &cases})).unwrap(),
+                )
+                .unwrap();
+            } else {
+                fs::write(&target, "# input\n").unwrap();
+            }
         }
         let pins: serde_json::Map<String, Value> = INPUTS
             .iter()
@@ -452,17 +434,11 @@ mod tests {
                 )
             })
             .collect();
-        let sidecar = json!({"schema":"marty.canvas-worker-startup-current-inputs/v1", "purpose":"These hashes do not attest the historical startup corpus", "sha256":pins});
+        let sidecar = json!({"schema":"marty.canvas-worker-startup-current-inputs/v2", "purpose":"Inputs to the native startup replay", "sha256":pins});
         fs::write(
             root.path()
                 .join("contracts/canvas-worker-startup-current-inputs.json"),
             serde_json::to_vec(&sidecar).unwrap(),
-        )
-        .unwrap();
-        fs::write(
-            root.path()
-                .join("contracts/canvas-worker-oracle-script-imports.json"),
-            b"{}",
         )
         .unwrap();
         let image = format!("issuance@sha256:{}", "a".repeat(64));
@@ -473,56 +449,27 @@ mod tests {
             serde_json::to_vec(&fixture).unwrap(),
         )
         .unwrap();
-        let observed = json!({"schema":"marty.canvas-worker-startup-oracle/v1", "python":"3.12.13", "source_sha256":{"worker":"c".repeat(64)}, "cases":[]});
-        let corpus = serde_json::to_vec(&observed).unwrap();
-        fs::write(
-            root.path()
-                .join("contracts/canvas-worker-startup-oracle.json"),
-            &corpus,
-        )
-        .unwrap();
         let executable = root.path().join("executable");
         fs::write(&executable, b"abc").unwrap();
         let worker_binary = root.path().join("worker-binary");
         fs::write(&worker_binary, b"independent worker bytes").unwrap();
         let worker_sha = file_sha(&worker_binary);
         let run = json!({"sha":"d".repeat(40), "run_id":"12"});
-        let evidence = startup_evidence(
-            root.path(),
-            &observed,
-            run.clone(),
-            &executable,
-            &worker_sha,
-        );
+        let evidence = startup_evidence(root.path(), run.clone(), &executable, &worker_sha);
         assert_eq!(
             evidence["schema"],
-            "marty.canvas-worker-startup-fresh-run/v1"
+            "marty.canvas-worker-startup-fresh-run/v2"
         );
         assert_eq!(evidence["run"], run);
-        assert_eq!(
-            evidence["corpus_sha256"],
-            format!("{:x}", Sha256::digest(&corpus))
-        );
+        assert_eq!(evidence["case_names"].as_array().unwrap().len(), 8);
         assert_eq!(evidence["source_inputs_sha256"], sidecar["sha256"]);
         assert_eq!(evidence["issuance_image"], image);
-        assert_eq!(evidence["observed_python"], "3.12.13");
         assert_eq!(evidence["test_executable_sha256"], file_sha(&executable));
         assert_eq!(evidence["worker_binary_sha256"], worker_sha);
         assert_ne!(
             evidence["worker_binary_sha256"],
             evidence["test_executable_sha256"]
         );
-        assert_eq!(evidence["conditional_child_requested"], false);
-        let mut different = observed.clone();
-        different["python"] = json!("different");
-        assert!(std::panic::catch_unwind(|| startup_evidence(
-            root.path(),
-            &different,
-            run.clone(),
-            &executable,
-            &worker_sha
-        ))
-        .is_err());
         let mut unpinned = fixture;
         unpinned["observed_image"] = json!("image:latest");
         fs::write(
@@ -533,7 +480,6 @@ mod tests {
         .unwrap();
         assert!(std::panic::catch_unwind(|| startup_evidence(
             root.path(),
-            &observed,
             run.clone(),
             &executable,
             &worker_sha

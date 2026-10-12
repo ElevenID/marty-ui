@@ -890,19 +890,9 @@ async fn worker_provider_generation_native_child() {
     worker_provider_child("generation").await;
 }
 
-#[tokio::test]
-async fn worker_oauth_revocation_secrets_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-secrets").await;
-}
-
 #[test]
 fn worker_oauth_revocation_secrets_matches_frozen_published_process() {
     assert_native_oauth_revocation_matrix("oauth-revocation-secrets");
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_counters_reference_matches_published_cycle() {
-    assert_worker_matrix_reference("oauth-revocation-counters").await;
 }
 
 #[test]
@@ -1079,6 +1069,9 @@ mod canvas_worker_provider_recovery_replay;
 mod canvas_worker_provider_signals_replay;
 #[path = "../../../services/issuance/tests/support/canvas_worker_rest_replay.rs"]
 mod canvas_worker_rest_replay;
+
+#[path = "../../../services/issuance/tests/support/remote_integration_secret.rs"]
+mod remote_integration_secret;
 
 #[test]
 fn worker_provider_signals_match_frozen_published_process() {
@@ -1280,7 +1273,19 @@ async fn worker_provider_child(scenario: &str) {
 
 #[test]
 fn worker_rest_matches_frozen_published_process() {
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1")
+        || !cfg!(target_os = "linux")
+    {
+        return;
+    }
+    let worker_binary = canvas_worker_process_signals::worker_executable();
+    let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     assert_worker_https("rest");
+    canvas_rest_requalification::emit_after_rest_pass(
+        &canvas_published_database::repository_root(),
+        &worker_binary,
+        &worker_binary_before,
+    );
 }
 
 #[test]
@@ -1382,43 +1387,6 @@ async fn worker_rest_native_child() {
 
 #[path = "support/canvas_rest_requalification.rs"]
 mod canvas_rest_requalification;
-
-#[tokio::test]
-async fn worker_rest_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_rest()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-rest-oracle.json"
-    ))
-    .unwrap();
-    let observed = owned.oracle.clone().unwrap();
-    assert_eq!(observed, expected);
-    owned.close().unwrap();
-    canvas_rest_requalification::emit_after_rest_pass(
-        &canvas_published_database::repository_root(),
-        &observed,
-    );
-}
-
-#[tokio::test]
-async fn worker_facts_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_facts()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-facts-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
-    owned.close().unwrap();
-}
 
 #[tokio::test]
 async fn worker_reclaimers_retry_reference_matches_published_process() {
@@ -1531,46 +1499,6 @@ async fn worker_provider_signals_reference_matches_published_process() {
 #[tokio::test]
 async fn worker_retry_after_reference_matches_published_process() {
     assert_worker_matrix_reference("retry-after").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_fence_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-fence").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_patch_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-patch").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_retry_after_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-retry-after").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_backoff_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-backoff").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_queue_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-queue").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_lease_reference_matches_published_process() {
-    assert_worker_matrix_reference("oauth-revocation-lease").await;
-}
-
-#[tokio::test]
-async fn worker_oauth_revocation_selection_reference_matches_published_repository() {
-    assert_worker_matrix_reference("oauth-revocation-selection").await;
 }
 
 #[tokio::test]
@@ -1745,23 +1673,8 @@ async fn worker_validation_repository_matches_frozen_errors() {
 }
 
 #[tokio::test]
-async fn worker_validation_reference_matches_published_process() {
-    assert_worker_matrix_reference("validation").await;
-}
-
-#[tokio::test]
-async fn worker_roster_failure_reference_matches_published_process() {
-    assert_worker_matrix_reference("roster-failure").await;
-}
-
-#[tokio::test]
 async fn worker_resource_race_reference_matches_published_process() {
     assert_worker_matrix_reference("resource-race").await;
-}
-
-#[tokio::test]
-async fn worker_resources_unavailable_reference_matches_published_process() {
-    assert_worker_matrix_reference("resources-unavailable").await;
 }
 
 async fn assert_worker_matrix_reference(kind: &str) {
@@ -1769,91 +1682,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
         return;
     }
     let (scenario_source, oracle_source) = match kind {
-        "oauth-revocation-secrets" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-secrets-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-secrets-oracle.json"
-            ),
-        ),
-        "oauth-revocation-counters" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-counters-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-counters-oracle.json"
-            ),
-        ),
-        "oauth-revocation-selection" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-selection-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-selection-oracle.json"
-            ),
-        ),
-        "oauth-revocation-lease" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-lease-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-lease-oracle.json"),
-        ),
-        "oauth-revocation-queue" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-queue-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-queue-oracle.json"),
-        ),
-        "oauth-revocation-backoff" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-backoff-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-backoff-oracle.json"
-            ),
-        ),
-        "oauth-revocation-retry-after" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-scenarios.json"
-            ),
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-retry-after-oracle.json"
-            ),
-        ),
-        "oauth-revocation-patch" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-patch-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-patch-oracle.json"),
-        ),
-        "oauth-revocation-fence" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-oauth-revocation-fence-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-fence-oracle.json"),
-        ),
-        "oauth-revocation" => (
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-scenarios.json"),
-            include_str!("../../../../contracts/canvas-worker-oauth-revocation-oracle.json"),
-        ),
         "retry-after" => (
             include_str!("../../../../contracts/canvas-worker-retry-after-scenarios.json"),
             include_str!("../../../../contracts/canvas-worker-retry-after-oracle.json"),
-        ),
-        "validation" => (
-            include_str!("../../../../contracts/canvas-worker-validation-scenarios.json"),
-            include_str!("../../../../contracts/canvas-worker-validation-oracle.json"),
-        ),
-        "roster-failure" => (
-            include_str!("../../../../contracts/canvas-worker-roster-failure-scenarios.json"),
-            include_str!("../../../../contracts/canvas-worker-roster-failure-oracle.json"),
-        ),
-        "resources-unavailable" => (
-            include_str!(
-                "../../../../contracts/canvas-worker-resources-unavailable-scenarios.json"
-            ),
-            include_str!("../../../../contracts/canvas-worker-resources-unavailable-oracle.json"),
         ),
         "resource-race" => (
             include_str!("../../../../contracts/canvas-worker-resource-race-scenarios.json"),
@@ -1884,53 +1715,9 @@ async fn assert_worker_matrix_reference(kind: &str) {
     );
     for name in names {
         let owned = match kind {
-            "oauth-revocation-secrets" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_secrets(name).await
-            }
-            "oauth-revocation-counters" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_counters(name).await
-            }
-            "oauth-revocation-selection" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_selection(name).await
-            }
-            "oauth-revocation-lease" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_lease(name).await
-            }
-            "oauth-revocation-queue" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_queue(name).await
-            }
-            "oauth-revocation-backoff" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_backoff(name).await
-            }
-            "oauth-revocation-retry-after" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_retry_after(name).await
-            }
-            "oauth-revocation-patch" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_patch(name).await
-            }
-            "oauth-revocation-fence" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation_fence(name).await
-            }
-            "oauth-revocation" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_oauth_revocation(
-                    name,
-                )
-                .await
-            }
             "retry-after" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_retry_after(name)
                     .await
-            }
-            "validation" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_validation(name)
-                    .await
-            }
-            "roster-failure" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_roster_failure(name)
-                    .await
-            }
-            "resources-unavailable" => {
-                canvas_published_database::PublishedDatabase::start_with_worker_resources_unavailable(name).await
             }
             "resource-race" => {
                 canvas_published_database::PublishedDatabase::start_with_worker_resource_race(name)
@@ -1942,22 +1729,6 @@ async fn assert_worker_matrix_reference(kind: &str) {
         assert_eq!(owned.oracle.as_ref().unwrap(), &expected[name], "{name}");
         owned.close().unwrap();
     }
-}
-
-#[tokio::test]
-async fn worker_retry_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_retry()
-        .await
-        .unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-retry-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &expected);
-    owned.close().unwrap();
 }
 
 #[allow(dead_code)]
@@ -1998,18 +1769,9 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;
     }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_startup()
+    let owned = canvas_published_database::PublishedDatabase::start()
         .await
         .unwrap();
-    let oracle = owned.oracle.clone().unwrap();
-    let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-startup-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(
-        oracle, expected,
-        "published startup reference must regenerate unchanged"
-    );
     let worker_binary = canvas_worker_process_signals::worker_executable();
     let worker_binary_before = canvas_startup_attestation::file_sha(&worker_binary);
     let pool = PgPoolOptions::new()
@@ -2017,12 +1779,11 @@ async fn worker_startup_matches_published_process_and_idle_heartbeat() {
         .connect(&owned.url)
         .await
         .unwrap();
-    canvas_worker_startup_replay::replay(&pool, &owned.url, &oracle).await;
+    canvas_worker_startup_replay::replay(&pool, &owned.url).await;
     pool.close().await;
     owned.close().unwrap();
     canvas_startup_attestation::emit_after_startup_pass(
         &canvas_published_database::repository_root(),
-        &oracle,
         &worker_binary,
         &worker_binary_before,
     );

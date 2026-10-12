@@ -54,7 +54,7 @@
           "hardware_attestation": true,
           "supported_algorithms": ["ES256", "ES384", "ES512", "RS256"]
         },
-        "signature_encoding": "der",
+        "signature_encoding": "algorithm-dependent",
         "key_purposes": ["mdoc_dsc"],
         "credential_formats": ["mso_mdoc", "zk_mdoc"],
         "rotation_policy": {"rotation_interval_days": 30, "overlap_days": 2, "auto_publish": true},

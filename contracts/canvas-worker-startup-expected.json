@@ -1,0 +1,15 @@
+{
+  "schema": "marty.canvas-worker-startup-expected/v1",
+  "heartbeat": {
+    "role": "canvas_sync",
+    "metadata": {
+      "leased_jobs": 0,
+      "phase": "idle",
+      "process": "standalone",
+      "processor_configured": true
+    }
+  },
+  "alive_after_idle": true,
+  "exit_code_after_interrupt": 130,
+  "job_count": 0
+}

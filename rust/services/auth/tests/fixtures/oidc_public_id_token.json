@@ -1,0 +1,19 @@
+{
+  "id_token": "eyJhbGciOiJFUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InByb3ZpZGVyLWtleS0xIn0.eyJpc3MiOiJodHRwczovL2lkZW50aXR5LmV4YW1wbGUvcmVhbG1zL21hcnR5Iiwic3ViIjoidXNlci0xIiwiZW1haWwiOiJhbGljZUBleGFtcGxlLmNvbSIsImF1ZCI6Im1hcnR5LXVpIiwiZXhwIjo0MTAyNDQ0ODAwLCJpYXQiOjE3NjcyMjU2MDAsIm5vbmNlIjoibm9uY2UtMSJ9.Ef130myTqifWYKrXe96rdCf-pknBaaQvAMu9PHIZSG-X0MfpNVvGmCtDnnRQupqPYJa38g8FkzxyEgwT_OhQag",
+  "jwks": {
+    "keys": [
+      {
+        "kty": "EC",
+        "crv": "P-256",
+        "alg": "ES256",
+        "use": "sig",
+        "key_ops": [
+          "verify"
+        ],
+        "kid": "provider-key-1",
+        "x": "wN65n_TS1BfzAZq-OWN1cjOjbqqAj8l18u1hj1qwvMk",
+        "y": "V7nRxpbnLpZVyEr6rVugHiVGuX7kkhgjuBXMD56Panw"
+      }
+    ]
+  }
+}

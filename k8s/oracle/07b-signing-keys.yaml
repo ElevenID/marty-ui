@@ -34,13 +34,42 @@ spec:
               value: signing-keys
             - name: SIGNING_KEYS_SERVICE_PORT
               value: "8017"
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE
+              value: /run/secrets/integration-secret-tls/tls.crt
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE
+              value: /run/secrets/integration-secret-tls/tls.key
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
                   key: SIGNING_KEYS_INTERNAL_API_KEY
+            - name: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY
+            - name: SIGNING_KEYS_ISSUER_SIGN_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_ISSUER_SIGN_KEY
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: SIGNING_KEYS_INTEGRATION_SECRET_KEY
+            - name: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: marty-secrets
+                  key: DEVICE_REGISTRATION_SIGNING_KEYS_KEY
             - name: SIGNING_KEYS_REDIS_URL
               value: redis://redis:6379/2
+            - name: ISSUER_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: PUBLIC_API_URL
             - name: BAO_ADDR
               valueFrom:
                 configMapKeyRef:
@@ -50,7 +79,9 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: marty-secrets
-                  key: OPENBAO_SERVICE_TOKEN
+                  key: SIGNING_KEYS_OPENBAO_TOKEN
+            - name: SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE
+              value: /run/secrets/signing-grant-verify/token
             - name: PUBLIC_DOMAIN
               valueFrom:
                 configMapKeyRef:
@@ -59,6 +90,15 @@ spec:
           ports:
             - name: http
               containerPort: 8017
+            - name: secret-tls
+              containerPort: 8018
+          volumeMounts:
+            - name: integration-secret-tls
+              mountPath: /run/secrets/integration-secret-tls
+              readOnly: true
+            - name: signing-grant-verify
+              mountPath: /run/secrets/signing-grant-verify
+              readOnly: true
           resources:
             requests:
               memory: 128Mi
@@ -78,6 +118,16 @@ spec:
               port: 8017
             initialDelaySeconds: 10
             periodSeconds: 10
+      volumes:
+        - name: integration-secret-tls
+          secret:
+            secretName: signing-keys-integration-secret-server-tls
+        - name: signing-grant-verify
+          secret:
+            secretName: marty-secrets
+            items:
+              - key: SIGNING_KEYS_GRANT_VERIFY_TOKEN
+                path: token
 ---
 apiVersion: v1
 kind: Service
@@ -92,3 +142,6 @@ spec:
     - name: http
       port: 8017
       targetPort: 8017
+    - name: secret-tls
+      port: 8018
+      targetPort: 8018

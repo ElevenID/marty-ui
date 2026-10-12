@@ -493,17 +493,32 @@ imports, nested JSON references, mounted helpers, and every normalized source
 hash. A new kind, helper, or scenario requires input review. This guards only
 current capture inputs; it does not attest historical OAuth observations,
 establish runtime compatibility, authorize qualification reuse, or alter any
-routine/full oracle execution. Exact-head and protected combined-head CI
-passed before merge.
+routine/full oracle execution. The reviewed candidate is now based on main
+after #1287 merged; its own PR and protected CI are still required.
+The Rust-only KMS hardening branch retires that Python runner and the v1 REST
+input closure, so it does not carry the dead-runner overlay. OAuth revocation
+replay is implemented in the native Issuance test support there; its live
+Canvas gates must qualify the current Rust implementation.
 
-Provider-recovery current-input follow-up (2026-10-12 merged [UI #1292](https://github.com/ElevenID/marty-ui/pull/1292)): eight
+The remote-KMS Rust-only branch retires the Python facts, retry,
+roster-failure, and validation producers. Their main-branch current-input
+overlays cannot qualify absent scripts. The still-active provider-signals
+producer has a separate exact closure guard, and the still-active timeout
+producers retain the timeout overlay with its hash updated for the Rust-only
+schema preparer. Native Rust replay and release qualification remain required.
+
+Provider-recovery current-input follow-up (2026-10-12 merged [UI #1292](https://github.com/ElevenID/marty-ui/pull/1292), reconciled for remote KMS): eight
 direct provider/reclaimer runners are treated as one family because the
 recovery runner can select sibling scenarios. A single overlay inherits the
-REST current inputs and pins 17 additional scripts/scenario files. Tests
+native REST current inputs and pins 21 additional scripts/scenario files. Tests
 reject a new producer, scenario selection, local helper, transitive JSON
 reference, or changed hash without review. The manifest is release-sensitive
 in the existing CI classifier. This is current capture-input evidence only,
 not historical corpus attestation, a qualification skip, or a runtime change.
+The Python OAuth revocation overlay is absent because its runner was retired;
+the native Issuance replay remains the supported coverage. Local and hosted
+validation of this reconciled branch remain required. The original #1292
+candidate had 17 additional pins; the active Rust-only family has 21.
 Independent review, 212 local tests, exact-head CI, and [protected
 combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38242078139)
 passed before merge. The protected Canvas job took 28m37s, including 443s
@@ -512,11 +527,12 @@ isolated database contracts. The prior protected run's corresponding values
 were 28m31s, 467s, 388s, and 639s. These two different candidates do not
 prove any speed change from the guard.
 
-A6 Python-owned input-record candidate (2026-10-12): only the OAuth and
-provider-recovery overlays have Python release-test consumers and no Rust
-reader; the inventory test checks every literal consumer, and all service
-Docker contexts exclude these records. Assign an exact edit to either record
-to Release Contract Tests on PRs. Their inherited REST record, capture
+A6 Python-owned input-record candidate (2026-10-12): on the Rust-only branch,
+only the provider-recovery overlay has Python release-test consumers and no
+Rust reader; the OAuth overlay and its runner are retired. The inventory test
+checks every literal consumer, and all service Docker contexts exclude the
+remaining record. Assign an exact edit to that record to Release Contract
+Tests on PRs. Its inherited REST record, capture
 scripts/scenarios, other current-input records, mixed or unknown edits, and
 protected merge groups retain the existing broader checks. This changes PR
 feedback selection only, not qualification or a production image. A hosted
@@ -544,16 +560,6 @@ A7 refresh (2026-10-07): Core PR [#352 run 37419154761](https://github.com/Eleve
 A7 refresh (2026-10-08): The latest normal CI for draft Core #355, [run 37844023348](https://github.com/ElevenID/marty-core/actions/runs/37844023348) at `d41d87c`, ran preflight for 14m07s (21:06:33–21:20:40 UTC), versus affected Rust tests 9m08s and Native ZKP security 8m23s; the CI gate started three seconds after preflight ended. Earlier successful #355 revisions [37841791644](https://github.com/ElevenID/marty-core/actions/runs/37841791644) and [37839304785](https://github.com/ElevenID/marty-core/actions/runs/37839304785) also ended on preflight: 12m37s versus 9m59s affected tests / 10m39s ZKP, and 18m16s versus 10m08s / 10m32s, respectively. These are three revisions of **one** security PR, not independent workload samples. In contrast, #354's [normal run 37826531572](https://github.com/ElevenID/marty-core/actions/runs/37826531572) ended on affected tests (18m06s versus 12m54s preflight); its [protected run 37828982922](https://github.com/ElevenID/marty-core/actions/runs/37828982922) ended on the protocols feature lane (17m04s versus 16m52s preflight). In #355's latest preflight, KMS graphs took 7m03s, its new OpenBao issuer proof 2m39s, workspace Clippy 1m47s, WASM fallback 1m03s, and EUDI client 1m02s. Cheap policy/format/setup checks already lead the job; the expensive steps share Cargo inputs and compiler cache on its runner. Splitting them into another job would add runner/toolchain/cache startup and potentially repeated compilation, while a same-runner split cannot shorten the gate. No independently cacheable or no-extra-cost split is demonstrated, and no speedup is claimed. Keep A7 deferred and all feature/security gates intact; remeasure across independent normal PR workloads before authorizing a split.
 
 A7 refresh (2026-10-10): Two independent normal dependency PRs now provide the requested workload check. [UUID run 38029628248](https://github.com/ElevenID/marty-core/actions/runs/38029628248) finished preflight at 06:19:56 UTC, after affected Rust tests at 06:19:23; its KMS graph step took 8m09s, workspace Clippy 2m18s, and EUDI client 3m39s. [cc run 38029635868](https://github.com/ElevenID/marty-core/actions/runs/38029635868) finished affected tests at 06:22:16, after preflight at 06:17:51; its KMS graphs took 6m33s, Clippy 2m16s, and EUDI client 3m22s. Thus preflight can be last, but is not consistently the gate tail even across two dependency inputs. These checks deliberately share a Cargo target/cache within their job and test different feature/security obligations. A separate runner has no demonstrated reusable compiled artifact or duration advantage; preserve all checks and defer splitting until a same-obligation, comparable pilot proves faster feedback or completion.
-
-A7 post-merge spot check (2026-10-12): after #359's bounded split,
-[Core cc PR run 38189253281](https://github.com/ElevenID/marty-core/actions/runs/38189253281)
-completed Fast Rust Preflight in 38s after runner start, while Affected Rust
-Tests took 13m35s. [Core UUID PR run 38189230770](https://github.com/ElevenID/marty-core/actions/runs/38189230770)
-completed the cheap lane in 35s after runner start, but that job did not start
-until 8m47s after Affected Rust Tests began. The split gives a short cheap
-execution path once assigned; runner scheduling can still delay wall-clock
-feedback. Both runs kept the broader required checks, and these observations
-do not establish an end-to-end speedup.
 
 ### A8: release-tier E2E and demo strategy
 
@@ -700,35 +706,29 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 
 Merged A1 service boundaries (2026-10-06 checkpoint): [#1118](https://github.com/ElevenID/marty-ui/pull/1118) moved the signed Gateway-to-Issuance webhook test to cross-service acceptance with its real PostgreSQL, signature, tenant-isolation, durable-state, and named CI checks. [#1121](https://github.com/ElevenID/marty-ui/pull/1121) moved six opt-in Gateway-to-Signing cases into `gateway_signing_acceptance`, retaining their exact named CI invocations and disposable Redis/OpenBao guards. Both service-to-service development edges are removed, and all six signing cases passed the protected contracts lane before #1121 merged. These ownership moves preserve production code and required acceptance runs.
 
-CSCA test-owner follow-up (2026-10-12): the Signing Keys
-package still carried a Verification development dependency solely for two
-certificate-generating test helpers and one Core capability-vector assertion.
-Use a shared `marty-crypto` test fixture for the Signing Keys lifecycle and
-real Redis/HTTP cases, and put the unchanged capability assertion plus one
-representative Core-authority-certificate-to-Signing import proof in the
-existing cross-service acceptance package. This preserves the independent
-Core-to-Signing compatibility witness while removing Verification from the
-Signing Keys package-scoped test graph. The Redis tests remain ignored for
-ordinary local execution, but both are now required in the existing
-disposable-Redis contracts lane with an exact two-case execution assertion
-and a workflow-policy guard. Production Docker contexts exclude the new
-acceptance test source and shared test fixture. This candidate does not
-change runtime behavior or relax CI gates, and it does not claim a hosted
-speedup. Locked
-offline package-scoped Cargo-tree counts, normalized for display duplicates,
-are 587 to 322 for Signing Keys and 718 to 721 for the already broad service
-acceptance package. This is compile-surface evidence, not a measured build
-duration. Local Rust 1.95 validation passed seven lifecycle cases, both new
-acceptance cases, and both real Redis/HTTP cases against an owned disposable
-Redis container; 147 workflow-policy tests passed, and independent review
-found no P1-P3 issue.
+CSCA test-owner follow-up (2026-10-12 #1294 and remote-KMS reconciliation):
+the protected mainline change moved the CSCA capability check to cross-service
+acceptance and required both live Signing Keys Redis/HTTP cases in the
+contracts lane. The remote-KMS branch had already retired local CSCA
+private-key generation and the obsolete Core issuance-surface claim. Its
+reconciliation retains the public-only PEM lifecycle fixtures, uses one of
+those certificates for cross-service import acceptance, and removes the
+mainline helper that generated local keys. Signing Keys no longer has an
+unused Verification development dependency; service acceptance uses
+Verification only for its supported verification tests. The exact two-case
+Redis execution assertion and workflow-policy guard remain, and production
+Docker contexts exclude the acceptance source. This changes test ownership
+without changing runtime behavior or relaxing CI gates. The pre-KMS package
+count and two-case authority-issuance evidence from #1294 do not describe
+the reconciled KMS-only test graph; qualify that graph on its own head.
 [UI #1294](https://github.com/ElevenID/marty-ui/pull/1294) passed exact-head
-and protected combined-head CI, including the two disposable-Redis CSCA cases,
-and merged as `c7d225b9` on October 12. The first protected attempt failed
-before two UI shards could start because the pinned release asset endpoint
-returned HTTP 500; its failed jobs passed on retry, and the fresh queue
-candidate passed in full. This is an ownership/compile-surface improvement,
-not a measured pipeline speedup.
+and protected combined-head CI before the remote-KMS reconciliation and
+merged as `c7d225b9` on October 12. Its then-current locked Signing Keys
+test graph dropped from 587 to 322 unique packages; this is historical
+compile-surface evidence, not a measured hosted duration or a claim about
+the later KMS-only graph. The first protected attempt failed before two UI
+shards could start because the pinned release asset endpoint returned HTTP
+500; the unchanged rerun and fresh queue candidate passed.
 
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 
@@ -3843,23 +3843,25 @@ passed all exact-head checks and full protected
 then merged as `5297e214` on October 12. The bounded-retry branch was not
 exercised by a live GitHub asset outage, so no turnaround saving is claimed.
 
-Next A0/A6 bounded candidate: the two Signing Keys CSCA test targets and
-their shared fixture are tracked test-only sources. The ordinary contracts
+Next A0/A6 bounded candidate: the two Signing Keys CSCA test targets are
+tracked test-only sources after remote-KMS reconciliation removed the old
+shared Rust fixture. The ordinary contracts
 lane runs the behavior target through the workspace test step and both
 ignored real-Redis storage cases through an exact-count step. The root
 Docker context still included the two test targets even though release
 builds do not compile tests; seven Rust-copying contexts are now checked
-before proposing exact exclusions. A PR-only selector may assign a nonempty
-diff consisting solely of these three files and the four existing
+before proposing exact exclusions, including the new migration-image context.
+A PR-only selector may assign a nonempty
+diff consisting solely of these two files and the four existing
 service-acceptance test targets to the contracts lane, provided the checked-out
 source, Cargo ownership, all seven Docker contexts, and CI execution owners
 still match. The production-focused CodeQL proof uses the same exact source
 set and retains analysis when proof or scope changes. Mixed, unknown,
-production, manifest, and proof-failed diffs,
-plus protected merge groups and main, retain full Rust validation. The
-complete 178-test local workflow/context suite passes; independent review
-found no P1-P3 issue. Hosted qualification remains. This is not yet a measured
-speedup.
+production, manifest, and proof-failed diffs, plus protected merge groups
+and main, retain full Rust validation. The pre-KMS exact-head #1296 CI passed;
+on the provisional KMS queue head, the affected local policy suite passed 178
+tests and independent review found no P1-P3 issue. The reconciled head still
+needs hosted and protected qualification. This is not yet a measured speedup.
 
 ## Design references
 

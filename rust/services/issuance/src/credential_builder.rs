@@ -12,6 +12,7 @@ use marty_oid4vci::{
     },
     types::SignedCredential,
 };
+use marty_signing_grant::{minter::GrantMinter, GrantBinding, SigningOrigin, HEADER_NAME};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -68,6 +69,20 @@ impl HttpCredentialBuilder {
         })
     }
 
+    pub fn new_with_grant(
+        base_url: Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        minter: GrantMinter,
+    ) -> Result<Self, CredentialIssuanceError> {
+        Ok(Self {
+            signer: Arc::new(
+                HttpDidSigner::new(base_url, api_key, timeout)?
+                    .with_grant_minter(SigningOrigin::IssuanceCredential, minter),
+            ),
+        })
+    }
+
     #[cfg(test)]
     fn with_signer(signer: Arc<dyn DidSigner>) -> Self {
         Self { signer }
@@ -83,12 +98,18 @@ impl HttpCredentialBuilder {
             .signer
             .sign(SignRequest {
                 organization_id: request.organization_id.clone(),
+                operation_id: request.credential_id.clone(),
                 issuer_did: request.issuer.issuer_did.clone(),
                 credential_format: request.remote_credential_format.clone(),
                 key_purpose: key_purpose(&request.remote_credential_format).to_owned(),
                 payload: payload.to_vec(),
                 algorithm: algorithm.to_owned(),
                 verification_method_id: verification_method(request)?.to_owned(),
+                signing_key_reference: request
+                    .issuer
+                    .signing_key_reference()
+                    .ok_or_else(|| signing_error("Resolved issuer has no remote signing key"))?
+                    .to_owned(),
             })
             .await?;
         URL_SAFE_NO_PAD
@@ -109,6 +130,7 @@ impl HttpCredentialBuilder {
             issuer_id: request.issuer.issuer_did.clone(),
             verification_method_id: verification_method(request)?.to_owned(),
             algorithm: request.issuer.algorithm.clone(),
+            issuer_public_jwk: issuer_public_jwk_json(request)?,
             subject_id: request.subject_did.clone(),
             credential_type: request.credential_type.clone(),
             claims,
@@ -123,11 +145,11 @@ impl HttpCredentialBuilder {
         let signature = self
             .sign(
                 request,
-                prepared.signing_input.as_bytes(),
+                prepared.signing_input().as_bytes(),
                 &request.issuer.algorithm,
             )
             .await?;
-        match assemble_sd_jwt(prepared, &signature) {
+        match assemble_sd_jwt(prepared, &signature).map_err(native_error)? {
             SignedCredential::SdJwt {
                 compact,
                 credential_id,
@@ -151,6 +173,7 @@ impl HttpCredentialBuilder {
             issuer_id: request.issuer.issuer_did.clone(),
             verification_method_id: verification_method(request)?.to_owned(),
             algorithm: request.issuer.algorithm.clone(),
+            issuer_public_jwk: issuer_public_jwk_json(request)?,
             subject_id: request.subject_did.clone(),
             credential_type: request.credential_type.clone(),
             claims,
@@ -168,11 +191,11 @@ impl HttpCredentialBuilder {
         let signature = self
             .sign(
                 request,
-                prepared.signing_input.as_bytes(),
+                prepared.signing_input().as_bytes(),
                 &request.issuer.algorithm,
             )
             .await?;
-        match assemble_jwt_vc(prepared, &signature) {
+        match assemble_jwt_vc(prepared, &signature).map_err(native_error)? {
             SignedCredential::JwtVcJson { jwt, credential_id } => Ok(BuiltCredential {
                 credential_id,
                 credential: jwt,
@@ -197,7 +220,9 @@ impl HttpCredentialBuilder {
         }
         let prepared = prepare_remote_mdoc(RemoteMdocRequest {
             issuer_id: request.issuer.issuer_did.clone(),
+            verification_method_id: verification_method(request)?.to_owned(),
             algorithm: request.issuer.algorithm.clone(),
+            issuer_public_jwk: issuer_public_jwk_json(request)?,
             credential_type: request.credential_type.clone(),
             namespace: mdoc_namespace(&request.credential_type)?.to_owned(),
             claims,
@@ -207,7 +232,11 @@ impl HttpCredentialBuilder {
         })
         .map_err(native_error)?;
         let signature = self
-            .sign(request, &prepared.tbs_data, &request.issuer.algorithm)
+            .sign(
+                request,
+                prepared.signing_payload(),
+                &request.issuer.algorithm,
+            )
             .await?;
         let signature = normalize_ecdsa_signature(&signature, &request.issuer.algorithm)
             .map_err(native_error)?;
@@ -337,12 +366,14 @@ const REDACTED_SIGNING_VALUE: &str = "[REDACTED]";
 #[derive(Clone)]
 pub(crate) struct SignRequest {
     pub(crate) organization_id: String,
+    pub(crate) operation_id: String,
     pub(crate) issuer_did: String,
     pub(crate) credential_format: String,
     pub(crate) key_purpose: String,
     pub(crate) payload: Vec<u8>,
     pub(crate) algorithm: String,
     pub(crate) verification_method_id: String,
+    pub(crate) signing_key_reference: String,
 }
 
 impl fmt::Debug for SignRequest {
@@ -350,12 +381,17 @@ impl fmt::Debug for SignRequest {
         formatter
             .debug_struct("SignRequest")
             .field("organization_id", &self.organization_id)
+            .field("operation_id", &self.operation_id)
             .field("issuer_did", &self.issuer_did)
             .field("credential_format", &self.credential_format)
             .field("key_purpose", &self.key_purpose)
             .field("payload", &REDACTED_SIGNING_VALUE)
             .field("algorithm", &self.algorithm)
             .field("verification_method_id", &self.verification_method_id)
+            .field(
+                "signing_key_reference_configured",
+                &!self.signing_key_reference.is_empty(),
+            )
             .finish()
     }
 }
@@ -386,6 +422,7 @@ pub(crate) struct HttpDidSigner {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
+    grant: Option<(SigningOrigin, GrantMinter)>,
 }
 
 impl HttpDidSigner {
@@ -403,7 +440,13 @@ impl HttpDidSigner {
             client,
             base_url,
             api_key: api_key.map(str::to_owned),
+            grant: None,
         })
+    }
+
+    pub(crate) fn with_grant_minter(mut self, origin: SigningOrigin, minter: GrantMinter) -> Self {
+        self.grant = Some((origin, minter));
+        self
     }
 
     fn endpoint(&self) -> Url {
@@ -430,6 +473,7 @@ struct SignBody<'a> {
     issuer_did: &'a str,
     credential_format: &'a str,
     key_purpose: &'a str,
+    key_reference: &'a str,
     payload_b64: String,
     algorithm: &'a str,
 }
@@ -449,14 +493,42 @@ struct SignResponseBody {
 #[async_trait]
 impl DidSigner for HttpDidSigner {
     async fn sign(&self, request: SignRequest) -> Result<SignResponse, CredentialIssuanceError> {
+        if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
+            return Err(signing_error("DID signer requires a bounded operation ID"));
+        }
+        if request.signing_key_reference.trim().is_empty() {
+            return Err(signing_error("DID signer requires a resolved remote key"));
+        }
+        let (origin, minter) = self
+            .grant
+            .as_ref()
+            .ok_or_else(|| signing_error("DID signer requires a scoped KMS grant minter"))?;
+        let grant = minter
+            .mint(&GrantBinding {
+                origin: *origin,
+                operation_id: &request.operation_id,
+                organization_id: &request.organization_id,
+                route: "/internal/compat/issuer-dids/sign",
+                service_id: None,
+                issuer_did: Some(&request.issuer_did),
+                key_reference: Some(&request.signing_key_reference),
+                key_purpose: &request.key_purpose,
+                algorithm: &request.algorithm,
+                payload: &request.payload,
+            })
+            .await
+            .and_then(|grant| grant.to_header_value())
+            .map_err(|_| signing_error("DID signer KMS grant is unavailable"))?;
         let mut http_request = self
             .client
             .post(self.endpoint())
             .query(&[("organization_id", request.organization_id.as_str())])
+            .header(HEADER_NAME, grant)
             .json(&SignBody {
                 issuer_did: &request.issuer_did,
                 credential_format: &request.credential_format,
                 key_purpose: &request.key_purpose,
+                key_reference: &request.signing_key_reference,
                 payload_b64: URL_SAFE_NO_PAD.encode(&request.payload),
                 algorithm: &request.algorithm,
             });
@@ -721,7 +793,17 @@ fn collect_json_ld_terms(value: &Value, terms: &mut std::collections::BTreeSet<S
     }
 }
 
-fn public_ed25519_jwk(
+fn issuer_public_jwk_json(
+    request: &CredentialBuildRequest,
+) -> Result<String, CredentialIssuanceError> {
+    Ok(public_issuer_jwk(
+        request.issuer.public_jwk.clone(),
+        verification_method(request)?,
+    )?
+    .to_string())
+}
+
+fn public_issuer_jwk(
     public_jwk: Option<Value>,
     verification_method_id: &str,
 ) -> Result<Value, CredentialIssuanceError> {
@@ -740,6 +822,23 @@ fn public_ed25519_jwk(
             private.join(", ")
         )));
     }
+    if jwk
+        .get("kid")
+        .and_then(Value::as_str)
+        .is_some_and(|kid| kid != verification_method_id)
+    {
+        return Err(signing_error(
+            "issuer public JWK kid does not match the DID verification method",
+        ));
+    }
+    Ok(Value::Object(jwk))
+}
+
+fn public_ed25519_jwk(
+    public_jwk: Option<Value>,
+    verification_method_id: &str,
+) -> Result<Value, CredentialIssuanceError> {
+    let jwk = public_issuer_jwk(public_jwk, verification_method_id)?;
     if jwk.get("kty").and_then(Value::as_str) != Some("OKP")
         || jwk.get("crv").and_then(Value::as_str) != Some("Ed25519")
         || jwk
@@ -751,16 +850,7 @@ fn public_ed25519_jwk(
             "eddsa-rdfc-2022 requires an Ed25519 public JWK from the issuer profile",
         ));
     }
-    if jwk
-        .get("kid")
-        .and_then(Value::as_str)
-        .is_some_and(|kid| kid != verification_method_id)
-    {
-        return Err(signing_error(
-            "issuer public JWK kid does not match the DID verification method",
-        ));
-    }
-    Ok(Value::Object(jwk))
+    Ok(jwk)
 }
 
 fn validate_completed_data_integrity(
@@ -890,9 +980,11 @@ mod tests {
         routing::post,
         Json, Router,
     };
-    use ed25519_dalek::{Signer, SigningKey};
-    use p256::{elliptic_curve::sec1::ToEncodedPoint, SecretKey as P256SecretKey};
+    use base64::engine::general_purpose::STANDARD;
+    use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::credential::IssuerContext;
@@ -900,21 +992,12 @@ mod tests {
     #[derive(Debug)]
     struct RecordingSigner {
         requests: Mutex<Vec<SignRequest>>,
-        ed25519: Option<SigningKey>,
     }
 
     impl RecordingSigner {
         fn fixed() -> Arc<Self> {
             Arc::new(Self {
                 requests: Mutex::new(Vec::new()),
-                ed25519: None,
-            })
-        }
-
-        fn ed25519(key: SigningKey) -> Arc<Self> {
-            Arc::new(Self {
-                requests: Mutex::new(Vec::new()),
-                ed25519: Some(key),
             })
         }
     }
@@ -925,16 +1008,7 @@ mod tests {
             &self,
             request: SignRequest,
         ) -> Result<SignResponse, CredentialIssuanceError> {
-            let signature = if request.algorithm == "EdDSA" {
-                self.ed25519
-                    .as_ref()
-                    .expect("Ed25519 test signer")
-                    .sign(&request.payload)
-                    .to_bytes()
-                    .to_vec()
-            } else {
-                vec![0x11; 64]
-            };
+            let signature = vec![0x11; 64];
             self.requests.lock().expect("request lock").push(request);
             Ok(SignResponse {
                 signature_b64: URL_SAFE_NO_PAD.encode(signature),
@@ -943,18 +1017,170 @@ mod tests {
         }
     }
 
+    struct DisposableTransitSigner {
+        client: reqwest::Client,
+        base_url: reqwest::Url,
+        token: String,
+        key_name: String,
+        requests: Mutex<Vec<(String, String, Vec<u8>)>>,
+    }
+
+    #[async_trait]
+    impl DidSigner for DisposableTransitSigner {
+        async fn sign(
+            &self,
+            request: SignRequest,
+        ) -> Result<SignResponse, CredentialIssuanceError> {
+            self.requests
+                .lock()
+                .expect("remote signer request lock")
+                .push((
+                    request.organization_id.clone(),
+                    request.key_purpose.clone(),
+                    request.payload.clone(),
+                ));
+            let body = if request.algorithm == "EdDSA" {
+                json!({"input": STANDARD.encode(&request.payload), "prehashed": false})
+            } else {
+                let digest = Sha256::digest(&request.payload);
+                json!({
+                    "input": STANDARD.encode(digest),
+                    "prehashed": true,
+                    "hash_algorithm": "sha2-256",
+                })
+            };
+            let response = self
+                .client
+                .post(
+                    self.base_url
+                        .join(&format!("/v1/transit/sign/{}", self.key_name))
+                        .map_err(|error| signing_error(error.to_string()))?,
+                )
+                .header("X-Vault-Token", &self.token)
+                .json(&body)
+                .send()
+                .await
+                .map_err(|error| signing_error(error.to_string()))?
+                .error_for_status()
+                .map_err(|error| signing_error(error.to_string()))?
+                .json::<Value>()
+                .await
+                .map_err(|error| signing_error(error.to_string()))?;
+            let encoded = response["data"]["signature"]
+                .as_str()
+                .and_then(|value| value.split(':').nth(2))
+                .ok_or_else(|| signing_error("OpenBao returned no signature"))?;
+            let signature = STANDARD
+                .decode(encoded)
+                .map_err(|error| signing_error(error.to_string()))?;
+            let signature = if request.algorithm == "EdDSA" {
+                signature
+            } else {
+                normalize_ecdsa_signature(&signature, "ES256").map_err(native_error)?
+            };
+            Ok(SignResponse {
+                signature_b64: URL_SAFE_NO_PAD.encode(signature),
+                signature_native_b64: None,
+            })
+        }
+    }
+
+    async fn disposable_transit_signer(
+        key_purpose: &str,
+        algorithm: &str,
+    ) -> (Arc<DisposableTransitSigner>, Value) {
+        assert_eq!(
+            std::env::var("MARTY_KMS_DISPOSABLE_PROBE").as_deref(),
+            Ok("1"),
+            "run only inside the disposable KMS probe"
+        );
+        let base_url = reqwest::Url::parse(
+            &std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL"),
+        )
+        .expect("valid disposable OpenBao URL");
+        assert_eq!(base_url.scheme(), "http");
+        assert!(matches!(
+            base_url.host_str(),
+            Some("127.0.0.1" | "localhost")
+        ));
+        let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
+        let key_prefix = match key_purpose {
+            "mdoc_dsc" => "cred-dsc",
+            "vc_jwt_issuer" => "cred-issuer",
+            _ => panic!("unsupported disposable key purpose"),
+        };
+        let key_name = format!("{key_prefix}-test-{}", uuid::Uuid::new_v4().simple());
+        let key_type = match algorithm {
+            "ES256" => "ecdsa-p256",
+            "EdDSA" => "ed25519",
+            _ => panic!("unsupported disposable key algorithm"),
+        };
+        let client = reqwest::Client::new();
+        let key_url = base_url
+            .join(&format!("/v1/transit/keys/{key_name}"))
+            .expect("key URL");
+        client
+            .post(key_url.clone())
+            .header("X-Vault-Token", &token)
+            .json(&json!({"type": key_type}))
+            .send()
+            .await
+            .expect("create remote issuer key")
+            .error_for_status()
+            .expect("scoped remote issuer key creation");
+        let metadata = client
+            .get(key_url)
+            .header("X-Vault-Token", &token)
+            .send()
+            .await
+            .expect("read remote key metadata")
+            .error_for_status()
+            .expect("scoped key metadata read")
+            .json::<Value>()
+            .await
+            .expect("remote key metadata JSON");
+        assert_eq!(metadata["data"]["exportable"], false);
+        assert_eq!(metadata["data"]["imported_key"], false);
+        let pem = metadata["data"]["keys"]["1"]["public_key"]
+            .as_str()
+            .expect("provider-generated public key");
+        let mut public_jwk = if algorithm == "EdDSA" {
+            let raw = STANDARD
+                .decode(pem)
+                .expect("OpenBao Ed25519 public key base64");
+            assert_eq!(raw.len(), 32, "OpenBao Ed25519 public key length");
+            json!({"kty":"OKP", "crv":"Ed25519", "x":URL_SAFE_NO_PAD.encode(raw)})
+        } else {
+            serde_json::to_value(
+                public_key_pem_to_jwk(pem).expect("valid remote issuer public key"),
+            )
+            .expect("public JWK JSON")
+        };
+        public_jwk["kid"] = json!("did:web:issuer.example#key-1");
+        let signer = Arc::new(DisposableTransitSigner {
+            client,
+            base_url,
+            token,
+            key_name,
+            requests: Mutex::new(Vec::new()),
+        });
+        (signer, public_jwk)
+    }
+
     #[test]
     fn signer_debug_output_redacts_payloads_and_signatures() {
         let payload_secret = "private-signing-payload";
         let signature_secret = "private-signature";
         let request = SignRequest {
             organization_id: "org-safe-id".to_owned(),
+            operation_id: "synthetic-operation".to_owned(),
             issuer_did: "did:web:issuer.example".to_owned(),
             credential_format: "lti_tool_jwt".to_owned(),
             key_purpose: "lti_tool_signing".to_owned(),
             payload: payload_secret.as_bytes().to_vec(),
             algorithm: "RS256".to_owned(),
             verification_method_id: "did:web:issuer.example#safe-key".to_owned(),
+            signing_key_reference: "transit/keys/safe-key".to_owned(),
         };
         let response = SignResponse {
             signature_b64: signature_secret.to_owned(),
@@ -1011,7 +1237,7 @@ mod tests {
                 verification_method_id: Some("did:web:issuer.example#key-1".to_owned()),
                 public_jwk: None,
                 certificate_chain: Vec::new(),
-                raw_context: json!({}),
+                raw_context: json!({"signing_key_reference": "transit/keys/issuer-1"}),
             },
             status_list_entries: vec![json!({
                 "index": 7,
@@ -1021,12 +1247,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sd_jwt_signs_exact_native_input_and_strips_holder_secrets() {
-        let signer = RecordingSigner::fixed();
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
+    async fn sd_jwt_signs_exact_native_input_with_public_holder_key() {
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::SdJwt);
+        request.issuer.public_jwk = Some(public_jwk);
         request.holder_jwk = Some(json!({
-            "kty":"EC", "crv":"P-256", "x":"x", "y":"y", "d":"secret"
+            "kty":"EC", "crv":"P-256",
+            "x":"UadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0",
+            "y":"ARBSJxKwtafP8IFoVIaYSpTmgx7axG5zYPqdg0p6gaE"
         }));
 
         let built = builder.build(&request).await.expect("SD-JWT build");
@@ -1040,10 +1270,11 @@ mod tests {
             .rsplit_once('.')
             .expect("signature segment")
             .0;
-        let recorded = signer.requests.lock().expect("request lock");
+        let recorded = signer.requests.lock().expect("remote signer request lock");
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].payload, signed_input.as_bytes());
-        assert_eq!(recorded[0].organization_id, "org-a");
+        assert_eq!(recorded[0].2, signed_input.as_bytes());
+        assert_eq!(recorded[0].0, "org-a");
+        assert_eq!(recorded[0].1, "vc_jwt_issuer");
         let payload_segment = signed_input.split('.').nth(1).expect("payload segment");
         let payload: Value = serde_json::from_slice(
             &URL_SAFE_NO_PAD
@@ -1056,10 +1287,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn jwt_vc_preserves_open_badge_profile_and_reserved_id() {
+    async fn sd_jwt_rejects_private_holder_jwk_before_signing() {
         let signer = RecordingSigner::fixed();
+        let builder = HttpCredentialBuilder::with_signer(signer.clone());
+        let mut request = request(CredentialBuilderKind::SdJwt);
+        let public_jwk = json!({
+            "kty":"EC", "crv":"P-256", "alg":"ES256",
+            "x":"UadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0",
+            "y":"ARBSJxKwtafP8IFoVIaYSpTmgx7axG5zYPqdg0p6gaE",
+            "kid":"did:web:issuer.example#key-1",
+        });
+        request.issuer.public_jwk = Some(public_jwk.clone());
+        request.holder_jwk = Some(json!({
+            "kty":public_jwk["kty"], "crv":public_jwk["crv"],
+            "x":public_jwk["x"], "y":public_jwk["y"],
+            "d":"synthetic-private-field-must-be-rejected",
+        }));
+
+        let error = builder
+            .build(&request)
+            .await
+            .expect_err("private holder JWK");
+        assert!(error
+            .to_string()
+            .contains("holder JWK must not contain private"));
+        assert!(signer.requests.lock().expect("request lock").is_empty());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
+    async fn jwt_vc_preserves_open_badge_profile_and_reserved_id() {
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer);
         let mut request = request(CredentialBuilderKind::JwtVcJson);
+        request.issuer.public_jwk = Some(public_jwk);
         request.credential_type = "open_badge".to_owned();
         request.achievement_id = Some("https://issuer.example/credentials/open_badge".to_owned());
         request
@@ -1087,22 +1348,20 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn mdoc_ignores_request_controlled_certificate_chain() {
-        let signer = RecordingSigner::fixed();
+        let (signer, public_jwk) = disposable_transit_signer("mdoc_dsc", "ES256").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::Mdoc);
+        request.issuer.public_jwk = Some(public_jwk);
         request.claims.insert(
             "_mdoc_x5c".to_owned(),
             json!(["attacker-selected-certificate"]),
         );
-        let holder_secret =
-            P256SecretKey::from_slice(&[0x33; 32]).expect("valid deterministic P-256 key");
-        let holder_public = holder_secret.public_key().to_encoded_point(false);
         request.holder_jwk = Some(json!({
             "kty":"EC", "crv":"P-256", "alg":"ES256",
-            "x": URL_SAFE_NO_PAD.encode(holder_public.x().expect("P-256 x coordinate")),
-            "y": URL_SAFE_NO_PAD.encode(holder_public.y().expect("P-256 y coordinate")),
-            "d": URL_SAFE_NO_PAD.encode(holder_secret.to_bytes()),
+            "x": "UadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0",
+            "y": "ARBSJxKwtafP8IFoVIaYSpTmgx7axG5zYPqdg0p6gaE",
         }));
 
         let built = builder.build(&request).await.expect("mdoc build");
@@ -1110,24 +1369,20 @@ mod tests {
         assert_eq!(built.credential_id, request.credential_id);
         assert!(!built.credential.is_empty());
         assert_eq!(
-            signer.requests.lock().expect("request lock")[0].key_purpose,
+            signer.requests.lock().expect("remote signer request lock")[0].1,
             "mdoc_dsc"
         );
+        assert!(request.holder_jwk.as_ref().unwrap().get("d").is_none());
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn data_integrity_uses_native_canonicalization_and_verifies_completion() {
-        let signing_key = SigningKey::from_bytes(&[0x42; 32]);
-        let verifying_key = signing_key.verifying_key();
-        let signer = RecordingSigner::ed25519(signing_key);
+        let (signer, public_jwk) = disposable_transit_signer("vc_jwt_issuer", "EdDSA").await;
         let builder = HttpCredentialBuilder::with_signer(signer.clone());
         let mut request = request(CredentialBuilderKind::DataIntegrity);
         request.issuer.algorithm = "EdDSA".to_owned();
-        request.issuer.public_jwk = Some(json!({
-            "kty":"OKP", "crv":"Ed25519",
-            "x": URL_SAFE_NO_PAD.encode(verifying_key.as_bytes()),
-            "kid":"did:web:issuer.example#key-1",
-        }));
+        request.issuer.public_jwk = Some(public_jwk);
 
         let built = builder.build(&request).await.expect("Data Integrity build");
 
@@ -1136,8 +1391,8 @@ mod tests {
         assert_eq!(document["id"], request.credential_id);
         assert_eq!(document["proof"]["cryptosuite"], "eddsa-rdfc-2022");
         assert_eq!(
-            signer.requests.lock().expect("request lock")[0].algorithm,
-            "EdDSA"
+            signer.requests.lock().expect("remote signer request lock")[0].1,
+            "vc_jwt_issuer"
         );
     }
 
@@ -1190,8 +1445,47 @@ mod tests {
         }))
     }
 
+    async fn credential_grant_minter() -> (GrantMinter, NamedTempFile, tokio::task::JoinHandle<()>)
+    {
+        let app = Router::new().route(
+            "/v1/transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256",
+            post(|headers: HeaderMap, Json(_body): Json<Value>| async move {
+                assert_eq!(
+                    headers.get("x-vault-token").unwrap(),
+                    "credential-mint-token"
+                );
+                Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("grant listener");
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut token_file = NamedTempFile::new().expect("mint token file");
+        std::io::Write::write_all(&mut token_file, b"credential-mint-token\n")
+            .expect("write token");
+        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .expect("BAO config lock");
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        std::env::set_var("BAO_ADDR", &endpoint);
+        let minter = GrantMinter::for_managed_openbao(
+            &endpoint,
+            SigningOrigin::IssuanceCredential,
+            token_file.path().to_path_buf(),
+        )
+        .expect("credential grant minter");
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        (minter, token_file, server)
+    }
+
     #[tokio::test]
     async fn http_signer_sends_the_language_neutral_contract() {
+        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let capture = HttpCapture::default();
         let app = Router::new()
             .route(
@@ -1211,18 +1505,26 @@ mod tests {
         )
         .expect("HTTP signer");
 
-        let response = signer
-            .sign(SignRequest {
-                organization_id: "org-a".to_owned(),
-                issuer_did: "did:web:issuer.example".to_owned(),
-                credential_format: "dc+sd-jwt".to_owned(),
-                key_purpose: "vc_jwt_issuer".to_owned(),
-                payload: b"exact-signing-input".to_vec(),
-                algorithm: "ES256".to_owned(),
-                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
-            })
+        let request = SignRequest {
+            organization_id: "org-a".to_owned(),
+            operation_id: "synthetic-operation".to_owned(),
+            issuer_did: "did:web:issuer.example".to_owned(),
+            credential_format: "dc+sd-jwt".to_owned(),
+            key_purpose: "vc_jwt_issuer".to_owned(),
+            payload: b"exact-signing-input".to_vec(),
+            algorithm: "ES256".to_owned(),
+            verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+            signing_key_reference: "transit/keys/issuer-1".to_owned(),
+        };
+        let error = signer
+            .sign(request.clone())
             .await
-            .expect("sign response");
+            .expect_err("unconfigured signer must deny before HTTP");
+        assert!(error.to_string().contains("scoped KMS grant minter"));
+        assert!(capture.0.lock().expect("capture lock").is_none());
+        let signer = signer.with_grant_minter(SigningOrigin::IssuanceCredential, minter);
+
+        let response = signer.sign(request).await.expect("sign response");
 
         assert!(!response.signature_b64.is_empty());
         let (query, headers, body) = capture
@@ -1236,17 +1538,50 @@ mod tests {
             Some("org-a")
         );
         assert_eq!(headers.get("X-API-Key").expect("API key"), "service-secret");
+        let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+            headers.get(HEADER_NAME).expect("grant").to_str().unwrap(),
+        )
+        .expect("bound grant");
+        assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCredential);
+        assert_eq!(grant.claims.operation_id, "synthetic-operation");
+        assert_eq!(
+            grant.claims.key_reference.as_deref(),
+            Some("transit/keys/issuer-1")
+        );
+        assert_eq!(
+            grant.claims.payload_sha256_b64,
+            marty_signing_grant::payload_digest(b"exact-signing-input")
+        );
         assert_eq!(
             body["payload_b64"],
             URL_SAFE_NO_PAD.encode(b"exact-signing-input")
         );
+        assert_eq!(body["key_reference"], "transit/keys/issuer-1");
         assert!(body.get("issuer_profile_id").is_none());
         assert!(body.get("service_id").is_none());
+        let missing_key = signer
+            .sign(SignRequest {
+                organization_id: "org-a".to_owned(),
+                operation_id: "synthetic-operation".to_owned(),
+                issuer_did: "did:web:issuer.example".to_owned(),
+                credential_format: "dc+sd-jwt".to_owned(),
+                key_purpose: "vc_jwt_issuer".to_owned(),
+                payload: b"exact-signing-input".to_vec(),
+                algorithm: "ES256".to_owned(),
+                verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                signing_key_reference: String::new(),
+            })
+            .await
+            .expect_err("missing remote key must be denied before HTTP");
+        assert!(missing_key.to_string().contains("resolved remote key"));
+        assert!(capture.0.lock().expect("capture lock").is_none());
         server.abort();
+        grant_server.abort();
     }
 
     #[tokio::test]
     async fn http_signer_rejects_even_null_private_routing_fields() {
+        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let app = Router::new().route("/issuer-dids/sign", post(private_routing_handler));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1258,22 +1593,26 @@ mod tests {
             None,
             Duration::from_secs(2),
         )
-        .expect("HTTP signer");
+        .expect("HTTP signer")
+        .with_grant_minter(SigningOrigin::IssuanceCredential, minter);
 
         let error = signer
             .sign(SignRequest {
                 organization_id: "org-a".to_owned(),
+                operation_id: "synthetic-operation".to_owned(),
                 issuer_did: "did:web:issuer.example".to_owned(),
                 credential_format: "dc+sd-jwt".to_owned(),
                 key_purpose: "vc_jwt_issuer".to_owned(),
                 payload: b"exact-signing-input".to_vec(),
                 algorithm: "ES256".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                signing_key_reference: "transit/keys/issuer-1".to_owned(),
             })
             .await
             .expect_err("private routing must be rejected");
 
         assert!(error.to_string().contains("private signing routing"));
         server.abort();
+        grant_server.abort();
     }
 }

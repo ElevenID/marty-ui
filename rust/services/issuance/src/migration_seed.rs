@@ -1,6 +1,4 @@
-//! Final-form equivalent of the historical Marty application-template seed.
-//! Existing databases were already transformed by Alembic; this runs only
-//! while installing the fresh Rust baseline.
+//! Seed Marty application templates while installing the fresh Rust baseline.
 
 use serde_json::{json, Map, Value};
 use sqlx::{PgConnection, Row};
@@ -23,11 +21,14 @@ pub(super) async fn seed_marty_application_templates(
         ));
     }
 
+    let marty_org_id =
+        Uuid::parse_str(MARTY_ORG_ID).map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+
     let organization_name: Option<String> = sqlx::query_scalar(
         "SELECT COALESCE(NULLIF(name, ''), slug, '')
          FROM organization_service.organizations WHERE id = $1::uuid",
     )
-    .bind(MARTY_ORG_ID)
+    .bind(marty_org_id)
     .fetch_optional(&mut *connection)
     .await?;
     let organization_name = organization_name.unwrap_or_default();

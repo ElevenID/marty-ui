@@ -32,7 +32,12 @@ struct NoSigner;
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for NoSigner {
-    async fn sign_jwt(&self, _: &Value) -> Result<String, CanvasLtiToolSigningError> {
+    async fn sign_jwt(
+        &self,
+        _: &Value,
+        _kind: marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind,
+        _source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
         panic!("REST evidence must not invoke LTI signing")
     }
     async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError> {

@@ -84,12 +84,11 @@ SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"
 SIGNING_CSCA_TEST_FILES = (
     "csca_lifecycle_behavior.rs",
     "csca_lifecycle_storage_contract.rs",
-    "support/csca_fixture.rs",
 )
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
-    "services/Dockerfile.migrations": ".dockerignore",
+    "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
     "docker/canvas-sandbox/Dockerfile": ".dockerignore",
     "rust/services/event-stream/Dockerfile": ".dockerignore",
     "rust/services/revocation-profile/Dockerfile": ".dockerignore",
@@ -645,22 +644,6 @@ def test_service_acceptance_targets_stay_out_of_release_rust_contexts() -> None:
     assert not _is_ignored(SERVICE_ACCEPTANCE_TEST_ROOT + "unreviewed.rs", root_lines)
 
 
-def test_signing_csca_fixture_is_test_only_and_excluded_from_release_contexts() -> None:
-    path = "rust/services/signing-keys/tests/support/csca_fixture.rs"
-    assert _tracked_regular_mode(ROOT, path)
-    assert set(_ownership_sources(ROOT, ("csca_fixture.rs",))) == {
-        "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
-        "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
-    }
-    for ignore_path in set(DOCKER_CONTEXTS.values()):
-        lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
-        assert _is_ignored(path, lines), f"Docker COPY includes {ignore_path}: {path}"
-        if ignore_path == ".dockerignore":
-            assert lines.count(path) == 1
-        for production_path in PRODUCTION_INPUTS:
-            assert not _is_ignored(production_path, lines)
-
-
 def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context() -> None:
     paths = [SIGNING_CSCA_TEST_ROOT + name for name in SIGNING_CSCA_TEST_FILES]
     assert all(_tracked_regular_mode(ROOT, path) for path in paths)
@@ -670,10 +653,9 @@ def test_signing_csca_test_targets_have_contracts_owner_and_no_release_context()
     assert manifest["package"]["name"] == "marty-signing-keys"
     assert manifest["package"].get("autotests", True) is True
     assert not manifest.get("test", [])
-    assert not _ownership_sources(ROOT, SIGNING_CSCA_TEST_FILES[:2]), (
+    assert not _ownership_sources(ROOT, SIGNING_CSCA_TEST_FILES), (
         "Review a Rust source include of a Signing Keys test target"
     )
-    test_signing_csca_fixture_is_test_only_and_excluded_from_release_contexts()
     assert _copying_rust_contexts(ROOT) == set(DOCKER_CONTEXTS)
     for dockerfile in DOCKER_CONTEXTS:
         recipe = (ROOT / dockerfile).read_text(encoding="utf-8")
@@ -720,7 +702,7 @@ def test_signing_csca_target_proof_rejects_production_consumer(monkeypatch) -> N
     original = _ownership_sources
 
     def with_production_consumer(root: Path, names: tuple[str, ...]) -> dict[str, str]:
-        if names == SIGNING_CSCA_TEST_FILES[:2]:
+        if names == SIGNING_CSCA_TEST_FILES:
             return {"rust/services/signing-keys/src/lib.rs": 'include!("csca_lifecycle_behavior.rs")'}
         return original(root, names)
 
@@ -747,11 +729,11 @@ def _select_contract_test_sources(changed: bytes) -> bool:
 def test_contract_test_selector_accepts_only_proved_sources() -> None:
     service = (SERVICE_ACCEPTANCE_TEST_ROOT + SERVICE_ACCEPTANCE_TARGETS[0] + ".rs").encode()
     signing = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[0]).encode()
-    fixture = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[-1]).encode()
+    storage = (SIGNING_CSCA_TEST_ROOT + SIGNING_CSCA_TEST_FILES[1]).encode()
     for changed, accepted in (
         (service + b"\0", True),
         (signing + b"\0", True),
-        (signing + b"\0" + fixture + b"\0", True),
+        (signing + b"\0" + storage + b"\0", True),
         (service + b"\0" + signing + b"\0", True),
         (b"", False),
         (signing, False),

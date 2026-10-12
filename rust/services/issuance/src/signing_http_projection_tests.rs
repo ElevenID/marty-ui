@@ -90,6 +90,7 @@ async fn native_tenant_lti_and_readiness_preserve_their_distinct_privacy_boundar
         signer,
         peer.base.clone(),
         Some("synthetic-key"),
+        Some("synthetic-issuer-sign-key"),
         Duration::from_secs(2),
     )
     .unwrap();

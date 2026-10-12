@@ -40,8 +40,8 @@ effective timestamps are recorded. Jobs and the existing review/application/even
 snapshot retain their original queries; the review projection is not full-row
 or all possible triggering-fact equivalence.
 
-`worker_facts_reference_matches_published_process` regenerates this reference
-in the mandatory configured suite. The original assignment reference must
+At the original capture checkpoint, `worker_facts_reference_matches_published_process`
+regenerated this reference in the configured suite. The original assignment reference must
 regenerate unchanged after the shared harness extension. Native adoption must
 retain both corpora and use the actual worker binary, HTTPS and encrypted OAuth
 persistence. That configured execution passed at the recorded head.
@@ -52,6 +52,11 @@ corpus. The shared HTTPS parent supplies the 16 frozen responses and checks all
 actual requests; Rust compares every stage's durable state and unchanged issued
 rows/ciphertext. Both assignment and all-fact parent gates remain mandatory.
 No production runtime or expected observations were modified for adoption.
+
+The later K8 hardening batch retires that live Python regeneration test and its
+preparer/capture selector. The native four-stage gate remains mandatory, with
+the frozen scenario and corpus bytes pinned by the tier inventory. Hosted
+exact-head qualification of this retirement is still pending.
 
 Exact-head CI `34034992317` and Rust CodeQL `34034992376` passed. The configured
 database job explicitly records the all-fact replay passing all 16 requests and

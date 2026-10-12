@@ -46,8 +46,9 @@ data:
   TRUST_PROFILE_SERVICE_URL: "http://trust-profile:8004"
   ISSUANCE_SERVICE_URL: "http://issuance:8005"
   # Recovery-mode alias: selected rendering overrides this exact consumer key.
-  ISSUANCE_NATIVE_SERVICE_URL: "http://issuance:8005"
+  ISSUANCE_NATIVE_SERVICE_URL: "http://issuance-native:8005"
   PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""
+  PASSPORT_PROVIDER_HMAC_KEY_VERSION: "1"
   PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"
   PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""
   # Passport owner selection is opt-in after native image, provider and rollback acceptance.

@@ -182,7 +182,7 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
             "POST",
             sign_path,
             signer=True,
-            headers=headers,
+            headers={"X-API-Key": fixture_module.ISSUER_SIGN_KEY},
             body=json.dumps(
                 {**selectors, "payload_b64": encoded(assertion_input.encode())}
             ),

@@ -245,6 +245,12 @@ warn() { :; }
 error() { printf '%s\n' "$*" >&2; exit 1; }
 catalog_services() { printf '%s\n' gateway canvas-sync-worker issuance; }
 command_not_found_handle() { return 91; }
+native_check() {
+  [[ "$1" == check-update && "$2" == --repo-root ]] || return 97
+  local snapshot
+  IFS= read -r snapshot || true
+  [[ "$snapshot" == '{"items":[]}' ]] || return 98
+}
 kubectl() {
   case "$1:$2" in
     get:deployment/issuance-native)

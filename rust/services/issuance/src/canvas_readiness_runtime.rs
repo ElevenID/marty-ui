@@ -13,6 +13,7 @@ use marty_oid4vci::{
     jose::{verify_compact_jwt_with_public_jwk, verify_detached_signature_with_public_jwk},
     lti::canvas_lti_trust_profile,
 };
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use rand::RngCore;
 use reqwest::{Client, StatusCode, Url};
 use serde_json::{json, Map, Value};
@@ -22,7 +23,7 @@ use thiserror::Error;
 use crate::{
     canvas_binding_domain::CanvasProgramBindingRecord,
     canvas_lti_experience::portable_canvas_pilot_enabled,
-    canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_lti_tool_signing::{CanvasLtiSigningKind, CanvasLtiToolJwtSigner},
     canvas_management_domain::CanvasPlatformRecord,
     canvas_management_service::CanvasReadinessInputProvider,
     canvas_readiness::{
@@ -102,6 +103,8 @@ pub(crate) trait CanvasReadinessDidSigner: Send + Sync {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError>;
 }
@@ -134,16 +137,20 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError> {
         self.sign_did(SignRequest {
             organization_id: organization_id.to_owned(),
+            operation_id: operation_id.to_owned(),
             issuer_did: configuration.issuer_did.clone(),
             credential_format: configuration.credential_format.to_owned(),
             key_purpose: configuration.key_purpose.to_owned(),
             payload: challenge.to_vec(),
             algorithm: configuration.algorithm.clone(),
             verification_method_id: verification_method_id.to_owned(),
+            signing_key_reference: signing_key_reference.to_owned(),
         })
         .await
         .map(|response| response.signature_b64)
@@ -171,7 +178,44 @@ impl LiveCanvasReadinessChallengeProvider {
         lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
         signing_service_url: Url,
         signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
         timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            None,
+        )
+    }
+
+    pub fn new_with_grant(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: GrantMinter,
+    ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            Some(minter),
+        )
+    }
+
+    fn configure(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: Option<GrantMinter>,
     ) -> Result<Self, String> {
         let issuer_resolver = HttpIssuerContextResolver::new(
             signing_service_url.clone(),
@@ -179,8 +223,11 @@ impl LiveCanvasReadinessChallengeProvider {
             timeout,
         )
         .map_err(|_| "Canvas readiness issuer resolver could not be configured".to_owned())?;
-        let did_signer = HttpDidSigner::new(signing_service_url, signing_service_api_key, timeout)
+        let mut did_signer = HttpDidSigner::new(signing_service_url, issuer_sign_key, timeout)
             .map_err(|_| "Canvas readiness DID signer could not be configured".to_owned())?;
+        if let Some(minter) = minter {
+            did_signer = did_signer.with_grant_minter(SigningOrigin::IssuanceReadiness, minter);
+        }
         Ok(Self::with_ports(
             lti_signer,
             Arc::new(issuer_resolver),
@@ -209,7 +256,15 @@ impl LiveCanvasReadinessChallengeProvider {
             "iat": evaluated_at.timestamp(),
             "jti": URL_SAFE_NO_PAD.encode(nonce),
         });
-        let token = self.lti_signer.sign_jwt(&payload).await.ok()?;
+        let token = self
+            .lti_signer
+            .sign_jwt(
+                &payload,
+                CanvasLtiSigningKind::Readiness,
+                payload.get("jti")?.as_str()?,
+            )
+            .await
+            .ok()?;
         let segments = token.split('.').collect::<Vec<_>>();
         let [encoded_header, encoded_payload, _] = segments.as_slice() else {
             return None;
@@ -262,6 +317,7 @@ impl LiveCanvasReadinessChallengeProvider {
             .await
             .ok()?;
         let verification_method_id = validate_issuer_resolution(&resolution, &configuration)?;
+        let signing_key_reference = crate::credential::resolved_signing_key_reference(&resolution)?;
         let public_jwk = resolution.get("public_jwk")?.as_object()?;
         let mut nonce = [0_u8; 32];
         rand::rng().fill_bytes(&mut nonce);
@@ -269,12 +325,15 @@ impl LiveCanvasReadinessChallengeProvider {
         challenge.extend_from_slice(organization_id.as_bytes());
         challenge.push(0);
         challenge.extend_from_slice(&nonce);
+        let operation_id = URL_SAFE_NO_PAD.encode(nonce);
         let signature = self
             .did_signer
             .sign_challenge(
                 organization_id,
                 &configuration,
                 verification_method_id,
+                signing_key_reference,
+                &operation_id,
                 &challenge,
             )
             .await
@@ -844,16 +903,11 @@ fn https_url(value: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use base64::engine::general_purpose::STANDARD;
     use chrono::TimeZone;
-    use rand08::rngs::OsRng;
-    use rsa::{
-        pkcs1v15::SigningKey,
-        signature::{SignatureEncoding, Signer},
-        traits::PublicKeyParts,
-        RsaPrivateKey,
-    };
+    use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
-    use sha2::Sha256;
+    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{
@@ -863,33 +917,107 @@ mod tests {
 
     #[derive(Clone)]
     struct RsaFixture {
-        private: Arc<RsaPrivateKey>,
+        client: reqwest::Client,
+        base_url: reqwest::Url,
+        token: String,
+        key_name: String,
         key_id: String,
         public_jwk: Value,
     }
 
     impl RsaFixture {
-        fn new(key_id: &str) -> Self {
-            let private =
-                Arc::new(RsaPrivateKey::new(&mut OsRng, 2_048).expect("readiness RSA private key"));
-            let public = private.to_public_key();
+        async fn new(key_id: &str, key_prefix: &str) -> Self {
+            assert_eq!(
+                std::env::var("MARTY_KMS_DISPOSABLE_PROBE").as_deref(),
+                Ok("1"),
+                "run only inside the disposable KMS probe"
+            );
+            assert!(matches!(key_prefix, "lti-tool" | "cred-issuer"));
+            let base_url = reqwest::Url::parse(
+                &std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL"),
+            )
+            .expect("valid disposable OpenBao URL");
+            assert_eq!(base_url.scheme(), "http");
+            assert!(matches!(
+                base_url.host_str(),
+                Some("127.0.0.1" | "localhost")
+            ));
+            let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
+            let key_name = format!("{key_prefix}-readiness-{}", uuid::Uuid::new_v4().simple());
+            let client = reqwest::Client::new();
+            let key_url = base_url
+                .join(&format!("/v1/transit/keys/{key_name}"))
+                .expect("remote key URL");
+            client
+                .post(key_url.clone())
+                .header("X-Vault-Token", &token)
+                .json(&json!({"type": "rsa-2048"}))
+                .send()
+                .await
+                .expect("create remote RSA key")
+                .error_for_status()
+                .expect("scoped RSA key creation");
+            let metadata = client
+                .get(key_url)
+                .header("X-Vault-Token", &token)
+                .send()
+                .await
+                .expect("read remote RSA metadata")
+                .error_for_status()
+                .expect("scoped RSA metadata read")
+                .json::<Value>()
+                .await
+                .expect("remote RSA metadata JSON");
+            assert_eq!(metadata["data"]["exportable"], false);
+            assert_eq!(metadata["data"]["imported_key"], false);
+            let pem = metadata["data"]["keys"]["1"]["public_key"]
+                .as_str()
+                .expect("provider-generated RSA public key");
+            let mut public_jwk = serde_json::to_value(
+                public_key_pem_to_jwk(pem).expect("valid remote RSA public key"),
+            )
+            .expect("public RSA JWK JSON");
+            public_jwk["kid"] = json!(key_id);
             Self {
-                private,
+                client,
+                base_url,
+                token,
+                key_name,
                 key_id: key_id.to_owned(),
-                public_jwk: json!({
-                    "kid": key_id,
-                    "kty": "RSA",
-                    "alg": "RS256",
-                    "use": "sig",
-                    "n": URL_SAFE_NO_PAD.encode(public.n().to_bytes_be()),
-                    "e": URL_SAFE_NO_PAD.encode(public.e().to_bytes_be()),
-                }),
+                public_jwk,
             }
         }
 
-        fn sign(&self, payload: &[u8]) -> String {
-            let signature = SigningKey::<Sha256>::new((*self.private).clone()).sign(payload);
-            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        async fn sign(&self, payload: &[u8]) -> Result<String, ()> {
+            let digest = Sha256::digest(payload);
+            let url = self
+                .base_url
+                .join(&format!("/v1/transit/sign/{}", self.key_name))
+                .map_err(|_| ())?;
+            let response = self
+                .client
+                .post(url)
+                .header("X-Vault-Token", &self.token)
+                .json(&json!({
+                    "input": STANDARD.encode(digest),
+                    "prehashed": true,
+                    "hash_algorithm": "sha2-256",
+                    "signature_algorithm": "pkcs1v15",
+                }))
+                .send()
+                .await
+                .map_err(|_| ())?
+                .error_for_status()
+                .map_err(|_| ())?
+                .json::<Value>()
+                .await
+                .map_err(|_| ())?;
+            let encoded = response["data"]["signature"]
+                .as_str()
+                .and_then(|value| value.split(':').nth(2))
+                .ok_or(())?;
+            let signature = STANDARD.decode(encoded).map_err(|_| ())?;
+            Ok(URL_SAFE_NO_PAD.encode(signature))
         }
     }
 
@@ -900,7 +1028,12 @@ mod tests {
 
     #[async_trait]
     impl CanvasLtiToolJwtSigner for TestLtiSigner {
-        async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+        async fn sign_jwt(
+            &self,
+            payload: &Value,
+            _kind: CanvasLtiSigningKind,
+            _source_id: &str,
+        ) -> Result<String, CanvasLtiToolSigningError> {
             let header = json!({"alg": "RS256", "typ": "JWT", "kid": self.rsa.key_id});
             let signing_input = format!(
                 "{}.{}",
@@ -909,7 +1042,9 @@ mod tests {
             );
             Ok(format!(
                 "{signing_input}.{}",
-                self.rsa.sign(signing_input.as_bytes())
+                self.rsa.sign(signing_input.as_bytes()).await.map_err(|_| {
+                    CanvasLtiToolSigningError::SigningFailed("remote RSA signer unavailable".into())
+                })?
             ))
         }
 
@@ -949,10 +1084,15 @@ mod tests {
             _organization_id: &str,
             _configuration: &CanvasReadinessIssuerConfiguration,
             _verification_method_id: &str,
+            _signing_key_reference: &str,
+            _operation_id: &str,
             challenge: &[u8],
         ) -> Result<String, CanvasReadinessDependencyError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.rsa.sign(challenge))
+            self.rsa
+                .sign(challenge)
+                .await
+                .map_err(|_| CanvasReadinessDependencyError)
         }
     }
 
@@ -962,6 +1102,7 @@ mod tests {
             "issuer_did": issuer_did,
             "algorithm": "RS256",
             "verification_method_id": rsa.key_id,
+            "signing_key_reference": "transit/keys/canvas-readiness-1",
             "public_jwk": rsa.public_jwk,
             "issuer_profile": {
                 "status": "active",
@@ -990,10 +1131,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn live_challenges_prove_the_published_lti_and_kms_keys() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = LiveCanvasReadinessChallengeProvider::with_ports(
             Arc::new(TestLtiSigner {
@@ -1020,10 +1163,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn live_challenges_reject_ambiguous_or_private_key_material_before_kms_use() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let mut resolution = issuer_resolution(issuer_did, &kms_rsa);
         resolution["public_jwk"]["d"] = json!("private-material-must-not-cross-boundary");
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1050,10 +1195,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn kms_challenge_requires_the_active_method_in_both_did_relationships() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let mut resolution = issuer_resolution(issuer_did, &kms_rsa);
         resolution["did_document"]["assertionMethod"] = json!([]);
         let calls = Arc::new(AtomicUsize::new(0));

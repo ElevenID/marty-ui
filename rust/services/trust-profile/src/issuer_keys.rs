@@ -101,7 +101,7 @@ fn assertion_verification_keys(
     }
     let mut authorized_ids = BTreeSet::new();
     let mut inline_methods = Vec::new();
-    for relationship in &document.assertion_method {
+    for relationship in document.assertion_methods() {
         if let Some(reference) = relationship.as_str() {
             let id = canonical_method_id(&document.id, reference)
                 .ok_or(IssuerKeyResolutionError::Invalid)?;
@@ -200,51 +200,29 @@ mod tests {
 
     fn document() -> DidDocument {
         let did = "did:web:issuer.example:orgs:acme";
-        DidDocument {
-            id: did.into(),
-            assertion_method: vec![json!(format!("{did}#issuer-key"))],
-            authentication: vec![json!(format!("{did}#login-key"))],
-            verification_method: vec![
-                VerificationMethod {
-                    id: format!("{did}#issuer-key"),
-                    r#type: "JsonWebKey".into(),
-                    controller: did.into(),
-                    public_key_jwk: Some(Jwk {
-                        kty: "EC".into(),
-                        crv: Some("P-256".into()),
-                        x: Some("x".into()),
-                        y: Some("y".into()),
-                        d: None,
-                        kid: Some("issuer-key".into()),
-                        additional_properties: Map::new(),
-                    }),
-                    public_key_multibase: None,
-                    public_key_base58: None,
-                    additional_properties: Map::new(),
-                },
-                VerificationMethod {
-                    id: format!("{did}#login-key"),
-                    r#type: "JsonWebKey".into(),
-                    controller: did.into(),
-                    public_key_jwk: Some(Jwk {
-                        kty: "EC".into(),
-                        crv: Some("P-256".into()),
-                        x: Some("other-x".into()),
-                        y: Some("other-y".into()),
-                        d: None,
-                        kid: Some("login-key".into()),
-                        additional_properties: Map::new(),
-                    }),
-                    public_key_multibase: None,
-                    public_key_base58: None,
-                    additional_properties: Map::new(),
-                },
-            ],
-            context: Value::Null,
-            key_agreement: vec![],
-            service: vec![],
-            additional_properties: Map::new(),
-        }
+        let mut document = DidDocument::new(did);
+        document
+            .set_assertion_methods(vec![json!(format!("{did}#issuer-key"))])
+            .unwrap();
+        document
+            .set_authentication(vec![json!(format!("{did}#login-key"))])
+            .unwrap();
+        let method = |name: &str, x: &str, y: &str| {
+            let mut method = VerificationMethod::new(format!("{did}#{name}"), "JsonWebKey", did);
+            method.public_key_jwk = Some(Jwk::new_public(
+                "EC",
+                Some("P-256".into()),
+                Some(x.into()),
+                Some(y.into()),
+                Some(name.into()),
+            ));
+            method
+        };
+        document.verification_method = vec![
+            method("issuer-key", "x", "y"),
+            method("login-key", "other-x", "other-y"),
+        ];
+        document
     }
 
     #[test]
@@ -260,19 +238,12 @@ mod tests {
 
     #[test]
     fn rejects_private_or_unusable_assertion_methods() {
-        let mut private = document();
-        private.verification_method[0]
-            .public_key_jwk
-            .as_mut()
-            .unwrap()
-            .d = Some("private".into());
-        assert_eq!(
-            assertion_verification_keys(&private),
-            Err(IssuerKeyResolutionError::Invalid)
-        );
+        let mut private = serde_json::to_value(document()).unwrap();
+        private["verificationMethod"][0]["publicKeyJwk"]["d"] = json!("private");
+        assert!(serde_json::from_value::<DidDocument>(private).is_err());
 
         let mut authentication_only = document();
-        authentication_only.assertion_method.clear();
+        authentication_only.set_assertion_methods(vec![]).unwrap();
         assert_eq!(
             assertion_verification_keys(&authentication_only),
             Err(IssuerKeyResolutionError::Invalid)

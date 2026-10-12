@@ -856,6 +856,63 @@ async fn completed_http_slice_replays_create_read_evidence_and_rejection() {
 }
 
 #[tokio::test]
+async fn private_material_is_rejected_at_the_application_http_boundary() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    let service = service(repository, Some("secret"));
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"detail": "Private key material is not accepted; use a remote key reference"})
+    );
+
+    let (status, created) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {},
+            "integration_context": {"key_reference": "transit/keys/issuer-v4"}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let application_id = created["id"].as_str().unwrap();
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        &format!("/internal/applications/{application_id}/submit-evidence"),
+        Some(json!({
+            "evidence_type": "DOCUMENT_SCAN",
+            "evidence_data": {"private_key_pem": "synthetic"}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"detail": "Private key material is not accepted; use a remote key reference"})
+    );
+}
+
+#[tokio::test]
 async fn authentication_tenant_and_template_failures_match_the_frozen_boundary() {
     let repository = Arc::new(MemoryRepository::default());
     repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));

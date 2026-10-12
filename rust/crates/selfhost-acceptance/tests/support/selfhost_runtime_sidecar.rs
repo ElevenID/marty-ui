@@ -21,6 +21,18 @@ use super::{
 const ERROR: &str = "Owned selfhost service boundary refused";
 const SOCKET: &str = "unix:///var/run/docker.sock";
 pub(super) const PENDING_OPERATION: &str = ".pending-operation-v1";
+const ISSUANCE_SECRET_MOUNTS: [&str; 10] = [
+    "marty_db_password",
+    "issuance_api_key",
+    "didcomm_issuance_openbao_token",
+    "sign_grant_mint_issuance_credential_token",
+    "sign_grant_mint_issuance_canvas_token",
+    "sign_grant_mint_issuance_readiness_token",
+    "sign_grant_mint_issuance_passport_token",
+    "token_hmac_key",
+    "canvas_credentials_shared_secret",
+    "grpc_service_token",
+];
 
 #[derive(Clone, Copy)]
 pub(super) enum PendingKind {
@@ -175,6 +187,25 @@ const ENTRYPOINT: &str = "/app/services/entrypoint.sh";
 pub(super) const TRANSACTION_ID: &str = "selfhost-loader-persisted-transaction";
 pub(super) const ORGANIZATION: &str = "synthetic-selfhost-loader-org";
 pub(super) const MANAGEMENT_KEY: &str = "synthetic-selfhost-loader-management-key";
+
+pub(super) fn network_gateway(database: &PublishedDatabase) -> Result<std::net::Ipv4Addr, String> {
+    let descriptor: Value =
+        serde_json::from_str(&database.borrow_descriptor()?).map_err(|_| ERROR)?;
+    let postgres = descriptor["postgres_id"].as_str().ok_or(ERROR)?;
+    exact_id(postgres)?;
+    let info = inspect(postgres)?;
+    let networks = info["NetworkSettings"]["Networks"]
+        .as_object()
+        .ok_or(ERROR)?;
+    require(networks.len() == 1)?;
+    networks
+        .values()
+        .next()
+        .and_then(|network| network["Gateway"].as_str())
+        .and_then(|value| value.parse::<std::net::Ipv4Addr>().ok())
+        .filter(|value| value.is_private() && !value.is_loopback() && !value.is_unspecified())
+        .ok_or_else(|| ERROR.into())
+}
 
 fn require(condition: bool) -> Result<(), String> {
     if condition {
@@ -331,17 +362,7 @@ fn checked_recovery_native(
         require(mount["Type"] == "bind" && mount["RW"] == false)?;
         let destination = mount["Destination"].as_str().ok_or(ERROR)?;
         let name = destination.strip_prefix("/run/secrets/").ok_or(ERROR)?;
-        require(
-            [
-                "marty_db_password",
-                "issuance_api_key",
-                "integration_secret_master_key",
-                "token_hmac_key",
-                "canvas_credentials_shared_secret",
-                "grpc_service_token",
-            ]
-            .contains(&name),
-        )?;
+        require(ISSUANCE_SECRET_MOUNTS.contains(&name))?;
         require(names.insert(name.to_owned()))?;
         let source = Path::new(mount["Source"].as_str().ok_or(ERROR)?);
         require(source.is_absolute() && source.starts_with(scratch))?;
@@ -355,7 +376,11 @@ fn checked_recovery_native(
         require(!metadata.file_type().is_symlink())?;
         require(source.canonicalize().map_err(|_| ERROR)? == source)?;
     }
-    require(names.len() == 6 || (names.len() == 5 && !names.contains("grpc_service_token")))
+    require(
+        names.len() == ISSUANCE_SECRET_MOUNTS.len()
+            || (names.len() == ISSUANCE_SECRET_MOUNTS.len() - 1
+                && !names.contains("grpc_service_token")),
+    )
 }
 
 /// Only exact parent-run labels are discoverable. No project-prefix cleanup;
@@ -422,6 +447,7 @@ impl<'a> OwnedNative<'a> {
         database: &'a PublishedDatabase,
         image: &PublicImage,
         case: SecretCase,
+        kms_url: &str,
     ) -> Result<Self, String> {
         require_closed_child()?;
         let descriptor: Value =
@@ -504,6 +530,7 @@ impl<'a> OwnedNative<'a> {
             "DATABASE_URL_TEMPLATE".into(),
             json!(format!("{prefix}@{database_host}:5432/marty")),
         );
+        environment.insert("INTEGRATION_SECRET_KMS_URL".into(), json!(kms_url));
         if case == SecretCase::RawAndFile {
             environment.insert(
                 "GRPC_SERVICE_TOKEN".into(),
@@ -887,16 +914,8 @@ mod recovery_tests {
         let scratch = owned.path().canonicalize().unwrap();
         let secrets = scratch.join("synthetic-secrets");
         std::fs::create_dir(&secrets).unwrap();
-        let names = [
-            "marty_db_password",
-            "issuance_api_key",
-            "integration_secret_master_key",
-            "token_hmac_key",
-            "canvas_credentials_shared_secret",
-            "grpc_service_token",
-        ];
         let mut mounts = Vec::new();
-        for name in names {
+        for name in ISSUANCE_SECRET_MOUNTS {
             let source = secrets.join(name);
             std::fs::write(&source, "synthetic").unwrap();
             mounts.push(json!({"Type":"bind","RW":false,"Source":source,"Destination":format!("/run/secrets/{name}")}));

@@ -44,7 +44,14 @@ python scripts/build_selfhost_image_lock.py \
 
 The generated `marty.selfhost-image-lock/v1` JSON has exactly the fields the
 Rust `package-selfhost-bundle --image-lock` path expects. It binds every
-rendered Compose service to one digest. A release producer must still verify
+rendered Compose service to one digest and records `openbao_didcomm_image`
+from the same four-role stack transaction. The Rust packager requires that
+field; the preparation and consumer lanes verify and pull its exact digest.
+The customer ZIP now includes the separate OpenBao Compose project and its
+bootstrap/config assets; the Rust packager pins both OpenBao services to this
+digest, and the downloaded-ZIP consumer checks that binding. This is still
+release preparation, not installed KMS qualification.
+A release producer must still verify
 provenance and anonymous pull for every image, qualify an extracted installed
 bundle, and sign/attest the eventual lock and archive before publication.
 
@@ -56,9 +63,9 @@ profiles from the exact claimed checkout, takes the issuance digest from the
 source stack lock, requires `selfhost_external_images_json` to name every
 independent service by exact digest, verifies Marty's image attestations and
 anonymous pull of every locked image, then uploads only a 30-day
-`selfhost-lock-preparation-unqualified-*` artifact. It never adds a fourth
-role to the three-role stack transaction, promotes a self-host tag, blocks or
-weakens the existing stack publication gates, or publishes a customer bundle.
+`selfhost-lock-preparation-unqualified-*` artifact. It adds no self-host-specific
+role to the four-role stack transaction, promotes no self-host tag, and neither
+weakens the existing stack publication gates nor publishes a customer bundle.
 
 This lane is **not** self-host qualification. The input's third-party
 infrastructure digests have exact repository/anonymous-pull checks but no

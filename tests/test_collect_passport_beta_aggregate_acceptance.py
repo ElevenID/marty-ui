@@ -401,6 +401,21 @@ def test_rejects_live_issuance_migration_ledger_drift(tmp_path, monkeypatch):
             list_ids=lambda project: listed(live, project))
 
 
+def test_rejects_live_private_key_storage(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    calls = iter([
+        "7|" + COMMIT + "|" + "5" * 64 + "|true|false",
+        ",".join(aggregate.ISSUANCE_MIGRATION_VERSIONS),
+        "column:issuance_service.issuer_signing_keys.encrypted_jwk_json",
+    ])
+    monkeypatch.setattr(aggregate, "beta_psql", lambda *_: next(calls))
+    with pytest.raises(EvidenceError, match="database contains private-key storage"):
+        aggregate.collect_aggregate(
+            tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+            probe=probe, attest=lambda *_: True,
+            list_ids=lambda project: listed(live, project))
+
+
 def test_rejects_live_native_marker_drift(tmp_path, monkeypatch):
     _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
     monkeypatch.setattr(aggregate, "beta_psql", lambda *_: "wrong marker")

@@ -494,12 +494,28 @@ impl CanvasLtiAgsServiceUrlValidator for Validator {
     }
 }
 
-struct Signer(Mutex<Vec<Value>>);
+struct Signer(
+    Mutex<
+        Vec<(
+            Value,
+            marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind,
+            String,
+        )>,
+    >,
+);
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for Signer {
-    async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
-        self.0.lock().unwrap().push(payload.clone());
+    async fn sign_jwt(
+        &self,
+        payload: &Value,
+        kind: marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind,
+        source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
+        self.0
+            .lock()
+            .unwrap()
+            .push((payload.clone(), kind, source_id.to_owned()));
         Ok("signed.deep-link.jwt".to_owned())
     }
 
@@ -512,7 +528,12 @@ struct FailingSigner;
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for FailingSigner {
-    async fn sign_jwt(&self, _payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+    async fn sign_jwt(
+        &self,
+        _payload: &Value,
+        _kind: marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind,
+        _source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
         Err(CanvasLtiToolSigningError::SigningFailed(
             "private-signing-outage-detail".to_owned(),
         ))
@@ -628,6 +649,17 @@ async fn service_validates_signs_and_persists_before_returning_browser_safe_resp
         ["https://canvas.example.test/deep-link-return"]
     );
     assert_eq!(signer.0.lock().unwrap().len(), 1);
+    {
+        let signed = signer.0.lock().unwrap();
+        assert_eq!(
+            signed[0].1,
+            marty_issuance_service::canvas_lti_tool_signing::CanvasLtiSigningKind::DeepLink
+        );
+        assert_eq!(
+            signed[0].2,
+            format!("session-id-1:{}", signed[0].0["nonce"].as_str().unwrap())
+        );
+    }
     assert_eq!(response.jwt, "signed.deep-link.jwt");
     assert_eq!(
         response.deep_link_return_url,

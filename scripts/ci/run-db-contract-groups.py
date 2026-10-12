@@ -59,9 +59,6 @@ MATRIX_SCENARIOS = frozenset(
 PUBLISHED_MATRIX_SCENARIOS = frozenset(
     {
         "retry-after",
-        "validation",
-        "roster-failure",
-        "resources-unavailable",
         "resource-race",
         "deadline",
         "timeout",
@@ -69,16 +66,6 @@ PUBLISHED_MATRIX_SCENARIOS = frozenset(
         "lease-expiry",
         "dispatch",
         "mixed-roster",
-        "oauth-revocation",
-        "oauth-revocation-fence",
-        "oauth-revocation-patch",
-        "oauth-revocation-retry-after",
-        "oauth-revocation-backoff",
-        "oauth-revocation-queue",
-        "oauth-revocation-lease",
-        "oauth-revocation-selection",
-        "oauth-revocation-counters",
-        "oauth-revocation-secrets",
     }
 )
 PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
@@ -198,7 +185,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "utf7_consumer",
         "validation_boundary",
         "worker_concurrent",
-        "worker_facts",
         "worker_provider_completion",
         "worker_provider_final",
         "worker_provider_generation",
@@ -207,9 +193,6 @@ TIMED_PUBLISHED_SCRIPTS = frozenset(
         "worker_provider_signals",
         "worker_reclaimers",
         "worker_reclaimers_retry",
-        "worker_rest",
-        "worker_retry",
-        "worker_startup",
     }
 )
 TIMING_NAMES = {

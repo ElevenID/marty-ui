@@ -41,6 +41,31 @@ fn callback(id: &str) -> mmf_messaging::Message {
 }
 
 #[test]
+fn in_memory_repository_rejects_private_context_and_artifact_payload() {
+    let repository = InMemoryFlowRepository::default();
+    let mut candidate = instance("instance-private", FlowInstanceStatus::Created);
+    candidate.context = json!({"public_jwk":{"kty":"EC","d":"secret"}});
+    assert!(matches!(
+        repository.save_instance(candidate),
+        Err(RepositoryError::InvalidStoredState(_))
+    ));
+    assert!(repository.instance("instance-private").unwrap().is_none());
+
+    let artifact = FlowArtifact {
+        id: "artifact-private".into(),
+        flow_instance_id: "instance-private".into(),
+        issuance_transaction_id: None,
+        payload: json!({"private_key_pem":"secret"}),
+        expires_at_ms: None,
+        attempt_number: 1,
+    };
+    assert!(matches!(
+        repository.save_artifact(artifact),
+        Err(RepositoryError::InvalidStoredState(_))
+    ));
+}
+
+#[test]
 fn terminal_result_nonce_and_callback_commit_once_under_concurrency() {
     let repository = Arc::new(InMemoryFlowRepository::default());
     repository

@@ -103,7 +103,7 @@ jobs:
             --stack-lock release/stack-lock.json \
             --claim-run-id "$(jq -er .claim_run_id transaction/release-transaction.json)" \
             --output "$RUNNER_TEMP/validated-transaction.json"
-          jq -e '(.state == "qualified" or .state == "promoting" or .state == "promoted") and (.gates | length == 2)' \
+          jq -e '(.state == "qualified" or .state == "promoting" or .state == "promoted") and (.gates | length == 4)' \
             "$RUNNER_TEMP/validated-transaction.json" >/dev/null
           python scripts/check_prepared_selfhost_consumer.py \
             --archive prepared/prepared-selfhost-bundle.zip \

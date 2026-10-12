@@ -1,119 +1,98 @@
-"""Guard current shared REST capture inputs, not historical qualification."""
+"""Guard the reviewed native REST replay inputs, not historical capture."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from scripts.ci.canvas_oracle_current_inputs import (
-    assert_current_inputs,
-    normalized_sha256,
-)
+from scripts.ci.canvas_oracle_current_inputs import normalized_sha256
 
 ROOT = Path(__file__).resolve().parents[1]
-GRAPH = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 EVIDENCE = ROOT / "contracts/canvas-worker-rest-current-inputs.json"
-REST = "run_canvas_worker_rest_oracle.py"
-MOUNTED_INPUTS = frozenset(
+INPUTS = frozenset(
     {
-        "scripts/prepare_canvas_published_schema.py",
+        "contracts/canvas-issued-review-scenarios.json",
+        "contracts/canvas-worker-rest-oracle.json",
+        "contracts/canvas-worker-rest-scenarios.json",
         "contracts/fixtures/canvas_worker_test_trust.py",
+        "rust/services/issuance/tests/support/canvas_worker_rest_replay.rs",
+        "rust/services/issuance/tests/support/remote_integration_secret.rs",
+        "scripts/canvas_worker_https_fixture.py",
+        "scripts/prepare_canvas_published_schema.py",
+        "scripts/test_canvas_lti_https.py",
+        "scripts/test_canvas_worker_rest_https.py",
     }
 )
 
 
-def _assert_rest_inputs(evidence: dict, graph: dict, root: Path) -> None:
-    assert_current_inputs(
-        evidence,
-        graph,
-        root,
-        entrypoint=REST,
-        schema="marty.canvas-worker-rest-current-inputs/v1",
-        label="REST",
-        disclaimer="do not attest historical REST or downstream corpora",
-        additional_inputs=MOUNTED_INPUTS,
+def _assert_native_rest_inputs(evidence: dict, root: Path) -> None:
+    assert evidence["schema"] == "marty.canvas-worker-rest-current-inputs/v2"
+    assert set(evidence) == {"schema", "purpose", "normalization", "sha256"}
+    assert "native REST replay" in evidence["purpose"]
+    assert evidence["normalization"] == (
+        "UTF-8 text with CRLF and CR converted to LF before SHA-256"
     )
-
-
-def test_current_rest_capture_inputs_match_explicit_hashes() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
-    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    _assert_rest_inputs(evidence, graph, ROOT)
-    assert len(evidence["sha256"]) == 10
-    assert MOUNTED_INPUTS <= set(evidence["sha256"])
-    assert graph["direct_imports"][REST] == [
-        "canvas_worker_https_fixture.py",
-        "run_canvas_worker_startup_oracle.py",
+    assert set(evidence["sha256"]) == INPUTS, "REST input set needs review"
+    for name, pinned in evidence["sha256"].items():
+        assert len(pinned) == 64 and all(c in "0123456789abcdef" for c in pinned)
+        assert normalized_sha256(root / name) == pinned, f"REST input drift: {name}"
+    scenarios = json.loads(
+        (root / "contracts/canvas-worker-rest-scenarios.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert scenarios["shared_seed"] == "canvas-issued-review-scenarios.json", (
+        "REST shared seed needs input review"
+    )
+    assert [stage["name"] for stage in scenarios["stages"]] == [
+        "initial_permit",
+        "deny_after_issue",
+        "duplicate_deny",
+        "rate_limit_preserves_evidence",
     ]
 
 
-@pytest.mark.parametrize(
-    "name",
-    json.loads(EVIDENCE.read_text(encoding="utf-8"))["sha256"],
-)
-def test_each_rest_input_change_invalidates_evidence(tmp_path: Path, name: str) -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+def test_native_rest_replay_inputs_match_explicit_hashes() -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    for source in evidence["sha256"]:
+    _assert_native_rest_inputs(evidence, ROOT)
+
+
+@pytest.mark.parametrize("name", sorted(INPUTS))
+def test_each_rest_input_change_invalidates_evidence(tmp_path: Path, name: str) -> None:
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    for source in INPUTS:
         target = tmp_path / source
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / source).read_bytes())
     target = tmp_path / name
     target.write_bytes(target.read_bytes() + b"\n# changed\n")
     with pytest.raises(AssertionError, match="REST input drift"):
-        _assert_rest_inputs(evidence, graph, tmp_path)
+        _assert_native_rest_inputs(evidence, tmp_path)
 
 
-@pytest.mark.parametrize("name", sorted(MOUNTED_INPUTS))
-def test_mounted_rest_runtime_pin_cannot_disappear(name: str) -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+def test_unreviewed_or_missing_rest_pin_is_rejected() -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    del evidence["sha256"][name]
-    with pytest.raises(AssertionError, match="need input review"):
-        _assert_rest_inputs(evidence, graph, ROOT)
-
-
-def test_new_rest_helper_requires_input_review() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+    evidence["sha256"].pop(next(iter(INPUTS)))
+    with pytest.raises(AssertionError, match="REST input set needs review"):
+        _assert_native_rest_inputs(evidence, ROOT)
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    graph["direct_imports"][REST].append("new_local_helper.py")
-    graph["direct_imports"]["new_local_helper.py"] = []
-    with pytest.raises(AssertionError, match="need input review"):
-        _assert_rest_inputs(evidence, graph, ROOT)
+    evidence["sha256"]["scripts/unreviewed.py"] = "a" * 64
+    with pytest.raises(AssertionError, match="REST input set needs review"):
+        _assert_native_rest_inputs(evidence, ROOT)
 
 
-def test_new_rest_scenario_requires_input_review() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
+def test_shared_seed_change_requires_review(tmp_path: Path) -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    graph["scenario_literals"][REST].append("canvas-worker-new-scenarios.json")
-    with pytest.raises(AssertionError, match="Missing capture scenario input"):
-        _assert_rest_inputs(evidence, graph, ROOT)
-
-
-def test_default_rest_shared_seed_change_requires_input_review(tmp_path: Path) -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
-    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    for source in evidence["sha256"]:
+    for source in INPUTS:
         target = tmp_path / source
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes((ROOT / source).read_bytes())
     scenario = tmp_path / "contracts/canvas-worker-rest-scenarios.json"
     data = json.loads(scenario.read_text(encoding="utf-8"))
-    assert data["shared_seed"] == "canvas-issued-review-scenarios.json"
     data["shared_seed"] = "canvas-worker-startup-scenarios.json"
     scenario.write_text(json.dumps(data), encoding="utf-8")
-    # Simulate a reviewed byte-pin update: the changed dependency graph must
-    # still reject removal of the previously pinned shared seed.
-    evidence["sha256"]["contracts/canvas-worker-rest-scenarios.json"] = (
-        normalized_sha256(scenario)
+    evidence["sha256"]["contracts/canvas-worker-rest-scenarios.json"] = normalized_sha256(
+        scenario
     )
-    with pytest.raises(AssertionError, match="need input review"):
-        _assert_rest_inputs(evidence, graph, tmp_path)
-
-
-def test_dynamic_scenario_path_requires_review() -> None:
-    graph = json.loads(GRAPH.read_text(encoding="utf-8"))
-    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
-    graph["scenario_templates"][REST] = ["canvas-worker-{kind}-scenarios.json"]
-    with pytest.raises(AssertionError, match="Review dynamic capture scenario paths"):
-        _assert_rest_inputs(evidence, graph, ROOT)
+    with pytest.raises(AssertionError, match="REST shared seed needs input review"):
+        _assert_native_rest_inputs(evidence, tmp_path)

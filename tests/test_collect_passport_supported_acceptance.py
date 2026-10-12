@@ -34,7 +34,8 @@ def manifest(tmp_path: Path) -> Path:
                             {"type": "oci", "uri": f"ghcr.io/elevenid/marty-ui-oss/{role}",
                              "digest": "sha256:" + letter * 64}
                             for role, letter in (("ui", "c"), ("services", "b"),
-                                                 ("migrations", "d"))
+                                                 ("migrations", "d"),
+                                                 ("openbao-didcomm", "f"))
                         ]}],
     }), encoding="utf-8")
     return path

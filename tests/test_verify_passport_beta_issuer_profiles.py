@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import copy
 import base64
-from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 
 from scripts import verify_passport_beta_issuer_profiles as profile_evidence
 from scripts.verify_passport_beta_issuer_profiles import (
     IssuerProfileEvidenceError, resolve_in_container, sign_in_container,
     verify_live_signatures, verify_profile_certificates, verify_profiles,
 )
-from tests.test_probe_passport_beta_chain import certificates
+from tests.test_probe_passport_beta_chain import certificates, public_chain_vectors
 
 
 def resolution(role: str) -> dict:
@@ -201,28 +197,35 @@ def test_sign_transport_sends_challenge_in_body_only(monkeypatch) -> None:
     assert challenge.decode() not in str(command)
 
 
-def test_fresh_kms_challenges_reject_rotated_or_replayed_key() -> None:
-    now = datetime.now(timezone.utc)
-    keys = {role: ec.generate_private_key(ec.SECP256R1()) for role in ("csca", "x509_doc_signer")}
-    certificates = {}
-    for role, key in keys.items():
-        name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, role)])
-        certificates[role] = (x509.CertificateBuilder()
-                              .subject_name(name).issuer_name(name).public_key(key.public_key())
-                              .serial_number(x509.random_serial_number())
-                              .not_valid_before(now - timedelta(days=1))
-                              .not_valid_after(now + timedelta(days=1))
-                              .sign(key, hashes.SHA256()))
+def test_fresh_signing_challenges_reject_replay_and_wrong_key_vectors(monkeypatch) -> None:
+    fixture = public_chain_vectors()
+    challenges = {
+        name: base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+        for name, value in fixture["challenges"].items()
+    }
+    order = (
+        "csca_positive", "dsc_positive", "csca_replay", "dsc_replay",
+        "csca_rotated", "dsc_rotated",
+    )
+    assert len({challenges[name] for name in order}) == len(order)
+    remaining = iter(challenges[name] for name in order)
+    def next_challenge(size: int) -> bytes:
+        assert size == 48
+        return next(remaining)
+
+    monkeypatch.setattr(profile_evidence.secrets, "token_bytes", next_challenge)
     csca, dsc = resolution("csca"), resolution("dsc")
-    csca_cert = certificates["csca"]
-    csca_pem = csca_cert.public_bytes(serialization.Encoding.PEM).decode()
+    csca_pem = fixture["csca"]
+    csca_cert = x509.load_pem_x509_certificate(csca_pem.encode("ascii"))
     coordinates = csca_cert.public_key().public_numbers()
     csca["public_jwk"] = {
         "kty": "EC", "crv": "P-256",
         "x": base64.urlsafe_b64encode(coordinates.x.to_bytes(32, "big")).decode().rstrip("="),
         "y": base64.urlsafe_b64encode(coordinates.y.to_bytes(32, "big")).decode().rstrip("="),
     }
-    dsc_der = certificates["x509_doc_signer"].public_bytes(serialization.Encoding.DER)
+    dsc_der = x509.load_pem_x509_certificate(fixture["dsc"].encode("ascii")).public_bytes(
+        serialization.Encoding.DER
+    )
     dsc["issuer_x5c"] = [base64.b64encode(dsc_der).decode()]
     chain = {"csca_http_status": 200, "dsc_http_status": 200,
              "chain_verified_by": "openssl-x509-strict",
@@ -231,20 +234,27 @@ def test_fresh_kms_challenges_reject_rotated_or_replayed_key() -> None:
 
     def signer(org: str, did: str, purpose: str, challenge: bytes) -> dict:
         assert org == "org-a" and did == csca["issuer_did"] and len(challenge) == 48
-        role = "csca" if purpose == "csca" else "x509_doc_signer"
-        signature = keys[role].sign(challenge, ec.ECDSA(hashes.SHA256()))
+        role = "csca" if purpose == "csca" else "dsc"
+        label = next(name for name in order if challenges[name] == challenge)
+        assert label.startswith(role)
+        signature_name = {
+            "dsc_replay": "dsc_positive",
+            "dsc_rotated": "wrong_dsc_rotated",
+        }.get(label, label)
         return {"ok": True, "algorithm": "ES256", "signature_encoding": "der",
                 "payload_length": 48, "issuer_did": did,
                 "verification_method_id": csca["verification_method_id"] if role == "csca"
                 else dsc["verification_method_id"],
-                "signature_b64": base64.urlsafe_b64encode(signature).decode().rstrip("=")}
+                "signature_b64": fixture["signatures"][signature_name]}
 
     def check(sign):
         return verify_live_signatures("org-a", csca["issuer_did"], dsc["issuer_did"],
                                       csca, dsc, chain, csca_pem, "private-api-key", signer=sign)
 
     assert check(signer)["managed_kms_custody_verified"] is True
-    rotated_key = ec.generate_private_key(ec.SECP256R1())
-    keys["x509_doc_signer"] = rotated_key
     with pytest.raises(IssuerProfileEvidenceError, match="cannot sign"):
         check(signer)
+    with pytest.raises(IssuerProfileEvidenceError, match="cannot sign"):
+        check(signer)
+    with pytest.raises(StopIteration):
+        next(remaining)

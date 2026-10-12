@@ -195,6 +195,11 @@ impl ApplicationTemplatePatch {
         template
             .require_draft_patch()
             .map_err(|_| ApplicationTemplateRequestError::NotDraft)?;
+        if marty_key_material_policy::contains_private_key_map(&self.changes) {
+            return Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned(),
+            ));
+        }
         for (name, value) in self.changes {
             match name.as_str() {
                 "name" => {
@@ -271,6 +276,13 @@ impl ApplicationTemplatePatch {
 
 impl ApplicationTemplateCreate {
     pub fn validate_transport(&self) -> Result<(), ApplicationTemplateRequestError> {
+        let request =
+            serde_json::to_value(self).map_err(|_| ApplicationTemplateRequestError::Projection)?;
+        if marty_key_material_policy::contains_private_key(&request) {
+            return Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned(),
+            ));
+        }
         require_length("name", &self.name, 1, 128)?;
         if !matches!(
             self.approval_strategy.as_str(),
@@ -1176,6 +1188,47 @@ mod tests {
             record.form_fields[0]["options"],
             json!(["PENDING", {"label": "Cleared", "value": "CLEARED"}])
         );
+    }
+
+    #[test]
+    fn application_template_transport_rejects_private_material_but_keeps_remote_references() {
+        let mut request = canonical_request();
+        request.ui_config = json!({"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            request.validate_transport(),
+            Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned()
+            ))
+        );
+
+        let mut record = canonical_request()
+            .into_record("template-1".to_owned(), now())
+            .unwrap();
+        let patch: ApplicationTemplatePatch = serde_json::from_value(json!({
+            "notification_config": {"key_reference": "transit/keys/issuer-v4"}
+        }))
+        .unwrap();
+        patch.apply(&mut record, now()).unwrap();
+        assert_eq!(
+            record.notification_config["key_reference"],
+            "transit/keys/issuer-v4"
+        );
+
+        let patch: ApplicationTemplatePatch = serde_json::from_value(json!({
+            "notification_config": {"note": "-----BEGIN PRIVATE KEY-----synthetic-----END PRIVATE KEY-----"}
+        }))
+        .unwrap();
+        let before = record.clone();
+        assert_eq!(
+            patch.apply(&mut record, now()),
+            Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned()
+            ))
+        );
+        assert_eq!(record, before);
     }
 
     #[test]

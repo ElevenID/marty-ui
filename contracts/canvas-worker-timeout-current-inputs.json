@@ -21,7 +21,7 @@
     "scripts/canvas_worker_output_capture.py": "9b9ca4cb5051bffc75b5c30a78de6e742c345a14604d818a8754fc9796f2c77d",
     "scripts/canvas_worker_shutdown_output.py": "305063a117f9ba12a91c460c40800e8c9959e3db2d6264a7e8e489d9ec15fda8",
     "scripts/canvas_worker_timeout_https_fixture.py": "93d6bab1f51f77d142aede5358a05941d851330bf67e4d1508558a7d2b7cbad0",
-    "scripts/prepare_canvas_published_schema.py": "01c4c2e944d641578b58a8fe4d33cf260cac7a8f48a2df4f5ebff975e89b75dc",
+    "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
     "scripts/run_canvas_worker_body_timeout_oracle.py": "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f",
     "scripts/run_canvas_worker_provider_recovery_oracle.py": "6e33b40fae7846180c73f2360241bacf3cf140d3758331ad51884b5b122cb296",
     "scripts/run_canvas_worker_provider_signals_oracle.py": "068dd621c9955387e87866e80120fd574e974000d564ec6d934e1aa300c658aa",

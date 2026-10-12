@@ -40,6 +40,7 @@ OCI_ROLES = {
     "ghcr.io/elevenid/marty-ui-oss/ui",
     "ghcr.io/elevenid/marty-ui-oss/services",
     "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 PROTECTED_FILES = (
     ".gitattributes",
@@ -61,6 +62,7 @@ PROTECTED_FILES = (
     "scripts/collect_passport_beta_acceptance.py",
     "scripts/collect_passport_beta_aggregate_acceptance.py",
     "scripts/prepare_official_beta_release.py",
+    "scripts/kms_core_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
@@ -94,7 +96,6 @@ PROTECTED_FILES = (
     "rust/services/issuance/src/migration_seed.rs",
     "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
     "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
-    "rust/services/issuance/migrations/0000_merge_issuance_heads_bridge.sql",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",
@@ -113,6 +114,7 @@ PROTECTED_FILES = (
     "docker-compose.profile.passport-premigrated-beta.yml",
     "docker-compose.ui-release.yml",
     "services/Dockerfile.migrations",
+    "services/Dockerfile.migrations.dockerignore",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
     "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
@@ -247,8 +249,8 @@ def manifest_source(
         raise HostProbeError("Official stack components are invalid") from exc
     require(release == f"marty-ui@{version}", "Official release version differs")
     digests = {images[role]["uri"]: images[role]["digest"]
-               for role in ("ui", "services", "migrations")}
-    require(set(digests) == OCI_ROLES and len(digests) == 3,
+               for role in ("ui", "services", "migrations", "openbao_didcomm")}
+    require(set(digests) == OCI_ROLES and len(digests) == len(OCI_ROLES),
             "Official UI OCI roles are incomplete")
     credentials = None if rust_only else next(
         item for item in manifest["components"]
@@ -264,7 +266,6 @@ def manifest_source(
                 "Credentials issuance image attestation is invalid")
     build_only = {}
     for variable, component_name in (
-        ("MARTY_COMMON", "marty-common"),
         ("MARTY_RS", "marty-core-python"),
         ("MARTY_VERIFICATION", "marty-verification-python"),
         ("MARTY_ISO18013", "marty-iso18013-python"),

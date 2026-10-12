@@ -791,17 +791,15 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
 
 
-def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
+def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert "$env:MARTY_COMMON_URI = $martyCommon.Uri" in script
-    assert "$env:MARTY_COMMON_DIGEST = $martyCommon.Digest" in script
-    assert "$env:MARTY_RS_URI = $martyRs.Uri" in script
-    assert "$env:MARTY_RS_DIGEST = $martyRs.Digest" in script
-    assert "$env:MARTY_VERIFICATION_URI = $martyVerification.Uri" in script
-    assert "$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest" in script
-    assert "$env:MARTY_ISO18013_URI = $martyIso18013.Uri" in script
-    assert "$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest" in script
+    assert "MARTY_COMMON_URI" not in script
+    assert "MARTY_COMMON_DIGEST" not in script
+    assert "MARTY_RS_URI" not in script
+    assert "MARTY_VERIFICATION_URI" not in script
+    assert "MARTY_ISO18013_URI" not in script
+    assert "marty-migration-bootstrap" in script
     assert "MARTY_ISSUANCE_IMAGE" not in script
     assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert "com.docker.compose.service=docs" in script

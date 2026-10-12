@@ -4,12 +4,14 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
     decrypt_verification_response, prepare_verification_submission, FlowInstanceRecord,
-    FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
-    FlowProviderRegistry, FlowVerificationSubmissionError, PreparedVerificationSubmission,
-    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
-    PresentationPolicyReference, VerificationSubmissionInput, VerificationSubmissionOptions,
-    CALLBACK_MAX_ATTEMPTS, CALLBACK_RETENTION_SECONDS,
+    FlowKeyEnvelopeProvider, FlowProviderError, FlowProviderRegistry,
+    FlowVerificationSubmissionError, PreparedVerificationSubmission, PresentationEvaluationRequest,
+    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
+    VerificationSubmissionInput, VerificationSubmissionOptions, CALLBACK_MAX_ATTEMPTS,
+    CALLBACK_RETENTION_SECONDS,
 };
+#[path = "support/haip_remote_fixture.rs"]
+mod haip_remote_fixture;
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
 use serde_json::{json, Value};
@@ -43,23 +45,22 @@ impl PresentationPolicyProvider for Policies {
     }
 }
 
-struct Envelopes(String);
+struct RemoteEnvelopes;
 
 #[async_trait]
-impl FlowKeyEnvelopeProvider for Envelopes {
-    async fn wrap(
+impl FlowKeyEnvelopeProvider for RemoteEnvelopes {
+    async fn decrypt_haip_response(
         &self,
-        _request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
-        unreachable!("submission only unwraps response keys")
-    }
-
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        assert_eq!(envelope.organization_id, "org-1");
-        assert_eq!(envelope.flow_instance_id, "abcdefghijklmnop");
-        assert_eq!(envelope.purpose, "oid4vp_response_decryption");
-        assert_eq!(envelope.envelope, "vault:haip-key");
-        Ok(self.0.clone())
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+        jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        assert_eq!(organization_id, "org-1");
+        assert_eq!(flow_instance_id, "abcdefghijklmnop");
+        assert_eq!(version, haip_remote_fixture::VERSION);
+        assert!(jwe.contains('.'));
+        Ok(br#"{"vp_token":"remote-fixture"}"#.to_vec())
     }
 }
 
@@ -619,7 +620,7 @@ async fn terminal_replay_accepts_only_the_same_canonical_submission_digest() {
 }
 
 #[tokio::test]
-async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_closed() {
+async fn legacy_envelope_and_malformed_jwe_fail_closed() {
     let vector: Value = serde_json::from_str(include_str!(
         "../../../../contracts/flow-haip-response-vector.json"
     ))
@@ -627,7 +628,36 @@ async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_cl
     let mut candidate = instance(false);
     candidate.context["haip_response_encryption_key_envelope"] = json!("vault:haip-key");
     let providers = FlowProviderRegistry {
-        flow_key_envelope: Some(Arc::new(Envelopes(vector["private_jwk"].to_string()))),
+        flow_key_envelope: Some(Arc::new(RemoteEnvelopes)),
+        ..Default::default()
+    };
+    assert!(matches!(
+        decrypt_verification_response(
+            &providers,
+            &candidate,
+            vector["compact_jwe"].as_str().unwrap(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
+    ));
+    assert!(matches!(
+        decrypt_verification_response(&providers, &candidate, "not-a-jwe").await,
+        Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
+    ));
+}
+
+#[tokio::test]
+async fn remote_haip_response_uses_scoped_version_without_private_key_unwrap() {
+    let vector: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-haip-response-vector.json"
+    ))
+    .unwrap();
+    let mut candidate = instance(false);
+    let remote = haip_remote_fixture::key(&candidate.organization_id, &candidate.id);
+    candidate.context["haip_response_encryption_key_reference"] = json!(remote.key_reference);
+    candidate.context["haip_response_encryption_public_jwk"] = remote.public_jwk;
+    let providers = FlowProviderRegistry {
+        flow_key_envelope: Some(Arc::new(RemoteEnvelopes)),
         ..Default::default()
     };
     let plaintext = decrypt_verification_response(
@@ -637,9 +667,18 @@ async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_cl
     )
     .await
     .unwrap();
-    assert_eq!(plaintext, json!({"vp_token": "fixture"}));
+    assert_eq!(plaintext, json!({"vp_token":"remote-fixture"}));
+    candidate.context["haip_response_encryption_key_reference"] = json!(format!(
+        "didcomm/haip/keys/other/abcdefghijklmnop/versions/{}",
+        haip_remote_fixture::VERSION
+    ));
     assert!(matches!(
-        decrypt_verification_response(&providers, &candidate, "not-a-jwe").await,
+        decrypt_verification_response(
+            &providers,
+            &candidate,
+            vector["compact_jwe"].as_str().unwrap()
+        )
+        .await,
         Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
     ));
 }
