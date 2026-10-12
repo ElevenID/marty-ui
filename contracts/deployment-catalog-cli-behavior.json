@@ -167,6 +167,59 @@
       "exit_code": 1,
       "stdout": "",
       "stderr": "Unknown stack: missing-stack\n"
+    },
+    {
+      "args": [
+        "services",
+        "selfhost-production",
+        "--field",
+        "bogus"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py services [-h] [--group GROUP] [--running-only]\n                                [--include-optional]\n                                [--field {id,compose_service,k8s_deployment,image_name,service_name_env,group,lifecycle}]\n                                [stack]\nmarty-deploy.py services: error: argument --field: invalid choice: 'bogus' (choose from id, compose_service, k8s_deployment, image_name, service_name_env, group, lifecycle)\n"
+    },
+    {
+      "args": [
+        "secrets",
+        "selfhost-production",
+        "--field",
+        "bogus"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py secrets [-h]\n                               [--field {id,env,file_env,compose_secret,no_log,allow_empty,required_for}]\n                               stack\nmarty-deploy.py secrets: error: argument --field: invalid choice: 'bogus' (choose from id, env, file_env, compose_secret, no_log, allow_empty, required_for)\n"
+    },
+    {
+      "args": [
+        "compose-command",
+        "selfhost-production",
+        "config",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "plan",
+        "selfhost-production",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
+    },
+    {
+      "args": [
+        "bundle-assets",
+        "selfhost",
+        "--unexpected"
+      ],
+      "exit_code": 2,
+      "stdout": "",
+      "stderr": "usage: marty-deploy.py [-h] [--repo-root REPO_ROOT]\n                       {validate,plan,services,secrets,compose-command,bundle-assets}\n                       ...\nmarty-deploy.py: error: unrecognized arguments: --unexpected\n"
     }
   ]
 }
