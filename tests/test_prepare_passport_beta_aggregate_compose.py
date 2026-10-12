@@ -31,6 +31,11 @@ def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
         environment = services[name]["environment"]
         assert environment["ENVIRONMENT"] == "beta"
         assert environment["GRPC_INSECURE_ALLOWED"] == "true"
+    sandbox = services["canvas-sandbox"]
+    assert sandbox["image"] == "${MARTY_SERVICES_IMAGE}"
+    assert sandbox["build"] is None
+    assert sandbox["entrypoint"] == ["/usr/local/bin/marty-canvas-sandbox"]
+    assert sandbox["command"] == []
 
 
 def test_live_operator_binds_all_signed_image_interpolation_inputs():
@@ -147,6 +152,11 @@ def candidate():
     services["issuance-native"]["command"] = []
     services["canvas-sync-worker"]["command"] = [
         "/usr/local/bin/marty-canvas-sync-worker"]
+    services["canvas-sandbox"]["entrypoint"] = [
+        "/usr/local/bin/marty-canvas-sandbox"]
+    services["canvas-sandbox"]["command"] = []
+    services["canvas-sandbox"]["healthcheck"] = {
+        "test": ["CMD", "curl", "-fsS", "http://localhost:8017/health"]}
     services["passport-callback-signer"]["networks"] = {
         "passport-callback-signing": None}
     services["openbao"]["networks"] = {
@@ -219,10 +229,48 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert "gateway" in plan["recreate_applications"]
     assert "cloudflared" in plan["restart_ingress_last"]
     assert "flow" in plan["recreate_applications"]
+    assert "canvas-sandbox" in plan["recreate_applications"]
     assert "postgres" not in plan["target_services"]
     assert plan["preserved_infrastructure"] == ["openbao"]
     assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
+
+
+@pytest.mark.parametrize("change", ["python-image", "python-entrypoint", "build", "health"])
+def test_old_python_canvas_sandbox_cannot_pass_signed_beta_plan(change):
+    handoff, intent, rendered, ui = candidate()
+    sandbox = rendered["services"]["canvas-sandbox"]
+    if change == "python-image":
+        sandbox["image"] = "python:3.12-slim"
+    elif change == "python-entrypoint":
+        sandbox["entrypoint"] = ["python", "/app/main.py"]
+    elif change == "build":
+        sandbox["build"] = {"context": "."}
+    else:
+        sandbox["healthcheck"]["test"] = ["CMD", "python", "-c", "print('ok')"]
+    with pytest.raises(ComposePlanError, match="signed release|signed Rust runtime"):
+        prepare(handoff, intent, rendered, ui)
+
+
+def test_aggregate_runner_verifies_recreated_rust_sandbox_binary_and_health():
+    source = (Path(__file__).resolve().parents[1] /
+              "scripts/run-passport-beta-aggregate-deploy.ps1").read_text(encoding="utf-8")
+    assert "Assert-RustCanvasSandbox" in source
+    assert source.index("Wait-BetaHealthy -Services $applications") < source.index(
+        "    Assert-RustCanvasSandbox\n")
+    assert "readlink /proc/1/exe" in source
+    assert "$image[0] -cne [string]$script:plan.services_image" in source
+
+
+def test_signed_services_images_package_canvas_sandbox_binary():
+    root = Path(__file__).resolve().parents[1]
+    build = (root / "scripts/build-rust-service-binaries.sh").read_text(encoding="utf-8")
+    public = (root / "services/Dockerfile").read_text(encoding="utf-8")
+    ci = (root / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+    assert "-p marty-canvas-sandbox --bin marty-canvas-sandbox" in build
+    assert "target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox" in public
+    assert "-p marty-canvas-sandbox --bin marty-canvas-sandbox" in ci
+    assert "target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox" in ci
 
 
 def test_aggregate_rejects_a_separate_python_issuance_image():

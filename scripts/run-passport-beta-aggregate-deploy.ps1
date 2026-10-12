@@ -438,6 +438,28 @@ function Wait-BetaHealthy {
     throw 'Aggregate beta service health did not converge'
 }
 
+function Assert-RustCanvasSandbox {
+    $ids = @(& docker ps --filter 'label=com.docker.compose.project=elevenid-beta' `
+        --filter 'label=com.docker.compose.service=canvas-sandbox' --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $ids.Count -ne 1) {
+        throw 'Signed Rust Canvas sandbox container is absent or ambiguous'
+    }
+    $image = @(& docker inspect --format '{{.Config.Image}}' $ids[0] 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $image.Count -ne 1 -or
+        $image[0] -cne [string]$script:plan.services_image) {
+        throw 'Canvas sandbox does not use the signed Rust services image'
+    }
+    $runtime = @(& docker exec $ids[0] readlink /proc/1/exe 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $runtime.Count -ne 1 -or
+        $runtime[0] -cne '/usr/local/bin/marty-canvas-sandbox') {
+        throw 'Canvas sandbox is not running the Rust binary'
+    }
+    $health = @(& docker exec $ids[0] curl -fsS http://127.0.0.1:8017/health 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $health.Count -ne 1 -or $health[0] -cne 'ok') {
+        throw 'Signed Rust Canvas sandbox health route failed'
+    }
+}
+
 function Invoke-BetaPsql {
     param([string]$Sql)
     $container = [string]$script:plan.postgres_container_id
@@ -949,6 +971,7 @@ try {
         $_ -notin @('passport-callback-signer', 'passport-beta-bureau') })
     Invoke-Compose -Services $applications
     Wait-BetaHealthy -Services $applications
+    Assert-RustCanvasSandbox
     $resumingAfterContinuity = Test-Path -LiteralPath $continuityPath
     Assert-ForwardGeneration -RequireIngressClosed:(-not $resumingAfterContinuity) |
         Out-Null
