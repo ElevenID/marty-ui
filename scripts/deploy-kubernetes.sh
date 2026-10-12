@@ -211,11 +211,11 @@ require_kubernetes_passport_selection() {
 }
 
 catalog_services() {
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field k8s_deployment
+  "$REPO_ROOT/scripts/marty-deploy.sh" services --group "$1" --field k8s_deployment
 }
 
 catalog_required_secret_envs() {
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" secrets "$1" --field env
+  "$REPO_ROOT/scripts/marty-deploy.sh" secrets "$1" --field env
 }
 
 is_placeholder_secret() {

@@ -23,9 +23,6 @@ sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
-from marty_common.migration_profile import normalize_migration_profile  # noqa: E402
-from marty_common.system_ids import MARTY_OPEN_BADGE_LOGIN_POLICY_ID  # noqa: E402
-from marty_devops import DeploymentCatalog  # noqa: E402
 
 
 class CheckError(RuntimeError):
@@ -44,7 +41,11 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-OPEN_BADGE_LOGIN_POLICY_ID = MARTY_OPEN_BADGE_LOGIN_POLICY_ID
+OPEN_BADGE_LOGIN_POLICY_ID = next(
+    line.partition("=")[2].strip()
+    for line in (REPO_ROOT / ".env.selfhost.production.example").read_text(encoding="utf-8").splitlines()
+    if line.startswith("CREDENTIAL_LOGIN_POLICY_ID=")
+)
 TEXT_BUNDLE_SUFFIXES = {".css", ".html", ".js", ".json", ".map", ".txt"}
 ORIGIN_RE = re.compile(r"https?://[A-Za-z0-9.-]+(?::\d+)?")
 
@@ -137,11 +138,27 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
     return parse_compose_ps_output(result.stdout)
 
 
-def validate_required_secret_files(secret_dir: Path, catalog: DeploymentCatalog, stack_name: str) -> str:
+def catalog_lines(*args: str) -> list[str]:
+    result = subprocess.run(
+        [
+            "cargo", "+1.95.0", "run", "--quiet", "--locked",
+            "--manifest-path", str(REPO_ROOT / "rust/Cargo.toml"),
+            "-p", "marty-deployment-catalog", "--bin", "marty-deploy",
+            "--", "--repo-root", str(REPO_ROOT), *args,
+        ],
+        check=False, capture_output=True, text=True, cwd=REPO_ROOT,
+    )
+    if result.returncode != 0:
+        raise CheckError(result.stderr.strip() or "Deployment catalog command failed.")
+    return result.stdout.splitlines()
+
+
+def validate_required_secret_files(secret_dir: Path, stack_name: str) -> str:
     checked: list[str] = []
-    for secret in catalog.required_secret_specs_for_stack(stack_name):
-        secret_id = str(secret["id"])
-        file_name = str(secret.get("compose_secret") or secret_id)
+    ids = catalog_lines("secrets", stack_name)
+    file_names = catalog_lines("secrets", stack_name, "--field", "compose_secret")
+    for secret_id, compose_secret in zip(ids, file_names, strict=True):
+        file_name = compose_secret or secret_id
         read_required_secret(secret_dir / file_name, secret_id)
         checked.append(secret_id)
 
@@ -198,7 +215,8 @@ def validate_google_social_login(env_values: dict[str, str], secret_dir: Path) -
 
 
 def validate_migration_profile(env_values: dict[str, str]) -> str:
-    profile = normalize_migration_profile(env_values.get("MARTY_MIGRATION_PROFILE"))
+    # Native credential-template config accepts the canonical profile name.
+    profile = (env_values.get("MARTY_MIGRATION_PROFILE") or "").strip().lower() or "dev"
     if profile != "selfhost-production":
         raise CheckError(
             "MARTY_MIGRATION_PROFILE must resolve to selfhost-production for the self-host stack; "
@@ -1109,15 +1127,15 @@ def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Pat
     return f"state={openbao_service.get('State')} health={openbao_service.get('Health') or 'n/a'} port={host_port}"
 
 
-def validate_main_stack(env_file: Path, compose_file: Path, catalog: DeploymentCatalog | None = None) -> str:
+def validate_main_stack(env_file: Path, compose_file: Path, use_catalog: bool = False) -> str:
     services = get_compose_services(env_file, compose_file)
     if not services:
         raise CheckError("Main self-host production stack is not running.")
 
     service_map = {entry.get("Service"): entry for entry in services}
     required_services = tuple(
-        catalog.running_services_for_stack("selfhost-production")
-        if catalog is not None
+        catalog_lines("services", "selfhost-production", "--running-only")
+        if use_catalog
         else (
             "postgres",
             "redis",
@@ -1195,14 +1213,14 @@ def main() -> int:
     if not secret_dir_value:
         raise SystemExit("SELFHOST_SECRET_DIR is missing from the self-host env file.")
     secret_dir = Path(secret_dir_value).expanduser().resolve()
-    catalog = DeploymentCatalog.load(REPO_ROOT)
+    catalog_lines("validate")
 
     compose_config_results = [
         run_check("openbao-compose-config", lambda: (ensure_compose_config(env_file, openbao_compose_file) or openbao_compose_file.name)),
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]
     validation_results = [
-        run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, catalog, "selfhost-production")),
+        run_check("selfhost-required-secrets", lambda: validate_required_secret_files(secret_dir, "selfhost-production")),
         run_check("cloudflare-tunnel-token", lambda: validate_tunnel_token(secret_dir)),
         run_check("migration-profile", lambda: validate_migration_profile(env_values)),
         run_check("google-social-login", lambda: validate_google_social_login(env_values, secret_dir)),
@@ -1225,7 +1243,7 @@ def main() -> int:
         run_check("marty-issuer-did-document", lambda: validate_marty_issuer_did_document(env_values)),
         run_check("protocol-no-spa-fallback", lambda: validate_protocol_routes_do_not_spa_fallback(env_values)),
         run_check("openbao", lambda: validate_openbao(env_values, secret_dir, env_file, openbao_compose_file)),
-        run_check("prod-compose-health", lambda: validate_main_stack(env_file, prod_compose_file, catalog)),
+        run_check("prod-compose-health", lambda: validate_main_stack(env_file, prod_compose_file, True)),
     ]
 
     results = compose_config_results + validation_results

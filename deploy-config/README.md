@@ -53,14 +53,14 @@ fixed OSS/hosted/outside-gate coverage contract. See
 
 Useful commands:
 
-- `python scripts/marty-deploy.py validate`
-- `python scripts/marty-deploy.py plan selfhost-production`
-- `python scripts/marty-deploy.py plan tunnel-beta-experiments` for the beta Canvas experiments stack
-- `python scripts/marty-deploy.py plan tunnel-beta-d11` for the D-11 external admissions recording stack
-- `python scripts/marty-deploy.py plan selfhost-beta-tunnel` only when beta intentionally routes into the same self-host production stack
-- `python scripts/marty-deploy.py plan kubernetes-production`
-- `python scripts/marty-deploy.py compose-command selfhost-production config`
-- `python scripts/marty-deploy.py secrets kubernetes-production --field env`
+- `sh scripts/marty-deploy.sh validate`
+- `sh scripts/marty-deploy.sh plan selfhost-production`
+- `sh scripts/marty-deploy.sh plan tunnel-beta-experiments` for the beta Canvas experiments stack
+- `sh scripts/marty-deploy.sh plan tunnel-beta-d11` for the D-11 external admissions recording stack
+- `sh scripts/marty-deploy.sh plan selfhost-beta-tunnel` only when beta intentionally routes into the same self-host production stack
+- `sh scripts/marty-deploy.sh plan kubernetes-production`
+- `sh scripts/marty-deploy.sh compose-command selfhost-production config`
+- `sh scripts/marty-deploy.sh secrets kubernetes-production --field env`
 
 Local image release commands:
 

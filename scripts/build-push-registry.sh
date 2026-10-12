@@ -136,7 +136,7 @@ fi
 BUILDER_CMD="docker buildx build --platform ${PLATFORM} --load"
 
 catalog_services() {
-  "$PYTHON_BIN" "$REPO_ROOT/scripts/marty-deploy.py" services --group "$1" --field id
+  "$REPO_ROOT/scripts/marty-deploy.sh" services --group "$1" --field id
 }
 
 build_and_push() {

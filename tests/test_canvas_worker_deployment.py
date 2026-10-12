@@ -12,7 +12,7 @@ import tomllib
 
 import pytest
 import yaml
-from marty_devops import DeploymentCatalog
+from catalog_test_support import CatalogView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -500,7 +500,7 @@ def test_consumer_matrix_derives_all_conformance_switches_from_real_owner(
 def test_consumer_matrix_uses_catalog_groups_files_and_profiles_without_claiming_tunnel_worker_start(
     compose_worker_gate,
 ):
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
     cases = {case["name"]: case for case in compose_worker_gate["catalog_cases"]()}
     required = {
         name
@@ -880,7 +880,7 @@ def test_ci_keeps_old_bundle_gate_and_checks_pinned_modern_binary_before_explici
 
 
 def test_canvas_worker_is_required_by_production_deployment_catalogs() -> None:
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
 
     for stack in ("selfhost-production", "kubernetes-production"):
         assert "canvas-sync-worker" in catalog.running_services_for_stack(stack)
@@ -951,6 +951,14 @@ def selfhost_canvas_environment():
         ),
         "CANVAS_SYNC_WORKER_JOB_TIMEOUT_SECONDS": "600",
     }
+
+
+def test_selfhost_preflight_uses_native_profile_and_seeded_login_policy() -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/check-selfhost-production.py"))
+    assert namespace["validate_migration_profile"]({"MARTY_MIGRATION_PROFILE": "selfhost-production"}) == "profile=selfhost-production"
+    with pytest.raises(namespace["CheckError"], match="current=dev"):
+        namespace["validate_migration_profile"]({})
+    assert namespace["OPEN_BADGE_LOGIN_POLICY_ID"] == "50000000-0000-0000-0000-000000000004"
 
 
 def test_production_preflight_requires_a_configured_canvas_worker_processor() -> None:

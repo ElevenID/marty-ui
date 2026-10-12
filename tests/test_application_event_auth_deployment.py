@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from marty_devops import DeploymentCatalog
+from catalog_test_support import CatalogView
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,7 +68,7 @@ def test_kubernetes_key_is_scoped_to_applicant_and_flow() -> None:
 
 
 def test_production_catalog_and_deploy_script_require_the_dedicated_key() -> None:
-    catalog = DeploymentCatalog.load(ROOT)
+    catalog = CatalogView.load(ROOT)
     for stack in ("selfhost-production", "kubernetes-production"):
         assert SECRET_ID in catalog.required_secrets_for_stack(stack)
 

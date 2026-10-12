@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from marty_devops.catalog import DeploymentCatalog
+from catalog_test_support import CatalogView
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -92,7 +92,7 @@ def test_kubernetes_update_script_updates_selfhost_image_variants():
 
 
 def test_kubernetes_worker_uses_catalog_native_per_service_image():
-    catalog = DeploymentCatalog.load(REPO_ROOT)
+    catalog = CatalogView.load(REPO_ROOT)
     worker = "canvas-sync-worker"
     assert worker in catalog.services_for_group("app")
     assert catalog.service_field(worker, "k8s_deployment") == worker
@@ -113,7 +113,7 @@ def test_kubernetes_rust_issuance_and_migration_keep_the_same_pin():
         assert "image: ${MARTY_ISSUANCE_IMAGE}" in block
         assert "/marty-ui/issuance:${IMAGE_TAG}" not in block
         assert "/marty-ui/canvas-sync-worker:${IMAGE_TAG}" not in block
-    catalog = DeploymentCatalog.load(REPO_ROOT)
+    catalog = CatalogView.load(REPO_ROOT)
     assert (
         catalog.service_field("issuance", "artifact_role")
         == "marty-ui-services"
