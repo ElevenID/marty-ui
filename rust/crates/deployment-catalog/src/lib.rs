@@ -32,6 +32,17 @@ fn string(value: &Value) -> Option<&str> {
     value.as_str()
 }
 
+fn python_truthy(value: &Value) -> bool {
+    match value {
+        Value::Null => false,
+        Value::Bool(value) => *value,
+        Value::Number(value) => value.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(value) => !value.is_empty(),
+        Value::Array(value) => !value.is_empty(),
+        Value::Object(value) => !value.is_empty(),
+    }
+}
+
 fn list(value: &Value) -> Vec<&Value> {
     value
         .as_array()
@@ -123,10 +134,17 @@ fn read_named(dir: &Path) -> Result<Map<String, Value>> {
     for path in paths {
         let value = read_json(&path)?;
         let name = field(&value, "name")
+            .filter(|value| python_truthy(value))
             .and_then(string)
-            .filter(|s| !s.trim().is_empty())
             .map(str::to_owned)
-            .or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()))
+            .or_else(|| {
+                if field(&value, "name").is_some_and(python_truthy) {
+                    None
+                } else {
+                    path.file_stem().map(|s| s.to_string_lossy().into_owned())
+                }
+            })
+            .filter(|name| !name.trim().is_empty())
             .ok_or_else(|| {
                 format!(
                     "Deployment metadata document {} has no valid name",
@@ -591,5 +609,33 @@ impl Catalog {
                 }
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::read_named;
+    use std::fs;
+
+    #[test]
+    fn named_documents_reject_truthy_non_string_names_and_fallback_for_falsy_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "marty-deployment-catalog-names-{}",
+            std::process::id()
+        ));
+        fs::create_dir(&dir).unwrap();
+        let document = dir.join("example.json");
+        fs::write(&document, r#"{"name":["selfhost"]}"#).unwrap();
+        assert!(read_named(&dir).unwrap_err().contains("has no valid name"));
+        fs::write(&document, r#"{"name":1}"#).unwrap();
+        assert!(read_named(&dir).unwrap_err().contains("has no valid name"));
+        fs::write(&document, r#"{"name":[]}"#).unwrap();
+        assert!(read_named(&dir).unwrap().contains_key("example"));
+        fs::write(&document, r#"{"name":0}"#).unwrap();
+        assert!(read_named(&dir).unwrap().contains_key("example"));
+        fs::write(&document, r#"{"name":"explicit"}"#).unwrap();
+        assert!(read_named(&dir).unwrap().contains_key("explicit"));
+        fs::remove_file(document).unwrap();
+        fs::remove_dir(dir).unwrap();
     }
 }
