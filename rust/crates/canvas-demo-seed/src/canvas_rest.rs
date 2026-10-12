@@ -15,6 +15,12 @@ pub struct CanvasRestConfig {
     pub learner_name: String,
     pub learner_email: String,
     pub learner_password: String,
+    pub launch_module_name: String,
+    pub launch_item_title: String,
+    pub launch_assignment_name: String,
+    pub quiz_title: String,
+    pub quiz_description: String,
+    pub quiz_points_possible: i64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,15 +96,25 @@ impl CanvasRestTransport for CanvasRestHttp {
             let fields = form
                 .as_object()
                 .ok_or_else(|| CanvasRestError::Other("Canvas form must be an object".into()))?;
-            let pairs: Vec<(String, String)> = fields
-                .iter()
-                .map(|(key, value)| {
-                    let value = value.as_str().ok_or_else(|| {
-                        CanvasRestError::Other(format!("Canvas form field {key} must be a string"))
-                    })?;
-                    Ok((key.clone(), value.to_owned()))
-                })
-                .collect::<Result<_, CanvasRestError>>()?;
+            let mut pairs = Vec::new();
+            for (key, value) in fields {
+                if let Some(value) = value.as_str() {
+                    pairs.push((key.clone(), value.to_owned()));
+                } else if let Some(values) = value.as_array() {
+                    for value in values {
+                        let value = value.as_str().ok_or_else(|| {
+                            CanvasRestError::Other(format!(
+                                "Canvas form field {key} must be a string"
+                            ))
+                        })?;
+                        pairs.push((key.clone(), value.to_owned()));
+                    }
+                } else {
+                    return Err(CanvasRestError::Other(format!(
+                        "Canvas form field {key} must be a string"
+                    )));
+                }
+            }
             request = request.form(&pairs);
         }
         let response = request
@@ -112,6 +128,9 @@ impl CanvasRestTransport for CanvasRestHttp {
             .map_err(|e| CanvasRestError::Other(e.to_string()))?;
         if !status.is_success() {
             return Err(CanvasRestError::Http(status.as_u16(), body));
+        }
+        if body.is_empty() {
+            return Ok(Value::Null);
         }
         serde_json::from_str(&body).map_err(|e| CanvasRestError::Other(e.to_string()))
     }
@@ -131,6 +150,13 @@ fn id(value: &Value) -> bool {
 
 fn field_matches(value: &Value, name: &str, expected: &str) -> bool {
     value.get(name).and_then(Value::as_str) == Some(expected)
+}
+
+fn id_text(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| value.to_string())
 }
 
 pub async fn ensure_course<T: CanvasRestTransport + Sync>(
@@ -270,4 +296,279 @@ pub async fn ensure_enrollment<T: CanvasRestTransport + Sync>(
             }),
         ))
         .await
+}
+
+fn result(action: &str, field: &str, value: Value) -> Value {
+    json!({"action": action, field: value})
+}
+
+fn required_created(value: Value, error: &str) -> Result<Value, CanvasRestError> {
+    if value.is_object() && id(&value) {
+        Ok(value)
+    } else {
+        Err(CanvasRestError::Other(error.into()))
+    }
+}
+
+fn items_url(cfg: &CanvasRestConfig, course_id: &str, module_id: &str) -> String {
+    format!(
+        "{}/api/v1/courses/{course_id}/modules/{module_id}/items",
+        base(cfg)
+    )
+}
+
+async fn create_module_item_with_retries<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    url: &str,
+    form: Value,
+) -> Result<Value, CanvasRestError> {
+    let original = form.as_object().expect("module form object");
+    let mut without_completion = original.clone();
+    without_completion.retain(|key, _| !key.starts_with("module_item[completion_requirement]"));
+    let mut without_content = original.clone();
+    without_content.remove("module_item[content_id]");
+    let mut compact = without_completion.clone();
+    compact.remove("module_item[content_id]");
+    let mut attempts = vec![original.clone()];
+    for candidate in [without_completion, without_content, compact] {
+        if !attempts.contains(&candidate) {
+            attempts.push(candidate);
+        }
+    }
+    let mut last_error = None;
+    for attempt in attempts {
+        match transport
+            .request(CanvasOperation::form(
+                "POST",
+                url.to_owned(),
+                Value::Object(attempt),
+            ))
+            .await
+        {
+            Ok(value) => {
+                return required_created(
+                    value,
+                    "Canvas module item create did not return an item payload",
+                )
+            }
+            Err(error @ CanvasRestError::Http(400 | 422, _)) => last_error = Some(error),
+            Err(error) => return Err(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| {
+        CanvasRestError::Other(
+            "Canvas module item create failed before any request was attempted".into(),
+        )
+    }))
+}
+
+pub async fn ensure_module<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRestConfig,
+    course_id: &str,
+) -> Result<Value, CanvasRestError> {
+    let url = format!("{}/api/v1/courses/{course_id}/modules", base(cfg));
+    let modules = transport.request(CanvasOperation::get(url.clone())).await?;
+    if let Some(module) = modules.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| field_matches(item, "name", &cfg.launch_module_name))
+    }) {
+        return Ok(result("existing", "module", module.clone()));
+    }
+    let created = transport
+        .request(CanvasOperation::form(
+            "POST",
+            url,
+            json!({
+                "module[name]": cfg.launch_module_name,
+                "module[published]": "true"
+            }),
+        ))
+        .await?;
+    Ok(result(
+        "created",
+        "module",
+        required_created(
+            created,
+            "Canvas module create did not return a module payload",
+        )?,
+    ))
+}
+
+pub async fn ensure_module_external_tool_item<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRestConfig,
+    course_id: &str,
+    module_id: &str,
+    external_url: &str,
+    external_tool_id: Option<&str>,
+) -> Result<Value, CanvasRestError> {
+    let url = items_url(cfg, course_id, module_id);
+    let items = transport.request(CanvasOperation::get(url.clone())).await?;
+    if let Some(item) = items.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| field_matches(item, "title", &cfg.launch_item_title))
+    }) {
+        if item.get("url").and_then(Value::as_str) != Some(external_url)
+            || item.get("published") == Some(&Value::Bool(false))
+        {
+            let Some(item_id) = item.get("id").filter(|value| !value.is_null()) else {
+                return Ok(result("existing", "item", item.clone()));
+            };
+            let mut form = json!({
+                "module_item[title]": cfg.launch_item_title,
+                "module_item[external_url]": external_url,
+                "module_item[new_tab]": "false",
+                "module_item[published]": "true"
+            });
+            if let Some(external_tool_id) = external_tool_id {
+                form["module_item[content_id]"] = json!(external_tool_id);
+            }
+            let updated = transport
+                .request(CanvasOperation::form(
+                    "PUT",
+                    format!("{url}/{}", id_text(item_id)),
+                    form,
+                ))
+                .await?;
+            return Ok(result("updated", "item", updated));
+        }
+        return Ok(result("existing", "item", item.clone()));
+    }
+    let mut form = json!({
+        "module_item[title]": cfg.launch_item_title,
+        "module_item[type]": "ExternalTool",
+        "module_item[external_url]": external_url,
+        "module_item[new_tab]": "false",
+        "module_item[published]": "true",
+        "module_item[completion_requirement][type]": "must_view"
+    });
+    if let Some(external_tool_id) = external_tool_id {
+        form["module_item[content_id]"] = json!(external_tool_id);
+    }
+    let created = create_module_item_with_retries(transport, &url, form).await?;
+    Ok(result("created", "item", created))
+}
+
+pub async fn ensure_quiz<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRestConfig,
+    course_id: &str,
+) -> Result<Value, CanvasRestError> {
+    let url = format!("{}/api/v1/courses/{course_id}/quizzes", base(cfg));
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("search_term", &cfg.quiz_title)
+        .finish();
+    let quizzes = transport
+        .request(CanvasOperation::get(format!("{url}?{query}")))
+        .await?;
+    if let Some(quiz) = quizzes.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| field_matches(item, "title", &cfg.quiz_title))
+    }) {
+        return Ok(result("existing", "quiz", quiz.clone()));
+    }
+    let created = transport
+        .request(CanvasOperation::form(
+            "POST",
+            url,
+            json!({
+                "quiz[title]": cfg.quiz_title,
+                "quiz[description]": cfg.quiz_description,
+                "quiz[quiz_type]": "assignment",
+                "quiz[published]": "true",
+                "quiz[points_possible]": cfg.quiz_points_possible.to_string(),
+                "quiz[allowed_attempts]": "1",
+                "quiz[scoring_policy]": "keep_highest"
+            }),
+        ))
+        .await?;
+    Ok(result(
+        "created",
+        "quiz",
+        required_created(created, "Canvas quiz create did not return a quiz payload")?,
+    ))
+}
+
+pub async fn ensure_module_quiz_item<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRestConfig,
+    course_id: &str,
+    module_id: &str,
+    quiz_id: &str,
+) -> Result<Value, CanvasRestError> {
+    let url = items_url(cfg, course_id, module_id);
+    let items = transport.request(CanvasOperation::get(url.clone())).await?;
+    if let Some(item) = items.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| field_matches(item, "title", &cfg.quiz_title))
+    }) {
+        return Ok(result("existing", "item", item.clone()));
+    }
+    let created = create_module_item_with_retries(
+        transport,
+        &url,
+        json!({
+            "module_item[title]": cfg.quiz_title,
+            "module_item[type]": "Quiz",
+            "module_item[content_id]": quiz_id,
+            "module_item[published]": "true",
+            "module_item[completion_requirement][type]": "must_submit"
+        }),
+    )
+    .await?;
+    Ok(result("created", "item", created))
+}
+
+pub async fn ensure_external_tool_assignment<T: CanvasRestTransport + Sync>(
+    transport: &T,
+    cfg: &CanvasRestConfig,
+    course_id: &str,
+    external_url: &str,
+) -> Result<Value, CanvasRestError> {
+    let url = format!("{}/api/v1/courses/{course_id}/assignments", base(cfg));
+    let query = form_urlencoded::Serializer::new(String::new())
+        .append_pair("search_term", &cfg.launch_assignment_name)
+        .finish();
+    let assignments = transport
+        .request(CanvasOperation::get(format!("{url}?{query}")))
+        .await?;
+    let existing = assignments.as_array().and_then(|items| {
+        items
+            .iter()
+            .find(|item| field_matches(item, "name", &cfg.launch_assignment_name))
+    });
+    if let Some(item) = existing {
+        if item.get("id").is_none_or(Value::is_null) {
+            return Ok(result("existing", "assignment", item.clone()));
+        }
+    }
+    let form = json!({
+        "assignment[name]": cfg.launch_assignment_name,
+        "assignment[published]": "true",
+        "assignment[points_possible]": "100",
+        "assignment[grading_type]": "points",
+        "assignment[submission_types][]": ["external_tool"],
+        "assignment[external_tool_tag_attributes][url]": external_url,
+        "assignment[external_tool_tag_attributes][new_tab]": "false"
+    });
+    let (method, action, target) = if let Some(item) = existing {
+        ("PUT", "updated", format!("{url}/{}", id_text(&item["id"])))
+    } else {
+        ("POST", "created", url)
+    };
+    let value = transport
+        .request(CanvasOperation::form(method, target, form))
+        .await?;
+    if action == "created" {
+        required_created(
+            value.clone(),
+            "Canvas assignment create did not return an assignment payload",
+        )?;
+    }
+    Ok(result(action, "assignment", value))
 }

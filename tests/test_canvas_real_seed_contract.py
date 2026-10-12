@@ -130,6 +130,59 @@ def test_frozen_canvas_core_rest(monkeypatch) -> None:
     assert capture_canvas_core_rest(monkeypatch) == contract["canvas_core_rest"]
 
 
+def capture_canvas_launch_surface_rest(monkeypatch) -> dict:
+    operations = []
+    responses = []
+
+    def request(method, url, *, payload=None, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": payload, "form": None})
+        return responses.pop(0)
+
+    def form_request(method, url, *, form, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": None, "form": form})
+        return responses.pop(0)
+
+    monkeypatch.setattr(seed, "_json_request", request)
+    monkeypatch.setattr(seed, "_form_request", form_request)
+    cfg = canvas_config()
+    launch_url = "https://marty.example/launch"
+    responses.extend([
+        [], {"id": 10, "name": cfg.launch_module_name},
+        [], {"id": 11, "title": cfg.launch_item_title, "url": launch_url, "published": True},
+        [], {"id": 12, "title": cfg.quiz_title},
+        [], {"id": 13, "title": cfg.quiz_title},
+        [], {"id": 14, "name": cfg.launch_assignment_name},
+        [{"id": 10, "name": cfg.launch_module_name}],
+        [{"id": 11, "title": cfg.launch_item_title, "url": "https://stale.example/launch", "published": False}],
+        {"id": 11, "title": cfg.launch_item_title, "url": launch_url, "published": True},
+        [{"id": 12, "title": cfg.quiz_title}],
+        [{"id": 13, "title": cfg.quiz_title}],
+        [{"id": 14, "name": cfg.launch_assignment_name}],
+        {"id": 14, "name": cfg.launch_assignment_name},
+    ])
+    created = {
+        "module": seed._ensure_canvas_module(cfg, 42),
+        "tool_item": seed._ensure_canvas_module_external_tool_item(cfg, 42, 10, launch_url, 99),
+        "quiz": seed._ensure_canvas_quiz(cfg, 42),
+        "quiz_item": seed._ensure_canvas_module_quiz_item(cfg, 42, 10, 12),
+        "assignment": seed._ensure_canvas_external_tool_assignment(cfg, 42, launch_url),
+    }
+    existing = {
+        "module": seed._ensure_canvas_module(cfg, 42),
+        "tool_item": seed._ensure_canvas_module_external_tool_item(cfg, 42, 10, launch_url, 99),
+        "quiz": seed._ensure_canvas_quiz(cfg, 42),
+        "quiz_item": seed._ensure_canvas_module_quiz_item(cfg, 42, 10, 12),
+        "assignment": seed._ensure_canvas_external_tool_assignment(cfg, 42, launch_url),
+    }
+    assert not responses
+    return {"operations": operations, "created": created, "existing": existing}
+
+
+def test_frozen_canvas_launch_surface_rest(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_launch_surface_rest(monkeypatch) == contract["canvas_launch_surface_rest"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []

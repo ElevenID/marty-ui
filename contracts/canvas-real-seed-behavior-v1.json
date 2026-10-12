@@ -1188,5 +1188,240 @@
         "user_id": 77
       }
     }
+  },
+  "canvas_launch_surface_rest": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": {
+          "module[name]": "Credential Launch",
+          "module[published]": "true"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Launch Credential",
+          "module_item[type]": "ExternalTool",
+          "module_item[external_url]": "https://marty.example/launch",
+          "module_item[new_tab]": "false",
+          "module_item[published]": "true",
+          "module_item[completion_requirement][type]": "must_view",
+          "module_item[content_id]": "99"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes?search_term=Credential+Quiz",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes",
+        "payload": null,
+        "form": {
+          "quiz[title]": "Credential Quiz",
+          "quiz[description]": "Quiz description",
+          "quiz[quiz_type]": "assignment",
+          "quiz[published]": "true",
+          "quiz[points_possible]": "100",
+          "quiz[allowed_attempts]": "1",
+          "quiz[scoring_policy]": "keep_highest"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Credential Quiz",
+          "module_item[type]": "Quiz",
+          "module_item[content_id]": "12",
+          "module_item[published]": "true",
+          "module_item[completion_requirement][type]": "must_submit"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments?search_term=Credential+Assignment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "POST",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments",
+        "payload": null,
+        "form": {
+          "assignment[name]": "Credential Assignment",
+          "assignment[published]": "true",
+          "assignment[points_possible]": "100",
+          "assignment[grading_type]": "points",
+          "assignment[submission_types][]": [
+            "external_tool"
+          ],
+          "assignment[external_tool_tag_attributes][url]": "https://marty.example/launch",
+          "assignment[external_tool_tag_attributes][new_tab]": "false"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items/11",
+        "payload": null,
+        "form": {
+          "module_item[title]": "Launch Credential",
+          "module_item[external_url]": "https://marty.example/launch",
+          "module_item[new_tab]": "false",
+          "module_item[published]": "true",
+          "module_item[content_id]": "99"
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/quizzes?search_term=Credential+Quiz",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/modules/10/items",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "GET",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments?search_term=Credential+Assignment",
+        "payload": null,
+        "form": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://canvas:8088/api/v1/courses/42/assignments/14",
+        "payload": null,
+        "form": {
+          "assignment[name]": "Credential Assignment",
+          "assignment[published]": "true",
+          "assignment[points_possible]": "100",
+          "assignment[grading_type]": "points",
+          "assignment[submission_types][]": [
+            "external_tool"
+          ],
+          "assignment[external_tool_tag_attributes][url]": "https://marty.example/launch",
+          "assignment[external_tool_tag_attributes][new_tab]": "false"
+        }
+      }
+    ],
+    "created": {
+      "module": {
+        "action": "created",
+        "module": {
+          "id": 10,
+          "name": "Credential Launch"
+        }
+      },
+      "tool_item": {
+        "action": "created",
+        "item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "url": "https://marty.example/launch",
+          "published": true
+        }
+      },
+      "quiz": {
+        "action": "created",
+        "quiz": {
+          "id": 12,
+          "title": "Credential Quiz"
+        }
+      },
+      "quiz_item": {
+        "action": "created",
+        "item": {
+          "id": 13,
+          "title": "Credential Quiz"
+        }
+      },
+      "assignment": {
+        "action": "created",
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment"
+        }
+      }
+    },
+    "existing": {
+      "module": {
+        "action": "existing",
+        "module": {
+          "id": 10,
+          "name": "Credential Launch"
+        }
+      },
+      "tool_item": {
+        "action": "updated",
+        "item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "url": "https://marty.example/launch",
+          "published": true
+        }
+      },
+      "quiz": {
+        "action": "existing",
+        "quiz": {
+          "id": 12,
+          "title": "Credential Quiz"
+        }
+      },
+      "quiz_item": {
+        "action": "existing",
+        "item": {
+          "id": 13,
+          "title": "Credential Quiz"
+        }
+      },
+      "assignment": {
+        "action": "updated",
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment"
+        }
+      }
+    }
   }
 }

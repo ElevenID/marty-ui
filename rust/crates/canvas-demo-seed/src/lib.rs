@@ -11,8 +11,9 @@ mod database;
 mod demo_evidence;
 mod wallet;
 pub use canvas_rest::{
-    ensure_course, ensure_enrollment, ensure_user, CanvasOperation, CanvasRestConfig,
-    CanvasRestError, CanvasRestHttp, CanvasRestTransport,
+    ensure_course, ensure_enrollment, ensure_external_tool_assignment, ensure_module,
+    ensure_module_external_tool_item, ensure_module_quiz_item, ensure_quiz, ensure_user,
+    CanvasOperation, CanvasRestConfig, CanvasRestError, CanvasRestHttp, CanvasRestTransport,
 };
 pub use database::seed_open_badge_templates;
 pub use demo_evidence::{
