@@ -404,7 +404,8 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         component for component in planned["components"]
         if component["name"] != "marty-credentials-issuance"
     ]
-    planned["components"][-1]["artifacts"][1]["digest"] = "sha256:" + "4" * 64
+    next(artifact for artifact in planned["components"][-1]["artifacts"]
+         if artifact["uri"] == "ghcr.io/elevenid/marty-ui-oss/services")["digest"] = "sha256:" + "5" * 64
     manifest.write_text(json.dumps(planned), encoding="utf-8")
     (planned_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
     (baseline_dir / "SHA256SUMS").write_text("synthetic", encoding="utf-8")
@@ -550,7 +551,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         "beta": {
             "postgres_system_identifier": "12345", "database_oid": "87774",
             "ui_service": {"configured_image":
-                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "3" * 64},
+                           "ghcr.io/elevenid/marty-ui-oss/ui@sha256:" + "4" * 64},
             "database_route": {"name": "elevenid-beta-network", "id": "a" * 64,
                                "postgres_container_id": "f" * 64},
             "postgres_runtime": {"image_id": "sha256:" + "f" * 64,
@@ -561,7 +562,7 @@ def fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     }
     target["beta"]["services"].update({
         "issuance": {"configured_image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "f" * 64},
-        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "2" * 64}
+        **{name: {"configured_image": "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "3" * 64}
            for name in ("gateway", "flow", "issuance-native", "signing-keys")},
     })
     return approval, manifest, values, target, runner

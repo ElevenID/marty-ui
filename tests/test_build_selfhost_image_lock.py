@@ -66,6 +66,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "ui": "sha256:" + "1" * 64,
         "services": "sha256:" + "2" * 64,
         "migrations": "sha256:" + "3" * 64,
+        "openbao_didcomm": "sha256:" + "7" * 64,
     }, build_run_id="92")
     model = {"services": {
         "postgres": {"image": "postgres:15-alpine"},

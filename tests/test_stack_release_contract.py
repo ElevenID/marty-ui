@@ -240,6 +240,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-ui-sbom.cdx.json",
         "marty-ui-services-sbom.cdx.json",
         "marty-ui-migrations-sbom.cdx.json",
+        "marty-ui-openbao-didcomm-sbom.cdx.json",
     }
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
     for name in expected_assets:
@@ -763,6 +764,49 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
                    if item.get("name") == "Persist exact gate evidence")
     assert "sha256sum gates/native/native-schema.json" in persist
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
+
+
+def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> None:
+    workflow = _text(".github/workflows/cd.yml")
+    jobs = yaml.safe_load(workflow)["jobs"]
+    prepare = _text(".github/workflows/prepare-stack-tag.yml")
+    image = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"
+
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in workflow
+    assert f"OPENBAO_DIDCOMM_IMAGE: {image}" in prepare
+    assert '--image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"' in prepare
+    build = jobs["build-openbao-didcomm"]
+    build_step = next(step for step in build["steps"] if step.get("id") == "build")
+    assert build_step["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    assert "push-by-digest=true" in build_step["with"]["outputs"]
+    assert any("actions/attest-build-provenance" in step.get("uses", "")
+               for step in build["steps"])
+    assert any('cosign sign --yes "$OPENBAO_DIDCOMM_IMAGE@$DIGEST"'
+               in step.get("run", "") for step in build["steps"])
+
+    assert "build-openbao-didcomm" in jobs["record-digests"]["needs"]
+    recorded = next(step["run"] for step in jobs["record-digests"]["steps"]
+                    if step.get("name") == "Persist the exact digest checkpoint")
+    assert '--digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"' in recorded
+    gate = jobs["didcomm-plugin-image-qualification"]
+    assert "build-openbao-didcomm" in gate["needs"]
+    probe = next(step["run"] for step in gate["steps"]
+                 if step.get("name") == "Verify and exercise the exact published OpenBao DIDComm image")
+    for required in (
+        'gh attestation verify "oci://$image"',
+        'export MARTY_OPENBAO_PROBE_IMAGE="$image"',
+        "probe_didcomm_issuance_token.py",
+        "probe_didcomm_openbao_ha.py",
+        "test_openbao_raft_recovery.ps1",
+    ):
+        assert required in probe
+    assert "didcomm-plugin-image-qualification" in jobs["qualify-release"]["needs"]
+    assert '--gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest"' in workflow
+    publication = jobs["publish-manifest"]
+    assert "build-openbao-didcomm" in publication["needs"]
+    assert '--role openbao_didcomm --digest "$DIGEST"' in workflow
+    assert 'uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"' in workflow
+    assert "marty-ui-openbao-didcomm-sbom.cdx.json" in workflow
 
 
 def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:

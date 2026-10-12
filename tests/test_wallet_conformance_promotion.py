@@ -182,7 +182,8 @@ def _stack_manifest() -> dict:
             "sbom": f"https://example.test/{name}.spdx.json",
             "provenance": "https://example.test/attestations",
         }
-        for name, digest in (("ui", "8"), ("services", "9"), ("migrations", "a"))
+        for name, digest in (("ui", "8"), ("services", "9"), ("migrations", "a"),
+                             ("openbao-didcomm", "b"))
     ]
     components.append(ui)
     return {

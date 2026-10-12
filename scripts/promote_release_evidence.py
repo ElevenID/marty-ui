@@ -36,6 +36,7 @@ REQUIRED_MARTY_UI_ARTIFACTS = {
     "ghcr.io/elevenid/marty-ui-oss/ui",
     "ghcr.io/elevenid/marty-ui-oss/services",
     "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 FRESH_ORG_RESOURCE_TYPES = {
     "signing_service",

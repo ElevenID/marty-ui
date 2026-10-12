@@ -122,6 +122,11 @@ def _manifest() -> dict:
                         "ghcr.io/elevenid/marty-ui-oss/migrations",
                         MIGRATIONS_DIGEST,
                     ),
+                    _artifact(
+                        "oci",
+                        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+                        "sha256:" + "7" * 64,
+                    ),
                 ],
                 UI_SHA,
                 "1.1.205",
@@ -267,6 +272,7 @@ def test_rust_only_signed_source_uses_services_image_without_python_issuance(
         "ghcr.io/elevenid/marty-ui-oss/ui",
         "ghcr.io/elevenid/marty-ui-oss/services",
         "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
     }
     assert source["build_only_artifacts"]
 
@@ -290,11 +296,25 @@ def test_official_release_cli_accepts_only_explicit_rust_only_manifest(
     monkeypatch.setattr(sys, "argv", args + ["--rust-only"])
     assert main() == 0
     plan = json.loads(capsys.readouterr().out)
-    assert set(plan["images"]) == {"ui", "services", "migrations"}
+    assert set(plan["images"]) == {"ui", "services", "migrations", "openbao_didcomm"}
     assert plan["images"]["services"]["reference"].endswith(SERVICES_DIGEST)
     assert "marty-credentials" not in plan["source_manifest"]["repositories"]
     assert validate_release_inputs(path, checksums, expected_ui_revision=UI_SHA,
                                    rust_only=True)["images"] == plan["images"]
+
+
+def test_rust_only_release_requires_the_didcomm_plugin_image(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["components"] = [component for component in manifest["components"]
+                              if component["name"] != "marty-credentials-issuance"]
+    ui = next(component for component in manifest["components"]
+              if component["name"] == "marty-ui")
+    ui["artifacts"] = [artifact for artifact in ui["artifacts"]
+                       if artifact["uri"] != "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"]
+    path, checksums = _write_release(tmp_path, manifest)
+    with pytest.raises(OfficialReleaseError, match="openbao_didcomm"):
+        validate_release_inputs(path, checksums, expected_ui_revision=UI_SHA,
+                                rust_only=True)
 
 
 def test_rust_only_source_rejects_legacy_issuance_component(tmp_path: Path) -> None:

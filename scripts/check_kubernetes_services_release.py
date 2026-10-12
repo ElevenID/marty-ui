@@ -24,6 +24,7 @@ UI_IMAGES = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 
 

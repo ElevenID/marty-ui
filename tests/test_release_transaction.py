@@ -18,11 +18,13 @@ DIGESTS = {
     "ui": "sha256:" + "1" * 64,
     "services": "sha256:" + "2" * 64,
     "migrations": "sha256:" + "3" * 64,
+    "openbao_didcomm": "sha256:" + "7" * 64,
 }
 IMAGES = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 GATES = {
     "public_stack": {
@@ -36,6 +38,10 @@ GATES = {
     "native_schema": {
         "run_id": "103",
         "evidence_sha256": "sha256:" + "6" * 64,
+    },
+    "didcomm_plugin": {
+        "run_id": "104",
+        "evidence_sha256": "sha256:" + "8" * 64,
     },
 }
 
@@ -82,6 +88,13 @@ def test_fresh_native_schema_evidence_is_required_for_release(tmp_path: Path) ->
         transaction.qualify(digests_recorded(tmp_path), without_native)
 
 
+def test_exact_plugin_image_evidence_is_required_for_release(tmp_path: Path) -> None:
+    without_plugin = {role: value for role, value in GATES.items()
+                      if role != "didcomm_plugin"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="didcomm_plugin"):
+        transaction.qualify(digests_recorded(tmp_path), without_plugin)
+
+
 def promoted(tmp_path: Path) -> dict[str, object]:
     value = qualified(tmp_path)
     for role in transaction.REQUIRED_IMAGE_ROLES:
@@ -103,6 +116,7 @@ def test_claim_is_deterministic_and_binds_all_absence_checks(tmp_path: Path) -> 
             "ui": True,
             "services": True,
             "migrations": True,
+            "openbao_didcomm": True,
         },
     }
     assert first["stack_lock_sha256"] == transaction.file_digest(
@@ -184,9 +198,12 @@ def test_claim_fails_closed_before_any_write(
 @pytest.mark.parametrize(
     ("tag_absent", "release_absent", "version_absence", "message"),
     [
-        (False, True, {"ui": True, "services": True, "migrations": True}, "tag"),
-        (True, False, {"ui": True, "services": True, "migrations": True}, "release"),
-        (True, True, {"ui": True, "services": False, "migrations": True}, "registry"),
+        (False, True, {role: True for role in transaction.REQUIRED_IMAGE_ROLES}, "tag"),
+        (True, False, {role: True for role in transaction.REQUIRED_IMAGE_ROLES}, "release"),
+        (True, True, {**{role: True for role in transaction.REQUIRED_IMAGE_ROLES},
+                      "services": False}, "registry"),
+        (True, True, {**{role: True for role in transaction.REQUIRED_IMAGE_ROLES},
+                      "openbao_didcomm": False}, "registry"),
     ],
 )
 def test_claim_requires_every_exact_coordinate_absence(

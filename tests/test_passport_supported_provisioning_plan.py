@@ -46,6 +46,8 @@ def manifest() -> dict:
               "digest": "sha256:" + "d" * 64},
              {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/ui",
               "digest": "sha256:" + "f" * 64},
+             {"type": "oci", "uri": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+              "digest": "sha256:" + "7" * 64},
         ]}
     )
     supporting = (

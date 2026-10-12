@@ -17107,3 +17107,18 @@ organization and status, not by subject; first check whether the old scenario's
 subject query was ever a supported route. Keep supported cross-format retrieval,
 OB2/OB3 status/trust and expiry/revocation as K7/K8 release-acceptance cases;
 do not count the inert Behave deletion or mock-builder contract as their proof.
+
+2026-10-12 release-path review found that CI built and exercised the Go
+OpenBao DIDComm extension image, but the protected stack release transaction
+published only UI, services and migrations. The self-host OpenBao Compose
+requires a digest-pinned plugin image, so a green source CI result could not
+produce the signed plugin artifact needed for KMS-only deployment. A local
+candidate correction adds `openbao_didcomm` as a fourth claim/digest/promotion
+role, builds it from the pinned Go/OpenBao Dockerfile, signs and attests the
+exact digest, runs scoped-token, Raft failover and snapshot-recovery probes
+against that published digest before qualification, and includes its SBOM and
+digest in the stack manifest. Downstream signed-manifest selectors now require
+all four UI-owned image artifacts. Focused release tests passed locally; this
+candidate is not pushed, hosted-qualified or an installed-stack proof yet.
+The self-host bundle still needs a reviewed binding for its OpenBao sidecar
+or a separately supplied exact plugin image at cutover.

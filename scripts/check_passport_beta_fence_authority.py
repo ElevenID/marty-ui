@@ -40,6 +40,7 @@ OCI_ROLES = {
     "ghcr.io/elevenid/marty-ui-oss/ui",
     "ghcr.io/elevenid/marty-ui-oss/services",
     "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
 }
 PROTECTED_FILES = (
     ".gitattributes",
@@ -248,8 +249,8 @@ def manifest_source(
         raise HostProbeError("Official stack components are invalid") from exc
     require(release == f"marty-ui@{version}", "Official release version differs")
     digests = {images[role]["uri"]: images[role]["digest"]
-               for role in ("ui", "services", "migrations")}
-    require(set(digests) == OCI_ROLES and len(digests) == 3,
+               for role in ("ui", "services", "migrations", "openbao_didcomm")}
+    require(set(digests) == OCI_ROLES and len(digests) == len(OCI_ROLES),
             "Official UI OCI roles are incomplete")
     credentials = None if rust_only else next(
         item for item in manifest["components"]
