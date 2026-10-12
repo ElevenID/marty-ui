@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@test/utils';
+import { act, fireEvent, render, screen, waitFor } from '@test/utils';
 
 import WalletSetup from '../WalletSetup';
 
@@ -43,6 +43,7 @@ vi.mock('../../application/wallet', async () => {
 
 describe('WalletSetup', () => {
   beforeEach(() => {
+    MOCK_AUTH.organizationId = 'org-1';
     vi.stubEnv('VITE_API_URL', 'https://wallet.example');
     // Fake timers prevent the countdown (setTimeout ×300) and polling
     // (setInterval 3 s) from keeping the test alive.
@@ -105,5 +106,64 @@ describe('WalletSetup', () => {
         storage: window.localStorage,
       });
     });
+  });
+
+  it('discards a prior organization ticket that resolves after the new ticket', async () => {
+    const pending = new Map<string, (ticket: unknown) => void>();
+    mockListTrustProfiles.mockImplementation(({ organization_id }: { organization_id: string }) =>
+      Promise.resolve([{ id: '11111111-2222-4333-8444-555555555555', name: organization_id, status: 'active' }]));
+    mockIssueRemotePairingTicket.mockImplementation(({ organizationId }: { organizationId: string }) =>
+      new Promise((resolve) => { pending.set(organizationId, resolve); }));
+
+    const { rerender } = render(<WalletSetup />);
+    await waitFor(() => expect(pending.has('org-1')).toBe(true));
+
+    MOCK_AUTH.organizationId = 'org-2';
+    rerender(<WalletSetup />);
+    await waitFor(() => expect(pending.has('org-2')).toBe(true));
+
+    const expires_at = new Date(Date.now() + 300000).toISOString();
+    await act(async () => {
+      pending.get('org-2')?.({ pairing_code: 'B'.repeat(43), pairing_id: '22222222-2222-4333-8444-555555555555', expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
+
+    await act(async () => {
+      pending.get('org-1')?.({ pairing_code: 'A'.repeat(43), pairing_id: '11111111-2222-4333-8444-555555555555', expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
+  });
+
+  it('discards a prior Trust Profile ticket after the selection changes', async () => {
+    const pending = new Map<string, (ticket: unknown) => void>();
+    const firstProfile = '11111111-2222-4333-8444-555555555555';
+    const secondProfile = '22222222-2222-4333-8444-555555555555';
+    mockListTrustProfiles.mockResolvedValue([
+      { id: firstProfile, name: 'Profile A', status: 'active' },
+      { id: secondProfile, name: 'Profile B', status: 'active' },
+    ]);
+    mockIssueRemotePairingTicket.mockImplementation(({ trustProfileId }: { trustProfileId: string }) =>
+      new Promise((resolve) => { pending.set(trustProfileId, resolve); }));
+
+    render(<WalletSetup />);
+    await waitFor(() => expect(mockListTrustProfiles).toHaveBeenCalled());
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Trust Profile' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Profile A' }));
+    await waitFor(() => expect(pending.has(firstProfile)).toBe(true));
+
+    fireEvent.mouseDown(screen.getByRole('combobox', { name: 'Trust Profile' }));
+    fireEvent.click(await screen.findByRole('option', { name: 'Profile B' }));
+    await waitFor(() => expect(pending.has(secondProfile)).toBe(true));
+
+    const expires_at = new Date(Date.now() + 300000).toISOString();
+    await act(async () => {
+      pending.get(secondProfile)?.({ pairing_code: 'B'.repeat(43), pairing_id: secondProfile, expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
+
+    await act(async () => {
+      pending.get(firstProfile)?.({ pairing_code: 'A'.repeat(43), pairing_id: firstProfile, expires_at });
+    });
+    expect(screen.getByTestId('pairing-code')).toHaveTextContent('B'.repeat(43));
   });
 });

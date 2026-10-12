@@ -7,10 +7,18 @@ const DEFAULT_POLL_INTERVAL_MS = 3000;
 
 export function buildPairingState({ pairingCode, pairingId, apiOrigin, expiresAt, now = Date.now() }) {
   const expiresIn = Math.max(0, Math.ceil((Date.parse(expiresAt) - now) / 1000));
+  let origin;
+  try {
+    origin = new URL(apiOrigin);
+  } catch {
+    throw new Error('Invalid server-issued wallet pairing ticket');
+  }
+  const secureOrigin = origin.protocol === 'https:' ||
+    (origin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(origin.hostname));
   if (!/^[A-Za-z0-9_-]{43}$/.test(pairingCode || '') ||
       !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(pairingId || '') ||
       !Number.isFinite(expiresIn) || expiresIn <= 0 ||
-      !apiOrigin.startsWith('https://') || new URL(apiOrigin).origin !== apiOrigin) {
+      !secureOrigin || origin.origin !== apiOrigin) {
     throw new Error('Invalid server-issued wallet pairing ticket');
   }
   const query = new URLSearchParams({ code: pairingCode, api: apiOrigin });

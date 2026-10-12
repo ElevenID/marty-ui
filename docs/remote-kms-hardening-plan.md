@@ -17248,3 +17248,30 @@ canceled run remains separate evidence. The three local tracker-only commits
 will be pushed together; because they change the head, require a fresh
 exact-head PR check set before protected merge. This source CI does not prove
 that a signed four-image release has been published or installed.
+
+2026-10-12 UI review/main reconciliation, local batch: #1192 was marked ready
+at tracker head `45e63ba7e`; its automated code review identified two P2
+wallet setup regressions. The documented loopback HTTP API origin was
+rejected by pairing QR validation, and an older in-flight organization or
+Trust Profile ticket could replace a newer QR/polling ID. The local fix
+accepts only HTTPS or exact loopback HTTP origins, binds ticket/status
+responses to the current request and scope, and clears stale QR state on
+selection changes. Focused wallet helper/component tests passed, including
+out-of-order organization and profile responses; TypeScript and focused
+ESLint passed. The automated security review completed without an additional
+finding. Hosted checks for pushed `45e63ba7e` remain in progress and do not
+cover these local corrections.
+
+Main advanced to `97778e0f8` with a Canvas timeout current-input guard. The
+local merge preserves that guard, updates only the Rust-branch schema-preparer
+hash, and adds its manifest to the Rust migration image exclusions. The
+facts/retry and roster-failure/validation Python producers guarded by other
+recent main overlays were already retired by this Rust-only branch, so their
+dead-script overlays are not restored. The still-active provider-signals
+producer gains an independent 12-input closure guard instead. Focused
+Canvas source/closure tests passed (89), as did 185 workflow-policy, timeout,
+and provider-signals guard cases after the selector reconciliation. Eleven
+focused wallet tests, TypeScript build checking, focused ESLint, Ruff checks
+for the new Python guard, YAML parsing, and diff hygiene passed. The merge,
+final local review, and fresh exact-head hosted CI are still required before
+source merge; the stack release lock stays `hold`.

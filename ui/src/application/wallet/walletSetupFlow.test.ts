@@ -15,7 +15,7 @@ import {
 } from './walletSetupFlow'
 
 describe('walletSetupFlow helpers', () => {
-  it('builds a wallet QR only from an unexpired server ticket and HTTPS origin', () => {
+  it('builds a wallet QR only from an unexpired server ticket and an HTTPS or loopback origin', () => {
     const pairingCode = 'A'.repeat(43)
     const pairingId = '11111111-2222-4333-8444-555555555555'
     const state = buildPairingState({ pairingCode, pairingId, apiOrigin: 'https://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })
@@ -23,8 +23,13 @@ describe('walletSetupFlow helpers', () => {
     expect(state.pairingId).toBe(pairingId)
     expect(state.qrContent).toBe(`marty://pair?code=${pairingCode}&api=https%3A%2F%2Fwallet.example`)
     expect(state.expiresIn).toBe(walletSetupDefaults.expirySeconds)
+    for (const apiOrigin of ['http://localhost:8000', 'http://127.0.0.1:8000', 'http://[::1]:8000']) {
+      expect(buildPairingState({ pairingCode, pairingId, apiOrigin, expiresAt: new Date(300000).toISOString(), now: 0 }).qrContent)
+        .toContain(encodeURIComponent(apiOrigin))
+    }
     expect(() => buildPairingState({ pairingCode: 'SHORT', pairingId, apiOrigin: 'https://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })).toThrow()
     expect(() => buildPairingState({ pairingCode, pairingId, apiOrigin: 'http://wallet.example', expiresAt: new Date(300000).toISOString(), now: 0 })).toThrow()
+    expect(() => buildPairingState({ pairingCode, pairingId, apiOrigin: 'http://localhost.attacker.example:8000', expiresAt: new Date(300000).toISOString(), now: 0 })).toThrow()
   })
 
   it('decides when countdown and polling should run', () => {

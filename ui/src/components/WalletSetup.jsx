@@ -7,7 +7,7 @@
  * 3. Show wallet connection status
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Container,
   Paper,
@@ -73,6 +73,9 @@ const WalletSetup = () => {
   const [trustProfiles, setTrustProfiles] = useState([]);
   const [trustProfileId, setTrustProfileId] = useState('');
   const [profileOrganizationId, setProfileOrganizationId] = useState(null);
+  const pairingRequestId = useRef(0);
+  const currentScope = useRef({ organizationId, trustProfileId });
+  currentScope.current = { organizationId, trustProfileId };
 
   // Wallet connection state
   const [walletConnected, setWalletConnected] = useState(false);
@@ -82,13 +85,22 @@ const WalletSetup = () => {
   const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [notificationPermission, setNotificationPermission] = useState('default');
 
-  const generatePairingCode = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const clearPairingPresentation = useCallback(() => {
     setPairingCode(null);
     setPairingId(null);
     setQrContent(null);
     setWalletConnected(false);
+  }, []);
+
+  const generatePairingCode = useCallback(async () => {
+    if (!organizationId || !trustProfileId || profileOrganizationId !== organizationId) return;
+    const requestId = ++pairingRequestId.current;
+    const isCurrent = () => requestId === pairingRequestId.current &&
+      currentScope.current.organizationId === organizationId &&
+      currentScope.current.trustProfileId === trustProfileId;
+    setLoading(true);
+    setError(null);
+    clearPairingPresentation();
     try {
       const ticket = await issueRemotePairingTicket({ organizationId, trustProfileId });
       const apiOrigin = new URL(import.meta.env.VITE_API_URL || window.location.origin, window.location.origin).origin;
@@ -98,24 +110,29 @@ const WalletSetup = () => {
         expiresAt: ticket.expires_at,
         apiOrigin,
       });
+      if (!isCurrent()) return;
       setPairingCode(nextPairingState.pairingCode);
       setPairingId(nextPairingState.pairingId);
       setQrContent(nextPairingState.qrContent);
       setExpiresIn(nextPairingState.expiresIn);
     } catch (err) {
-      setError(err.message || 'Could not issue a wallet pairing code');
+      if (isCurrent()) setError(err.message || 'Could not issue a wallet pairing code');
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [organizationId, trustProfileId]);
+  }, [organizationId, trustProfileId, profileOrganizationId, clearPairingPresentation]);
 
   useEffect(() => {
     let current = true;
+    pairingRequestId.current += 1;
+    setLoading(false);
     setTrustProfiles([]);
     setTrustProfileId('');
     setProfileOrganizationId(null);
-    setPairingId(null);
-    setQrContent(null);
+    clearPairingPresentation();
+    setActiveStep(0);
+    setWalletDeviceId(null);
+    setSuccess(null);
     if (organizationId) {
       listTrustProfiles({ organization_id: organizationId })
         .then((profiles) => {
@@ -128,12 +145,18 @@ const WalletSetup = () => {
         .catch(() => { if (current) setError('Could not load Trust Profiles for wallet pairing'); });
     }
     return () => { current = false; };
-  }, [organizationId]);
+  }, [organizationId, clearPairingPresentation]);
 
   const checkWalletStatus = useCallback(async () => {
     if (!pairingId || activeStep !== 0) return;
+    const requestId = pairingRequestId.current;
+    const { organizationId: requestOrganizationId, trustProfileId: requestTrustProfileId } = currentScope.current;
+    const isCurrent = () => requestId === pairingRequestId.current &&
+      currentScope.current.organizationId === requestOrganizationId &&
+      currentScope.current.trustProfileId === requestTrustProfileId;
     try {
       const status = await loadRemotePairingStatus({ pairingId });
+      if (!isCurrent()) return;
       if (status.state === 'paired' && status.registration_id) {
         setWalletConnected(true);
         setWalletDeviceId(status.registration_id);
@@ -144,7 +167,9 @@ const WalletSetup = () => {
         setPairingId(null);
       }
     } catch (err) {
-      setError(err.message || 'Could not check wallet pairing status');
+      if (isCurrent()) {
+        setError(err.message || 'Could not check wallet pairing status');
+      }
     }
   }, [pairingId, activeStep]);
 
@@ -283,7 +308,12 @@ const WalletSetup = () => {
                   labelId="wallet-trust-profile-label"
                   label="Trust Profile"
                   value={trustProfileId}
-                  onChange={(event) => setTrustProfileId(event.target.value)}
+                  onChange={(event) => {
+                    pairingRequestId.current += 1;
+                    setLoading(false);
+                    clearPairingPresentation();
+                    setTrustProfileId(event.target.value);
+                  }}
                   data-testid="wallet-trust-profile-select"
                 >
                   {trustProfiles.map((profile) => (
@@ -323,7 +353,7 @@ const WalletSetup = () => {
                   variant="outlined"
                   startIcon={<RefreshIcon />}
                   onClick={generatePairingCode}
-                  disabled={loading || !trustProfileId}
+                  disabled={loading || !trustProfileId || profileOrganizationId !== organizationId}
                   data-testid="refresh-qr-button"
                 >
                   Refresh QR

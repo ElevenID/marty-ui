@@ -427,6 +427,50 @@ and 602 successful Canvas timing rows in each run, then merged as
 `2300a8582d`. Its exact preflight-test source selector has no measured
 scoped-PR saving yet.
 
+Facts/retry current-input follow-up (2026-10-12 merged): the two thin
+`run_canvas_worker_{facts,retry}_oracle.py` producers inherit the independently
+guarded REST capture inputs and add only their two scripts and two scenario
+files. One overlay pins those four normalized source hashes; its test first
+validates the inherited REST evidence against current source, then requires
+the exact union of both computed wrapper import, child, and transitive
+scenario closures plus the mounted preparer/trust inputs. Focused local
+tests and independent review cleared the candidate. This is current-source
+drift detection, not historical capture-source attestation, complete image
+or runtime closure, or permission to skip reference qualification.
+[UI #1282](https://github.com/ElevenID/marty-ui/pull/1282) passed full PR
+and [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38209022385),
+including the Canvas service and release-contract gates, then merged as
+`eb7cdd0bb`.
+
+REST-dependent current-input follow-up (2026-10-12): the
+provider-signals, roster-failure, and validation producers share the REST and
+startup graph. A single overlay inherits the ten guarded REST inputs and pins
+seven additional current inputs, including the shared retry scenario. Its test
+requires the exact union of all three producers' static script and transitive
+scenario closures plus mounted preparer/trust inputs. It does not attest their
+historical observations, qualify an image or runtime, or reduce live oracle
+coverage. [UI #1285](https://github.com/ElevenID/marty-ui/pull/1285)
+passed 216 focused local tests, independent review, full PR CI and protected
+combined-head CI, then merged as `94e5640bb`. No CI speedup is attributed to
+the evidence guard.
+
+Timeout current-input follow-up (2026-10-12 local candidate): the delayed-header
+and body-inactivity historical producers now have one exact current-input
+record covering their static script/import and transitive scenario union, plus
+the mounted preparer and trust fixture. The release-owned test fails on source
+drift, a newly reached helper/scenario or a removed mounted input. It does not
+attest the historical corpora, prove runtime compatibility, or authorize any
+test skip. All routine and full timeout obligations remain unchanged. The 33
+focused input tests and 180 combined workflow-policy/input tests pass locally;
+hosted and protected CI remain pending, with no claimed runtime saving.
+
+The remote-KMS Rust-only branch retires the Python facts, retry,
+roster-failure, and validation producers. Their main-branch current-input
+overlays cannot qualify absent scripts. The still-active provider-signals
+producer has a separate exact closure guard, and the still-active timeout
+producers retain the timeout overlay with its hash updated for the Rust-only
+schema preparer. Native Rust replay and release qualification remain required.
+
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
 ### A6-A7: rollout and fast feedback
