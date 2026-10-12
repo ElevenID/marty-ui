@@ -439,6 +439,15 @@ drift detection, not historical capture-source attestation, complete image
 or runtime closure, or permission to skip reference qualification. Protected
 CI and main merge remain pending.
 
+REST-dependent current-input follow-up (2026-10-12 local candidate): the
+provider-signals, roster-failure, and validation producers share the REST and
+startup graph. A single overlay inherits the ten guarded REST inputs and pins
+seven additional current inputs, including the shared retry scenario. Its test
+requires the exact union of all three producers' static script and transitive
+scenario closures plus mounted preparer/trust inputs. It does not attest their
+historical observations, qualify an image or runtime, or reduce live oracle
+coverage. Local review and protected CI remain pending.
+
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
 ### A6-A7: rollout and fast feedback
