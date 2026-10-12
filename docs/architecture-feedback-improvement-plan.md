@@ -3860,8 +3860,29 @@ set and retains analysis when proof or scope changes. Mixed, unknown,
 production, manifest, and proof-failed diffs, plus protected merge groups
 and main, retain full Rust validation. The pre-KMS exact-head #1296 CI passed;
 on the provisional KMS queue head, the affected local policy suite passed 178
-tests and independent review found no P1-P3 issue. The reconciled head still
-needs hosted and protected qualification. This is not yet a measured speedup.
+tests and independent review found no P1-P3 issue. The reconciled #1296 head
+also passed full PR CI. All 22 jobs in the
+[protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38279805896)
+passed, and #1296 merged as `68d18cfbe` on October 12. Protected merge-group
+and main validation remained broad. No eligible source-only PR has yet
+exercised the new selective path, so no hosted feedback saving is claimed.
+
+The same protected #1296 Canvas job took 31m11s. Its retained timing artifact
+records 449s in the pinned Bookworm container compilation (241s test targets,
+87s issuance binaries, 91s Gateway, 30s Flow), 430s building the public
+self-host image, and 645s in the published Canvas database group. These job
+steps are serial; the reported worker (501s), composition (466s), and
+self-host (252s) target durations overlap inside that database group and must
+not be added together. The host `sccache` counters show no cache hits or
+misses for the Bookworm build because the network-isolated container does not
+invoke the host wrapper; that counter is not evidence of a cache regression.
+The next compile/image reuse change needs proof of compatible toolchain,
+features, target, and runtime, or a measured independent-phase overlap.
+Neither the timing record nor #1296 authorizes removing database cases.
+The #1296 PR-head Canvas job took 22m54s, with corresponding compile, image,
+and database steps of 300s, 332s, and 439s. The protected head included the
+earlier remote-KMS merge and ran under different conditions, so the 8m17s
+spread is not a before/after effect of the selector.
 
 ## Design references
 
