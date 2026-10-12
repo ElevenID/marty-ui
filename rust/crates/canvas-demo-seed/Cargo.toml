@@ -24,3 +24,6 @@ tokio = { workspace = true, features = ["process", "io-util"] }
 url.workspace = true
 uuid.workspace = true
 
+[dev-dependencies]
+axum.workspace = true
+
