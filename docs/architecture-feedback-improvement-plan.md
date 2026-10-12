@@ -3908,6 +3908,22 @@ The 33 local context-policy tests pass; image build and protected CI remain
 required before merge. This removes a known
 source-layer invalidation input but is not yet a measured hosted speedup.
 
+October 12 A4 operations-input candidate (local, not yet merged): the frozen
+75-case operations corpus contains 36 rejection observations (one 400, one
+401, 34 422) that the production handler rejects before SQL, and 39
+successful reads that require real PostgreSQL state. The same native HTTP
+request recipe and frozen observations now drive a fast issuance library test
+for the 36 pre-SQL cases against an unreachable lazy PostgreSQL pool; the
+named Canvas acceptance test retains the 39 successful real-database cases.
+Exact case counts and names are asserted, and the pinned historical oracle
+producer remains unchanged. Local library execution passed (one focused test,
+0.01s runtime), as did the exact named pinned-image/real-PostgreSQL acceptance
+test (one test, 8.66s runtime, including producer and database setup); its
+owned containers were removed. The acceptance target compiled after preserving
+sibling support-module exports. Independent review found no P1-P3 issue.
+Protected CI and comparable whole-lane timing evidence are still required
+before any speed claim or promotion.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
