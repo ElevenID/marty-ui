@@ -466,8 +466,9 @@ focused input tests and 180 combined workflow-policy/input tests passed locally;
 full PR and protected combined-head CI passed before merge, with no claimed
 runtime saving.
 
-A6 current-input metadata follow-up (2026-10-12 local candidate): the root and
-both service-specific Docker ignore files repeat one exclusion per Canvas
+A6 current-input metadata follow-up (2026-10-12 merged
+[UI #1287](https://github.com/ElevenID/marty-ui/pull/1287), `81865d048`):
+the root and both service-specific Docker ignore files repeat one exclusion per Canvas
 `*-current-inputs.json` evidence record, while the CI path classifier repeats
 their names. Bounded immediate-child patterns cover the same seven current
 records: the Docker rule excludes these CI-only manifests from product images,
@@ -478,9 +479,10 @@ re-inclusion, and exercises both new and nested path classifications. A future
 CI-evidence manifest therefore need not edit all three ignore files or the CI
 workflow, but still requires its owning test and inventory review. This does
 not change existing image inputs, protected merge-group selection, source or
-corpus selection, or claim a hosted speedup. The rebased candidate passed 147
-local workflow-policy tests and independent review; hosted/protected CI remains
-required before promotion.
+corpus selection, or claim a hosted speedup. The patch passed 147 local
+workflow-policy tests, independent review, full PR CI, and [protected
+combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38227383325)
+before merge.
 
 OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
 shared runner produces ten reviewed kinds, including nine variant corpora.
@@ -491,8 +493,8 @@ imports, nested JSON references, mounted helpers, and every normalized source
 hash. A new kind, helper, or scenario requires input review. This guards only
 current capture inputs; it does not attest historical OAuth observations,
 establish runtime compatibility, authorize qualification reuse, or alter any
-routine/full oracle execution. The candidate is stacked locally on the A6
-metadata-classifier PR until that base passes protected CI.
+routine/full oracle execution. The reviewed candidate is now based on main
+after #1287 merged; its own PR and protected CI are still required.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
