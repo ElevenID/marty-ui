@@ -1,0 +1,208 @@
+{
+  "schema": "marty.canvas-real-seed-behavior/v1",
+  "source": "55bb69973:scripts/seed_canvas_real.py",
+  "gateway_seed": {
+    "operations": [
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms?organization_id=org-1",
+        "payload": null
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms",
+        "payload": {
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "display_name": "Canvas Demo",
+          "canvas_base_url": "https://canvas.example",
+          "lti_client_id": "client-1",
+          "lti_deployment_id": "deployment-1",
+          "enabled": true
+        }
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/sandbox-probe",
+        "payload": {}
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms?organization_id=org-1",
+        "payload": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1",
+        "payload": {
+          "organization_id": "org-1",
+          "canvas_account_id": "account-1",
+          "display_name": "Canvas Demo",
+          "canvas_base_url": "https://canvas.example",
+          "lti_client_id": "client-1",
+          "lti_deployment_id": "deployment-1",
+          "enabled": true,
+          "lti_issuer": "https://canvas.example",
+          "lti_jwks_json": {
+            "keys": []
+          }
+        }
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/sandbox-probe",
+        "payload": {}
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings?organization_id=org-1&platform_id=platform-1&application_template_id=at-1",
+        "payload": null
+      },
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/integrations/canvas/platforms/platform-1/program-bindings",
+        "payload": {
+          "application_template_id": "at-1",
+          "credential_template_id": "ct-1",
+          "display_name": "Program Demo",
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "direct_issue_enabled": false,
+          "auto_approve_on_evidence": true,
+          "evidence_requirements": [
+            {
+              "evidence_type": "EXTERNAL_FACT",
+              "provider": "canvas",
+              "fact_type": "canvas.quiz_score",
+              "verification_method": "SIGNED_AGS_SCORE",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "auto_issue_on_permit": true,
+              "pass_rule": {
+                "path": "assertion.score_percent",
+                "operator": ">=",
+                "value": 80
+              }
+            }
+          ],
+          "canvas_scope": {
+            "course_id": "42",
+            "quiz_id": "9"
+          },
+          "delivery_mode": "wallet_plus_canvas_mirror",
+          "issuer_mode": "org_managed",
+          "approval_policy_set_id": null,
+          "deployment_profile_id": null,
+          "feature_flags": {
+            "enable_canvas_evidence": true,
+            "enable_canvas_lti": true,
+            "enable_canvas_mirror_publish": true,
+            "enable_canvas_mirror_ops": true,
+            "enable_canvas_deep_linking": true,
+            "enable_canvas_ags": true,
+            "enable_canvas_nrps": true
+          },
+          "enabled": true
+        }
+      },
+      {
+        "method": "GET",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings?organization_id=org-1&platform_id=platform-1&application_template_id=at-1",
+        "payload": null
+      },
+      {
+        "method": "PUT",
+        "url": "http://localhost:8000/v1/integrations/canvas/program-bindings/binding-1",
+        "payload": {
+          "application_template_id": "at-1",
+          "credential_template_id": "ct-1",
+          "display_name": "Program Demo",
+          "flow_mode": "elevenid_orchestrated_canvas_evidence",
+          "direct_issue_enabled": false,
+          "auto_approve_on_evidence": true,
+          "evidence_requirements": [
+            {
+              "evidence_type": "EXTERNAL_FACT",
+              "provider": "canvas",
+              "fact_type": "canvas.course_completion",
+              "verification_method": "SIGNED_WEBHOOK",
+              "scope": {
+                "course_id": "42",
+                "quiz_id": "9"
+              },
+              "auto_issue_on_permit": true,
+              "pass_rule": {
+                "path": "assertion.completed",
+                "operator": "equals",
+                "value": true
+              }
+            }
+          ],
+          "canvas_scope": {
+            "course_id": "42",
+            "quiz_id": "9"
+          },
+          "delivery_mode": "wallet_only",
+          "issuer_mode": "org_managed",
+          "approval_policy_set_id": null,
+          "deployment_profile_id": null,
+          "feature_flags": {
+            "enable_canvas_evidence": true,
+            "enable_canvas_lti": true,
+            "enable_canvas_mirror_publish": false,
+            "enable_canvas_mirror_ops": false,
+            "enable_canvas_deep_linking": true,
+            "enable_canvas_ags": true,
+            "enable_canvas_nrps": true
+          },
+          "enabled": true
+        }
+      }
+    ],
+    "actions": [
+      "created",
+      "updated",
+      "created",
+      "updated"
+    ],
+    "scope": {
+      "course_id": "42",
+      "quiz_id": "9",
+      "assignment_id": "0"
+    },
+    "remote_signing": {
+      "provider": "gateway-signing-key-registry",
+      "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+      "issuer_did": "did:web:beta.elevenidllc.com:orgs:marty",
+      "verification_method_id": "did:web:beta.elevenidllc.com:orgs:marty#cred-issuer-marty-es256",
+      "signing_service_id": "managed-openbao-transit",
+      "signing_key_reference": "cred-issuer-marty-es256",
+      "key_purpose": "vc_jwt_issuer",
+      "credential_formats": [
+        "sd_jwt_vc",
+        "jwt_vc_json"
+      ],
+      "secret_boundary": {
+        "issuer_private_key_location": "external_remote_key_store",
+        "beta_elevenidllc_com_private_key_material": "not_present",
+        "canvas_private_key_material": "not_present"
+      },
+      "resolver": {
+        "url": "http://signing-keys:8000/issuer-context",
+        "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
+      }
+    }
+  },
+  "database_behavior": {
+    "template_seed": "single_transaction",
+    "issuer_profile_id": "ip-marty-vc-jwt-issuer",
+    "signing_service_id": "managed-openbao-transit"
+  },
+  "unfrozen_groups": [
+    "canvas_lms_http_and_rails",
+    "demo_application_and_ags",
+    "wallet_claim_and_mirror",
+    "transition_summary"
+  ]
+}
