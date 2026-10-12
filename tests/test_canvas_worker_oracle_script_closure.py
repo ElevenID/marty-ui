@@ -15,6 +15,7 @@ import pytest
 from scripts.ci.canvas_oracle_current_inputs import (
     assert_current_inputs,
     expanded_inputs,
+    launched_scripts,
     normalized_sha256,
 )
 
@@ -70,22 +71,6 @@ def local_imports(source: Path, scripts: Path) -> list[str]:
             if candidate.is_file():
                 dependencies.add(candidate.name)
     return sorted(dependencies)
-
-
-def launched_scripts(source: Path, scripts: Path) -> list[str]:
-    tree = ast.parse(source.read_text(encoding="utf-8"), filename=str(source))
-    prefix = "/verification/scripts/"
-    launched = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
-            continue
-        if not node.value.startswith(prefix) or not node.value.endswith(".py"):
-            continue
-        name = node.value.removeprefix(prefix)
-        assert Path(name).name == name, f"Review process script path in {source.name}"
-        assert (scripts / name).is_file(), f"Missing process script: {name}"
-        launched.add(name)
-    return sorted(launched)
 
 
 def capture_script_graph(

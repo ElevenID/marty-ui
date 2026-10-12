@@ -1830,12 +1830,10 @@ pub async fn run_canvas_mirror_automation_main_lifecycle(pool: &PgPool, database
         stdout
     });
     let client = bounded_http_client(Duration::from_secs(5));
-    let health = tokio::time::timeout(
-        Duration::from_secs(10),
-        wait_for_health_with_client(http_port, &client),
-    )
-    .await
-    .expect("packaged automation readiness deadline");
+    let health = wait_for_owned_review_health(Duration::from_secs(10), || {
+        wait_for_health_with_client(http_port, &client)
+    })
+    .await;
     assert_eq!(
         health,
         Some(json!({"status":"healthy","service":"issuance-service"}))
