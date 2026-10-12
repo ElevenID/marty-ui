@@ -1,0 +1,1069 @@
+{
+  "schema": "marty.demo-seed-reference/v1",
+  "source": {
+    "repository": "ElevenID/Marty",
+    "commit": "36bb2aac65759edc2ccdce120e16a61391a7ce32",
+    "system_ids_sha256": "4ea3b4596c6556de4088fb56ea5c76afa56be0f027d1d4653ce499f4448da64f",
+    "demo_seed_data_sha256": "03db4cbf595370d893bef9b2474c6dbe4ec83552544ceb18bbcaab1e3e97dc04"
+  },
+  "canvas_system_ids": {
+    "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID": "0ab66d45-0d84-5fbd-837f-25788d3227a1",
+    "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_TEMPLATE_ID": "50000000-0000-0000-0000-000000000041",
+    "MARTY_DEFAULT_ORG_ID": "00000000-0000-0000-0000-000000000001",
+    "MARTY_VERIFIED_MEMBER_BADGE_APPLICATION_TEMPLATE_ID": "0ab66d45-0d84-5fbd-837f-25788d32279e",
+    "MARTY_VERIFIED_MEMBER_BADGE_TEMPLATE_ID": "50000000-0000-0000-0000-000000000040"
+  },
+  "vendor_bundle": {
+    "organization": {
+      "id": "22222222-2222-2222-2222-222222222222",
+      "name": "Demo Vendor Org",
+      "display_name": "Demo Vendor Org",
+      "slug": "demo-vendor-org",
+      "description": "Demo organization for context switching and join/discovery demonstrations",
+      "org_type": "startup",
+      "status": "active",
+      "join_mechanism": "open",
+      "requires_approval": false,
+      "is_discoverable": true,
+      "settings": {}
+    },
+    "credential_types": [
+      {
+        "id": "demo-passport-credential-type",
+        "name": "passport",
+        "description": "Demo Passport Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "given_name",
+            "family_name",
+            "birth_date",
+            "nationality",
+            "document_number",
+            "expiry_date"
+          ],
+          "optional_fields": [
+            "portrait",
+            "sex",
+            "birth_place",
+            "issuing_authority"
+          ],
+          "doctype": "org.icao.mrtd.passport"
+        },
+        "display_config": {
+          "display_name": "Demo Passport Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "2-3 business days"
+        }
+      },
+      {
+        "id": "demo-drivers-license-credential-type",
+        "name": "drivers_license",
+        "description": "Demo Driver License Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "given_name",
+            "family_name",
+            "birth_date",
+            "document_number",
+            "issue_date",
+            "expiry_date"
+          ],
+          "optional_fields": [
+            "portrait",
+            "address",
+            "vehicle_categories",
+            "restrictions"
+          ],
+          "doctype": "org.iso.18013.5.1.mDL"
+        },
+        "display_config": {
+          "display_name": "Demo Driver License Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "2-3 business days"
+        }
+      },
+      {
+        "id": "demo-national-id-credential-type",
+        "name": "national_id",
+        "description": "Demo National ID Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "given_name",
+            "family_name",
+            "birth_date",
+            "document_number",
+            "nationality"
+          ],
+          "optional_fields": [
+            "portrait",
+            "sex",
+            "birth_place",
+            "address"
+          ],
+          "doctype": "org.marty.national_id.1"
+        },
+        "display_config": {
+          "display_name": "Demo National ID Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "2-3 business days"
+        }
+      },
+      {
+        "id": "demo-travel-visa-credential-type",
+        "name": "travel_visa",
+        "description": "Demo Travel Visa Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "given_name",
+            "family_name",
+            "birth_date",
+            "nationality",
+            "document_number"
+          ],
+          "optional_fields": [
+            "portrait",
+            "visa_type",
+            "valid_from",
+            "valid_until",
+            "issuing_country"
+          ],
+          "doctype": "org.marty.travel.visa.1"
+        },
+        "display_config": {
+          "display_name": "Demo Travel Visa Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "2-3 business days"
+        }
+      },
+      {
+        "id": "demo-access-badge-credential-type",
+        "name": "access_badge",
+        "description": "Demo Access Badge Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "given_name",
+            "family_name",
+            "employee_id"
+          ],
+          "optional_fields": [
+            "portrait",
+            "department",
+            "access_level",
+            "valid_from",
+            "valid_until"
+          ],
+          "doctype": "org.marty.access.badge.1"
+        },
+        "display_config": {
+          "display_name": "Demo Access Badge Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "1-2 business days"
+        }
+      },
+      {
+        "id": "demo-dtc-credential-type",
+        "name": "dtc",
+        "description": "Demo DTC Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "passport_number",
+            "issuing_authority",
+            "issue_date",
+            "expiry_date",
+            "dtc_type"
+          ],
+          "optional_fields": [
+            "personal_details",
+            "data_groups",
+            "access_control",
+            "access_key"
+          ],
+          "doctype": "org.icao.dtc.1"
+        },
+        "display_config": {
+          "display_name": "Demo DTC Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "2-3 business days"
+        }
+      },
+      {
+        "id": "demo-open-badge-credential-type",
+        "name": "open_badge",
+        "description": "Demo Open Badge Credential",
+        "format": "jwt_vc_json",
+        "schema_definition": {
+          "required_fields": [
+            "version",
+            "payload_json"
+          ],
+          "optional_fields": [
+            "document_store_json",
+            "recipient_identity",
+            "signing_json"
+          ],
+          "doctype": "openbadges"
+        },
+        "display_config": {
+          "display_name": "Demo Open Badge Credential",
+          "is_published": true,
+          "is_system_template": false,
+          "is_active": true,
+          "visibility": "public",
+          "estimated_processing_time": "1-2 business days"
+        }
+      }
+    ],
+    "credential_templates": [
+      {
+        "id": "40000000-0000-0000-0000-000000000001",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Passport",
+        "description": "ICAO 9303 compliant digital travel credential with NFC capability",
+        "status": "active",
+        "credential_type": "passport",
+        "vct": "https://marty.example/credentials/passport",
+        "doctype": "org.iso.18013.5.1.PASSPORT",
+        "claims": [
+          {
+            "id": "passport-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "passport-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "passport-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          },
+          {
+            "id": "passport-claim-document-number",
+            "name": "document_number",
+            "display_name": "Document Number",
+            "description": "Document Number",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000002",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Driver's License",
+        "description": "ISO/IEC 18013-5 compliant mobile driving license",
+        "status": "active",
+        "credential_type": "drivers_license",
+        "vct": "https://marty.example/credentials/drivers_license",
+        "doctype": "org.iso.18013.5.1.mDL",
+        "claims": [
+          {
+            "id": "drivers_license-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "drivers_license-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "drivers_license-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000003",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "National ID",
+        "description": "National identity credential for verified applicants",
+        "status": "active",
+        "credential_type": "national_id",
+        "vct": "https://marty.example/credentials/national_id",
+        "doctype": "org.iso.18013.5.1.NID",
+        "claims": [
+          {
+            "id": "national_id-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "national_id-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "national_id-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000004",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Travel Visa",
+        "description": "Digitally issued travel visa credential for approved applicants",
+        "status": "active",
+        "credential_type": "travel_visa",
+        "vct": "https://marty.example/credentials/travel_visa",
+        "doctype": "org.iso.18013.5.1.VISA",
+        "claims": [
+          {
+            "id": "travel_visa-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "travel_visa-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "travel_visa-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          },
+          {
+            "id": "travel_visa-claim-document-number",
+            "name": "document_number",
+            "display_name": "Document Number",
+            "description": "Document Number",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000005",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Access Badge",
+        "description": "Corporate access badge credential for authorized personnel",
+        "status": "active",
+        "credential_type": "access_badge",
+        "vct": "https://marty.example/credentials/access_badge",
+        "doctype": "com.enterprise.access.badge",
+        "claims": [
+          {
+            "id": "access_badge-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "access_badge-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "access_badge-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000006",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Digital Travel Credential",
+        "description": "Digital Travel Credential per ICAO DTC specification",
+        "status": "active",
+        "credential_type": "dtc",
+        "vct": "https://marty.example/credentials/dtc",
+        "doctype": "org.icao.dtc",
+        "claims": [
+          {
+            "id": "dtc-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "Given Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "dtc-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Family Name",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "dtc-claim-date-of-birth",
+            "name": "date_of_birth",
+            "display_name": "Date of Birth",
+            "description": "Date of Birth",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          },
+          {
+            "id": "dtc-claim-document-number",
+            "name": "document_number",
+            "display_name": "Document Number",
+            "description": "Document Number",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "given_name",
+          "family_name",
+          "date_of_birth"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000007",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "Professional Development Certificate",
+        "description": "Professional Development Certificate - Open Badge 3.0 credential for continuing education and professional development",
+        "status": "active",
+        "credential_type": "open_badge",
+        "vct": "https://marty.example/credentials/open_badge",
+        "doctype": "org.openbadges.v3",
+        "claims": [
+          {
+            "id": "family-name",
+            "name": "family_name",
+            "required": true,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Recipient last name",
+            "display_name": "Family Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "given-name",
+            "name": "given_name",
+            "required": true,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Recipient first name",
+            "display_name": "Given Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "achievement-name",
+            "name": "achievement_name",
+            "required": true,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Name of the achievement or certification",
+            "display_name": "Achievement Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "course-name",
+            "name": "course_name",
+            "required": true,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Course or program name",
+            "display_name": "Course Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "completion-date",
+            "name": "completion_date",
+            "required": true,
+            "derivable": false,
+            "claim_type": "date",
+            "description": "Date of course completion",
+            "display_name": "Completion Date",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "institution-name",
+            "name": "institution_name",
+            "required": true,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Name of issuing institution",
+            "display_name": "Institution Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "badge-image",
+            "name": "badge_image",
+            "required": false,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "URL to badge image",
+            "display_name": "Badge Image",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "achievement-criteria",
+            "name": "achievement_criteria",
+            "required": false,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Criteria for earning the badge",
+            "display_name": "Achievement Criteria",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "grade",
+            "name": "grade",
+            "required": false,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Grade or score received",
+            "display_name": "Grade",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "credit-hours",
+            "name": "credit_hours",
+            "required": false,
+            "derivable": false,
+            "claim_type": "integer",
+            "description": "Credit hours earned",
+            "display_name": "Credit Hours",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "instructor-name",
+            "name": "instructor_name",
+            "required": false,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Name of the instructor",
+            "display_name": "Instructor Name",
+            "selectively_disclosable": false
+          },
+          {
+            "id": "certificate-id",
+            "name": "certificate_id",
+            "required": false,
+            "derivable": false,
+            "claim_type": "string",
+            "description": "Unique certificate identifier",
+            "display_name": "Certificate ID",
+            "selectively_disclosable": false
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#1a1a2e",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 365,
+          "max_validity_days": 1095,
+          "renewable": true,
+          "renewal_window_days": 30,
+          "require_revalidation": false
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "sd_jwt_vc",
+          "jwt_vc"
+        ],
+        "credential_payload_format": null,
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "marty",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "spruce-vc+sd-jwt"
+          }
+        ]
+      },
+      {
+        "id": "40000000-0000-0000-0000-000000000008",
+        "organization_id": "22222222-2222-2222-2222-222222222222",
+        "name": "ISO 18013-5 mDL",
+        "description": "ISO/IEC 18013-5 Mobile Driving Licence — full doctype identifier for SpruceKit compatibility",
+        "status": "active",
+        "credential_type": "org.iso.18013.5.1.mDL",
+        "vct": "https://marty.example/credentials/org.iso.18013.5.1.mDL",
+        "doctype": "org.iso.18013.5.1.mDL",
+        "claims": [
+          {
+            "id": "mdl-claim-family-name",
+            "name": "family_name",
+            "display_name": "Family Name",
+            "description": "Last name(s) or surname(s) of the mDL holder",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-given-name",
+            "name": "given_name",
+            "display_name": "Given Name",
+            "description": "First name(s) of the mDL holder",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-birth-date",
+            "name": "birth_date",
+            "display_name": "Date of Birth",
+            "description": "Birth date of the mDL holder (YYYY-MM-DD)",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": true,
+            "derivable": true
+          },
+          {
+            "id": "mdl-claim-issue-date",
+            "name": "issue_date",
+            "display_name": "Issue Date",
+            "description": "Date on which the mDL was issued (YYYY-MM-DD)",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-expiry-date",
+            "name": "expiry_date",
+            "display_name": "Expiry Date",
+            "description": "Date on which the mDL expires (YYYY-MM-DD)",
+            "claim_type": "date",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-issuing-country",
+            "name": "issuing_country",
+            "display_name": "Issuing Country",
+            "description": "Alpha-2 country code of the issuing authority (ISO 3166-1)",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-issuing-authority",
+            "name": "issuing_authority",
+            "display_name": "Issuing Authority",
+            "description": "Name of the issuing authority",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-document-number",
+            "name": "document_number",
+            "display_name": "Document Number",
+            "description": "Unique document number assigned by the issuing authority",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-driving-privileges",
+            "name": "driving_privileges",
+            "display_name": "Driving Privileges",
+            "description": "Vehicle categories and conditions the holder is authorised to drive",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-un-distinguishing-sign",
+            "name": "un_distinguishing_sign",
+            "display_name": "UN Distinguishing Sign",
+            "description": "UN distinguishing sign of the issuing country (e.g. USA, GBR)",
+            "claim_type": "string",
+            "required": true,
+            "selectively_disclosable": false,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-resident-address",
+            "name": "resident_address",
+            "display_name": "Resident Address",
+            "description": "Permanent place of residence",
+            "claim_type": "string",
+            "required": false,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-birth-place",
+            "name": "birth_place",
+            "display_name": "Place of Birth",
+            "description": "Country and municipality or state/province where the holder was born",
+            "claim_type": "string",
+            "required": false,
+            "selectively_disclosable": true,
+            "derivable": false
+          },
+          {
+            "id": "mdl-claim-age-over-21",
+            "name": "age_over_21",
+            "display_name": "Age Over 21",
+            "description": "Whether the holder is over 21 years old",
+            "claim_type": "boolean",
+            "required": false,
+            "selectively_disclosable": true,
+            "derivable": true
+          }
+        ],
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": [
+          "family_name",
+          "given_name",
+          "birth_date",
+          "resident_address",
+          "birth_place",
+          "age_over_21"
+        ],
+        "derived_attributes": [],
+        "display_style": {
+          "background_color": "#0f4c81",
+          "text_color": "#ffffff"
+        },
+        "validity_rules": {
+          "default_validity_days": 1825,
+          "max_validity_days": 3650,
+          "renewable": true,
+          "renewal_window_days": 90,
+          "require_revalidation": true
+        },
+        "issuer_requirements": {
+          "allowed_issuer_dids": []
+        },
+        "supported_formats": [
+          "mso_mdoc"
+        ],
+        "credential_payload_format": "mso_mdoc",
+        "version": 1,
+        "wallet_configs": [
+          {
+            "wallet_id": "sprucekit",
+            "deep_link_scheme": "openid-credential-offer://",
+            "format_variant": "mso_mdoc"
+          }
+        ]
+      }
+    ]
+  }
+}

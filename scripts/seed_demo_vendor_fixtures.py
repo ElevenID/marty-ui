@@ -16,16 +16,35 @@ from sqlalchemy.ext.asyncio import AsyncConnection, create_async_engine
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "packages"))
+SEED_REFERENCE = REPO_ROOT / "contracts/demo-seed-reference-v1.json"
 
-from marty_common.demo_seed_data import (  # pylint: disable=import-error
-    DEMO_VENDOR_ORG_ID,
-    get_demo_vendor_seed_bundle,
-)
-from marty_common.migration_profile import (  # pylint: disable=import-error
-    is_persistent_profile,
-    normalize_migration_profile,
-)
+
+def _seed_bundle() -> dict[str, Any]:
+    reference = json.loads(SEED_REFERENCE.read_text(encoding="utf-8"))
+    if reference.get("schema") != "marty.demo-seed-reference/v1":
+        raise ValueError("Unexpected demo seed reference schema")
+    bundle = reference["vendor_bundle"]
+    if bundle["organization"]["id"] != "22222222-2222-2222-2222-222222222222":
+        raise ValueError("Unexpected demo vendor organization ID")
+    return bundle
+
+
+DEMO_VENDOR_ORG_ID = "22222222-2222-2222-2222-222222222222"
+
+
+def _normalize_profile(value: str | None) -> str:
+    profile = (value or "").strip().lower()
+    aliases = {
+        "": "dev", "local": "dev", "development": "dev",
+        "experiment": "experiments", "experimental": "experiments",
+        "beta-experiment": "experiments", "beta_experiment": "experiments",
+        "beta-experiments": "experiments", "beta_experiments": "experiments",
+        "prod": "production", "selfhost-prod": "selfhost-production",
+        "selfhost_prod": "selfhost-production",
+        "selfhostproduction": "selfhost-production",
+        "selfhost_production": "selfhost-production", "qa": "test", "ci": "test",
+    }
+    return aliases.get(profile, profile)
 
 
 def _load_dotenv(env_file: Path) -> None:
@@ -438,7 +457,7 @@ async def _seed_credential_templates(
 
 
 async def _run_seed() -> dict[str, Any]:
-    bundle = get_demo_vendor_seed_bundle()
+    bundle = _seed_bundle()
     database_url = _resolve_database_url()
     engine = create_async_engine(database_url, future=True)
 
@@ -489,8 +508,8 @@ def main() -> int:
     args = _parse_args()
     _load_dotenv(Path(args.env_file))
 
-    profile = normalize_migration_profile(os.environ.get("MARTY_MIGRATION_PROFILE"))
-    if is_persistent_profile() and not args.force:
+    profile = _normalize_profile(os.environ.get("MARTY_MIGRATION_PROFILE"))
+    if profile in {"production", "selfhost-production"} and not args.force:
         print(
             "ERROR: demo vendor fixtures are intended for reset-friendly profiles only. "
             f"Refusing to run against persistent profile '{profile}'. Use --force to override.",
