@@ -1,6 +1,6 @@
 //! Local disposable Postgres gate for the Canvas badge/application template pair.
 
-use marty_canvas_demo_seed::{seed_open_badge_templates, GatewaySeedConfig};
+use marty_canvas_demo_seed::{lookup_transition, seed_open_badge_templates, GatewaySeedConfig};
 use serde_json::{json, Value};
 use sqlx::{Connection, PgConnection};
 use std::{env, process, time::SystemTime};
@@ -132,6 +132,50 @@ async fn run_case(url: &Url) {
     .await
     .unwrap();
     assert_eq!(name, "stale badge");
+
+    // The transition evidence reader must work against the same migrated
+    // issuance schema used by the service, including all five joined tables.
+    for table in [
+        "applications",
+        "issuance_transactions",
+        "evidence_facts",
+        "issued_credentials",
+        "credential_delivery_records",
+    ] {
+        exec(
+            &mut conn,
+            &table_ddl(
+                issuance_migration,
+                &format!("CREATE TABLE issuance_service.{table} ("),
+            ),
+        )
+        .await;
+    }
+    drop(conn);
+    assert!(lookup_transition(url.as_str(), "missing")
+        .await
+        .unwrap()
+        .is_none());
+    let mut conn = PgConnection::connect(url.as_str()).await.unwrap();
+    exec(&mut conn, "INSERT INTO issuance_service.applications (id,organization_id,application_template_id,applicant_identifier,form_data,submitted_evidence,status,derived_claims,created_at,updated_at,issuance_transaction_id) VALUES ('app-1','org-1','at-1','learner','{}','[]','approved','{}',now(),now(),'tx-1')").await;
+    exec(&mut conn, "INSERT INTO issuance_service.issuance_transactions (id,organization_id,credential_template_id,status,pre_auth_code,claims,created_at,expires_at,credential_type,issuer_profile_id,issuer_mode,signing_service_id,delivery_mode) VALUES ('tx-1','org-1','ct-1','issued','code','{}',now(),now() + interval '1 day','OpenBadgeCredential','profile-1','org_managed','managed-openbao-transit','wallet_plus_canvas_mirror')").await;
+    exec(&mut conn, "INSERT INTO issuance_service.evidence_facts (id,organization_id,application_id,subject_id,provider,fact_type,logical_key,source_revision,payload_hash,observed_at,effective_at) VALUES ('fact-1','org-1','app-1','learner','canvas','canvas.quiz_score','quiz-1','rev-1','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',now(),now())").await;
+    exec(&mut conn, "INSERT INTO issuance_service.issued_credentials (id,transaction_id,organization_id,credential_template_id,credential_jwt,credential_hash,status,status_updated_at,revoked,issued_at) VALUES ('cred-1','tx-1','org-1','ct-1','header.payload.signature','hash','active',now(),false,now())").await;
+    exec(&mut conn, "INSERT INTO issuance_service.credential_delivery_records (id,credential_id,transaction_id,organization_id,delivery_target,delivery_mode,status,external_credential_id) VALUES ('delivery-1','cred-1','tx-1','org-1','canvas_credentials','wallet_plus_canvas_mirror','delivered','badge-1')").await;
+    drop(conn);
+    let summary = lookup_transition(url.as_str(), "app-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(summary["application"]["issuance_transaction_id"], "tx-1");
+    assert_eq!(summary["application"]["issuer_profile_id"], "profile-1");
+    assert_eq!(summary["latest_fact"]["provider"], "canvas");
+    assert_eq!(summary["issued_credential"]["id"], "cred-1");
+    assert_eq!(
+        summary["delivery_records"][0]["external_credential_id"],
+        "badge-1"
+    );
+    assert_eq!(summary["canvas_mirror_delivery_records"], 1);
 }
 
 #[tokio::test]
