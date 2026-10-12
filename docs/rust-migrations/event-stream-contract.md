@@ -6,10 +6,10 @@
 
 **Legacy server:** Removed after black-box parity and failure gates passed.
 
-The Rust service preserves the current public and operational contract before
-the Python process is removed. Producer normalization remains in
-`services/common/grpc_event_bus.py` until producer services migrate; it is a
-gRPC client adapter and does not implement server fan-out decisions.
+The Rust service preserves the public and operational contract after the
+Python process was removed. The unused Python producer adapter
+`services/common/grpc_event_bus.py` was retired after producer services
+migrated to Rust; it did not implement server fan-out decisions.
 
 ## Contract matrix
 

@@ -26,11 +26,7 @@ IMAGES = {
     "redis": "docker.io/library/redis@sha256:" + "c" * 64,
     "openbao": "quay.io/openbao/openbao@sha256:" + "d" * 64,
 }
-SUCCESS = ("Profile: selfhost-production (persistent=True)\n"
-           "Marty KMS identity: ready\n"
-           "Ensured non-exportable notification webhook envelope key\n"
-           "All migrations completed successfully\n"
-           "notification schema migrated\n")
+SUCCESS = '{"level":"INFO","message":"notification schema migrated"}\n'
 
 
 PROJECT = "marty-selfhost-migrate-probe-" + "1" * 16
@@ -179,14 +175,10 @@ def test_model_rejects_profile_network_port_or_secret_escape(tmp_path: Path) -> 
             validate_model(changed, IMAGES, tmp_path, PROJECT)
 
 
-def test_evidence_must_include_profile_kms_and_native_notification() -> None:
+def test_migration_entrypoint_requires_native_notification_completion() -> None:
     _assert_run(SUCCESS)
-    for missing in ("Profile: selfhost-production ", "persistent=True",
-                    "Marty KMS identity: ready",
-                    "Ensured non-exportable notification webhook envelope key",
-                    "notification schema migrated"):
-        with pytest.raises(QualificationError):
-            _assert_run(SUCCESS.replace(missing, ""))
+    with pytest.raises(QualificationError):
+        _assert_run(SUCCESS.replace("notification schema migrated", "notification started"))
 
 
 def test_exact_digest_probe_reruns_and_cleans(tmp_path: Path) -> None:

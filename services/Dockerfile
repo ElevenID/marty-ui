@@ -121,6 +121,7 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-device-registr
 COPY --from=rust-service-builder /build/rust/target/release/marty-verification-service /usr/local/bin/marty-verification-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-issuance-service /usr/local/bin/marty-issuance-service
 COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-worker /usr/local/bin/marty-canvas-sync-worker
+COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-provider-ingress /usr/local/bin/marty-passport-provider-ingress
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile

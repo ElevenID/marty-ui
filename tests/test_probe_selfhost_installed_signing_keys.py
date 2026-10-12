@@ -210,11 +210,7 @@ def test_runtime_hook_runs_after_two_migrations_and_retains_unqualified(tmp_path
     monkeypatch.setattr(probe.migrations, "validate_scoped_model", lambda *args: None)
     monkeypatch.setattr(probe.migrations, "verify_local_platforms", lambda images: None)
     calls = []
-    completed = ("Profile: selfhost-production (persistent=True)\n"
-                 "Marty KMS identity: ready\n"
-                 "Ensured non-exportable notification webhook envelope key\n"
-                 "All migrations completed successfully\n"
-                 "notification schema migrated\n")
+    completed = '{"level":"INFO","message":"notification schema migrated"}\n'
 
     def run(args, environment, timeout=90):
         calls.append(args)

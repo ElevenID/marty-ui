@@ -31,7 +31,7 @@ else:
     from probe_passport_supported_routes import exercise
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+from scripts.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 TEST_KEY = re.compile(r"mk_test_[A-Za-z0-9]{43}\n\Z")

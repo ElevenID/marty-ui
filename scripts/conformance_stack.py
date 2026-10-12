@@ -39,14 +39,6 @@ ONE_SHOT_SERVICES = {
     "openbao-init",
 }
 PUBLIC_JWK_PRIVATE_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
-LOCAL_BUILD_ARGS = (
-    "MARTY_RS_URI",
-    "MARTY_RS_DIGEST",
-    "MARTY_VERIFICATION_URI",
-    "MARTY_VERIFICATION_DIGEST",
-    "MARTY_ISO18013_URI",
-    "MARTY_ISO18013_DIGEST",
-)
 
 
 def validate_project(project: str) -> str:
@@ -83,7 +75,7 @@ def compose_command(
         files.insert(1, GHCR_FILE)
         files.insert(2, IMMUTABLE_INFRA_FILE)
     else:
-        # The base stack defines every source-built Python service. The UI is
+        # The base stack defines the source-built Rust services. The UI is
         # deliberately supplied by a mode-specific profile because released
         # runs replace it with an immutable GHCR image. Without this profile,
         # --local-build cannot even render: the public TLS proxy depends on an
@@ -413,19 +405,8 @@ def assert_ports_available(
 
 
 def local_build_arguments() -> list[str]:
-    """Return explicit immutable bootstrap build arguments for source runs."""
-    missing = [
-        name for name in LOCAL_BUILD_ARGS if not os.environ.get(name, "").strip()
-    ]
-    if missing:
-        raise ValueError(
-            "--local-build requires published, digest-pinned bootstrap artifacts: "
-            + ", ".join(missing)
-        )
-    values: list[str] = []
-    for name in LOCAL_BUILD_ARGS:
-        values.extend(["--build-arg", f"{name}={os.environ[name]}"])
-    return values
+    """The Rust migration image has no external Python wheel build inputs."""
+    return []
 
 
 def configure_oidf_internal_tls_port() -> None:

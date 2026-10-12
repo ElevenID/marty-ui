@@ -312,12 +312,9 @@ def _empty_project(project: str, environment: dict[str, str],
 
 
 def _assert_run(stdout: str) -> None:
-    require("Profile: selfhost-production " in stdout
-            and "persistent=True" in stdout
-            and "Marty KMS identity: ready" in stdout
-            and "Ensured non-exportable notification webhook envelope key" in stdout
-            and "All migrations completed successfully" in stdout
-            and "notification schema migrated" in stdout,
+    # Rust bootstrap intentionally emits no success claim. Its persisted
+    # PostgreSQL, Redis, and OpenBao effects are checked below after this log.
+    require("notification schema migrated" in stdout,
             "Released migration image did not complete the self-host entrypoint")
 
 

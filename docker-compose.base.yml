@@ -6,14 +6,6 @@
 # Public deployments reach edge services over the Compose network through a
 # governed proxy/tunnel; internal service ports are never LAN/public listeners.
 
-x-marty-migration-build-artifacts: &marty_migration_build_artifacts
-  MARTY_RS_URI: ${MARTY_RS_URI:?set MARTY_RS_URI to the immutable marty-rs wheel}
-  MARTY_RS_DIGEST: ${MARTY_RS_DIGEST:?set MARTY_RS_DIGEST to that wheel's sha256 digest}
-  MARTY_VERIFICATION_URI: ${MARTY_VERIFICATION_URI:?set MARTY_VERIFICATION_URI to the immutable marty-verification wheel}
-  MARTY_VERIFICATION_DIGEST: ${MARTY_VERIFICATION_DIGEST:?set MARTY_VERIFICATION_DIGEST to that wheel's sha256 digest}
-  MARTY_ISO18013_URI: ${MARTY_ISO18013_URI:?set MARTY_ISO18013_URI to the immutable marty-iso18013 wheel}
-  MARTY_ISO18013_DIGEST: ${MARTY_ISO18013_DIGEST:?set MARTY_ISO18013_DIGEST to that wheel's sha256 digest}
-
 # One development-only value shared by the native issuance owner and its direct
 # callers. Deployed overlays replace this with their existing secret source.
 x-native-issuance-grpc-auth: &native_issuance_grpc_auth
@@ -278,8 +270,6 @@ services:
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
-      args:
-        <<: *marty_migration_build_artifacts
     environment:
       MARTY_DB_PASSWORD: ${MARTY_DB_PASSWORD:-marty_dev_password}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty

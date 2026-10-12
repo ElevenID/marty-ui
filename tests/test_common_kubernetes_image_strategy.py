@@ -6,7 +6,7 @@ from pathlib import Path
 from marty_devops.catalog import DeploymentCatalog
 
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 K8S_DIR = REPO_ROOT / "k8s" / "oracle"
 MUTABLE_IMAGE_PATTERN = re.compile(
     r"image:\s+.*(?::latest|:-latest|:prod|:-prod|:main|:-main|:dev|:-dev)(?:\s|$|[}@])"

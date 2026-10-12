@@ -83,6 +83,7 @@ DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
     "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
+    "docker/canvas-sandbox/Dockerfile": ".dockerignore",
     "rust/services/event-stream/Dockerfile": ".dockerignore",
     "rust/services/revocation-profile/Dockerfile": ".dockerignore",
     "rust/services/signing-keys/Dockerfile": ".dockerignore",
@@ -329,6 +330,7 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         "services/common/events.py",
         "services/common/grpc_event_bus.py",
     ):
+        assert not (ROOT / path).exists(), path
         assert _is_ignored(path, public_lines), path
 
 
@@ -865,6 +867,7 @@ def test_public_context_rejects_reincluded_python_event_adapter() -> None:
         .splitlines()
     )
     path = "services/common/grpc_event_bus.py"
+    assert not (ROOT / path).exists()
     assert _is_ignored(path, lines)
     assert not _is_ignored(path, [*lines, "!**"])
     assert not _is_ignored(path, [*lines, "!services/common/**"])

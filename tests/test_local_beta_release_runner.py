@@ -169,7 +169,10 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "config/keycloak",
         "config/envoy/envoy.yaml",
         "docker/openbao-init.sh",
-        "docker/canvas-localhost-bridge/server.py",
+        "docker/canvas-localhost-bridge/Cargo.toml",
+        "docker/canvas-localhost-bridge/Cargo.lock",
+        "docker/canvas-localhost-bridge/Dockerfile",
+        "docker/canvas-localhost-bridge/src/main.rs",
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):
@@ -195,7 +198,7 @@ def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> No
 
     step = 'Write-Step "Reconcile beta OpenBao state from release configuration"'
     command = '-Arguments @("run", "--rm", "--no-deps", "openbao-init")'
-    migration = '"python", "/app/services/run_all_migrations.py"'
+    migration = '"/usr/local/bin/marty-migration-bootstrap"'
 
     assert step in script
     assert command in script
@@ -788,17 +791,15 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
 
 
-def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
+def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
     assert "MARTY_COMMON_URI" not in script
     assert "MARTY_COMMON_DIGEST" not in script
-    assert "$env:MARTY_RS_URI = $martyRs.Uri" in script
-    assert "$env:MARTY_RS_DIGEST = $martyRs.Digest" in script
-    assert "$env:MARTY_VERIFICATION_URI = $martyVerification.Uri" in script
-    assert "$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest" in script
-    assert "$env:MARTY_ISO18013_URI = $martyIso18013.Uri" in script
-    assert "$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest" in script
+    assert "MARTY_RS_URI" not in script
+    assert "MARTY_VERIFICATION_URI" not in script
+    assert "MARTY_ISO18013_URI" not in script
+    assert "marty-migration-bootstrap" in script
     assert "MARTY_ISSUANCE_IMAGE" not in script
     assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert "com.docker.compose.service=docs" in script
@@ -834,7 +835,7 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count("-RedisPassword $redisPassword") == 2
-    assert script.count('"/app/services/run_all_migrations.py"') == 3
+    assert script.count('"/usr/local/bin/marty-migration-bootstrap"') == 3
     assert '"/app/run_all_migrations.py"' not in script
     assert script.count('"issuance-migrations"') == 4
     assert "issuance-migration-rehearsal.log" in script

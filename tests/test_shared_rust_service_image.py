@@ -36,7 +36,10 @@ UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
     "marty-passport-acceptance-api-key",
 }
-ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
+PROFILE_RUST_BINARIES = {"marty-canvas-sandbox"}
+ALL_RUST_BINARIES = (
+    set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
+)
 
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
@@ -303,7 +306,7 @@ def test_deleted_python_service_directories_do_not_return() -> None:
             assert not list(service_dir.rglob("*.py"))
 
 
-def test_registry_builder_separates_rust_services_from_python_migrations() -> None:
+def test_registry_builder_has_no_python_wheel_inputs_for_rust_migrations() -> None:
     script = (ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
     service_args = script.split('"services/Dockerfile"', maxsplit=1)[1].split(
         "done < <(catalog_services app)", maxsplit=1
@@ -322,5 +325,4 @@ def test_registry_builder_separates_rust_services_from_python_migrations() -> No
         "MARTY_ISO18013_URI",
         "MARTY_ISO18013_DIGEST",
     ):
-        assert marker in migration_args
-    assert "MARTY_COMMON_URI" not in migration_args
+        assert marker not in migration_args

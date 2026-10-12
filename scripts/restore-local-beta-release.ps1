@@ -423,15 +423,7 @@ if ($workerRecords.Count -eq 1) {
     if ($LASTEXITCODE -ne 0) { throw "Worker rollback image must be available for preflight inspection before stopping beta" }
     $image = @((($rawImage -join "`n") | ConvertFrom-Json))
     if ($image.Count -ne 1 -or $image[0].Id -cne $workerRecord.image_id) { throw "Worker rollback image identity mismatch" }
-    $currentWorker = $null
-    if ($null -eq $workerRecord.PSObject.Properties['rollback_launch']) {
-        $configArguments = Get-ComposeArgs @('config', '--format', 'json')
-        $rawConfiguration = & docker @configArguments
-        if ($LASTEXITCODE -ne 0) { throw "Legacy worker rollback requires a readable matching Compose configuration before stopping beta" }
-        $configuration = ($rawConfiguration -join "`n") | ConvertFrom-Json
-        $currentWorker = (Get-BetaWorkerField $configuration.services 'canvas-sync-worker').Value
-    }
-    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -CurrentWorker $currentWorker -ImageConfig $image[0].Config
+    $workerLaunch = Resolve-BetaWorkerRollbackLaunch -Record $workerRecord -ImageConfig $image[0].Config
 }
 foreach ($record in $preDeploy) {
     if ($record.running -and $record.service -in $applicationServices) {

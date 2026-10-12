@@ -804,14 +804,10 @@ def test_public_builds_do_not_checkout_sibling_sources() -> None:
 
     assert "context: .." not in workflow
     assert "COPY ../" not in dockerfiles
-    assert "MARTY_COMMON_URI" not in dockerfiles
-    assert "MARTY_COMMON_DIGEST" not in dockerfiles
-    assert "MARTY_VERIFICATION_URI" in dockerfiles
-    assert "MARTY_VERIFICATION_DIGEST" in dockerfiles
-    assert "MARTY_ISO18013_URI" in dockerfiles
-    assert "MARTY_ISO18013_DIGEST" in dockerfiles
+    assert "marty-migration-bootstrap" in dockerfiles
+    assert "COPY ../" not in dockerfiles
+    assert "pip install" not in _text("services/Dockerfile.migrations")
     assert "marty_common" not in dockerfiles
-    assert "sha256sum --check --strict" in dockerfiles
 
 
 def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification() -> (
@@ -896,15 +892,16 @@ def test_stack_tag_and_release_require_explicit_eligibility() -> None:
     )
 
 
-def test_python_migration_image_installs_every_required_native_backend() -> None:
+def test_rust_migration_image_has_no_python_runtime_or_wheels() -> None:
     service = _text("services/Dockerfile")
     migrations = _text("services/Dockerfile.migrations")
 
-    assert 'MARTY_RS_WHEEL="/tmp/${MARTY_RS_URI##*/}"' in migrations
-    assert 'MARTY_VERIFICATION_WHEEL="/tmp/${MARTY_VERIFICATION_URI##*/}"' in migrations
-    assert 'MARTY_ISO18013_WHEEL="/tmp/${MARTY_ISO18013_URI##*/}"' in migrations
-    assert '"$MARTY_VERIFICATION_WHEEL"' in migrations
-    assert '"$MARTY_ISO18013_WHEEL"' in migrations
+    assert "FROM debian:bookworm-slim" in migrations
+    assert "marty-migration-bootstrap" in migrations
+    assert "marty-notification" in migrations
+    assert "COPY services /app/services" not in migrations
+    assert "RUN python" not in migrations
+    assert "pip install" not in migrations
     assert "MARTY_RS_WHEEL" not in service
     assert "python" not in service.split("FROM debian:bookworm-slim", maxsplit=1)[1]
 

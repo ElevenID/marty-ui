@@ -83,7 +83,10 @@ else:
         PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
     )
 
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+if __package__:
+    from .passport_disposable_identity import ORGANIZATION_ID, issuer_did
+else:
+    from passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 WORKFLOW_NAME = "Passport Supported Disposable Provisioning Producer"

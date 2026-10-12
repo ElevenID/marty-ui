@@ -89,8 +89,8 @@ def test_only_the_native_credential_template_runtime_remains() -> None:
     assert behavior["python_runtime_fallback"] is False
 
 
-def test_python_migration_runner_does_not_import_deleted_credential_template() -> None:
-    migration_runner = text("services/run_all_migrations.py")
+def test_rust_migration_bootstrap_does_not_import_deleted_credential_template() -> None:
+    migration_runner = text("rust/services/signing-keys/src/bootstrap_engine.rs")
     assert '"name": "credential_template"' not in migration_runner
     assert '"module": "credential_template.infrastructure.models"' not in migration_runner
 

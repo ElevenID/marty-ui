@@ -1,4 +1,4 @@
-# Inputs used by the migration image's Rust builder and Python runtime.
+# Inputs used by the migration image's Rust builder and runtime.
 **
 !rust/
 !rust/**
@@ -6,12 +6,7 @@
 !proto/**
 !contracts/
 !contracts/python-text-semantics.json
-!contracts/auth-executable-behavior.json
-!contracts/oid4vp-authenticated-contract-v1.json
-!services/
-!services/**
 !scripts/
-!scripts/check_migration_db_drivers.py
 !scripts/load-secrets-env.sh
 !scripts/run-migrations-with-secrets.sh
 

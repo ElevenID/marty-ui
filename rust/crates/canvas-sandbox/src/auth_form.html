@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Canvas Sandbox — LTI Launch</title>
+</head>
+<body onload="document.forms[0].submit()">
+<p>Redirecting to your tool for LTI launch verification &hellip;</p>
+<form method="post" action="{{REDIRECT_URI}}">
+<input type="hidden" name="id_token" value="{{ID_TOKEN}}">
+<input type="hidden" name="state" value="{{STATE}}">
+<noscript><button type="submit">Continue</button></noscript>
+</form>
+</body>
+</html>

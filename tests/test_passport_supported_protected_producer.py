@@ -12,7 +12,7 @@ import uuid
 import pytest
 import yaml
 
-from services.passport_disposable_identity import issuer_did
+from scripts.passport_disposable_identity import issuer_did
 from scripts.check_passport_supported_producer_handoff import HandoffError, verify_handoff
 from scripts.passport_supported_infra_images import qualified_images
 from scripts.passport_supported_protected_producer import (

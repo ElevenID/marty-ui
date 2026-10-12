@@ -16862,3 +16862,64 @@ attempts stopped before the scan on OneDrive linker and cold-cache ten-minute
 compile limits; prebuilding the test binaries on D: let the full live probe
 complete. This is source-built holder-path evidence, not a scan of signed UI
 images or every later product write; retain the K10 release gate.
+
+UI main `551634836` replaced the shared Python migration bootstrap with the
+Rust `marty-migration-bootstrap` binary while PR #1192 was held. The KMS branch
+has merged that source locally, preserving the Rust OpenBao identity, Flow and
+notification envelope-key bootstrap and deleting the old Python entrypoint and
+tests. The migration image no longer installs Core Python wheels; its build
+context still includes the Rust text-semantics contract required at compile
+time. Deployment and registry image builds no longer pass Python wheel build
+arguments. The historical passport aggregate cutover remains a terminal
+retirement guard because it stages an old Python writer; current Rust beta
+deployment uses `deploy-local-beta-release.ps1`. A conformance selector that
+pointed at two nonexistent authcrypt overlays now uses the maintained
+`issuance-native-authcrypt` overlay. The focused Python reconciliation suite
+passed 186 cases with 12 platform skips, and the narrower Docker-context suite
+passed 34. The Rust bootstrap and assembled-image qualifications are recorded
+below; full self-review and an exact-head hosted gate remain before landing
+this grouped merge. Earlier Python migration-image receipts remain historical only.
+The merged Signing Keys Rust bootstrap unit/reference target passed 7/7 with
+the released Core Rust dependency graph. The self-host installed-migration
+probe previously required Python success messages; it now relies on the Rust
+notification completion log and its existing live PostgreSQL, Redis and
+OpenBao state assertions. Its qualification/installed-probe tests passed 40
+with one platform skip. The source checks alone do not qualify the image or
+its disposable database run; that separate result is recorded below.
+The local merge self-review caught one authcrypt regression: upstream's
+conformance selector had removed the native-Issuance-only guard while its
+profile names were being reconciled. The guard is restored, and a focused
+negative test now proves a legacy issuance owner cannot select authcrypt.
+A broader staged-diff review found that resolving the upstream Compose conflict
+by taking its entire file would silently discard this branch's scoped signing
+grant token mounts, integration-secret remote-only settings and issuer signer
+routes. The integration now starts from the hardened Compose file and removes
+only the two obsolete Python migration wheel declarations. The conformance,
+self-host owner, release and key-boundary selector suites passed 331/331 on
+that correction. This is a required security fix, not evidence of image or
+deployment acceptance.
+
+The Rust-only migration image `marty-kms-migrations:rust-merge-local`
+(`sha256:3a9833daf6e31ce8af32c0c2bd01ec2187dec5e608b72cc4634732dbd78c0213`)
+and current native services image `marty-kms-services:rust-merge-local`
+(`sha256:aa353b067ce61994f06534cd3a76658bddecb355b8fa745eb24ed2e7d89508ec`)
+built locally. The disposable self-host assembled-schema probe ran twice against
+those exact local tags and pinned PostgreSQL, Redis and OpenBao images. The
+Rust migration entrypoint, native schema migrate/verify, notification head
+`20260808_0002`, managed Redis registry and non-exportable notification
+Transit key passed. The second run retained the same 61 tables, 811 columns
+and 85 JSON columns as the earlier Python-image probe, with inventory hash
+`afab3feb9abac53bcbfb702f6e6976d2cf31bc98da71044c21272d749dbd03d3`.
+Catalog and content scans found no private-key storage; isolated Compose
+teardown left no labeled probe containers. The full receipt is
+`artifacts/kms-rust-assembled-schema-probe-20261012.json`. This supersedes
+the earlier Python migration image as local assembled-schema evidence, but
+remains source-built rather than signed published artifact or cutover proof.
+The migration image also passed a network-isolated runtime inspection: the
+Rust bootstrap and notification binaries are executable, while Python and
+`run_all_migrations.py` are absent. The beta deployment script parsed, the
+changed shell scripts passed `bash -n`, targeted Rust packages passed rustfmt,
+and the beta/Canvas/ownership selector suite passed after updating one stale
+Python-wheel assertion (132 passed, 12 platform skips). Workspace-wide
+rustfmt hit Windows' command-line length limit, so the hosted Linux formatter
+remains part of the final exact-head gate.

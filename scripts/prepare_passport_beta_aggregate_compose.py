@@ -48,13 +48,14 @@ SIGNED_APPLICATIONS = frozenset({
     "notification", "compliance-profile", "presentation-policy", "deployment-profile",
     "signing-keys", "flow", "verification", "revocation-profile",
     "device-registration", "event-stream", "issuance-native", "canvas-sync-worker",
-    "gateway", "passport-callback-signer", "passport-beta-bureau",
+    "gateway", "passport-callback-signer", "passport-beta-bureau", "canvas-sandbox",
 })
 # Gateway binds only the beta host loopback port in this render. Start it with
 # Rust applications so private Flow routes can be proved while the public edge
 # remains stopped.
 INGRESS = frozenset({"cloudflared", "nginx-proxy", "envoy", "waltid-nginx"})
 NEW_SERVICES = frozenset({"passport-callback-signer", "passport-beta-bureau"})
+OPTIONAL_LOCALHOST_BRIDGE = "issuance-canvas-localhost-bridge"
 TRANSITION_SQL_FILES = {
     "transition_sql_sha256": "passport-beta-rust-owner-transition.sql",
     "rust_owner_verify_sql_sha256": "passport-beta-rust-owner-verify.sql",
@@ -199,6 +200,10 @@ def image_override(handoff: dict[str, Any]) -> str:
         rows.extend((f"  {name}:", "    image: ${MARTY_SERVICES_IMAGE}",
                      "    environment:",
                      f"      SERVICE_NAME: {name.replace('-', '_')}"))
+        if name == "canvas-sandbox":
+            rows.extend(("    build: !reset null",
+                         "    entrypoint: [/usr/local/bin/marty-canvas-sandbox]",
+                         "    command: []"))
         if name == "issuance-native":
             rows.extend(("      ENVIRONMENT: beta",
                          "      GRPC_INSECURE_ALLOWED: 'true'"))
@@ -393,6 +398,8 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
                 and item["service"] not in previous,
                 "Beta maintenance generation has ambiguous services")
         previous[item["service"]] = item["container_id"]
+    require(OPTIONAL_LOCALHOST_BRIDGE not in previous,
+            "Optional Canvas localhost bridge cannot enter signed aggregate beta generation")
     require("postgres" in previous
             and (SIGNED_APPLICATIONS - NEW_SERVICES | {"issuance"}).issubset(previous)
             and not (NEW_SERVICES & previous.keys()),
@@ -439,7 +446,7 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             and signing_network.get("name") == "elevenid-beta-passport-callback-signing"
             and signing_network.get("internal") is True,
             "Passport callback signing network is not isolated")
-    for name in SIGNED_APPLICATIONS - {"issuance-native", "canvas-sync-worker"}:
+    for name in SIGNED_APPLICATIONS - {"issuance-native", "canvas-sync-worker", "canvas-sandbox"}:
         require(not services[name].get("entrypoint") and not services[name].get("command"),
                 f"Rendered beta service overrides signed dispatch: {name}")
     require(services["issuance-native"].get("entrypoint")
@@ -450,6 +457,13 @@ def prepare(handoff: dict[str, Any], maintenance_intent: dict[str, Any],
             == ["/usr/local/bin/marty-canvas-sync-worker"]
             and not services["canvas-sync-worker"].get("entrypoint"),
             "Canvas worker command differs")
+    sandbox = services["canvas-sandbox"]
+    require(sandbox.get("entrypoint") == ["/usr/local/bin/marty-canvas-sandbox"]
+            and sandbox.get("command") == []
+            and not sandbox.get("build")
+            and sandbox.get("healthcheck", {}).get("test")
+                == ["CMD", "curl", "-fsS", "http://localhost:8017/health"],
+            "Rendered beta Canvas sandbox is not the signed Rust runtime")
     issuance = services.get("issuance")
     require(isinstance(issuance, dict)
             and issuance.get("image") == handoff["services_image"]

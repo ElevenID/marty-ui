@@ -199,11 +199,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
     (install / "docker").mkdir(parents=True)
     (install / "docker/openbao-init.sh").write_text("fixture", encoding="utf-8")
     calls = []
-    success = ("Profile: selfhost-production (persistent=True)\n"
-               "Marty KMS identity: ready\n"
-               "Ensured non-exportable notification webhook envelope key\n"
-               "All migrations completed successfully\n"
-               "notification schema migrated\n")
+    success = '{"level":"INFO","message":"notification schema migrated"}\n'
 
     def run(args, environment, timeout=90):
         calls.append(args)

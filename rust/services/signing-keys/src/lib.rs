@@ -1,3 +1,7 @@
+pub mod bootstrap;
+pub mod bootstrap_engine;
+pub mod bootstrap_runtime;
+pub mod bootstrap_simulation;
 pub mod certificate_csr;
 pub mod certificate_issuance;
 pub mod compat;

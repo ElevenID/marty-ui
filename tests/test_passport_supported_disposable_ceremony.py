@@ -16,7 +16,7 @@ import uuid
 import pytest
 
 from scripts import passport_supported_disposable_ceremony as ceremony
-from services.passport_disposable_identity import managed_key_reference
+from scripts.passport_disposable_identity import managed_key_reference
 from scripts.passport_supported_provisioning_producer import PARTIAL_ONLY_SERVICES
 
 
