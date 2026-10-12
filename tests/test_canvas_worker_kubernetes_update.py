@@ -266,6 +266,12 @@ kubectl() {
   esac
 }
 readonly -f kubectl
+native_check() {
+  [[ "$1" == check-update ]] || return 96
+  local snapshot
+  IFS= read -r -d '' snapshot || :
+  [[ "$snapshot" == '{}' ]]
+}
 """
     result = subprocess.run(
         [bash, "--noprofile", "--norc", "-s"],
@@ -273,7 +279,7 @@ readonly -f kubectl
                "prepare_kubernetes_native_issuance() {\n"
                "  MARTY_SERVICES_IMAGE=synthetic.invalid/services@sha256:"
                + "a" * 64 + "\n"
-               "  K8S_NATIVE_ISSUANCE_BIN=true\n"
+               "  K8S_NATIVE_ISSUANCE_BIN=native_check\n"
                "}\ncmd_update_images\n"),
         text=True,
         capture_output=True,
