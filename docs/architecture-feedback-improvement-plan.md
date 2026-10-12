@@ -3924,6 +3924,17 @@ sibling support-module exports. Independent review found no P1-P3 issue.
 Protected CI and comparable whole-lane timing evidence are still required
 before any speed claim or promotion.
 
+October 12 A3 shadow-edge candidate (local, not yet merged): Device
+Registration constructs a Trust Profile HTTP client from
+`TRUST_PROFILE_SERVICE_URL` and requests the scoped wallet-issuer key route;
+the Trust Profile service publishes that route, and base Compose binds the
+service URL. The planner now records this non-Cargo consumer with source-backed
+tests. The hypothetical reachability inventory includes Device Registration
+for upstream Trust Profile changes. This remains diagnostic only: service
+changes still select the full Rust workspace, and the non-Cargo graph is not
+complete. All 53 local planner tests passed (465 subtests), and independent
+review found no P1-P3 issue. Hosted PR and protected checks remain pending.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
