@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,30 @@ def test_demo_seed_reference_keeps_released_identifiers_and_catalog() -> None:
     assert bundle["organization"]["id"] == "22222222-2222-2222-2222-222222222222"
     assert len(bundle["credential_types"]) == 7
     assert len(bundle["credential_templates"]) == 8
+
+
+def test_provenance_uses_canonical_git_blob_bytes() -> None:
+    source = REFERENCE["source"]
+    source_paths = {
+        "system_ids_sha256": (
+            "packages/marty-common/marty_common/system_ids.py",
+            "5dcac6ed7719d0bdc32e8948a2ce803112c660a7b0ecd04164fed0ff562f5717",
+        ),
+        "demo_seed_data_sha256": (
+            "packages/marty-common/marty_common/demo_seed_data.py",
+            "2c4b71cdc775e167e10e9b47e5b629dcf53b3e771dd6769f135dbb8a12d1bc83",
+        ),
+    }
+    marty_checkout = ROOT.parent.parent / "Marty"
+    for field, (path, expected) in source_paths.items():
+        assert source[field] == expected
+        if (marty_checkout / ".git").exists():
+            blob = subprocess.run(
+                ["git", "-C", str(marty_checkout), "show", f"{source['commit']}:{path}"],
+                capture_output=True,
+                check=True,
+            ).stdout
+            assert hashlib.sha256(blob).hexdigest() == expected
 
 
 def test_live_seed_commands_start_without_marty_common() -> None:

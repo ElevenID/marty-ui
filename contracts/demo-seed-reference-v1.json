@@ -3,8 +3,8 @@
   "source": {
     "repository": "ElevenID/Marty",
     "commit": "36bb2aac65759edc2ccdce120e16a61391a7ce32",
-    "system_ids_sha256": "4ea3b4596c6556de4088fb56ea5c76afa56be0f027d1d4653ce499f4448da64f",
-    "demo_seed_data_sha256": "03db4cbf595370d893bef9b2474c6dbe4ec83552544ceb18bbcaab1e3e97dc04"
+    "system_ids_sha256": "5dcac6ed7719d0bdc32e8948a2ce803112c660a7b0ecd04164fed0ff562f5717",
+    "demo_seed_data_sha256": "2c4b71cdc775e167e10e9b47e5b629dcf53b3e771dd6769f135dbb8a12d1bc83"
   },
   "canvas_system_ids": {
     "MARTY_CANVAS_MIP_QUIZ_OPEN_BADGE_APPLICATION_TEMPLATE_ID": "0ab66d45-0d84-5fbd-837f-25788d3227a1",
