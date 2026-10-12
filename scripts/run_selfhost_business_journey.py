@@ -138,7 +138,8 @@ def required_secrets(secret_root: Path) -> None:
         # contents into a report or command line.
         with path.open("rb") as stream:
             prefix = stream.read(32).strip().lower()
-        if prefix.startswith((b"change-me", b"changeme", b"placeholder")):
+        if prefix.startswith((b"change-me", b"change_me", b"changeme",
+                              b"replace-me", b"replace_me", b"placeholder")):
             raise ValueError(f"qualification secret is a placeholder: {name}")
 
 

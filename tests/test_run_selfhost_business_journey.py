@@ -175,11 +175,16 @@ def test_source_policy_with_no_approved_keys_fails_closed(monkeypatch,
         trusted_custody_keys(tmp_path, "a" * 40)
 
 
-def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("placeholder", [
+    "change-me-later", "CHANGE_ME_sign_grant_verify_token",
+    "replace-me", "replace_me_token", "placeholder",
+])
+def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path,
+                                              placeholder: str) -> None:
     import run_selfhost_business_journey as runner
 
     monkeypatch.setattr(runner, "EXPECTED_SECRET_NAMES", frozenset({"issuer_token"}))
-    (tmp_path / "issuer_token").write_text("change-me-later", encoding="utf-8")
+    (tmp_path / "issuer_token").write_text(placeholder, encoding="utf-8")
     with pytest.raises(ValueError, match="placeholder: issuer_token"):
         required_secrets(tmp_path)
 
