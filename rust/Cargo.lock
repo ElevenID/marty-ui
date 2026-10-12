@@ -4668,7 +4668,6 @@ dependencies = [
  "marty-oid4vp-contract",
  "marty-passport-auth",
  "marty-signing-grant",
- "marty-verification",
  "p256",
  "percent-encoding",
  "redis",
