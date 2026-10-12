@@ -103,7 +103,9 @@ jobs:
 
       - name: Require exact evidence tooling checkout
         shell: bash
-        run: test "$(git rev-parse HEAD)" = "${{ steps.source_runs.outputs.tooling_sha }}"
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ steps.source_runs.outputs.tooling_sha }}"
+          test -f rust/crates/spruce-metadata-probe/Cargo.toml
 
       - name: Download and verify signed stack manifest
         id: stack_manifest

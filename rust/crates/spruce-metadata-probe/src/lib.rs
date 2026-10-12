@@ -45,7 +45,21 @@ fn has_any_display_name(value: Option<&Value>) -> bool {
 fn python_list(values: &BTreeSet<String>) -> String {
     let quoted: Vec<String> = values
         .iter()
-        .map(|v| format!("'{}'", v.replace('\\', "\\\\").replace('\'', "\\'")))
+        .map(|value| {
+            let mut escaped = String::new();
+            for ch in value.chars() {
+                match ch {
+                    '\\' => escaped.push_str("\\\\"),
+                    '\'' => escaped.push_str("\\'"),
+                    '\n' => escaped.push_str("\\n"),
+                    '\r' => escaped.push_str("\\r"),
+                    '\t' => escaped.push_str("\\t"),
+                    ch if ch.is_control() => escaped.push_str(&format!("\\x{:02x}", ch as u32)),
+                    ch => escaped.push(ch),
+                }
+            }
+            format!("'{escaped}'")
+        })
         .collect();
     format!("[{}]", quoted.join(", "))
 }

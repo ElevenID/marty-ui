@@ -32,6 +32,28 @@ fn frozen_python_validation_corpus() {
     }
 }
 
+#[test]
+fn malformed_configuration_id_cannot_inject_log_lines() {
+    let corpus: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/spruce-metadata-probe-v1.json"
+    ))
+    .unwrap();
+    let mut issuer = corpus["probe_success"]["issuer_metadata"].clone();
+    issuer["credential_configurations_supported"]
+        .as_object_mut()
+        .unwrap()
+        .insert("bad\nid".to_owned(), Value::Null);
+    let base = corpus["base"].as_str().unwrap();
+    let org = corpus["organization_id"].as_str().unwrap();
+    let error = marty_spruce_metadata_probe::validate_issuer(
+        &issuer,
+        &format!("{base}/org/{org}"),
+        &format!("{base}/credentials/marty-verified-member-badge"),
+    )
+    .unwrap_err();
+    assert_eq!(error, "Malformed credential configurations: ['bad\\nid']");
+}
+
 #[tokio::test]
 async fn invalid_origin_fails_before_network_io() {
     assert_eq!(
