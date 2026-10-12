@@ -17027,3 +17027,21 @@ fresh isolated database and the reviewed plugin image with exact signed
 service/migration digests, representative runtime writes, private-key catalog
 and JSON-content scans, and coordinated PostgreSQL/OpenBao restore. No running
 beta/self-host stack was changed for this review.
+
+K7 feature-loss self-review of Credentials #313 head `7370b33`: its retired
+private-key-driven Behave files contain 67 scenarios across credential
+issuance/verification, SD-JWT disclosures, W3C VC structure, Open Badges,
+OID4VP, ZK proofs, revocation and lifecycle behavior. These manual scenarios
+were outside current Credentials CI, but deletion still requires assertion
+coverage review. Exact merged Core `f0819fa` contains candidate public-only
+replacements: `ietf_selective_disclosure_hides_claims_and_binds_each_hash`
+and `verified_presentation_rejects_invalid_issuer_signature` in
+`marty-oid4vci`, VC-JWT public-key/tamper checks in `marty-verification::vcdm`,
+signed OB3 structure/verification vectors in `open_badges_conformance`, and
+`round_trip_age_over_18`/`verify_rejects_wrong_transcript` in `marty-zkp`.
+Those named tests exist at the exact Core release commit; their presence is
+not a complete 67-scenario equivalence proof. Before Credentials #313 leaves
+draft, finish the scenario-to-native-test map, especially cross-format
+interoperability, revocation/lifecycle and issuer-side Open Badge/SD-JWT
+assertions, and run any missing cases through remote KMS or public vectors.
+Do not restore local private-key fixtures to make the old Behave suite run.
