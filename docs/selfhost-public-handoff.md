@@ -105,6 +105,8 @@ passed an installed run, so no installed journey has qualified a release.
 The follow-on synthetic fixture setup and trust bootstrap contract are in
 `docs/selfhost-synthetic-fixture.md`. They are not part of any currently
 published bundle.
+The exact artifact staging and isolated Linux invocation are in
+`docs/selfhost-disposable-qualification-runbook.md`.
 
 Before adding these assets to the release publisher, run the full installation
 from a fresh extracted ZIP and disposable external OpenBao and state. Bind the
