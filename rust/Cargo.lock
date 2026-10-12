@@ -5163,7 +5163,6 @@ dependencies = [
  "der",
  "http 1.5.0",
  "marty-crypto 0.1.62",
- "marty-verification",
  "percent-encoding",
  "redis",
  "regex",

@@ -805,12 +805,13 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 4
+    assert verified[-1] == b"" and len(verified) == 5
     service_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert service_tests == [
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
+        "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
     ]
     expected = {
         "all": "false",
@@ -825,7 +826,7 @@ def test_verified_service_acceptance_test_sources_select_contracts_only_on_pr(
     }
     assert (
         _classify_changed_paths(service_tests, tmp_path, include_rust_plan=True)
-        == [expected] * 3
+        == [expected] * 4
     )
     assert _classify_changed_paths(
         service_tests, tmp_path, combined=True, include_rust_plan=True
@@ -1613,6 +1614,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     for name in contracts:
         assert steps[name]["if"] == "matrix.lane == 'contracts'"
         assert not steps[name].get("continue-on-error", False)
+    live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
+    assert "csca_lifecycle_storage_contract:2" in live_signing
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
@@ -5181,6 +5184,7 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "passport_managed_kms_chain",
         "passport_gateway_postgres",
         "gateway_signing_acceptance",
+        "csca_capability_contract",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
     assert "marty-signing-keys" not in worker["dev-dependencies"]

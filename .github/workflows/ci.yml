@@ -1812,7 +1812,7 @@ jobs:
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5; do
+          for entry in service_rotation_live_contract:2 vdsnc_registration_live_contract:2 managed_key_create_live_contract:5 csca_lifecycle_storage_contract:2; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
