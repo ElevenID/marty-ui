@@ -5,6 +5,8 @@ from pathlib import Path
 import re
 import runpy
 import shutil
+import subprocess
+import sys
 
 import pytest
 import yaml
@@ -12,6 +14,30 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 ACCEPTANCE_SUPPORT = ROOT / "rust/crates/canvas-acceptance/tests/support"
 FIXTURE = runpy.run_path(str(ROOT / "scripts/render_base_native_runtime_fixture.py"))
+
+
+def test_owned_canvas_release_policy_imports_from_copied_source_assets(tmp_path):
+    source = (ACCEPTANCE_SUPPORT / "base_runtime_container.rs").read_text()
+    match = re.search(r"const ASSETS: &\[&str\] = &\[(.*?)\];", source, re.DOTALL)
+    assert match is not None
+    for relative in re.findall(r'"([^"]+)"', match.group(1)):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / relative, destination)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(tmp_path / "scripts/prepare_official_beta_release.py"),
+            "--help",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.fixture

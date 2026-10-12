@@ -44,6 +44,7 @@ const ASSETS: &[&str] = &[
     "scripts/conformance_native.py",
     "scripts/validate_beta_didcomm_configuration.py",
     "scripts/prepare_official_beta_release.py",
+    "scripts/kms_core_release.py",
     "scripts/test_conformance_native_compose.py",
     "scripts/conformance_stack.py",
     "scripts/test_canvas_worker_compose_render.py",
@@ -1058,8 +1059,7 @@ mod tests {
         ] {
             assert!(completed(&status, SENTINEL).is_err());
         }
-        assert_eq!(ASSETS.len(), 20);
-        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), 20);
+        assert_eq!(ASSETS.iter().collect::<BTreeSet<_>>().len(), ASSETS.len());
         assert_eq!(kubernetes_source_assets().unwrap().len(), 7);
     }
 }
