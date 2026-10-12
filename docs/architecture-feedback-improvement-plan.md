@@ -3609,9 +3609,39 @@ savings. The PR run's worker and composition targets took 486.549s and
 449.438s. The route matrix is therefore a lower-priority speed target than
 repeated database preparation. Keep all 64 real-route cases in routine and
 qualification checks; no subset or hosted speedup has been established. The
-pilot still needs same-commit, manual-dispatch off/on Canvas target and case
-inventory comparisons: manual dispatch enables full historical qualification,
-so its wall time is not directly comparable to these PR/merge-group runs.
+separate same-commit manual-dispatch off/on pilot above enables full historical
+qualification, so its wall time is not directly comparable to these
+PR/merge-group runs.
+
+October 12 A4 hosted follow-up: [#1279](https://github.com/ElevenID/marty-ui/pull/1279)
+merged fixed-category Docker-create diagnostics and a separate
+`published_base_restore` timing label without changing routine validation.
+The exact-main opt-in [run 38194724363](https://github.com/ElevenID/marty-ui/actions/runs/38194724363)
+passed the full database step in 28m29s, but its subsequent ignored
+parity/isolation diagnostic failed at the first Docker create with
+`image_unavailable`. The regular published runner pulls the oracle-pinned
+PostgreSQL image and exports the selected canonical/mirror reference only in
+its child process; the separate ignored-test workflow step did neither.
+Prepare that same pinned image before the diagnostic rather than weakening
+the digest or accepting an unqualified test failure. The artifact contains
+105 successful scenario timing identities matching the earlier
+off [run 38180950901](https://github.com/ElevenID/marty-ui/actions/runs/38180950901).
+The current-main published Canvas group ran 1,708.0s on versus 1,306.8s
+in that earlier off run, and the database step ran 28m29s on versus 21m48s
+off. These two runs use different commits, so the earlier same-commit off/on
+comparison above is the stronger wall-time evidence. The new labels show 48
+`published_probe` migrations plus 85 `published_base_restore` operations
+on, compared with 92 probes off; published database readiness occurred 273
+times on versus 233 off. These overlapping phase sums do not explain wall
+time additively, but repeated process-local base preparation is consistent
+with the extra database starts. This is a negative hosted speed result.
+Keep the reuse switch manual-only and do not promote it to routine or release
+CI; fixing the diagnostic's missing image setup is a test-quality repair,
+not a speed claim. The complete Linux [#1279 PR artifact](https://github.com/ElevenID/marty-ui/actions/runs/38188963613)
+and [protected merge-group artifact](https://github.com/ElevenID/marty-ui/actions/runs/38192948453)
+recorded all 64 JSON-depth route cases at 27.127s and 14.219s, respectively,
+so keep that full route matrix rather than cutting coverage for a small
+fraction of the 8-11-minute routine database step.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both

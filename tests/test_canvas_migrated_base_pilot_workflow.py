@@ -101,6 +101,29 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
     )
 
 
+def test_manual_pilot_prepares_the_same_pinned_postgres_image_as_the_published_runner() -> None:
+    diagnostic = next(
+        step
+        for step in _steps()
+        if step.get("name") == "Verify opted-in Canvas migrated-base parity and isolation"
+    )
+    run = diagnostic["run"]
+    assert "jq -er '.observed_postgres_image'" in run
+    assert "../contracts/canvas-worker-consumer-range-oracle.json" in run
+    assert '[[ "$postgres_image" =~ ^postgres@sha256:[a-f0-9]{64}$ ]]' in run
+    assert 'MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \\' in run
+    assert '../scripts/ci/pull-pinned-dockerhub-image.sh "$postgres_image"' in run
+    assert "export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE" in run
+    assert run.index("export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") < run.index(
+        "mapfile -t executables"
+    )
+    published_runner = (
+        ROOT / "scripts/ci/run-published-canvas-contracts.sh"
+    ).read_text(encoding="utf-8")
+    assert "jq -er '.observed_postgres_image, .observed_image'" in published_runner
+    assert 'pull-pinned-dockerhub-image.sh" "$1"' in published_runner
+
+
 def _exact_runner():
     spec = importlib.util.spec_from_file_location("exact_canvas_runner", EXACT_RUNNER)
     assert spec is not None and spec.loader is not None

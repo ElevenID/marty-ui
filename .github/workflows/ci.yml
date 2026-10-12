@@ -2046,6 +2046,14 @@ jobs:
           MARTY_CANVAS_PUBLISHED_SCHEMA_TEST: '1'
         run: |
           set -euo pipefail
+          # The normal published runner pulls this oracle-pinned image in its
+          # own process; the standalone ignored diagnostics need the same setup.
+          postgres_image="$(jq -er '.observed_postgres_image' \
+            ../contracts/canvas-worker-consumer-range-oracle.json)"
+          [[ "$postgres_image" =~ ^postgres@sha256:[a-f0-9]{64}$ ]]
+          MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE="$(bash \
+            ../scripts/ci/pull-pinned-dockerhub-image.sh "$postgres_image")"
+          export MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE
           mapfile -t executables < <(jq -r '
             select(.reason == "compiler-artifact")
             | select(.package_id | contains("#marty-canvas-acceptance@"))
