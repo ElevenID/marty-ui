@@ -17518,3 +17518,54 @@ passed. The earlier owned Redis proof remains valid because the merge did not
 alter those Rust suites or their CI invocation. Publish the grouped final
 head and require new exact-head CI before protected merge. Release stays
 `hold`.
+
+2026-10-12 protected consumer landings and release decision candidate: UI
+#1192's corrected source head `bcdf87228` passed exact-head CI
+`38266819643`, including the early Redis-only cases and later provisioned
+OpenBao rotation/VDS-NC cases. Its combined-main queue run `38270833019`,
+CodeQL, policy and organization checks passed, and protected main merged it
+as `62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`. Credentials #313's
+digest-semantics review finding was already corrected on `b41947e`; the
+hosted log showed all three integration cases passing and its stale thread
+was resolved. Protected Credentials queue CI `38271673555` passed and main
+merged #313 as `7ac622015a220992fbae84177a1518fec7b75849`. Core
+v0.2.2 remains the pinned signed dependency. Preserve both failed UI runs
+and their successful corrective runs as distinct evidence.
+
+The retired Credentials cross-format subject-query sentence appeared only
+in `tests/features/digital_identity.feature`, with no Behave step definition
+or implemented Credentials query. Native Issuance's tenant-scoped issued-
+credential list accepts organization and status, not a subject filter. This
+is not a lost public API; K7/K8 still need installed-stack cross-format
+issuance, tenant-scoped retrieval, presentation, verification, status and
+trust acceptance. The production stack lock excludes the retired
+`marty-credentials-issuance` artifact and ships the native Rust owner; the
+old Credentials v0.1.79 release does not prove this merged source.
+
+Separate release candidate from exact UI main: `v1.1.244` is already
+published, so advance the stack lock to unused `marty-ui@1.1.245` and set
+`release_state: eligible` in a reviewed PR. This only authorizes the
+digest-first four-image claim/build/qualification path. Before claiming,
+require protected-main exact-head gates and the separately required full
+qualification run. The stack-release environment review, signed exact-
+digest image inspection, installed KMS-only and supported cutover/rollback
+acceptance remain open; eligibility alone is not a deployment approval.
+
+2026-10-12 release-candidate local review: protected UI main at
+`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8` is the exact base of the
+separate eligibility branch. `v1.1.245` had no GitHub release or Git tag at
+the check; `v1.1.244` is already published. The lock, release-contract tests
+and this tracker are the only changed files. The focused stack release,
+tag-gate, transaction and absence suite passed 132/132; Ruff, JSON parsing
+and diff hygiene passed. A local GHCR version-tag absence probe returned
+HTTP 403 at registry token lookup, so the hosted claim's registry check must
+still prove all four image coordinates unused. The `stack-release`
+environment has a required reviewer and no admin bypass; the release
+workflow builds and qualifies exact image digests before its protected
+publish job. Do not infer signed artifacts, installation, or cutover from
+this eligible source candidate.
+The six additional stack-lock consumer suites passed 227/227 locally,
+including self-host preparation, release-provenance fixtures, beta-fence
+checks and workflow selection. Together with the focused release gates,
+359 local tests passed on the candidate. The full exact-main qualification
+run and hosted release claim remain required after protected merge.
