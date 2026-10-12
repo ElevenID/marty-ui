@@ -17450,3 +17450,20 @@ its protected combined-head result and exact `main` commit before resolving
 this branch, or let #1192 advance if #1294 leaves the queue. Do not bypass
 merge protection or rerun CI on a speculative source merge. Release state
 remains `hold`.
+
+2026-10-12 #1294 CSCA test-custody review: the queued mainline change
+isolates CSCA test dependencies but introduces a `csca_fixture` helper that
+calls `CertificateBuilderConfig::build_self_signed()` in Signing Keys tests,
+and moves an authority-generation test into service acceptance. This would
+reverse the KMS branch's `298023863` public-only CSCA fixture retirement if
+accepted verbatim. When #1294 lands, reconcile its CI and useful contract
+coverage while retaining public PEM fixtures and no test-side local issuer
+key generation. The existing KMS branch's `marty-verification` Signing Keys
+dev dependency has no remaining import; local commit `75dc4e6c4` removed
+it and its lockfile edge. Locked Cargo metadata and diff checks passed. The
+first two Windows compiles failed when `link.exe` could not reopen a proc-macro
+DLL in the OneDrive target, including a one-job retry. A clean temporary
+target outside OneDrive compiled the focused Signing Keys CSCA lifecycle test
+and ran all seven tests successfully. The original linker failure is local
+filesystem evidence, not a source test failure. The mainline #1294 merge
+and its public-only fixture reconciliation remain pending.
