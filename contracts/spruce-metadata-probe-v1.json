@@ -486,6 +486,55 @@
         }
       },
       "error": "Malformed credential configurations: ['bad\\nid']"
+    },
+    {
+      "name": "numeric_zero_configuration_display",
+      "kind": "issuer",
+      "input": {
+        "credential_issuer": "https://beta.elevenidllc.com/org/00000000-0000-0000-0000-000000000001",
+        "display": [
+          {
+            "name": "ElevenID LLC",
+            "locale": "en"
+          }
+        ],
+        "credential_configurations_supported": {
+          "MemberCredential#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/marty-verified-member-badge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Marty Verified Member Badge"
+                }
+              ]
+            }
+          },
+          "EmployeeBadge#sd-jwt": {
+            "format": "dc+sd-jwt",
+            "vct": "https://beta.elevenidllc.com/credentials/EmployeeBadge",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": 0.0
+                }
+              ]
+            }
+          },
+          "org.iso.18013.5.1.mDL#mdoc": {
+            "format": "mso_mdoc",
+            "doctype": "org.iso.18013.5.1.mDL",
+            "credential_metadata": {
+              "display": [
+                {
+                  "name": "Mobile Driving Licence (mDL)"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "error": "Malformed credential configurations: ['EmployeeBadge#sd-jwt']"
     }
   ],
   "probe_success": {

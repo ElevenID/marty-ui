@@ -20,7 +20,7 @@ fn require(ok: bool, error: &str) -> Result<(), String> {
 fn value_string(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) if n.to_string() != "0" => n.to_string(),
+        Some(Value::Number(n)) if n.as_f64() != Some(0.0) => n.to_string(),
         Some(Value::Bool(true)) => "True".into(),
         _ => String::new(),
     }
