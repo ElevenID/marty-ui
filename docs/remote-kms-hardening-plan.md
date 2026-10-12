@@ -16821,7 +16821,8 @@ instead of requiring unpublished GHCR digests. Both runs completed the
 migration entrypoint, Rust native schema migration and verification, and
 notification ledger head `20260808_0002`; the catalog and JSON/text content
 scans found no private-key storage. The assembled inventory contained 811
-columns and was identical on the idempotent rerun (SHA-256
+columns across 61 tables in five schemas, including 85 JSON columns, and was
+identical on the idempotent rerun (SHA-256
 `afab3feb9abac53bcbfb702f6e6976d2cf31bc98da71044c21272d749dbd03d3`).
 The full inventory, local image digests, source heads and limits are in
 `artifacts/kms-local-assembled-schema-probe-20261012.json`. This materially

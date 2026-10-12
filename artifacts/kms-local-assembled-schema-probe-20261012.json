@@ -26,6 +26,15 @@
     "migrations": "7bc066bfd4ce07a3bbdf2cea6d728d2b08b8c29c",
     "services": "75ded97111eb37efd7eecbad69ef139709178c6d"
   },
+  "schema_column_counts": {
+    "credential_template_service": 85,
+    "device_registration_service": 60,
+    "issuance_service": 463,
+    "notification_service": 90,
+    "organization_service": 113
+  },
+  "table_count": 61,
+  "json_column_count": 85,
   "table_column_count": 811,
   "table_columns": [
     {
