@@ -17078,3 +17078,16 @@ Rust formatting and diff checks passed. Receipt:
 backend-auth failure/retry case locally, not the full interrupted-delivery
 or signed-image recovery matrix. Keep the next push grouped with the held
 tracker updates and requalify its exact head.
+
+2026-10-12 UI main reconciliation: main advanced by `eb7cdd0bb`, which adds
+current-input guards exclusively for Python Canvas facts/retry REST wrappers.
+Those wrappers and their input inventories were intentionally retired by the
+Rust-only UI migration. Applying the upstream guard changes to this branch
+failed 11 focused tests because the referenced wrapper files do not exist.
+Merge commit `e11638c46` records the upstream ancestry while retaining the
+KMS branch tree; inspection of the upstream commit confirmed its nine touched
+files were wrapper evidence, not an independent runtime fix. The reconciled
+Canvas/CI focused suite passed 191/191, Ruff passed, and the branch diff check
+passed. The unrelated untracked `%SystemDrive%` directory was not added. This
+local batch is ready for a single UI #1192 push and exact-head CI; the stack
+release lock remains `hold`.
