@@ -17518,3 +17518,21 @@ passed. The earlier owned Redis proof remains valid because the merge did not
 alter those Rust suites or their CI invocation. Publish the grouped final
 head and require new exact-head CI before protected merge. Release stays
 `hold`.
+
+2026-10-12 release-stage checkpoint (newer than the branch history above):
+Core #355 and Credentials #313 merged; native UI KMS-only feature #1192
+also merged. UI release-eligibility #1297 merged to protected main at
+`0dc0179d4e040350a4b3aee73af57c9bd4e67478`, with `v1.1.245` eligible
+in `release/stack-lock.json` and the passport beta handoff guide corrected.
+All five required merge-group workflows passed on that exact main commit.
+Separate full CI workflow-dispatch run `38288999258` remains in progress on
+that commit; completed jobs have passed at this checkpoint. The Git tag and
+GitHub release `v1.1.245` were absent when checked. Wait for exact-main CI
+success, then dispatch `prepare-stack-tag.yml` with this tag and source SHA;
+its hosted no-write check must prove all four registry coordinates unused.
+Pass its successful claim run ID to `cd.yml` for signed publication. The
+protected `stack-release` environment requires human reviewer approval at
+the publishing gate. Signed installed-image, real provider/device,
+cross-format, clean-schema, and cutover/rollback acceptance remain open.
+Reconcile this local checkpoint into the post-release evidence PR without
+moving protected main before the exact-main claim.
