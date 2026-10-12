@@ -1780,5 +1780,200 @@
         }
       }
     ]
+  },
+  "canvas_lms_summary": {
+    "complete": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment",
+          "html_url": "https://canvas.example/assignments/14",
+          "action": "created"
+        }
+      },
+      "quiz": {
+        "id": 12,
+        "title": "Credential Quiz",
+        "html_url": "https://canvas.example/quizzes/12",
+        "action": "created",
+        "module_item": {
+          "id": 13,
+          "title": "Credential Quiz",
+          "html_url": "https://canvas.example/items/13",
+          "action": "created"
+        }
+      }
+    },
+    "assignment_error": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment_error": "Canvas assignment seed failed (422)"
+      },
+      "quiz": {
+        "id": 12,
+        "title": "Credential Quiz",
+        "html_url": "https://canvas.example/quizzes/12",
+        "action": "created",
+        "module_item": {
+          "id": 13,
+          "title": "Credential Quiz",
+          "html_url": "https://canvas.example/items/13",
+          "action": "created"
+        }
+      }
+    },
+    "quiz_error": {
+      "public_domain": {
+        "action": "updated",
+        "domain": "canvas.example",
+        "accounts": []
+      },
+      "developer_key": {
+        "id": 5,
+        "name": "client-1",
+        "client_id": "client-1",
+        "action": "created",
+        "owner_binding_account_id": 1,
+        "owner_binding_workflow_state": "on",
+        "requested_binding_account_id": 1,
+        "requested_binding_workflow_state": "on"
+      },
+      "course": {
+        "id": 42,
+        "name": "Marty Course",
+        "course_code": "MARTY-101",
+        "sis_course_id": "marty-course"
+      },
+      "learner": {
+        "id": 77,
+        "name": "Test Learner",
+        "login_id": "learner@example.com"
+      },
+      "enrollment": {
+        "id": 88,
+        "user_id": 77
+      },
+      "external_tool": {
+        "id": 99,
+        "name": "Canvas Demo",
+        "deployment_id": "deployment-1",
+        "action": "created"
+      },
+      "launch_surface": {
+        "module": {
+          "id": 10,
+          "name": "Credential Launch",
+          "action": "created"
+        },
+        "module_item": {
+          "id": 11,
+          "title": "Launch Credential",
+          "html_url": "https://canvas.example/items/11",
+          "action": "created"
+        },
+        "assignment": {
+          "id": 14,
+          "name": "Credential Assignment",
+          "html_url": "https://canvas.example/assignments/14",
+          "action": "created"
+        }
+      },
+      "quiz": {
+        "error": "Canvas quiz seed failed (422)"
+      }
+    }
   }
 }

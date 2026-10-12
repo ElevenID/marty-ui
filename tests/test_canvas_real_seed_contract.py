@@ -407,6 +407,35 @@ def test_frozen_canvas_transition(monkeypatch) -> None:
     assert capture_canvas_transition(monkeypatch) == contract["canvas_transition"]
 
 
+def capture_canvas_lms_summary(monkeypatch) -> dict:
+    cfg = canvas_config()
+    monkeypatch.setattr(seed, "_ensure_canvas_public_domain", lambda *_args: {"action": "updated", "domain": "canvas.example", "accounts": []})
+    monkeypatch.setattr(seed, "_ensure_canvas_course", lambda *_args: {"id": 42, "name": cfg.course_name, "course_code": cfg.course_code, "sis_course_id": cfg.course_sis_id})
+    monkeypatch.setattr(seed, "_ensure_canvas_user", lambda *_args: {"id": 77, "name": cfg.learner_name, "login_id": cfg.learner_email})
+    monkeypatch.setattr(seed, "_ensure_canvas_enrollment", lambda *_args, **_kwargs: {"id": 88, "user_id": 77})
+    monkeypatch.setattr(seed, "_ensure_canvas_developer_key", lambda *_args: {"action": "created", "key": {"id": 5, "name": "client-1", "global_id": "client-1", "owner_binding_account_id": 1, "owner_binding_workflow_state": "on", "requested_binding_account_id": 1, "requested_binding_workflow_state": "on"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_external_tool", lambda *_args, **_kwargs: {"action": "created", "tool": {"id": 99, "name": "Canvas Demo", "deployment_id": "deployment-1"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_module", lambda *_args, **_kwargs: {"action": "created", "module": {"id": 10, "name": cfg.launch_module_name}})
+    monkeypatch.setattr(seed, "_ensure_canvas_module_external_tool_item", lambda *_args, **_kwargs: {"action": "created", "item": {"id": 11, "title": cfg.launch_item_title, "html_url": "https://canvas.example/items/11"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_quiz", lambda *_args, **_kwargs: {"action": "created", "quiz": {"id": 12, "title": cfg.quiz_title, "html_url": "https://canvas.example/quizzes/12"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_module_quiz_item", lambda *_args, **_kwargs: {"action": "created", "item": {"id": 13, "title": cfg.quiz_title, "html_url": "https://canvas.example/items/13"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_external_tool_assignment", lambda *_args, **_kwargs: {"action": "created", "assignment": {"id": 14, "name": cfg.launch_assignment_name, "html_url": "https://canvas.example/assignments/14"}})
+    complete = seed._seed_canvas_lms_objects(cfg, config(), "platform-1")
+    def fail_assignment(*_args, **_kwargs):
+        raise HTTPError("https://canvas.example", 422, "unsupported", None, None)
+    monkeypatch.setattr(seed, "_ensure_canvas_external_tool_assignment", fail_assignment)
+    assignment_error = seed._seed_canvas_lms_objects(cfg, config(), "platform-1")
+    monkeypatch.setattr(seed, "_ensure_canvas_external_tool_assignment", lambda *_args, **_kwargs: {"action": "created", "assignment": {"id": 14, "name": cfg.launch_assignment_name, "html_url": "https://canvas.example/assignments/14"}})
+    monkeypatch.setattr(seed, "_ensure_canvas_quiz", fail_assignment)
+    quiz_error = seed._seed_canvas_lms_objects(cfg, config(), "platform-1")
+    return {"complete": complete, "assignment_error": assignment_error, "quiz_error": quiz_error}
+
+
+def test_frozen_canvas_lms_summary(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_canvas_lms_summary(monkeypatch) == contract["canvas_lms_summary"]
+
+
 def capture(monkeypatch) -> dict:
     operations = []
     responses = []
