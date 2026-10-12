@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
@@ -203,6 +204,26 @@ def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
     }
     if not isinstance(document, dict) or any(document.get(k) != v for k, v in expected.items()):
         raise ValueError("signed KMS custody evidence does not bind installed fixture")
+    proofs = document.get("profile_proofs")
+    if not isinstance(proofs, list) or len(proofs) != 2:
+        raise ValueError("signed KMS custody profile proofs are incomplete")
+    for proof, did, purpose, prefix in zip(
+        proofs,
+        (environment["SELFHOST_ISSUER_DID"], environment["SELFHOST_VERIFIER_DID"]),
+        ("vc_jwt_issuer", "oid4vp_request_signing"),
+        ("cred-issuer-", "oid4vp-verifier-"),
+    ):
+        selector = {"issuer_did": did, "key_purpose": purpose,
+                    "credential_format": "SD_JWT_VC", "algorithm": "ES256"}
+        tuple_value = f'{environment["SELFHOST_ORG_ID"]}|{did}|{purpose}|SD_JWT_VC|ES256'
+        reference = f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256"
+        if (not isinstance(proof, dict)
+                or set(proof) != {"profile_selector", "key_reference", "key_version"}
+                or proof["profile_selector"] != selector
+                or proof["key_reference"] != reference
+                or type(proof["key_version"]) is not int
+                or proof["key_version"] <= 0):
+            raise ValueError("signed KMS custody profile proof does not bind managed key")
     command(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin",
              "-inkey", str(public_key), "-sigfile", str(signature),
              "-in", str(evidence)], timeout=120)

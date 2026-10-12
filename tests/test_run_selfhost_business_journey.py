@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
@@ -221,7 +222,8 @@ def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -
     document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
                 "organization_id": "org", "issuer_did": "did:example:issuer",
                 "verifier_did": "did:example:verifier",
-                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True}
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "profile_proofs": custody_profile_proofs(environment)}
     evidence.write_text(json.dumps(document), encoding="utf-8")
     subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private),
                     "-in", str(evidence), "-out", str(signature)],
@@ -229,6 +231,71 @@ def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -
     approved = frozenset({hashlib.sha256(public.read_bytes()).hexdigest()})
     assert verify_kms_custody(evidence, signature, public, preflight,
                               environment, approved) == hashlib.sha256(evidence.read_bytes()).hexdigest()
-    evidence.write_text(json.dumps({**document, "profile_proofs": ["tampered"]}), encoding="utf-8")
+    changed = json.loads(json.dumps(document))
+    changed["profile_proofs"][0]["key_version"] = 2
+    evidence.write_text(json.dumps(changed), encoding="utf-8")
     with pytest.raises(ValueError, match="installed journey command returned failure"):
         verify_kms_custody(evidence, signature, public, preflight, environment, approved)
+
+
+def custody_profile_proofs(environment: dict[str, str]) -> list[dict]:
+    proofs = []
+    for did, purpose, prefix in (
+        (environment["SELFHOST_ISSUER_DID"], "vc_jwt_issuer", "cred-issuer-"),
+        (environment["SELFHOST_VERIFIER_DID"], "oid4vp_request_signing", "oid4vp-verifier-"),
+    ):
+        tuple_value = f'{environment["SELFHOST_ORG_ID"]}|{did}|{purpose}|SD_JWT_VC|ES256'
+        proofs.append({
+            "profile_selector": {"issuer_did": did, "key_purpose": purpose,
+                                 "credential_format": "SD_JWT_VC", "algorithm": "ES256"},
+            "key_reference": f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256",
+            "key_version": 1,
+        })
+    return proofs
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing", "duplicate", "extra", "wrong_selector", "wrong_reference",
+    "zero_version", "bool_version", "extra_field",
+])
+def test_custody_rejects_unbound_profile_proofs(monkeypatch, tmp_path: Path,
+                                                mutation: str) -> None:
+    import run_selfhost_business_journey as runner
+
+    evidence = tmp_path / "custody.json"
+    signature = tmp_path / "custody.sig"
+    public_key = tmp_path / "custody.pub"
+    signature.write_text("signature", encoding="utf-8")
+    public_key.write_text("public key", encoding="utf-8")
+    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64}
+    environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+    proofs = custody_profile_proofs(environment)
+    if mutation == "missing":
+        proofs = []
+    elif mutation == "duplicate":
+        proofs[1] = proofs[0]
+    elif mutation == "extra":
+        proofs.append(proofs[0])
+    elif mutation == "wrong_selector":
+        proofs[0]["profile_selector"]["issuer_did"] = "did:example:other"
+    elif mutation == "wrong_reference":
+        proofs[0]["key_reference"] = "cred-issuer-unbound-es256"
+    elif mutation == "zero_version":
+        proofs[0]["key_version"] = 0
+    elif mutation == "bool_version":
+        proofs[0]["key_version"] = True
+    else:
+        proofs[0]["extra"] = "unreviewed"
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "organization_id": "org", "issuer_did": environment["SELFHOST_ISSUER_DID"],
+                "verifier_did": environment["SELFHOST_VERIFIER_DID"],
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "profile_proofs": proofs}
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("signature check was called"))
+    with pytest.raises(ValueError, match="signed KMS custody profile proof"):
+        verify_kms_custody(evidence, signature, public_key, preflight, environment,
+                           trusted_keys)
