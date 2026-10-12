@@ -217,7 +217,7 @@ fn normalize_reference_state(value: &mut Value) {
 fn tags(error: RunError) -> Vec<String> {
     match error {
         RunError::MissingDatabase => vec!["DATABASE_URL environment variable not set".into()],
-        RunError::Database(_) => vec!["Database connectivity verification failed".into()],
+        RunError::Database => vec!["Database connectivity verification failed".into()],
         RunError::Schemas(_) => vec!["Error creating schemas".into()],
         RunError::MissingNotificationKms => vec![
             "Notification webhook KMS preparation failed".into(),
@@ -303,6 +303,10 @@ mod tests {
 
     #[tokio::test]
     async fn verify_only_checks_database_and_never_writes() {
+        assert_eq!(
+            super::RunError::Database.to_string(),
+            "Database connectivity verification failed"
+        );
         let successful = replay(&json!({"input": {
             "environment": {"DATABASE_URL": "postgresql://marty@postgres/marty"},
             "verify_only": true

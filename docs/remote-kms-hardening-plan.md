@@ -16972,3 +16972,17 @@ Private-key catalog/content scans were empty and teardown succeeded. Receipt:
 the local Compose command and source-built image, not the eventual signed
 release image. UI #1192 run `38205991904` remains in progress with 17 passed
 and four running jobs; the grouped correction is held locally until it finishes.
+
+Further bootstrap security self-review found that `RunError::Database(String)`
+could print a driver diagnostic containing a supplied database URL for some
+failure classes. The Rust CLI now uses a fixed verify-only connectivity error
+regardless of the backend diagnostic. The focused test and warnings-denied
+Clippy passed; a rebuilt migration image
+`marty-kms-migrations:rust-verify-redacted-local`
+(`sha256:3a836105ccdeb9f183bc51d99abb6799ed7340dec807b950d5eb6eb1a048e674`)
+passed the complete fresh disposable PostgreSQL/Redis/OpenBao assembled-schema
+probe twice, with 61 tables, 811 columns and unchanged inventory hash. A
+malformed URL containing a sentinel password failed in that actual image with
+the fixed diagnostic and no sentinel in process output. The new receipt is
+`artifacts/kms-rust-verify-redacted-assembled-probe-20261012.json`. The image
+is source-built local evidence; published-image qualification remains open.

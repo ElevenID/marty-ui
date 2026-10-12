@@ -194,8 +194,8 @@ impl Config {
 pub enum RunError {
     #[error("DATABASE_URL environment variable not set")]
     MissingDatabase,
-    #[error("Database connectivity verification failed: {0}")]
-    Database(String),
+    #[error("Database connectivity verification failed")]
+    Database,
     #[error("Error creating schemas: {0}")]
     Schemas(String),
     #[error("OpenBao address/token are required for webhook secret protection")]
@@ -254,7 +254,7 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
         return backend
             .verify_database(&database.replace("+asyncpg", ""))
             .await
-            .map_err(RunError::Database);
+            .map_err(|_| RunError::Database);
     }
     backend
         .schemas(&database.replace("+asyncpg", ""), SCHEMAS)
