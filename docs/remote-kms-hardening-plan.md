@@ -16783,3 +16783,25 @@ test target passed `cargo +1.95.0 check --locked` and warnings-denied Clippy
 locally with build output on D:. An initial build under the OneDrive worktree
 failed while linking a DLL; the short-path rerun passed. This is not yet a
 Canvas pass; the hosted runtime rerun remains before acceptance.
+
+UI main advanced while the held grouped candidate was being checked. The
+candidate is merging upstream `main` rather than requesting another PR CI run
+against a conflicting head. The only file conflict was the Canvas input hash
+manifest: its published-database support now combines the upstream fixed-category
+Docker-create diagnostic with the candidate's custody changes, and its normalized
+source hash was recomputed for the manifest. Local merged selector, DB group,
+and inventory tests found one real integration issue: the migration Dockerfile's
+new `contracts/python-text-semantics.json` copy makes it an owner in the image
+context inventory. It now has a dedicated narrow `.dockerignore` and an explicit
+owner in the CI test. The merged inventory/DB tests passed 57/57, all
+Rust Docker-context ownership tests passed 29/29, and the full CI selector
+suite passed 148/148. The migration image rebuilt successfully from this
+context using the three pinned published Core 0.2.2 wheels and digests;
+the local image is `marty-kms-migrations:merged-local-v0.2.2` with Docker
+manifest-list digest `sha256:403a52ded4f8b49c25199df73dd0c264415f4f349d5f7801a7b343fa9e387f93`.
+This remains local build evidence, not a signed published UI image or a
+running-database cutover. The merged Canvas Rust check and hosted head still
+need qualification before lifting any hold.
+The rebuilt image also ran with networking disabled and reported Core packages
+`marty-rs`, `marty-verification-py`, and `marty-iso18013` all at 0.2.2, with
+retired `marty-common` absent.

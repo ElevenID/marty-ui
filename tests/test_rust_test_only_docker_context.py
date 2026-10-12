@@ -82,7 +82,7 @@ SERVICE_ACCEPTANCE_TARGETS = (
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",
     "rust/services/Dockerfile.ci": "rust/services/Dockerfile.ci.dockerignore",
-    "services/Dockerfile.migrations": ".dockerignore",
+    "services/Dockerfile.migrations": "services/Dockerfile.migrations.dockerignore",
     "rust/services/event-stream/Dockerfile": ".dockerignore",
     "rust/services/revocation-profile/Dockerfile": ".dockerignore",
     "rust/services/signing-keys/Dockerfile": ".dockerignore",

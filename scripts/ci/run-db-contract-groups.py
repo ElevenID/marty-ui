@@ -203,6 +203,7 @@ TIMING_NAMES = {
     | frozenset(
         {
             "published_probe",
+            "published_base_restore",
             "status_native_seed",
             "worker_validation_template",
         }

@@ -489,6 +489,7 @@ def test_phase_parser_accepts_only_known_case_and_contract_ids() -> None:
         assert GROUPS._safe_phase(GROUPS.TIMING_PREFIX + marker, "published-canvas")
     for phase, name in (
         ("migration_seed", "published_probe"),
+        ("migration_seed", "published_base_restore"),
         ("migration_seed", "status_native_seed"),
         ("migration_seed", "worker_validation_template"),
         ("fixture_seed", "status_native_seed"),
@@ -604,6 +605,9 @@ def test_migration_seed_labels_have_fixed_constructor_owners() -> None:
     assert set(constructor_scripts) == GROUPS.TIMED_PUBLISHED_SCRIPTS
     assert "TIMED_PUBLISHED_SCRIPTS.contains(&script)" in support
     assert '"published_probe".to_owned()' in support
+    assert (
+        'PhaseTimer::start("migration_seed", "published_base_restore")' in support
+    )
     assert support.count('"worker_validation_template"') == 1
     assert (
         worker.count("PublishedDatabase::start_for_worker_validation_template()") == 1
