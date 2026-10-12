@@ -17286,3 +17286,14 @@ head was queued to avoid further Canvas CI cost; its completed jobs and
 cancellation remain recorded. Exact-head CI `38227682264` was queued.
 Source merge and signed installed-release acceptance remain open, and
 `release_state: hold` remains in force.
+
+2026-10-12 release-sequence check: the protected-main stack claim requires
+`release_state: eligible` before it can create a digest-first four-image
+transaction. The stack release workflow then builds and qualifies exact image
+digests before promotion; its `stack-release` environment has a required
+reviewer and admin bypass disabled. Thus the release-state change is a
+separate reviewed source decision after the consumer PR and required checks,
+not evidence that images or the KMS-only cutover have already qualified.
+The stack lock remains `hold` at this checkpoint. UI #1192's exact-head run
+`38227682264` is still live with 17 successful jobs and no failures at the
+latest poll; plugin, Rust contracts, Canvas and service images remain active.
