@@ -17313,3 +17313,16 @@ the earlier full workflow file run had 184 passing cases and revealed only
 these two merge-fixture mismatches, which are now corrected. The passing CI
 run proves the previous head; a fresh exact-head run is required after this
 grouped reconciliation push. The release lock remains `hold`.
+
+2026-10-12 second exact-head result and OAuth guard reconciliation: UI CI
+`38232246073` passed all 22 jobs on `02d8fc2f3`, including the plugin/Raft
+restore, Rust contracts, service images, Canvas and final CI Gate. Protected
+`main` advanced to `22c006b7c` during that run, so strict merge protection
+again requires a current-main head. The new main commit guards a Python
+OAuth-revocation oracle and v1 REST input closure already retired in this
+Rust-only branch. The integration merge omits that dead-runner overlay while
+retaining main's architecture/CI history and the current native OAuth
+revocation replay. Two focused workflow inventory/helper cases and 30 Canvas
+closure/inventory cases passed locally; YAML and diff checks passed. This
+merged head still requires fresh hosted CI, and neither green source run
+qualifies signed release images or cutover. Keep `release_state: hold`.
