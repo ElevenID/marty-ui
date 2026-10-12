@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{BADGE_NAME}} - Canvas Credentials Sandbox</title>
+<style>
+body { font-family: Arial, sans-serif; margin: 0; background: #f4f7fb; color: #172033; }
+.bar { background: #1f76d2; color: white; padding: 18px 28px; font-size: 20px; font-weight: 700; }
+main { max-width: 920px; margin: 40px auto; padding: 0 20px; }
+.panel { background: white; border: 1px solid #d8e0ec; border-radius: 12px; padding: 28px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06); }
+.badge { width: 92px; height: 92px; border-radius: 50%; background: #e8f1ff; display: grid; place-items: center; color: #1f76d2; font-size: 42px; font-weight: 800; }
+.head { display: flex; gap: 20px; align-items: center; }
+.status { display: inline-block; margin-top: 10px; padding: 6px 10px; border-radius: 999px; background: #e9f7ef; color: #166534; font-size: 13px; font-weight: 700; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; margin-top: 28px; }
+.label { color: #64748b; font-size: 12px; font-weight: 700; text-transform: uppercase; }
+.value { margin-top: 4px; overflow-wrap: anywhere; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+.actions { margin-top: 30px; display: flex; gap: 12px; flex-wrap: wrap; }
+a.button { background: #1f76d2; color: white; padding: 12px 16px; border-radius: 6px; text-decoration: none; font-weight: 700; }
+a.secondary { color: #1f76d2; padding: 12px 0; font-weight: 700; }
+@media (max-width: 720px) { .head { align-items: flex-start; flex-direction: column; } .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="bar">Canvas Credentials Sandbox</div>
+<main>
+  <section class="panel">
+    <div class="head">
+      <div class="badge">IC</div>
+      <div>
+        <h1>{{BADGE_NAME}}</h1>
+        <p>This beta sandbox simulates a Canvas Credentials display. The canonical credential, issuer DID, and status remain in ElevenID.</p>
+        <span class="status">{{STATUS}}</span>
+      </div>
+    </div>
+    <div class="grid">
+      <div><div class="label">Canvas Credential ID</div><div class="value mono">{{ID}}</div></div>
+      <div><div class="label">Canonical Credential ID</div><div class="value mono">{{CANONICAL_ID}}</div></div>
+      <div><div class="label">Issuer DID</div><div class="value mono">{{ISSUER_DID}}</div></div>
+      <div><div class="label">Canvas Account</div><div class="value mono">{{CANVAS_ACCOUNT_ID}}</div></div>
+      <div><div class="label">Subject DID</div><div class="value mono">{{SUBJECT_DID}}</div></div>
+      <div><div class="label">Mirrored</div><div class="value">{{CREATED_AT}}</div></div>
+    </div>
+    <div class="actions">
+      <a class="button" href="{{PROVENANCE_URL}}">Open Console Provenance</a>
+      <a class="secondary" href="{{BADGE_METADATA_URL}}">Open Badge Metadata</a>
+    </div>
+  </section>
+</main>
+</body>
+</html>
