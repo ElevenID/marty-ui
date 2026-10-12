@@ -8,10 +8,15 @@ use url::form_urlencoded;
 
 mod database;
 mod demo_evidence;
+mod wallet;
 pub use database::seed_open_badge_templates;
 pub use demo_evidence::{
     ags_score_payload, application_payload, send_signed_ags, signed_ags_wire, DemoEvidenceConfig,
     SignedAgsWire,
+};
+pub use wallet::{
+    claim_wallet_credential, CanonicalWalletProof, WalletHttp, WalletOperation, WalletProof,
+    WalletTransport,
 };
 
 #[derive(Clone, Debug)]
