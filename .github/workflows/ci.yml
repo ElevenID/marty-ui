@@ -274,7 +274,7 @@ jobs:
                 *) contract_test_candidate=false; break ;;
               esac
             done
-            # The prefix only rejects; exact ownership and six contexts grant.
+            # The prefix only rejects; exact ownership and all Rust contexts grant.
             if [[ "$contract_test_candidate" == true ]] &&
                printf '%s\0' "${changed_files[@]}" |
                  python3 tests/test_rust_test_only_docker_context.py \
