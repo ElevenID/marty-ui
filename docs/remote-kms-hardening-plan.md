@@ -17379,3 +17379,17 @@ Queue follow-up: #1192 reports `UNMERGEABLE` behind #1292. A read-only
 plan and two Canvas CI test files. Do not skip the queue. Reconcile the
 protected `main` result of #1292 once it lands, run focused local tests,
 then publish one grouped #1192 correction for fresh exact-head checks.
+
+2026-10-12 #1292 reconciliation: protected main merged #1292 as
+`ab1bc30dd`; its queue CI `38242078139` passed all 23 jobs. The local
+KMS branch first incorporated #1292's provider/reclaimer input guard, then
+merged exact protected main. Its Python OAuth overlay remains excluded
+because that runner was retired by the Rust-only branch. The active eight
+provider/reclaimer runners now inherit the native REST v2 input record and
+pin four additional Python/script closure inputs, with a separate exact
+guard over their 21 provider-specific pins. The architecture and CI
+inventory retain the native Rust and provider consumers without reviving
+retired wrappers. All 213 affected closure, workflow-inventory and native
+REST tests passed locally; Ruff and diff checks passed; protected main is
+an ancestor. This is one grouped local branch correction pending push and
+fresh exact-head CI. The signed release and cutover remain on hold.
