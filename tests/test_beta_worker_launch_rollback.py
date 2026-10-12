@@ -80,7 +80,7 @@ function Invoke-ContractCases {
             'capture' { $launch = New-BetaWorkerRollbackLaunch -ContainerConfig $case.config }
             'validate' { $launch = $case.launch }
             'resolve' {
-                $launch = Resolve-BetaWorkerRollbackLaunch -Record $case.record -CurrentWorker $case.current_worker -ImageConfig $case.image_config
+                $launch = Resolve-BetaWorkerRollbackLaunch -Record $case.record -ImageConfig $case.image_config
             }
             default { throw 'Unknown synthetic operation' }
         }
@@ -310,22 +310,12 @@ def rendered_fields(report: dict) -> dict:
 @pytest.mark.parametrize(
     ("entrypoint", "command", "selector"),
     [
-        (None, ["python", "-m", "issuance.canvas_worker"], None),
-        ([], ["python", "-m", "issuance.canvas_worker"], None),
-        (None, ["python3", "-m", "issuance.canvas_worker"], None),
-        (["python", "-m", "issuance.canvas_worker"], None, None),
-        (["python", "-m", "issuance.canvas_worker"], [], None),
         (["/usr/local/bin/marty-canvas-sync-worker"], None, None),
         (["/usr/local/bin/marty-canvas-sync-worker"], [], None),
         (["/usr/local/bin/marty-canvas-sync-worker"], [], ""),
         (None, ["/usr/local/bin/marty-canvas-sync-worker"], None),
         (["/app/services/entrypoint.sh"], None, "canvas_sync_worker"),
         (None, ["/app/services/entrypoint.sh"], "canvas-sync-worker"),
-        (
-            ["/bin/sh", "-c"],
-            [". /app/load-secrets-env.sh\nexec python -m issuance.canvas_worker\n"],
-            None,
-        ),
         (["/bin/sh", "-c"], [NATIVE_LOADER], None),
         (["/bin/sh", "-c"], [NATIVE_LOADER], ""),
         (["/bin/sh", "-c"], [NATIVE_LOADER], "canvas_sync_worker"),
@@ -438,6 +428,25 @@ def test_unrecognized_shell_or_secret_bearing_launch_is_not_replayed(exercise, c
     assert "synthetic-secret" not in (report["message"] or "")
 
 
+@pytest.mark.parametrize(
+    ("entrypoint", "command"),
+    [
+        (None, ["python", "-m", "issuance.canvas_worker"]),
+        ([], ["python3", "-m", "issuance.canvas_worker"]),
+        (["python", "-m", "issuance.canvas_worker"], None),
+        (["/bin/sh", "-c"], [". /app/load-secrets-env.sh\nexec python -m issuance.canvas_worker\n"]),
+    ],
+)
+def test_exact_python_worker_launch_is_rejected_before_capture(exercise, entrypoint, command):
+    [report] = exercise([{
+        "operation": "capture",
+        "config": {"Entrypoint": entrypoint, "Cmd": command, "Env": []},
+    }])
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
+
+
 def test_native_secret_loader_rejects_nonexact_shell_vectors_before_mutation(exercise):
     variants = [
         (["/bin/bash", "-c"], [NATIVE_LOADER]),
@@ -502,7 +511,7 @@ def test_native_secret_loader_rejects_nonexact_shell_vectors_before_mutation(exe
 
 
 @pytest.mark.parametrize("selector", [None, "", "canvas_sync_worker"])
-@pytest.mark.parametrize("processor", [None, "", PROCESSOR])
+@pytest.mark.parametrize("processor", [None, ""])
 def test_native_loader_saved_record_preserves_both_selector_states(
     exercise, selector, processor
 ):
@@ -571,23 +580,22 @@ def resolution_case(snapshot=None, *, current=None, image=None) -> dict:
     return {
         "operation": "resolve",
         "record": record,
+        # Deliberately supplied to prove restore never infers from the current
+        # Compose worker when a saved manifest lacks launch provenance.
         "current_worker": current
         if current is not None
-        else {
-            "command": ["python", "-m", "issuance.canvas_worker"],
-            "environment": {"CANVAS_SYNC_PROCESSOR": PROCESSOR},
-        },
+        else {"command": ["/usr/local/bin/marty-canvas-sync-worker"], "environment": {}},
         "image_config": image
         if image is not None
         else {
             "Entrypoint": None,
-            "Cmd": PYTHON_IMAGE_COMMAND,
+            "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
             "Env": [],
         },
     }
 
 
-def test_saved_python_launch_overrides_new_rust_consumer_without_ambient_selector(
+def test_saved_python_launch_is_rejected_even_with_native_image(
     exercise,
 ):
     saved = launch(None, ["python", "-m", "issuance.canvas_worker"])
@@ -603,26 +611,39 @@ def test_saved_python_launch_overrides_new_rust_consumer_without_ambient_selecto
             )
         ]
     )
-    assert report["caught"] is False, report["message"]
-    assert report["launch"] == saved
-    assert report["mutations"] == 1
-    selector = dict(
-        (key.value, value)
-        for key, value in rendered_fields(report)["environment"].value
-    )["SERVICE_NAME"]
-    assert selector.tag == "!reset"
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
 
 
-def test_saved_rust_launch_overrides_python_consumer(exercise):
-    saved = launch(["/app/services/entrypoint.sh"], [], "canvas_sync_worker")
+@pytest.mark.parametrize("image_command", [
+    PYTHON_IMAGE_COMMAND,
+    ["python", "-m", "issuance.canvas_worker"],
+    ["python3", "-m", "issuance.canvas_worker"],
+])
+def test_captured_native_launch_cannot_replay_legacy_python_image(
+    exercise, image_command
+):
+    saved = launch(None, ["/usr/local/bin/marty-canvas-sync-worker"])
+    [report] = exercise([resolution_case(
+        saved,
+        image={"Entrypoint": None, "Cmd": image_command, "Env": []},
+    )])
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
+
+
+def test_saved_rust_launch_uses_inspected_native_image(exercise):
+    saved = launch(None, ["/usr/local/bin/marty-canvas-sync-worker"])
     [report] = exercise(
         [
             resolution_case(
                 saved,
                 image={
-                    "Entrypoint": ["/app/services/entrypoint.sh"],
-                    "Cmd": None,
-                    "Env": ["SERVICE_NAME=issuance_native", "API_KEY=synthetic-secret"],
+                    "Entrypoint": None,
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+                    "Env": ["API_KEY=synthetic-secret"],
                 },
             )
         ]
@@ -633,18 +654,33 @@ def test_saved_rust_launch_overrides_python_consumer(exercise):
     assert "synthetic-secret" not in json.dumps(report)
 
 
-@pytest.mark.parametrize("image_selector", ["", "canvas_sync_worker", "issuance"])
+def test_saved_native_launch_uses_inspected_shared_dispatcher_image(exercise):
+    saved = launch(None, ["/app/services/entrypoint.sh"], "canvas-sync-worker")
+    [report] = exercise([resolution_case(
+        saved,
+        image={
+            "Entrypoint": None,
+            "Cmd": ["/app/services/entrypoint.sh"],
+            "Env": ["SERVICE_NAME=canvas-sync-worker"],
+        },
+    )])
+    assert report["caught"] is False, report["message"]
+    assert report["launch"] == saved
+    assert report["mutations"] == 1
+
+
+@pytest.mark.parametrize("image_selector", ["", "canvas_sync_worker"])
 def test_absent_captured_selector_cannot_silently_inherit_image_selector(
     exercise, image_selector
 ):
-    saved = launch(None, ["python", "-m", "issuance.canvas_worker"])
+    saved = launch(None, ["/usr/local/bin/marty-canvas-sync-worker"])
     [report] = exercise(
         [
             resolution_case(
                 saved,
                 image={
                     "Entrypoint": None,
-                    "Cmd": None,
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
                     "Env": [f"SERVICE_NAME={image_selector}"],
                 },
             )
@@ -655,7 +691,7 @@ def test_absent_captured_selector_cannot_silently_inherit_image_selector(
 
 
 @pytest.mark.parametrize("selector", [None, "issuance", ""])
-def test_legacy_manifest_allows_proven_python_image_and_consumer(exercise, selector):
+def test_legacy_manifest_never_infers_python_launch(exercise, selector):
     current = {
         "command": ["python", "-m", "issuance.canvas_worker"],
         "environment": {"CANVAS_SYNC_PROCESSOR": PROCESSOR},
@@ -663,9 +699,9 @@ def test_legacy_manifest_allows_proven_python_image_and_consumer(exercise, selec
     if selector is not None:
         current["environment"]["SERVICE_NAME"] = selector
     [report] = exercise([resolution_case(current=current)])
-    assert report["caught"] is False, report["message"]
-    assert report["launch"] == launch(None, current["command"], selector, PROCESSOR)
-    assert report["mutations"] == 1
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
     assert report["ambient"] == "ambient-must-not-be-used"
 
 
@@ -736,32 +772,19 @@ def test_ambiguous_or_unsupported_selector_is_not_captured(exercise, environment
     assert "synthetic-secret" not in (report["message"] or "")
 
 
-def test_legacy_selector_uses_explicit_consumer_then_image_not_host(exercise):
-    image = {
-        "Entrypoint": None,
-        "Cmd": PYTHON_IMAGE_COMMAND,
-        "Env": ["SERVICE_NAME=issuance"],
-    }
-    reports = exercise(
-        [
-            resolution_case(image=image),
-            resolution_case(
-                image=image,
-                current={
-                    "command": ["python", "-m", "issuance.canvas_worker"],
-                    "environment": {
-                        "SERVICE_NAME": "issuance_native",
-                        "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-                    },
-                },
-            ),
-        ]
-    )
-    for report, selector in zip(reports, ["issuance", "issuance_native"], strict=True):
-        assert report["caught"] is False, report["message"]
-        assert report["launch"]["service_name_present"] is True
-        assert report["launch"]["service_name"] == selector
-        assert report["ambient"] == "ambient-must-not-be-used"
+def test_captured_native_selector_uses_saved_value_not_host(exercise):
+    saved = launch(None, ["/usr/local/bin/marty-canvas-sync-worker"], "canvas_sync_worker")
+    [report] = exercise([resolution_case(
+        saved,
+        image={
+            "Entrypoint": None,
+            "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+            "Env": ["SERVICE_NAME=canvas-sync-worker"],
+        },
+    )])
+    assert report["caught"] is False, report["message"]
+    assert report["launch"]["service_name"] == "canvas_sync_worker"
+    assert report["ambient"] == "ambient-must-not-be-used"
 
 
 def test_persisted_contract_cannot_expand_to_secret_environment_capture(exercise):
@@ -774,20 +797,15 @@ def test_persisted_contract_cannot_expand_to_secret_environment_capture(exercise
     assert "synthetic-secret" not in report["message"]
 
 
-@pytest.mark.parametrize(
-    "command",
-    [
-        None,
-        ["/app/services/entrypoint.sh"],
-        ["/usr/local/bin/marty-canvas-sync-worker"],
-    ],
-)
-def test_legacy_python_consumer_requires_proven_python_image_command(exercise, command):
+def test_missing_capture_fails_even_with_native_image_config(exercise):
     [report] = exercise(
-        [resolution_case(image={"Entrypoint": None, "Cmd": command, "Env": []})]
+        [resolution_case(image={"Entrypoint": None,
+                                "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+                                "Env": []})]
     )
     assert report["caught"] is True
     assert report["mutations"] == 0
+    assert "captured native launch provenance" in report["message"]
 
 
 def test_lowercase_environment_name_is_not_uppercase_selector(exercise):
@@ -797,18 +815,17 @@ def test_lowercase_environment_name_is_not_uppercase_selector(exercise):
                 "operation": "capture",
                 "config": {
                     "Entrypoint": None,
-                    "Cmd": ["python", "-m", "issuance.canvas_worker"],
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
                     "Env": ["service_name=issuance"],
                 },
             },
             resolution_case(
-                current={
-                    "command": ["python", "-m", "issuance.canvas_worker"],
-                    "environment": {
-                        "service_name": "issuance",
-                        "CANVAS_SYNC_PROCESSOR": PROCESSOR,
-                    },
-                }
+                launch(None, ["/usr/local/bin/marty-canvas-sync-worker"]),
+                image={
+                    "Entrypoint": None,
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+                    "Env": ["service_name=issuance"],
+                },
             ),
         ]
     )
@@ -826,7 +843,7 @@ def test_lowercase_environment_name_is_not_uppercase_selector(exercise):
         "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target",
     ],
 )
-def test_old_python_processor_configuration_survives_current_rust_consumer(
+def test_saved_python_processor_configuration_is_rejected(
     exercise, processor
 ):
     saved = launch(
@@ -844,14 +861,9 @@ def test_old_python_processor_configuration_survives_current_rust_consumer(
             )
         ]
     )
-    assert report["caught"] is False, report["message"]
-    assert report["launch"] == saved
-    fields = {
-        key.value: value for key, value in rendered_fields(report)["environment"].value
-    }
-    node = fields["CANVAS_SYNC_PROCESSOR"]
-    assert node.tag == ("!reset" if processor is None else "tag:yaml.org,2002:str")
-    assert node.value == ("null" if processor is None else processor)
+    assert report["caught"] is True
+    assert report["mutations"] == 0
+    assert report["lines"] == []
 
 
 @pytest.mark.parametrize("processor", [None, "", "unsupported.synthetic:callback"])
@@ -874,46 +886,40 @@ def test_legacy_manifest_requires_proven_nonempty_builtin_processor(
     assert "unsupported.synthetic" not in report["message"]
 
 
-def test_legacy_processor_can_come_from_inspected_image_but_explicit_empty_blocks_it(
+def test_inspected_legacy_processor_is_rejected_but_empty_native_processor_is_allowed(
     exercise,
 ):
-    image = {
-        "Entrypoint": None,
-        "Cmd": PYTHON_IMAGE_COMMAND,
-        "Env": [f"CANVAS_SYNC_PROCESSOR={PROCESSOR}"],
-    }
+    image = {"Entrypoint": None,
+             "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+             "Env": [f"CANVAS_SYNC_PROCESSOR={PROCESSOR}"]}
     reports = exercise(
         [
             resolution_case(
+                launch(None, ["/usr/local/bin/marty-canvas-sync-worker"]),
                 image=image,
-                current={
-                    "command": ["python", "-m", "issuance.canvas_worker"],
-                    "environment": {},
-                },
             ),
             resolution_case(
-                image=image,
-                current={
-                    "command": ["python", "-m", "issuance.canvas_worker"],
-                    "environment": {"CANVAS_SYNC_PROCESSOR": ""},
-                },
+                launch(None, ["/usr/local/bin/marty-canvas-sync-worker"], processor=""),
+                image={"Entrypoint": None,
+                       "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
+                       "Env": ["CANVAS_SYNC_PROCESSOR="]},
             ),
         ]
     )
-    assert reports[0]["caught"] is False, reports[0]["message"]
-    assert reports[0]["launch"]["canvas_sync_processor"] == PROCESSOR
-    assert reports[1]["caught"] is True
-    assert reports[1]["mutations"] == 0
+    assert reports[0]["caught"] is True
+    assert reports[0]["mutations"] == 0
+    assert reports[1]["caught"] is False, reports[1]["message"]
+    assert reports[1]["launch"]["canvas_sync_processor"] == ""
 
 
 def test_captured_absent_processor_cannot_inherit_immutable_image_default(exercise):
     [report] = exercise(
         [
             resolution_case(
-                launch(None, ["python", "-m", "issuance.canvas_worker"]),
+                launch(None, ["/usr/local/bin/marty-canvas-sync-worker"]),
                 image={
                     "Entrypoint": None,
-                    "Cmd": PYTHON_IMAGE_COMMAND,
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
                     "Env": [f"CANVAS_SYNC_PROCESSOR={PROCESSOR}"],
                 },
             )
@@ -938,7 +944,7 @@ def test_ambiguous_or_unsupported_processor_is_not_captured(exercise, environmen
                 "operation": "capture",
                 "config": {
                     "Entrypoint": None,
-                    "Cmd": ["python", "-m", "issuance.canvas_worker"],
+                    "Cmd": ["/usr/local/bin/marty-canvas-sync-worker"],
                     "Env": environment,
                 },
             }

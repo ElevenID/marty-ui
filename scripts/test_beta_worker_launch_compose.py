@@ -17,9 +17,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKER = "canvas-sync-worker"
-PROCESSOR = (
-    "issuance.infrastructure.api.canvas_routes:process_authoritative_canvas_sync_target"
-)
 SELECTIONS = ("SERVICE_NAME", "CANVAS_SYNC_PROCESSOR")
 OLD_IMAGE = "sha256:" + "a" * 64
 CURRENT_IMAGE = "sha256:" + "b" * 64
@@ -43,7 +40,7 @@ $results=@()
 foreach ($case in $cases) {
     $launch=New-BetaWorkerRollbackLaunch -ContainerConfig $case.config
     $record=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @{rollback_launch=$launch} -Depth 20 -Compress)
-    $resolved=Resolve-BetaWorkerRollbackLaunch -Record $record -CurrentWorker $null -ImageConfig $case.config
+    $resolved=Resolve-BetaWorkerRollbackLaunch -Record $record -ImageConfig $case.config
     $results+=@{name=$case.name; launch=$resolved; lines=@(ConvertTo-BetaWorkerRollbackLines -Launch $resolved)}
 }
 ConvertTo-Json -InputObject @($results) -Depth 20 -Compress
@@ -52,17 +49,9 @@ ConvertTo-Json -InputObject @($results) -Depth 20 -Compress
 
 def synthetic_captures():
     """Representative configurations, not a second implementation/allowlist."""
-    python = ["python", "-m", "issuance.canvas_worker"]
     native = ["/usr/local/bin/marty-canvas-sync-worker"]
     dispatcher = ["/app/services/entrypoint.sh"]
     samples = [
-        ("python-processing", None, python, {"CANVAS_SYNC_PROCESSOR": PROCESSOR}),
-        (
-            "python-empty-vectors",
-            [],
-            python,
-            {"SERVICE_NAME": "issuance", "CANVAS_SYNC_PROCESSOR": PROCESSOR},
-        ),
         ("native-entrypoint", native, None, {}),
         (
             "native-command-empty-selectors",
@@ -81,12 +70,6 @@ def synthetic_captures():
             None,
             dispatcher,
             {"SERVICE_NAME": "canvas-sync-worker"},
-        ),
-        (
-            "python-secret-loader",
-            ["/bin/sh", "-c"],
-            [". /app/load-secrets-env.sh\nexec python -m issuance.canvas_worker\n"],
-            {"CANVAS_SYNC_PROCESSOR": PROCESSOR},
         ),
         (
             "native-secret-loader",
@@ -117,11 +100,10 @@ def synthetic_captures():
 def synthetic_model(current):
     service = {
         "image": CURRENT_IMAGE,
-        "entrypoint": None,
-        "command": ["python", "-m", "issuance.canvas_worker"],
+        "entrypoint": ["/app/services/entrypoint.sh"],
+        "command": [],
         "environment": {
-            "SERVICE_NAME": "issuance",
-            "CANVAS_SYNC_PROCESSOR": PROCESSOR,
+            "SERVICE_NAME": "canvas_sync_worker",
             "DATABASE_URL_TEMPLATE": "synthetic-file-secret-template",
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/database_password",
             "CANVAS_SYNC_POLL_SECONDS": "60",
@@ -140,13 +122,8 @@ def synthetic_model(current):
         "stop_grace_period": "35s",
         "labels": {"synthetic.future-field": "preserve-complete-runtime-model"},
     }
-    if current.startswith("rust"):
-        service["entrypoint"] = ["/app/services/entrypoint.sh"]
-        service["command"] = []
-        service["environment"]["SERVICE_NAME"] = "canvas_sync_worker"
-        del service["environment"]["CANVAS_SYNC_PROCESSOR"]
-        if current == "rust-command":
-            service["entrypoint"], service["command"] = [], service["entrypoint"]
+    if current == "native-command":
+        service["entrypoint"], service["command"] = [], service["entrypoint"]
     return {
         "services": {
             WORKER: service,
@@ -244,7 +221,7 @@ def run(compose_command=None, powershell_executable=None):
         assert "synthetic-do-not-capture" not in captured.stdout
         # Positive control: ordinary YAML null really can pick up ambient values.
         # No external .env is loaded and these are the only interpolated fields.
-        ambient_model = synthetic_model("python")
+        ambient_model = synthetic_model("native-entrypoint")
         ambient_model["services"][WORKER]["environment"].update(
             {name: None for name in SELECTIONS}
         )
@@ -257,7 +234,7 @@ def run(compose_command=None, powershell_executable=None):
             == "synthetic-ambient-must-not-be-inherited"
             for name in SELECTIONS
         )
-        for current in ("python", "rust-entrypoint", "rust-command"):
+        for current in ("native-entrypoint", "native-command"):
             (directory / "base.json").write_text(
                 json.dumps(synthetic_model(current)), encoding="utf-8"
             )
@@ -292,7 +269,7 @@ def run(compose_command=None, powershell_executable=None):
                 worker["environment"].update(selections)
                 assert_exact_model(actual, expected, f"{current} <- {case['name']}")
                 checked += 1
-    assert checked == len(cases) * 3
+    assert checked == len(cases) * 2
     print(
         f"Rollback launch Compose gate: {checked} synthetic merges preserve launch, both selectors and complete runtime wiring; config only"
     )
