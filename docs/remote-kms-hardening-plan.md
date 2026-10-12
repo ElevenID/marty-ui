@@ -16923,3 +16923,8 @@ and the beta/Canvas/ownership selector suite passed after updating one stale
 Python-wheel assertion (132 passed, 12 platform skips). Workspace-wide
 rustfmt hit Windows' command-line length limit, so the hosted Linux formatter
 remains part of the final exact-head gate.
+The reconciled Rust-bootstrap merge was committed as `e85206af7`. Upstream
+main then advanced one Canvas CI-only commit `2433b6c87`; it was merged into
+the same local PR branch, and its two focused Python test modules passed
+52/52. The grouped head is ready for one draft-PR push and exact-head CI;
+no stack release hold is lifted by these local results.
