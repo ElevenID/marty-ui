@@ -466,8 +466,9 @@ focused input tests and 180 combined workflow-policy/input tests passed locally;
 full PR and protected combined-head CI passed before merge, with no claimed
 runtime saving.
 
-A6 current-input metadata follow-up (2026-10-12 local candidate): the root and
-both service-specific Docker ignore files repeat one exclusion per Canvas
+A6 current-input metadata follow-up (2026-10-12 merged
+[UI #1287](https://github.com/ElevenID/marty-ui/pull/1287), `81865d048`):
+the root and both service-specific Docker ignore files repeat one exclusion per Canvas
 `*-current-inputs.json` evidence record, while the CI path classifier repeats
 their names. Bounded immediate-child patterns cover the same seven current
 records: the Docker rule excludes these CI-only manifests from product images,
@@ -478,9 +479,22 @@ re-inclusion, and exercises both new and nested path classifications. A future
 CI-evidence manifest therefore need not edit all three ignore files or the CI
 workflow, but still requires its owning test and inventory review. This does
 not change existing image inputs, protected merge-group selection, source or
-corpus selection, or claim a hosted speedup. The rebased candidate passed 147
-local workflow-policy tests and independent review; hosted/protected CI remains
-required before promotion.
+corpus selection, or claim a hosted speedup. The patch passed 147 local
+workflow-policy tests, independent review, full PR CI, and [protected
+combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38227383325)
+before merge.
+
+OAuth-revocation current-input follow-up (2026-10-12 local candidate): the
+shared runner produces ten reviewed kinds, including nine variant corpora.
+One overlay inherits the guarded REST inputs and pins eleven additional
+current inputs (the runner and ten scenario matrices). Its release-owned test
+checks the producer mapping, exact dynamic scenario template, static local
+imports, nested JSON references, mounted helpers, and every normalized source
+hash. A new kind, helper, or scenario requires input review. This guards only
+current capture inputs; it does not attest historical OAuth observations,
+establish runtime compatibility, authorize qualification reuse, or alter any
+routine/full oracle execution. The reviewed candidate is now based on main
+after #1287 merged; its own PR and protected CI are still required.
 
 Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
 
@@ -493,6 +507,8 @@ Concrete broad-classifier cost (2026-10-03): [UI #1065](https://github.com/Eleve
 Ensure cheap failures can be reported promptly. Additional lanes must justify their compilation/setup cost and retain every required obligation. For Core, examine the 14m23s preflight before separating work; preserve its feature/security matrix and avoid merely duplicating builds.
 
 Current Core evidence supports deferring a preflight split. In protected #348, preflight completed in 11m43s while affected Rust tests took 13m56s and Rust CodeQL took 12m25s. Its cheap Python/release, advisory, and formatting checks already precede compilation. Within preflight, exact KMS graphs took 369s, trusted-list client 136s, clippy 104s, and WASM serial fallback 63s. Parallelizing these into another runner would duplicate setup/compilation without reducing this run's 13m56s test critical path. Revisit A7 if repeated normal runs place preflight on the critical path or if evidence shows an independently cacheable setup; keep the full feature/security matrix.
+
+October 12 Core recheck: protected combined-head [run 38179824091](https://github.com/ElevenID/marty-core/actions/runs/38179824091) completed `Fast Rust Preflight` in 32s, and [run 38187637906](https://github.com/ElevenID/marty-core/actions/runs/38187637906) in 36s. Their slowest successful CI jobs were Feature Matrix (protocols) at 15m54s and KMS Role and Public-Key Graphs at 16m41s, respectively. Both gates passed. Preflight is not the critical path in these two candidates; no additional preflight split is justified by this evidence. These are observed job durations, not a claim about all change classes or a measured speedup from this tracker update.
 
 A7 refresh (2026-10-05, pre-incident runs): Core PR [37098640425](https://github.com/ElevenID/marty-core/actions/runs/37098640425) ran preflight in 11m43s versus affected Rust tests in 13m56s; PR [37101783100](https://github.com/ElevenID/marty-core/actions/runs/37101783100) took 16m53s versus 18m29s. Protected [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) ran preflight in 14m29s versus the Windows platform lane in 19m10s. These parallel-lane samples do not put preflight on the critical path; its expensive steps compile Rust and offer no independently cacheable setup proven by this audit. Keep A7 deferred, without counting the 2026-10-05 hosted-runner assignment incident as execution time.
 
@@ -3715,9 +3731,13 @@ not evidence that the repaired opt-in diagnostic passed. Its Canvas database
 step took 27m26s (07:22:01–07:49:27 UTC), and its timing artifact has 105
 distinct successful `scenario` names; this is a baseline, not a speed claim. A new
 [manual run 38220186150](https://github.com/ElevenID/marty-ui/actions/runs/38220186150)
-was requested on main with the input set to `true`; its job-level input,
-result, and comparable timings remain pending verification. Keep reuse
-manual-only.
+ completed successfully. Its Canvas job log confirms
+ `MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT: 1`; the opt-in parity/isolation
+ step passed, and the timing artifact has the same 105 distinct successful
+ scenario identities with no failed phase. Its database step took 28m33s
+ (08:20:41-08:49:14 UTC), versus 27m26s off. The runs have different commits
+ and load conditions, so this is not a controlled speed estimate; it provides
+ no basis to promote reuse. Keep the switch manual-only.
 
 Merge-queue reuse audit: current PR runs do not attest the exact checked-out
 merge tree or workflow revision, and a green aggregate run does not prove both
