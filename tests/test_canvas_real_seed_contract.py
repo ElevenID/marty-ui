@@ -280,3 +280,27 @@ def capture_wallet_claim(monkeypatch) -> dict:
 def test_frozen_wallet_claim(monkeypatch) -> None:
     contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
     assert capture_wallet_claim(monkeypatch) == contract["wallet_claim"]
+
+
+def capture_mirror_and_issuer_context(monkeypatch) -> dict:
+    operations = []
+    responses = [
+        {"processed_count": 1, "publish": {"delivered_count": 1}},
+        {"issuer_profile_id": "profile-1", "issuer_did": "did:web:marty.example", "signing_service_id": "managed-openbao-transit", "signing_key_reference": "key-ref", "verification_method_id": "did:web:marty.example#key-ref", "ignored": True},
+    ]
+
+    def request(method, url, *, payload=None, headers=None, timeout=20):
+        operations.append({"method": method, "url": url, "payload": payload, "headers": headers, "timeout": timeout})
+        return responses.pop(0)
+
+    monkeypatch.setattr(seed, "_json_request", request)
+    cfg = config()
+    mirror = seed._run_canvas_demo_mirror_publish(cfg)
+    context = seed._resolve_issuer_context_summary(cfg)
+    assert not responses
+    return {"operations": operations, "mirror": mirror, "issuer_context": context}
+
+
+def test_frozen_mirror_and_issuer_context(monkeypatch) -> None:
+    contract = json.loads((ROOT / "contracts/canvas-real-seed-behavior-v1.json").read_text())
+    assert capture_mirror_and_issuer_context(monkeypatch) == contract["mirror_and_issuer_context"]

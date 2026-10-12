@@ -201,7 +201,7 @@
   },
   "unfrozen_groups": [
     "canvas_lms_http_and_rails",
-    "mirror_and_transition_summary"
+    "transition_summary"
   ],
   "database_seed": {
     "modern_schema": {
@@ -1047,6 +1047,41 @@
       "credential_size": 24,
       "credential_hash": "256d04db4e5e4ac308751ed0885b722b758630567c53a7125ed9fbd068e5c3f6",
       "notification_id": "notify-1"
+    }
+  },
+  "mirror_and_issuer_context": {
+    "operations": [
+      {
+        "method": "POST",
+        "url": "http://localhost:8000/v1/issuance/delivery-records/canvas-credentials/run-automation-cycle?organization_id=org-1&limit=25&retry_failed=true",
+        "payload": {},
+        "headers": {
+          "X-API-Key": "test-gateway-key"
+        },
+        "timeout": 60
+      },
+      {
+        "method": "GET",
+        "url": "http://signing-keys:8000/issuer-context?organization_id=org-1&credential_format=sd_jwt_vc&key_purpose=vc_jwt_issuer",
+        "payload": null,
+        "headers": {
+          "X-API-Key": "test-signing-key"
+        },
+        "timeout": 20
+      }
+    ],
+    "mirror": {
+      "processed_count": 1,
+      "publish": {
+        "delivered_count": 1
+      }
+    },
+    "issuer_context": {
+      "issuer_profile_id": "profile-1",
+      "issuer_did": "did:web:marty.example",
+      "signing_service_id": "managed-openbao-transit",
+      "signing_key_reference": "key-ref",
+      "verification_method_id": "did:web:marty.example#key-ref"
     }
   }
 }
