@@ -17569,3 +17569,12 @@ including self-host preparation, release-provenance fixtures, beta-fence
 checks and workflow selection. Together with the focused release gates,
 359 local tests passed on the candidate. The full exact-main qualification
 run and hosted release claim remain required after protected merge.
+
+2026-10-12 release-candidate review correction: PR #1297's exact-head source
+CI `38277126447` passed, but an unresolved review thread found the operative
+passport beta handoff still dispatched readiness on already-published
+`v1.1.244`. Update that command to `v1.1.245` and bind it to the stack lock in
+the release contract test. Historical `v1.1.244` fixtures and evidence remain
+unchanged. Require local focused checks and fresh exact-head CI before the
+protected merge; neither the passed superseded head nor eligibility proves a
+signed or installed KMS-only release.
