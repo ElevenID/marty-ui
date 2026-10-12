@@ -3770,7 +3770,6 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "marty-demo-vendor-seed",
- "marty-oid4vci",
  "reqwest",
  "serde",
  "serde_json",

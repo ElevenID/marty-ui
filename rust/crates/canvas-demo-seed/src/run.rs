@@ -353,15 +353,30 @@ pub async fn run_seed(
                                     if connector.demo_wallet_claim_enabled {
                                         let public_api =
                                             env_first(env, &["PUBLIC_API_URL"]).unwrap_or_default();
-                                        match claim_wallet_credential(
-                                            &WalletHttp::new(),
-                                            &CanonicalWalletProof,
-                                            &gateway_cfg,
-                                            &public_api,
-                                            &transaction_id,
-                                        )
-                                        .await
-                                        {
+                                        let proof_base =
+                                            env_first(env, &["SIGNING_KEYS_HOLDER_PROOF_BASE_URL"])
+                                                .unwrap_or_else(|| {
+                                                    "http://signing-keys:8017/internal/signing-keys"
+                                                        .into()
+                                                });
+                                        let claim = match CanonicalWalletProof::new(
+                                            &proof_base,
+                                            &connector.signing_keys_internal_api_key,
+                                            &gateway_cfg.organization_id,
+                                        ) {
+                                            Ok(proof) => {
+                                                claim_wallet_credential(
+                                                    &WalletHttp::new(),
+                                                    &proof,
+                                                    &gateway_cfg,
+                                                    &public_api,
+                                                    &transaction_id,
+                                                )
+                                                .await
+                                            }
+                                            Err(error) => Err(error),
+                                        };
+                                        match claim {
                                             Ok(result) => {
                                                 wallet = Some(result);
                                                 if connector.demo_mirror_publish_enabled {

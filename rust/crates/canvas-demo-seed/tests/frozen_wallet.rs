@@ -1,9 +1,14 @@
 use async_trait::async_trait;
+use axum::{http::HeaderMap, routing::post, Json, Router};
 use marty_canvas_demo_seed::{
-    claim_wallet_credential, GatewaySeedConfig, WalletOperation, WalletProof, WalletTransport,
+    claim_wallet_credential, CanonicalWalletProof, GatewaySeedConfig, WalletOperation, WalletProof,
+    WalletTransport,
 };
 use serde_json::{json, Map, Value};
-use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+};
 
 struct Stub {
     responses: Mutex<VecDeque<Value>>,
@@ -45,8 +50,9 @@ impl WalletTransport for Stub {
     }
 }
 
+#[async_trait]
 impl WalletProof for Stub {
-    fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String> {
+    async fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String> {
         self.proofs
             .lock()
             .unwrap()
@@ -120,4 +126,53 @@ async fn missing_offer_code_fails_before_token_request() {
         .await
         .is_err());
     assert_eq!(stub.operations.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn canonical_proof_uses_the_signing_service_kms_boundary() {
+    let captured = Arc::new(Mutex::new(None));
+    let app = Router::new().route(
+        "/internal/vc-api/holder-proof",
+        post({
+            let captured = Arc::clone(&captured);
+            move |headers: HeaderMap, Json(body): Json<Value>| {
+                let captured = Arc::clone(&captured);
+                async move {
+                    *captured.lock().unwrap() = Some(json!({
+                        "api_key": headers.get("x-api-key").unwrap().to_str().unwrap(),
+                        "body": body,
+                    }));
+                    Json(json!({"proof_jwt": "kms-signed-proof"}))
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let proof = CanonicalWalletProof::new(
+        &format!("http://{address}/internal/signing-keys"),
+        "internal-test-key",
+        "org-1",
+    )
+    .unwrap();
+    assert_eq!(
+        proof
+            .create_proof_jwt("https://issuer.example/org/org-1", "nonce-1")
+            .await
+            .unwrap(),
+        "kms-signed-proof"
+    );
+    assert_eq!(
+        *captured.lock().unwrap(),
+        Some(json!({
+            "api_key": "internal-test-key",
+            "body": {
+                "organization_id": "org-1",
+                "issuer_url": "https://issuer.example/org/org-1",
+                "nonce": "nonce-1"
+            }
+        }))
+    );
+    server.abort();
 }

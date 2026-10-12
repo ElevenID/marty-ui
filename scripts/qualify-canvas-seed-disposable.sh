@@ -62,6 +62,9 @@ validate_disposable_endpoints() {
     [[ "$(env_value SIGNING_KEYS_INTERNAL_BASE_URL)" == "http://signing-keys:8017/internal/signing-keys" ]] || {
       echo "SIGNING_KEYS_INTERNAL_BASE_URL must target the disposable signing-keys service" >&2; exit 2;
     }
+    [[ "$(env_value SIGNING_KEYS_HOLDER_PROOF_BASE_URL)" == "http://signing-keys:8017/internal/signing-keys" ]] || {
+      echo "SIGNING_KEYS_HOLDER_PROOF_BASE_URL must target the disposable signing-keys service" >&2; exit 2;
+    }
     [[ "$(env_value CANVAS_REAL_CONTAINER_NAME)" == "$project-canvas-real" ]] || {
       echo "CANVAS_REAL_CONTAINER_NAME must identify this disposable project" >&2; exit 2;
     }

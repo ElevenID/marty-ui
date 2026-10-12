@@ -70,15 +70,69 @@ impl WalletTransport for WalletHttp {
     }
 }
 
+#[async_trait]
 pub trait WalletProof {
-    fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String>;
+    async fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String>;
 }
 
-pub struct CanonicalWalletProof;
+/// Uses the same KMS-backed holder proof provider as the Gateway VC-API bridge.
+pub struct CanonicalWalletProof {
+    url: String,
+    api_key: String,
+    organization_id: String,
+    client: reqwest::Client,
+}
 
+impl CanonicalWalletProof {
+    pub fn new(
+        signing_keys_internal_base_url: &str,
+        api_key: &str,
+        organization_id: &str,
+    ) -> Result<Self, String> {
+        let service = signing_keys_internal_base_url
+            .trim_end_matches('/')
+            .strip_suffix("/internal/signing-keys")
+            .ok_or("Signing keys URL must end in /internal/signing-keys")?;
+        if service.is_empty() || api_key.trim().is_empty() || organization_id.trim().is_empty() {
+            return Err("Signing keys holder proof configuration is incomplete".into());
+        }
+        Ok(Self {
+            url: format!("{service}/internal/vc-api/holder-proof"),
+            api_key: api_key.into(),
+            organization_id: organization_id.into(),
+            client: reqwest::Client::new(),
+        })
+    }
+}
+
+#[async_trait]
 impl WalletProof for CanonicalWalletProof {
-    fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String> {
-        marty_oid4vci::proof::create_proof_jwt(audience, nonce).map_err(|e| e.to_string())
+    async fn create_proof_jwt(&self, audience: &str, nonce: &str) -> Result<String, String> {
+        let response = self
+            .client
+            .post(&self.url)
+            .header("x-api-key", &self.api_key)
+            .json(&json!({
+                "organization_id": self.organization_id,
+                "issuer_url": audience,
+                "nonce": nonce,
+            }))
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|e| format!("KMS holder proof request failed: {e}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "KMS holder proof request failed ({})",
+                response.status()
+            ));
+        }
+        let body: Value = response.json().await.map_err(|e| e.to_string())?;
+        body["proof_jwt"]
+            .as_str()
+            .filter(|proof| !proof.is_empty())
+            .map(str::to_owned)
+            .ok_or("KMS holder proof response did not include proof_jwt".into())
     }
 }
 
@@ -112,7 +166,7 @@ fn compact_credential(response: &Value) -> Option<&str> {
 }
 
 /// Claims one demo credential through the public pre-authorized OID4VCI path.
-pub async fn claim_wallet_credential<T: WalletTransport + Sync, P: WalletProof>(
+pub async fn claim_wallet_credential<T: WalletTransport + Sync, P: WalletProof + Sync>(
     transport: &T,
     proof: &P,
     cfg: &GatewaySeedConfig,
@@ -166,7 +220,7 @@ pub async fn claim_wallet_credential<T: WalletTransport + Sync, P: WalletProof>(
         public_api_url.trim_end_matches('/')
     };
     let audience = format!("{audience_base}/org/{}", cfg.organization_id);
-    let proof_jwt = proof.create_proof_jwt(&audience, nonce)?;
+    let proof_jwt = proof.create_proof_jwt(&audience, nonce).await?;
     let response = transport
         .request(WalletOperation {
             method: "POST",

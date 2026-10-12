@@ -13,7 +13,6 @@ base64.workspace = true
 chrono.workspace = true
 hex.workspace = true
 hmac.workspace = true
-marty-oid4vci.workspace = true
 marty-demo-vendor-seed = { path = "../demo-vendor-seed" }
 reqwest = { workspace = true, features = ["form"] }
 serde.workspace = true
@@ -26,4 +25,3 @@ uuid.workspace = true
 
 [dev-dependencies]
 axum.workspace = true
-
