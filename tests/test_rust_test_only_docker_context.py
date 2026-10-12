@@ -78,6 +78,7 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "passport_managed_kms_chain",
     "passport_gateway_postgres",
     "gateway_signing_acceptance",
+    "csca_capability_contract",
 )
 DOCKER_CONTEXTS = {
     "services/Dockerfile": "services/Dockerfile.dockerignore",

@@ -23,7 +23,7 @@ marty-issuance-service = { path = "../../services/issuance" }
 marty-passport-auth = { path = "../passport-auth" }
 marty-signing-grant = { path = "../signing-grant" }
 marty-signing-keys = { path = "../../services/signing-keys" }
-marty-verification = { workspace = true, features = ["csca"] }
+marty-verification.workspace = true
 mmf-platform.workspace = true
 mmf-security.workspace = true
 num-bigint.workspace = true
@@ -50,6 +50,10 @@ path = "tests/passport_gateway_postgres.rs"
 [[test]]
 name = "gateway_signing_acceptance"
 path = "tests/gateway_signing_acceptance.rs"
+
+[[test]]
+name = "csca_capability_contract"
+path = "tests/csca_capability_contract.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

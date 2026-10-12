@@ -706,6 +706,22 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 
 Merged A1 service boundaries (2026-10-06 checkpoint): [#1118](https://github.com/ElevenID/marty-ui/pull/1118) moved the signed Gateway-to-Issuance webhook test to cross-service acceptance with its real PostgreSQL, signature, tenant-isolation, durable-state, and named CI checks. [#1121](https://github.com/ElevenID/marty-ui/pull/1121) moved six opt-in Gateway-to-Signing cases into `gateway_signing_acceptance`, retaining their exact named CI invocations and disposable Redis/OpenBao guards. Both service-to-service development edges are removed, and all six signing cases passed the protected contracts lane before #1121 merged. These ownership moves preserve production code and required acceptance runs.
 
+CSCA test-owner follow-up (2026-10-12 #1294 and remote-KMS reconciliation):
+the protected mainline change moved the CSCA capability check to cross-service
+acceptance and required both live Signing Keys Redis/HTTP cases in the
+contracts lane. The remote-KMS branch had already retired local CSCA
+private-key generation and the obsolete Core issuance-surface claim. Its
+reconciliation retains the public-only PEM lifecycle fixtures, uses one of
+those certificates for cross-service import acceptance, and removes the
+mainline helper that generated local keys. Signing Keys no longer has an
+unused Verification development dependency; service acceptance uses
+Verification only for its supported verification tests. The exact two-case
+Redis execution assertion and workflow-policy guard remain, and production
+Docker contexts exclude the acceptance source. This changes test ownership
+without changing runtime behavior or relaxing CI gates. The pre-KMS package
+count and two-case authority-issuance evidence from #1294 do not describe
+the reconciled KMS-only test graph; qualify that graph on its own head.
+
 A3 Trust Profile runtime edge ([#1117](https://github.com/ElevenID/marty-ui/pull/1117), merged 2026-10-06): Presentation Policy reads `TRUST_PROFILE_SERVICE_URL`, passes it into its native control plane, and fetches `/internal/v1/trust-profiles/{profile_id}` during trust resolution, rejecting a mismatched profile or organization identity. The UI shadow planner records this non-Cargo consumer with source-backed regression assertions. This is diagnostic coverage only: every service-package change still selects the entire Rust workspace because other runtime/deployment edges remain unmapped. No CI speedup or narrower gate is claimed.
 
 ### 2026-10-06 follow-up checkpoint
