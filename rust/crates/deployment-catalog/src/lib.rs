@@ -197,6 +197,13 @@ impl Catalog {
             }
         }
         for (id, service) in &self.services {
+            if !service.is_object() {
+                errors.push(format!(
+                    "service {} descriptor must be an object",
+                    pyrepr(id)
+                ));
+                continue;
+            }
             if let Some(group) = field(service, "group").and_then(string) {
                 if !group.is_empty() && !self.groups.contains_key(group) {
                     errors.push(format!(

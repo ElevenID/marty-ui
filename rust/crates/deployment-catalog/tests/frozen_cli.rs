@@ -102,6 +102,22 @@ fn malformed_catalog_lists_fail_validation_before_operator_use() {
 }
 
 #[test]
+fn malformed_service_descriptor_fails_validation_before_operator_use() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../..")
+        .canonicalize()
+        .unwrap();
+    let mut catalog = Catalog::load(root).unwrap();
+    catalog
+        .services
+        .insert("gateway".into(), Value::String("bad".into()));
+    assert!(catalog
+        .validate()
+        .unwrap_err()
+        .contains("service 'gateway' descriptor must be an object"));
+}
+
+#[test]
 fn equals_style_options_match_frozen_spaced_options() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../..")
