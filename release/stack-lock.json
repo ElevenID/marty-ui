@@ -32,39 +32,39 @@
     {
       "name": "marty-core-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.61",
-      "commit": "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c",
+      "version": "0.2.2",
+      "commit": "f0819fa0a7783eaebc2efaa105908809244c75a4",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty_rs-0.1.61-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:4139b7ed105e1ce5ab21a9af778385104bd89260c26b13ab7a560aeae7150645",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty_rs-0.2.2-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:3a26459c2bd78ecbf65845bd07884d131b78ea640e3f5e78ed3cc0e34c771a21",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },
     {
       "name": "marty-verification-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.61",
-      "commit": "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c",
+      "version": "0.2.2",
+      "commit": "f0819fa0a7783eaebc2efaa105908809244c75a4",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty_verification_py-0.1.61-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:fdf6987989f381deb473b97c4bbe30fab2ea2e13296de8446951162c532aba82",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty_verification_py-0.2.2-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:d92718e91412b91cade368947f1ec80c29900d94d9958f12b4ef01a37ae2bf92",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },
     {
       "name": "marty-iso18013-python",
       "repository": "ElevenID/marty-core",
-      "version": "0.1.61",
-      "commit": "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c",
+      "version": "0.2.2",
+      "commit": "f0819fa0a7783eaebc2efaa105908809244c75a4",
       "artifacts": [{
         "type": "python",
-        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty_iso18013-0.1.61-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
-        "digest": "sha256:d11af7c31eaa1557adc0c5e771d30ff4097ede9e2871862c6a5885e9f0490359",
-        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/marty-core.spdx.json",
+        "uri": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty_iso18013-0.2.2-cp311-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+        "digest": "sha256:d529e07babcdf6a6899d00fefa6e07ca2672afe9cce5810271a878cd4acea450",
+        "sbom": "https://github.com/ElevenID/marty-core/releases/download/v0.2.2/marty-core.spdx.json",
         "provenance": "https://github.com/ElevenID/marty-core/attestations"
       }]
     },

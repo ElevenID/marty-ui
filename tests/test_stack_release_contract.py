@@ -12,6 +12,12 @@ import yaml
 import pytest
 
 from scripts import stack_tag_gate
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 FULL_SHA_ACTION = re.compile(r"^\s*(?:-\s*)?uses:\s*[^\s]+@[0-9a-f]{40}\s*$")
@@ -909,8 +915,11 @@ def test_python_migration_image_installs_every_required_native_backend() -> None
         "marty-verification-python",
         "marty-iso18013-python",
     ):
-        assert components[name]["version"] == "0.1.61"
-        assert components[name]["commit"] == "a3adbbdca93251e4db7933c5c77fe5e8c3f4266c"
+        assert components[name]["version"] == CORE_VERSION
+        assert components[name]["commit"] == CORE_REVISION
+        assert components[name]["artifacts"][0]["uri"].startswith(
+            CORE_RELEASE_URI + CORE_WHEEL_PREFIXES[name] + "-" + CORE_VERSION + "-"
+        )
 
 
 def test_release_images_reject_commerce_markers() -> None:
