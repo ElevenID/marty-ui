@@ -468,6 +468,16 @@ A7 refresh (2026-10-08): The latest normal CI for draft Core #355, [run 37844023
 
 A7 refresh (2026-10-10): Two independent normal dependency PRs now provide the requested workload check. [UUID run 38029628248](https://github.com/ElevenID/marty-core/actions/runs/38029628248) finished preflight at 06:19:56 UTC, after affected Rust tests at 06:19:23; its KMS graph step took 8m09s, workspace Clippy 2m18s, and EUDI client 3m39s. [cc run 38029635868](https://github.com/ElevenID/marty-core/actions/runs/38029635868) finished affected tests at 06:22:16, after preflight at 06:17:51; its KMS graphs took 6m33s, Clippy 2m16s, and EUDI client 3m22s. Thus preflight can be last, but is not consistently the gate tail even across two dependency inputs. These checks deliberately share a Cargo target/cache within their job and test different feature/security obligations. A separate runner has no demonstrated reusable compiled artifact or duration advantage; preserve all checks and defer splitting until a same-obligation, comparable pilot proves faster feedback or completion.
 
+A7 post-merge spot check (2026-10-12): after #359's bounded split,
+[Core cc PR run 38189253281](https://github.com/ElevenID/marty-core/actions/runs/38189253281)
+completed Fast Rust Preflight in 38s after runner start, while Affected Rust
+Tests took 13m35s. [Core UUID PR run 38189230770](https://github.com/ElevenID/marty-core/actions/runs/38189230770)
+completed the cheap lane in 35s after runner start, but that job did not start
+until 8m47s after Affected Rust Tests began. The split gives a short cheap
+execution path once assigned; runner scheduling can still delay wall-clock
+feedback. Both runs kept the broader required checks, and these observations
+do not establish an end-to-end speedup.
+
 ### A8: release-tier E2E and demo strategy
 
 Classify release authority from an authenticated claim/manifest and exact version/tag, not from a mutable dispatch input or a guessed substring. The tag parser in this branch validates syntax only; it does not authorize deployment or publication. Unknown, missing, or inconsistent classifications fail closed. Keep routine PR/unit/integration/security checks and deployment preflights independent of this tier decision.
