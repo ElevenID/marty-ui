@@ -16953,3 +16953,7 @@ Targeted Rust formatting and warnings-denied Clippy passed for the corrected
 Signing Keys library. The invalid-database output was also checked with a
 sentinel URL password and did not disclose it. The grouped fix remains local
 while the previously pushed PR head completes its required hosted run.
+The rebuilt binary also matched all 18 frozen Python bootstrap effect/state
+cases in a network-isolated Docker invocation using standard input. An initial
+invocation omitted Docker's `-i` and correctly exited on empty input; the
+corrected invocation passed 18/18.
