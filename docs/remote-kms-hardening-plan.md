@@ -16811,3 +16811,19 @@ post-push beta-fence review found the newly owned migration Docker context
 allowlist should be part of the same source-integrity set as its Dockerfile;
 that local protection edit is held for the next grouped correction after
 the running CI head reports. No release hold is lifted.
+
+Local assembled-image K10 progress: the rebuilt Core-0.2.2 migration image
+and a current source-built native Rust services image ran through the existing
+disposable self-host migration probe with pinned PostgreSQL 15, Redis 7 and
+OpenBao 2.5.2 images. The probe preserved its isolated Compose model and
+teardown checks while matching the two product roles to exact local tags
+instead of requiring unpublished GHCR digests. Both runs completed the
+migration entrypoint, Rust native schema migration and verification, and
+notification ledger head `20260808_0002`; the catalog and JSON/text content
+scans found no private-key storage. The assembled inventory contained 811
+columns and was identical on the idempotent rerun (SHA-256
+`afab3feb9abac53bcbfb702f6e6976d2cf31bc98da71044c21272d749dbd03d3`).
+The full inventory, local image digests, source heads and limits are in
+`artifacts/kms-local-assembled-schema-probe-20261012.json`. This materially
+narrows the installed-image database gap but does not qualify signed UI
+images, representative runtime writes, or supported cutover.
