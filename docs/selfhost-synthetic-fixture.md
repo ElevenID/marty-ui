@@ -49,8 +49,9 @@ sha256sum custody-test.pub
 
 Add only the reviewed public-key SHA-256 to
 `deploy-config/selfhost-kms-custody-trust-roots.json` in a protected source
-commit, then prepare a new ZIP/receipt from that exact commit. The current
-policy has no approved keys and deliberately blocks qualification. The hook
+commit, then prepare a new ZIP/receipt from that exact commit. This branch
+contains a disposable test signer digest for review; it is not present in a
+published bundle. The hook
 signs with `openssl pkeyutl -sign -rawin`; the runner verifies the exact
 evidence bytes with the source-approved public key before starting the public
 journey. Remove the short-lived private key and OpenBao audit token after the

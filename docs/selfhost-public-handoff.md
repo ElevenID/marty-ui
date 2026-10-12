@@ -93,9 +93,10 @@ document with schema `marty.selfhost-kms-custody/v1`, the exact `source_sha`,
 `verifier_key_non_exportable: true`. The runner verifies its signature using
 the supplied OpenSSL Ed25519 public key before issuing, and requires that key's SHA-256 digest
 in the prepared release source commit's reviewed
-`deploy-config/selfhost-kms-custody-trust-roots.json`. The list is currently
-empty, so no operator-supplied self-signed claim can pass. Adding a trusted
-signer requires a reviewed source change and a new prepared release. The
+`deploy-config/selfhost-kms-custody-trust-roots.json`. This branch carries a
+disposable test signer digest for review; no published release contains that
+policy yet. Adding a trusted signer requires a reviewed source change and a
+new prepared release. The
 integration checkout is pinned to protected-main commit
 `71a34c96f4bff2911919ebd3a41644ec2631ee07`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet
