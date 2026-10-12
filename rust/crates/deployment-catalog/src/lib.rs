@@ -363,7 +363,7 @@ impl Catalog {
         Ok(field(service, name).map(text).unwrap_or_default())
     }
 
-    pub fn required_secrets(&self, stack_name: &str) -> Result<Vec<String>> {
+    pub fn required_input_ids(&self, stack_name: &str) -> Result<Vec<String>> {
         let stack = self.stack(stack_name)?;
         let mut ids = strings(field(stack, "required_secrets"));
         for (id, descriptor) in &self.input_specs {
@@ -472,7 +472,7 @@ impl Catalog {
             ("name", Value::from(stack_name)),
             (
                 "required_secret_names",
-                Value::from(self.required_secrets(stack_name)?),
+                Value::from(self.required_input_ids(stack_name)?),
             ),
             (
                 "required_services",

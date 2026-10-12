@@ -318,7 +318,7 @@ fn run() -> Result<(), String> {
         "secrets" => {
             let positionals = positional(params, &["--field"]);
             let field = option(params, "--field").unwrap_or("id");
-            for id in catalog.required_secrets(required(&positionals, 0, "stack")?)? {
+            for id in catalog.required_input_ids(required(&positionals, 0, "stack")?)? {
                 println!("{}", catalog.public_input_field(&id, field)?);
             }
         }
