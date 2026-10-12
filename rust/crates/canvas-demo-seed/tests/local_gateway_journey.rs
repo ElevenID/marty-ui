@@ -38,6 +38,13 @@ async fn gateway(State(calls): State<Calls>, request: Request) -> (StatusCode, J
         (Method::POST, "/v1/integrations/canvas/platforms/platform-1/program-bindings") => {
             json!({"id": "binding-1"})
         }
+        (Method::GET, "/issuer-context") => json!({
+            "issuer_profile_id": "profile-1",
+            "issuer_did": "did:web:marty.example",
+            "signing_service_id": "managed-openbao-transit",
+            "signing_key_reference": "key-ref",
+            "verification_method_id": "did:web:marty.example#key-ref"
+        }),
         _ => {
             return (
                 StatusCode::NOT_FOUND,
@@ -69,7 +76,14 @@ async fn local_gateway_journey_has_no_db_or_canvas_side_effects() {
         ),
         ("CANVAS_PROGRAM_BINDING_SEED_ENABLED".into(), "true".into()),
         ("CANVAS_LMS_SEED_ENABLED".into(), "false".into()),
-        ("SIGNING_KEYS_INTERNAL_API_KEY".into(), String::new()),
+        (
+            "SIGNING_KEYS_INTERNAL_API_KEY".into(),
+            "registry-key".into(),
+        ),
+        (
+            "SIGNING_KEYS_INTERNAL_BASE_URL".into(),
+            format!("http://{address}"),
+        ),
     ]);
     let config = build_run_config(&env, false, false).unwrap();
     let report = run_seed(&config, &env, "postgresql://unreachable.invalid/unused")
@@ -80,7 +94,19 @@ async fn local_gateway_journey_has_no_db_or_canvas_side_effects() {
     assert_eq!(report["binding"]["id"], "binding-1");
     assert_eq!(report["canvas_lms"], Value::Null);
     assert_eq!(report["warnings"], json!([]));
+    assert_eq!(report["issuer_context"]["issuer_profile_id"], "profile-1");
     let calls = calls.lock().unwrap();
-    assert_eq!(calls.len(), 5);
-    assert!(calls.iter().all(|(_, _, key)| key == "gateway-key"));
+    assert_eq!(calls.len(), 6);
+    assert!(calls
+        .iter()
+        .filter(|(_, path, _)| path != "/issuer-context")
+        .all(|(_, _, key)| key == "gateway-key"));
+    assert_eq!(
+        calls
+            .iter()
+            .find(|(_, path, _)| path == "/issuer-context")
+            .unwrap()
+            .2,
+        "registry-key"
+    );
 }
