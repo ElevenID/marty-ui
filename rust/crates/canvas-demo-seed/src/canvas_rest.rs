@@ -278,7 +278,7 @@ pub async fn ensure_enrollment<T: CanvasRestTransport + Sync>(
     if let Some(enrollment) = existing.as_array().and_then(|items| {
         items.iter().find(|item| {
             item.get("user_id").is_some_and(|value| {
-                value.as_str() == Some(user_id) || value.to_string() == user_id
+                value.as_str() == Some(user_id) || value.to_string().as_str() == user_id
             })
         })
     }) {

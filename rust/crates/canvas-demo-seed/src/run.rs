@@ -305,8 +305,8 @@ pub async fn run_seed(
                 let application_id = value_id(&created["id"]).expect("validated application ID");
                 application = Some(created);
                 if connector.demo_evidence_event_enabled {
-                    let secret = env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"])
-                        .unwrap_or_else(|| String::new());
+                    let secret =
+                        env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).unwrap_or_default();
                     let secret =
                         if secret.is_empty() && !env.contains_key("CANVAS_DISPOSABLE_PROJECT") {
                             docker_container_env_value(

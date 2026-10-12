@@ -69,9 +69,7 @@ impl CanvasDockerTransport for Stub {
         let payload: Value = serde_json::from_slice(&STANDARD.decode(encoded).unwrap()).unwrap();
         args[3] = "CANVAS_LTI_SETUP_B64=<payload>".into();
         let script = operation.input.unwrap();
-        let command: Vec<String> = std::iter::once("docker".to_owned())
-            .chain(args.into_iter())
-            .collect();
+        let command: Vec<String> = std::iter::once("docker".to_owned()).chain(args).collect();
         self.operations.lock().unwrap().push(json!({
             "command": command,
             "payload": payload,

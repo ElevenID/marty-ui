@@ -71,31 +71,6 @@ fn disposable_canvas_target(args: &[String], project: &str) -> Result<String, St
     Ok(target)
 }
 
-#[cfg(test)]
-mod disposable_tests {
-    use super::disposable_canvas_target;
-
-    #[test]
-    fn docker_exec_is_limited_to_project_owned_canvas() {
-        let project = "marty-canvas-disposable-local";
-        let own = vec![
-            "exec".into(),
-            "-i".into(),
-            format!("{project}-canvas-real"),
-            "bash".into(),
-        ];
-        assert_eq!(
-            disposable_canvas_target(&own, project).unwrap(),
-            "marty-canvas-disposable-local-canvas-real"
-        );
-        let other = vec!["exec".into(), "marty-canvas-real".into(), "bash".into()];
-        assert!(disposable_canvas_target(&other, project).is_err());
-        let inspect = vec!["inspect".into(), "marty-issuance".into()];
-        assert!(disposable_canvas_target(&inspect, project).is_err());
-        assert!(disposable_canvas_target(&own, "elevenid-beta").is_err());
-    }
-}
-
 #[async_trait]
 impl CanvasDockerTransport for CanvasDocker {
     async fn run(&self, operation: CanvasDockerOperation) -> Result<CanvasDockerOutput, String> {
@@ -476,4 +451,29 @@ pub async fn docker_container_env_value<T: CanvasDockerTransport + Sync>(
         .filter_map(|value| value.as_str().map(str::to_owned))
         .find_map(|value| value.strip_prefix(&prefix).map(str::to_owned))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod disposable_tests {
+    use super::disposable_canvas_target;
+
+    #[test]
+    fn docker_exec_is_limited_to_project_owned_canvas() {
+        let project = "marty-canvas-disposable-local";
+        let own = vec![
+            "exec".into(),
+            "-i".into(),
+            format!("{project}-canvas-real"),
+            "bash".into(),
+        ];
+        assert_eq!(
+            disposable_canvas_target(&own, project).unwrap(),
+            "marty-canvas-disposable-local-canvas-real"
+        );
+        let other = vec!["exec".into(), "marty-canvas-real".into(), "bash".into()];
+        assert!(disposable_canvas_target(&other, project).is_err());
+        let inspect = vec!["inspect".into(), "marty-issuance".into()];
+        assert!(disposable_canvas_target(&inspect, project).is_err());
+        assert!(disposable_canvas_target(&own, "elevenid-beta").is_err());
+    }
 }
