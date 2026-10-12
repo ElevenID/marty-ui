@@ -121,6 +121,24 @@ foreach ($path in @(
 . (Join-Path $PSScriptRoot 'beta-deployment-lock.ps1')
 . (Join-Path $PSScriptRoot 'beta-passport-fence-legacy-boundary.ps1')
 
+function Assert-NoRunningCanvasLocalhostBridge {
+    $byService = @(& docker ps `
+        --filter 'label=com.docker.compose.project=elevenid-beta' `
+        --filter 'label=com.docker.compose.service=issuance-canvas-localhost-bridge' `
+        --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect optional Canvas localhost bridge before aggregate beta mutation'
+    }
+    $byName = @(& docker ps --filter 'name=^/marty-issuance-canvas-localhost-bridge$' `
+        --format '{{.ID}}' 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        throw 'Could not inspect optional Canvas localhost bridge before aggregate beta mutation'
+    }
+    if ($byService.Count -ne 0 -or $byName.Count -ne 0) {
+        throw 'Stop the optional Canvas localhost bridge before aggregate beta deployment; it is outside the signed Rust image set'
+    }
+}
+
 function Invoke-Plan {
     param([string[]]$Arguments)
     $previous = $ErrorActionPreference
@@ -812,6 +830,7 @@ $script:productionRecoveryReady = $false
 $script:productionRecoveryDigest = $null
 $lock = Enter-BetaDeploymentLock -AllowPending
 try {
+    Assert-NoRunningCanvasLocalhostBridge
     if (-not (Test-Path -LiteralPath (Get-BetaPassportFenceMarkerPath)) -or
         -not (Test-Path -LiteralPath (Get-BetaMutationMarkerPath)) -or
         -not (Test-Path -LiteralPath $MaintenanceReceipt) -or
@@ -947,6 +966,7 @@ try {
         "SET marty.passport_beta_expected_native_migration_sha256 = '$($script:plan.migration_set_sha256)';`n"
     $sql = [Text.UTF8Encoding]::new($false, $true).GetString(
         [IO.File]::ReadAllBytes($enablePath))
+    Assert-NoRunningCanvasLocalhostBridge
     if ($loginBefore[0] -ceq 'f') {
         Invoke-BetaPsql -Sql ($session + $sql) | Out-Null
     }

@@ -330,3 +330,54 @@ def test_beta_preflight_rejects_running_optional_bridge_before_mutation(tmp_path
     assert (result.returncode != 0) is running
     if running:
         assert "Stop the optional Canvas localhost bridge before beta release" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("service_running", "name_running", "inspect_failed", "expected_message"),
+    [
+        (False, False, False, None),
+        (True, False, False, "Stop the optional Canvas localhost bridge before aggregate beta deployment"),
+        (False, True, False, "Stop the optional Canvas localhost bridge before aggregate beta deployment"),
+        (False, False, True, "Could not inspect optional Canvas localhost bridge before aggregate beta mutation"),
+    ],
+)
+def test_aggregate_preflight_requires_no_running_optional_bridge(
+    tmp_path, service_running, name_running, inspect_failed, expected_message,
+):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell unavailable")
+    source = (ROOT / "scripts/run-passport-beta-aggregate-deploy.ps1").read_text()
+    start = source.index("function Assert-NoRunningCanvasLocalhostBridge {")
+    end = source.index("\nfunction ", start + 1)
+    function = source[start:end]
+    first_call = source.index("    Assert-NoRunningCanvasLocalhostBridge", source.index("$lock = Enter-BetaDeploymentLock"))
+    second_call = source.index("    Assert-NoRunningCanvasLocalhostBridge", first_call + 1)
+    assert first_call < source.index("Write-DurableJson -Path $planPath")
+    assert second_call < source.index("Invoke-BetaPsql -Sql ($session + $sql)")
+    service_marker = "'synthetic-bridge-id'" if service_running else ""
+    name_marker = "'synthetic-bridge-id'" if name_running else ""
+    exit_code = 1 if inspect_failed else 0
+    harness = tmp_path / "aggregate-bridge-guard.ps1"
+    harness.write_text(
+        "$ErrorActionPreference = 'Stop'\n"
+        "function docker {\n"
+        "  if ($args[0] -ne 'ps') { throw 'Unexpected Docker invocation' }\n"
+        f"  $global:LASTEXITCODE = {exit_code}\n"
+        "  if (($args -join ' ') -match 'label=com.docker.compose.service=issuance-canvas-localhost-bridge') {\n"
+        f"    {service_marker}\n"
+        "  } elseif (($args -join ' ') -match 'name=\\^/marty-issuance-canvas-localhost-bridge\\$') {\n"
+        f"    {name_marker}\n"
+        "  } else { throw 'Unexpected Docker filter' }\n"
+        "}\n"
+        + function
+        + "\nAssert-NoRunningCanvasLocalhostBridge\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-File", str(harness)],
+        capture_output=True, text=True, timeout=15,
+    )
+    assert (result.returncode != 0) is (expected_message is not None)
+    if expected_message:
+        assert expected_message in result.stderr
