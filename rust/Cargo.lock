@@ -4478,6 +4478,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-deployment-catalog"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "marty-deployment-profile"
 version = "0.1.0"
 dependencies = [
