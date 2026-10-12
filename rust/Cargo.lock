@@ -3766,6 +3766,7 @@ dependencies = [
  "async-trait",
  "reqwest",
  "serde_json",
+ "sqlx",
  "tokio",
  "url",
 ]

@@ -11,6 +11,7 @@ publish = false
 async-trait.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 url.workspace = true
 
 [dev-dependencies]

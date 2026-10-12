@@ -6,6 +6,9 @@ use serde_json::{json, Map, Value};
 use std::time::Duration;
 use url::form_urlencoded;
 
+mod database;
+pub use database::seed_open_badge_templates;
+
 #[derive(Clone, Debug)]
 pub struct GatewaySeedConfig {
     pub base_url: String,
@@ -163,6 +166,157 @@ pub fn remote_signing_config(signing_keys_internal_base_url: &str) -> Value {
             "url": format!("{}/issuer-context", signing_keys_internal_base_url.trim_end_matches('/')),
             "api_key_source": "SIGNING_KEYS_INTERNAL_API_KEY"
         }
+    })
+}
+
+const BADGE_VCT: &str =
+    "https://beta.elevenidllc.com/credentials/canvas-interoperability-foundations-badge";
+const BADGE_NAME: &str = "Interoperable Credentials Foundations Badge";
+const BADGE_DESCRIPTION: &str = "Open Badge 3.0 credential for completing the Interoperable Credentials Foundations learning check in Canvas.";
+const ISSUER_DID: &str = "did:web:beta.elevenidllc.com:orgs:marty";
+
+fn badge_claims() -> Value {
+    let claims: [(&str, &str, &str, bool); 18] = [
+        ("email", "Learner email", "string", true),
+        ("given_name", "Given name", "string", true),
+        ("family_name", "Family name", "string", true),
+        ("achievement_id", "Achievement ID", "string", false),
+        ("achievement_name", "Achievement", "string", true),
+        (
+            "achievement_description",
+            "Achievement description",
+            "string",
+            true,
+        ),
+        (
+            "achievement_criteria",
+            "Achievement criteria",
+            "string",
+            false,
+        ),
+        ("badge_image_url", "Badge image", "image", false),
+        ("course_name", "Canvas course", "string", true),
+        ("quiz_name", "Canvas quiz", "string", true),
+        ("score_percent", "Score percent", "number", true),
+        ("completion_date", "Completion date", "date", true),
+        ("institution_name", "Institution", "string", true),
+        ("certificate_id", "Certificate ID", "string", true),
+        ("organization_id", "Issuer organization", "string", false),
+        ("achievement", "Open Badge achievement", "object", false),
+        ("result", "Canvas quiz result", "object", true),
+        (
+            "learning_context",
+            "Canvas learning context",
+            "object",
+            true,
+        ),
+    ];
+    Value::Array(
+        claims
+            .into_iter()
+            .map(
+                |(name, display_name, claim_type, selectively_disclosable)| {
+                    json!({
+                        "name": name,
+                        "display_name": display_name,
+                        "claim_type": claim_type,
+                        "required": true,
+                        "selectively_disclosable": selectively_disclosable
+                    })
+                },
+            )
+            .collect(),
+    )
+}
+
+pub fn credential_template_payload(cfg: &GatewaySeedConfig) -> Value {
+    let image = format!("{BADGE_VCT}/image.svg");
+    json!({
+        "id": cfg.credential_template_id,
+        "organization_id": cfg.organization_id,
+        "name": BADGE_NAME,
+        "description": BADGE_DESCRIPTION,
+        "status": "active",
+        "credential_type": "OpenBadgeCredential",
+        "vct": BADGE_VCT,
+        "doctype": "org.openbadges.v3",
+        "claims": badge_claims(),
+        "privacy_posture": "selective_disclosure",
+        "selective_disclosure_fields": ["email", "given_name", "family_name", "achievement_name", "achievement_description", "course_name", "quiz_name", "score_percent", "completion_date", "institution_name", "certificate_id", "result", "learning_context"],
+        "zk_predicate_claims": [],
+        "derived_attributes": [],
+        "display_style": {"background_color": "#0B5F7A", "text_color": "#ffffff", "icon": "award", "logo_url": image},
+        "validity_rules": {"duration": "P1Y", "renewal_required": false},
+        "issuer_requirements": {"allowed_issuer_dids": [ISSUER_DID], "trust_tier_required": "organization_managed_remote_signing", "audit_level_required": "standard"},
+        "supported_formats": ["sd_jwt_vc"],
+        "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
+        "wallet_configs": [
+            {"wallet_id": "waltid", "deep_link_scheme": "openid-credential-offer://", "format_variant": null},
+            {"wallet_id": "spruceid", "deep_link_scheme": "spruceid://", "format_variant": "dc+sd-jwt"}
+        ],
+        "key_access_mode": "REMOTE_SIGNING",
+        "issuer_key_id": "cred-issuer-marty-es256",
+        "issuer_algorithm": "ES256",
+        "remote_signing_config": remote_signing_config(&cfg.signing_keys_internal_base_url),
+        "version": 1
+    })
+}
+
+pub fn open_badge_evidence_requirement(cfg: &GatewaySeedConfig, scope: &Value) -> Value {
+    json!({
+        "id": "canvas-quiz-score",
+        "label": "Canvas quiz score",
+        "evidence_type": "EXTERNAL_FACT",
+        "provider": "canvas",
+        "fact_type": cfg.program_binding_evidence_type,
+        "verification_method": "SIGNED_AGS_SCORE",
+        "scope": scope,
+        "pass_rule": {"path": "assertion.score_percent", "operator": ">=", "value": cfg.program_binding_score_threshold},
+        "required": true,
+        "auto_issue_on_permit": cfg.program_binding_auto_approve
+    })
+}
+
+pub fn application_template_payload(cfg: &GatewaySeedConfig, scope: &Value) -> Value {
+    let fields = [
+        ("email", "Email", "email"),
+        ("given_name", "Given name", "text"),
+        ("family_name", "Family name", "text"),
+        ("course_name", "Canvas course", "text"),
+        ("quiz_name", "Canvas quiz", "text"),
+        ("score_percent", "Score percent", "number"),
+    ];
+    json!({
+        "id": cfg.application_template_id,
+        "organization_id": cfg.organization_id,
+        "name": "Interoperable Credentials Foundations Application",
+        "description": "Canvas-started application workflow for the interoperability Open Badge demonstration.",
+        "credential_template_id": cfg.credential_template_id,
+        "form_fields": fields.into_iter().map(|(name, label, kind)| json!({"name": name, "label": label, "type": kind, "required": true})).collect::<Vec<_>>(),
+        "evidence_requirements": [open_badge_evidence_requirement(cfg, scope)],
+        "claim_collection_rules": [],
+        "required_checks": [],
+        "approval_strategy": "policy",
+        "approval_policy_set_id": null,
+        "application_validity_days": 30,
+        "auto_approval_rules": [],
+        "ui_config": {
+            "scenario": "canvas_mip_quiz_open_badge",
+            "provider": "canvas",
+            "fact_type": cfg.program_binding_evidence_type,
+            "scope": scope,
+            "delivery_mode": cfg.program_binding_delivery_mode,
+            "issuer_mode": "org_managed",
+            "issuer_did": ISSUER_DID,
+            "open_badge": {
+                "vct": BADGE_VCT,
+                "name": BADGE_NAME,
+                "image": format!("{BADGE_VCT}/image.svg"),
+                "criteria": format!("{BADGE_VCT}/criteria")
+            }
+        },
+        "notification_config": {},
+        "status": "active"
     })
 }
 

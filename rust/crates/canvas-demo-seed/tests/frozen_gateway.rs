@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use marty_canvas_demo_seed::{
-    demo_scope, remote_signing_config, upsert_binding, upsert_platform, GatewaySeedConfig,
-    GatewayTransport, Operation,
+    application_template_payload, credential_template_payload, demo_scope, remote_signing_config,
+    upsert_binding, upsert_platform, GatewaySeedConfig, GatewayTransport, Operation,
 };
 use serde_json::{json, Value};
 use std::{collections::VecDeque, sync::Mutex};
@@ -9,6 +9,29 @@ use std::{collections::VecDeque, sync::Mutex};
 struct Stub {
     responses: Mutex<VecDeque<Value>>,
     operations: Mutex<Vec<Value>>,
+}
+
+#[test]
+fn badge_template_payloads_match_frozen_python_contract() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-real-seed-behavior-v1.json"
+    ))
+    .unwrap();
+    let cfg = config();
+    for (case, scope) in [
+        ("modern_schema", json!({})),
+        (
+            "legacy_remote_columns",
+            json!({"course_id": "42", "quiz_id": "9"}),
+        ),
+    ] {
+        let writes = &contract["database_seed"][case]["writes"];
+        assert_eq!(credential_template_payload(&cfg), writes[0]["payload"]);
+        assert_eq!(
+            application_template_payload(&cfg, &scope),
+            writes[1]["payload"]
+        );
+    }
 }
 
 #[async_trait]
