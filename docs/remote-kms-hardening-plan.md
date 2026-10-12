@@ -17015,3 +17015,15 @@ checks rather than Windows compile-only results. The [Canvas job in run
 `38205991904`](https://github.com/ElevenID/marty-ui/actions/runs/38205991904)
 passed. Signed release deployment, the remaining retry/recovery matrix and
 external wallet acceptance are still open.
+
+K9 cutover-script review while `dbdd664d5` CI runs: the current
+`scripts/deploy-local-beta-release.ps1` rehearsal restores the existing beta
+PostgreSQL dump into a copy and starts `quay.io/openbao/openbao:2` in dev mode.
+Its Rust `--verify-only` step now correctly checks database connectivity, but
+that copied database and vanilla OpenBao instance cannot qualify a fresh
+private-key-table-free deployment or the X25519 plugin. Keep this historical
+beta rehearsal separate from KMS-only acceptance. The release gate needs a
+fresh isolated database and the reviewed plugin image with exact signed
+service/migration digests, representative runtime writes, private-key catalog
+and JSON-content scans, and coordinated PostgreSQL/OpenBao restore. No running
+beta/self-host stack was changed for this review.
