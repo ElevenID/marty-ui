@@ -17693,3 +17693,15 @@ GitHub reports #1315 already queued. PR #1316 is ahead on merge-group head
 queued at this checkpoint). Protected main is `60e94ab382c67b4cc5db1a85096440b31fcd46b8`.
 Do not dispatch full-main CI until #1315 actually merges and exact main is
 known; no tag or signed release has been qualified.
+
+2026-10-13 protected merge and full qualification: all five required
+merge-group workflows passed on #1315 combined head
+`9b5d14559efd6630d463e9457ee3a3590571de06`, including CI
+`38381184034`. GitHub merged #1315 at `2026-10-13T10:38:34Z`; protected
+main is that exact SHA. Another operator/process already dispatched one
+full `ci.yml` workflow-dispatch run `38384795362` on the same exact SHA at
+`10:38:54Z`; it was queued when checked. Do not duplicate it. Require this
+full run to succeed while main remains exact, then perform the no-write
+stack-tag claim. Source attempt 1's unrelated renewal-health failure and
+successful failed-job attempt 2 remain recorded; the queue itself was green.
+No tag, signed image, installed KMS-only matrix, or cutover is claimed.
