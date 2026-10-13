@@ -18081,3 +18081,17 @@ The exact four-image release claim must follow the protected merge, because
 the claim workflow requires the dispatch SHA to equal protected `main` and
 the stack-tag policy requires exact-main merge-group and full CI evidence.
 Tag `v1.1.245` and its GitHub release were absent at this checkpoint.
+
+2026-10-13 protected-merge checkpoint: all corrected-head UI #1319 checks,
+including CI Gate, Canvas isolated contracts and the OpenBao plugin image's
+coordinated PostgreSQL/Raft recovery, passed on run `38407302994`. The PR was
+submitted to the required merge queue. Earlier UI #1318 is ahead in that queue
+and changes the same verifier release workflow. A local merge-tree check found
+one workflow conflict. The staged, unpushed resolution keeps #1318's attested
+Core source/archive build and the #1319 disposable OpenBao/JWK verifier gate,
+removes the redundant Core checkout/build, and binds the runtime fixture to
+the verified archive binary. The combined release tests passed 69 cases;
+Ruff and diff checks passed. Hold a #1319 correction push until #1318 reaches
+protected `main`, then merge its actual protected commit and push one corrected
+head for required CI. The local merge of #1318's PR head is still uncommitted
+in the UI worktree and is only a conflict-resolution rehearsal.
