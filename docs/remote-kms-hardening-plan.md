@@ -18153,3 +18153,16 @@ qualification was dispatched once as CI workflow run `38425975502` with
 `workflow_dispatch` event and the same head SHA; it is queued at this
 checkpoint. Do not claim or publish `v1.1.245` until this run succeeds and the
 no-write claim validates all release coordinates and workflow evidence.
+
+2026-10-13 exact-main release transaction: full manual CI run `38425975502`
+passed on protected `e473ef4ef7c17ac91f95f96c6e38c7e55f75c481`, including
+fresh full Canvas, OpenBao PostgreSQL/Raft recovery, native Rust contracts,
+release contracts and service images. The tag and GitHub release for
+`v1.1.245` were absent. Fresh no-write claim run `38432534977` passed and
+produced `stack-release-claim-v1.1.245`; its transaction is `claimed` with ID
+`41288ab956f450b865cbd0f675fe051f45866fca3f7d00e9739a416a220e5e88`.
+The claim evidence binds all five successful exact-main merge-group workflows
+and full CI `38425975502`. Stack release workflow run `38432681890` was
+dispatched from this claim on the same protected SHA and is in progress.
+Do not infer image qualification, promotion or KMS-only acceptance from the
+claim alone; inspect the transaction checkpoints and exact signed images.
