@@ -3106,6 +3106,7 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         "scripts/ci/plan_affected_rust.py",
         "tests/test_plan_affected_rust.py",
         "docs/architecture-feedback-improvement-plan.md",
+        "docs/architecture-test-obligations.md",
     ]
     exact = _classify_changed_paths(
         planner_paths, tmp_path, combined=True, include_planner_plan=True
@@ -3117,10 +3118,47 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
             [source], tmp_path, include_planner_plan=True
         )[0]
         assert selected["planner_only"] == selected["release"] == "true"
-    document_only = _classify_changed_paths(
-        [planner_paths[2]], tmp_path, include_planner_plan=True
-    )[0]
-    assert document_only["planner_only"] == "false"
+    for document in planner_paths[2:]:
+        document_only = _classify_changed_paths(
+            [document], tmp_path, include_planner_plan=True
+        )[0]
+        assert document_only["planner_only"] == "false"
+        bounded = _classify_changed_paths(
+            [planner_paths[0], document],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+        )[0]
+        assert bounded["planner_only"] == bounded["release"] == "true"
+        assert bounded["all"] == bounded["rust"] == "false"
+        absent = tmp_path / ("absent-" + Path(document).stem)
+        for source in planner_paths[:2]:
+            target = absent / source
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("synthetic planner source", encoding="utf-8")
+        missing_document = _classify_changed_paths(
+            [planner_paths[0], document],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+            working_directory=absent,
+        )[0]
+        assert missing_document["planner_only"] == "false"
+        linked_document = absent / document
+        linked_document.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            linked_document.symlink_to(ROOT / document)
+        except (OSError, NotImplementedError):
+            pass  # Windows without symlink privilege; protected Linux checks it.
+        else:
+            linked = _classify_changed_paths(
+                [planner_paths[0], document],
+                tmp_path,
+                combined=True,
+                include_planner_plan=True,
+                working_directory=absent,
+            )[0]
+            assert linked["planner_only"] == "false"
     empty_diff = _classify_changed_paths(
         [], tmp_path, combined=True, include_planner_plan=True
     )[0]
