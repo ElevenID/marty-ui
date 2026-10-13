@@ -8,6 +8,20 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
+Current gate (2026-10-13): Core #355, Credentials #313, the grouped UI feature
+#1192 and subsequent UI hardening PRs through #1321 are merged. The corrected
+protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
+Exact-main full CI `38444511880` passed, but a later cancelled duplicate run
+invalidated it under the release claim's latest-run rule. Replacement full CI
+`38454924907` is running; wait for its terminal success, then make one fresh
+no-write `v1.1.245` claim and qualify a new signed stack transaction. The
+prior failed claims and failed release transaction are immutable evidence, not
+promotion candidates. After signed-image qualification, prove clean installed
+KMS-only database/runtime writes, DIDComm and integration-secret recovery,
+feature journeys, cutover and rollback. Real AWS/Azure/GCP and physical-device
+acceptance remain open because access is not provisioned. Do not mark K6,
+K8/K9 or the overall goal complete from local OpenBao tests.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
