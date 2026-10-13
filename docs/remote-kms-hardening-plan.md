@@ -18143,3 +18143,13 @@ is running required checks; protected merge is not yet complete. The failed
 reported missing exact-main full Canvas qualification. Once #1319 lands, run
 the manual full CI lane at its exact main SHA before a fresh claim; do not
 reuse the preceding claim's evidence.
+
+2026-10-13 protected UI merge: all five configured merge-group workflow
+checks, including full CI run `38421206903` and its Canvas, native contract,
+release, service-image and OpenBao PostgreSQL/Raft jobs, passed on synthetic
+head `e473ef4ef7c17ac91f95f96c6e38c7e55f75c481`. UI #1319 merged through
+the protected queue at exactly that SHA. The exact-main full Canvas
+qualification was dispatched once as CI workflow run `38425975502` with
+`workflow_dispatch` event and the same head SHA; it is queued at this
+checkpoint. Do not claim or publish `v1.1.245` until this run succeeds and the
+no-write claim validates all release coordinates and workflow evidence.
