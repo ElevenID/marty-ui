@@ -65,6 +65,7 @@ PUBLISHED_MATRIX_SCENARIOS = frozenset(
         "body-timeout",
         "lease-expiry",
         "dispatch",
+        "mixed-roster",
     }
 )
 PUBLISHED_MATRIX_PROBE_NAMES = frozenset(
@@ -243,6 +244,7 @@ TIMING_NAMES = {
         {
             "sql_logging",
             "json_consumer",
+            "mixed_roster_reference",
             "oauth_lease_reference",
             *PREFLIGHT_MODES,
             "mixed-roster-preflight",

@@ -1122,6 +1122,17 @@ impl PublishedDatabase {
         .await
     }
 
+    pub async fn start_with_worker_mixed_roster(case: &str) -> Result<Self, String> {
+        Self::start_with_worker_case(
+            case,
+            include_str!("../../../../../contracts/canvas-worker-mixed-roster-scenarios.json"),
+            "worker_mixed_roster",
+            "worker-mixed-roster",
+            "MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE",
+        )
+        .await
+    }
+
     pub async fn start_with_worker_resource_race(case: &str) -> Result<Self, String> {
         Self::start_with_worker_case(
             case,
