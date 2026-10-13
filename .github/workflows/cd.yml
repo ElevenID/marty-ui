@@ -693,6 +693,7 @@ jobs:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         working-directory: marty-ui
         shell: bash
@@ -702,7 +703,8 @@ jobs:
             --arg version "$VERSION" \
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
-            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" '
             .components += [{
               name: "marty-ui",
               repository: "ElevenID/marty-ui",
@@ -716,6 +718,9 @@ jobs:
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
                 {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
@@ -814,7 +819,7 @@ jobs:
           python ../marty-ui/scripts/wait_for_public_services.py \
             --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
-          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations"')"
+          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations" && $0 != "openbao-grant-bootstrap" && $0 != "signing-integration-tls-bootstrap"')"
           if [ -n "$unexpected_exits" ]; then
             echo "Public-stack services exited unexpectedly:"
             echo "$unexpected_exits"

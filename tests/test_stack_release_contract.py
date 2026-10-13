@@ -898,7 +898,7 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
 
 
-def test_public_stack_smoke_uses_three_role_adapter_contract() -> None:
+def test_public_stack_smoke_binds_all_four_kms_images() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     smoke = jobs["public-stack-smoke"]
     plugin = jobs["didcomm-plugin-image-qualification"]
@@ -908,9 +908,9 @@ def test_public_stack_smoke_uses_three_role_adapter_contract() -> None:
     script = build["run"]
 
     assert "build-openbao-didcomm" in smoke["needs"]
-    assert "OPENBAO_DIDCOMM_DIGEST" not in build["env"]
-    assert script.count('{type: "oci"') == 3
-    assert 'marty-ui-oss/openbao-didcomm' not in script
+    assert build["env"]["OPENBAO_DIDCOMM_DIGEST"] == "${{ needs.build-openbao-didcomm.outputs.digest }}"
+    assert script.count('{type: "oci"') == 4
+    assert 'marty-ui-oss/openbao-didcomm' in script
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
 
