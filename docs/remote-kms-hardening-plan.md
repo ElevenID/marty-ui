@@ -17809,3 +17809,29 @@ The PR also prepared version 1.2.85 and corrected README coverage claims.
 Annotated `v1.2.85` now points to that exact protected-main commit; release
 workflow `38396954947` is in progress. Do not pin it in UI until its signed
 source archive, digest, SBOM and provenance are published and verified.
+
+2026-10-13 signed harness release and local four-image replay:
+`marty-integration-tests v1.2.85` published successfully in release run
+`38396954947`. Its source archive digest is
+`sha256:8cdbf705cfe5aed7ca523fb2888b281604bd5e280b87e103c6a511aeb218424d`;
+SHA256SUMS and GitHub build attestation verify the exact protected-main
+`f3e9e4b01fb10bf77dde31c6672998399ad2d88e` tag source. The UI release
+fix worktree locally pins this signed source, and its focused release/schema
+selection passed 57 tests. Before pushing that worktree, a local manifest
+constructed from the four exact image digests in failed release transaction
+`38390398846` found that the newly released integration renderer still
+required a historical `marty-common` Python wheel missing from the current
+Rust stack lock. A follow-up integration branch
+`fix/kms-current-stack-renderer-20261013` locally separates that historical
+adapter requirement from the four-image path; its 116 affected tests passed
+and the exact candidate manifest rendered all four pinned images. Local
+Compose config also passed. A disposable full-stack `up --wait` then exposed
+missing Signing Keys gateway credentials, followed by a required scoped
+signing-grant verifier token file. The branch locally supplies distinct
+nonproduction gateway credentials and binds Compose to the signed OpenBao
+DIDComm image instead of upstream OpenBao, but the scoped grant-token
+bootstrap is not implemented yet. The attempted local stack was torn down
+with its isolated project volumes. No integration correction PR or UI PR
+has been pushed, and no full public-stack or installed acceptance is claimed.
+Do not use v1.2.85 as release qualification input until the corrected harness
+is locally started and then signed/pinned.
