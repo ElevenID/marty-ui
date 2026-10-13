@@ -17713,8 +17713,18 @@ OpenBao DIDComm, Rust contracts and CI Gate. Canvas took longer than its
 source rerun but finished successfully; do not infer a test failure from
 its duration. The exact-main no-write `v1.1.245` claim run `38390245195`
 was dispatched by another operator/process and succeeded. With no CD run
-for this claim present, stack-release workflow `38390378067` was
-dispatched once with `claim_run_id=38390245195`. Its build, signature,
+for this claim present at the pre-dispatch check, stack-release workflow
+`38390378067` was dispatched with `claim_run_id=38390245195`. Its build, signature,
 attestation, installed qualification and protected publication gates are
 still pending. This checkpoint does not assert a tag, release image,
 installed KMS-only journey or cutover.
+
+2026-10-13 concurrent release-dispatch correction: another operator
+dispatched stack-release run `38390398846` on the same protected-main SHA
+11 seconds after `38390378067`. The first run was cancelled at
+`11:33:04Z` while UI and services were building; no qualification or
+publication result from that run is usable. The surviving run
+`38390398846` passed transaction resolution and is building the images.
+Follow that handle and do not dispatch a third run. The concurrency race
+incurred duplicate partial build work despite the immediate pre-dispatch
+run-list check; retain this evidence when reviewing CI cost.
