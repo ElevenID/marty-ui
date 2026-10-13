@@ -13,6 +13,7 @@
   },
   "required_lane": "test-rust-services/canvas",
   "shared_fixture_source": "rust/services/issuance/tests/support/canvas_published_database.rs",
+  "retired_case_ids": ["worker_mixed_roster_reference_matches_published_process"],
   "case_ids": [
     "body_capture_rejects_non_matrix_cases_before_resource_creation",
     "body_timeout_reference_rejects_invalid_scenario_closure",

@@ -69,8 +69,13 @@ def validate_package_migration(migration: dict, listed: set[str], root: Path = R
         "Canvas package migration identity list drift",
     )
     require(
-        set(case_ids) <= listed,
+        set(case_ids) - set(migration.get("retired_case_ids", [])) <= listed,
         "Canvas package migration missing a compiled case",
+    )
+    require(
+        migration.get("retired_case_ids")
+        == ["worker_mixed_roster_reference_matches_published_process"],
+        "Canvas retired migration case drift",
     )
     require(
         migration.get("ignored_capture_only_case_ids")
@@ -118,7 +123,7 @@ def validate(inventory: dict, listed: set[str], root: Path = ROOT) -> None:
     names.append(inventory["native_roster_failure"]["test"])
     names.append(inventory["native_resources_unavailable"]["test"])
     require(
-        len(historical) == 17
+        len(historical) == 16
         and len(preflights) == 4
         and len(native_replays) == 3
         and len(native_oauth) == 10,

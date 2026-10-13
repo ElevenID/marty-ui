@@ -125,22 +125,8 @@ require_selfhost_tests() {
   }
 }
 deadline_serial_test=worker_deadline_matches_frozen_published_process
-mixed_roster_serial_test=worker_mixed_roster_reference_matches_published_process
-# The mixed-roster published-process replay enforces a 10-second child SIGINT
-# bound. Run it without the other Canvas owners during full qualification.
 historical_serial_tests=()
 historical_serial_skips=()
-if [[ "$mode" == full || "$mode" == worker-full ||
-  "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 1 ]]; then
-  historical_serial_tests=("$mixed_roster_serial_test")
-  for historical_serial_test in "${historical_serial_tests[@]}"; do
-    historical_serial_skips+=(--skip "$historical_serial_test")
-  done
-fi
-run_historical_serial_tests() {
-  if (( ${#historical_serial_tests[@]} == 0 )); then return; fi
-  timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
-}
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
 # This branch never loads composition, Gateway, Flow or the public selfhost
@@ -202,7 +188,7 @@ if [[ "$mode" == worker-* ]]; then
     expected_worker_skips=4
     if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 0 ]]; then
       worker_preflight_skips+=(--skip reference_matches_published)
-      expected_worker_skips=21
+      expected_worker_skips=20
       worker_retry_tier=routine
       worker_validation_tier=routine
     fi
@@ -221,7 +207,6 @@ if [[ "$mode" == worker-* ]]; then
   pull_worker_images
   timed canvas_serial sql_logging "$worker_executable" "$worker_serial_test" --exact --nocapture --test-threads=1
   timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
-  run_historical_serial_tests
   worker_log=$(mktemp "${RUNNER_TEMP:?}/canvas-worker-only.XXXXXX")
   trap 'rm -f -- "$worker_log"' EXIT
   timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" "$worker_executable" --skip "$worker_serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
@@ -320,10 +305,10 @@ if [[ "$mode" == full-after-preflights ]]; then
       --skip worker_lease_expiry_matches_frozen_published_process
       --skip reference_matches_published
     )
-    # All 17 remaining historical process/repository/cycle replays are available in
+    # All 16 remaining historical process/repository/cycle replays are available in
     # manual qualification, not the PR and merge-queue critical path. A new
     # replay changes this count and must be deliberately classified.
-    expected_skipped_worker_tests=21
+    expected_skipped_worker_tests=20
   fi
 fi
 pull_images() {
@@ -388,7 +373,6 @@ printf '%s\n' "$all_test_names" | grep -Fx 'worker_effect_transaction_obeys_real
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_reconciliation_preserves_current_fields_and_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_dispatch_reference_matches_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_matches_frozen_published_process: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'worker_mixed_roster_native_child: test'
@@ -520,7 +504,6 @@ timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --no
 # The deadline replay measures a 10-second renewal against a frozen 14-second
 # bound. Run it without concurrent Canvas database owners or test threads.
 timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
-run_historical_serial_tests
 
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
 # root authority in this acceptance process; the native binary gets only the

@@ -20,18 +20,18 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
-MIGRATED_CASES = json.loads(
+MIGRATION = json.loads(
     (ROOT / "contracts/canvas-worker-package-migration.json").read_text(
         encoding="utf-8"
     )
-)["case_ids"]
+)
+MIGRATED_CASES = set(MIGRATION["case_ids"]) - set(MIGRATION["retired_case_ids"])
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
 BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
 LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
 DEADLINE_TARGET = "worker_deadline_matches_frozen_published_process"
-MIXED_ROSTER_REFERENCE = "worker_mixed_roster_reference_matches_published_process"
-HISTORICAL_SERIAL = (MIXED_ROSTER_REFERENCE,)
+HISTORICAL_SERIAL = ()
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
@@ -87,43 +87,43 @@ PINS = [
     "postgres@sha256:" + "a" * 64,
     "registry.invalid/issuance@sha256:" + "b" * 64,
 ]
-MANDATORY_REGISTRATION_COUNT = 149
+MANDATORY_REGISTRATION_COUNT = 148
 MANDATORY_REGISTRATION_SHA256 = (
-    "a28b242a5868fcac773121433c4b30a1e9575dafa68bf7ad75ee4ea0189261cb"
+    "48e7ffaf8ef52c4782eaa05277f199c37511f16b5f2ce6f3a9b215ae3481bf2e"
 )
 RENDERED_CONFIG = (
     "rendered_base_process::"
     "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
 )
-CURRENT_REGISTRATION_COUNT = 150
+CURRENT_REGISTRATION_COUNT = 149
 CURRENT_REGISTRATION_SHA256 = (
-    "8569b04acaf09a6206b99aa1922104ecfe37ad22cc16e1beda632615ed55642a"
+    "fd846cb38fbbaa6729f41dfd121e4851f8c56e431465a6202b9ea1be8a8f02d7"
 )
 PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
-NEW_REGISTRATION_COUNT = 151
+NEW_REGISTRATION_COUNT = 150
 NEW_REGISTRATION_SHA256 = (
-    "9a377b25c50ea1deb399a56de3bde42f1e2665c850ad5f674364258cc4f3942f"
+    "76133d73ea747b04265f53a2d73229765a82a78d287d5d4c32ec6d462362e1c8"
 )
 K8S_RENDERED_CONFIG = (
     "resolved_kubernetes_runtime::"
     "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
 )
-PRE_ROSTER_REGISTRATION_COUNT = 152
+PRE_ROSTER_REGISTRATION_COUNT = 151
 PRE_ROSTER_REGISTRATION_SHA256 = (
-    "6db8f5ca4bf1e50dc97ff4a7b927ee477009867c8ca87b6674c8dd5167238b89"
+    "e25ebe369084c89569b9d3a7fce6cc46f3dbee269972455dfef0894130b8a9cf"
 )
 ROSTER_EXPIRY_TESTS = (
     "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
     "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
 )
 RENDERER_BOUNDS = "rendered_base_process::renderer_bounds_proof_is_image_free"
-LATEST_REGISTRATION_COUNT = 155
+LATEST_REGISTRATION_COUNT = 154
 LATEST_REGISTRATION_SHA256 = (
-    "53424925027bc7f829d679bbfcc3d2b0ae1077939e5d0b6609e52169c08c8d5f"
+    "d1a4c06ffa76d784113e283d1a4f0059cbcb3dcd96305b2f02455afcf1316832"
 )
-PRE_RENDERER_REGISTRATION_COUNT = 154
+PRE_RENDERER_REGISTRATION_COUNT = 153
 PRE_RENDERER_REGISTRATION_SHA256 = (
-    "f906fbd6b6032660a9a385b770f100ee443a6397295f3133acd25de44289e0de"
+    "0019ba0be2fb27534d4986d9c054c22ab32051555998affa3eaca174a84f4b0c"
 )
 
 
@@ -220,12 +220,8 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     deadline_serial = '"$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1'
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
-    assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
-    assert 'historical_serial_tests=("$mixed_roster_serial_test")' in script
-    assert (
-        'timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
-        in script
-    )
+    assert "run_historical_serial_tests" not in script
+    assert "mixed_roster_reference" not in script
     assert (
         sum(
             line.strip() == "timed canvas_serial json_consumer env " + scoped_kms + json_serial
@@ -1304,7 +1300,8 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:12] == [
+    serial_prefix = 11 + len(HISTORICAL_SERIAL)
+    assert children[:serial_prefix] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
@@ -1354,7 +1351,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[12:]) == sorted(
+    assert sorted(children[serial_prefix:]) == sorted(
         [
             [
                 "child",
@@ -1465,7 +1462,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert any(
         call[:2] == ["child", "worker-contract"]
         and "--test-threads=4" in call
-        and call.count("--skip") == 3
+        and call.count("--skip") == 2 + len(HISTORICAL_SERIAL)
         for call in calls
     )
 

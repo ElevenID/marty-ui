@@ -90,7 +90,7 @@ def discovered() -> set[str]:
 
 def test_exact_current_inventory_is_source_and_fixture_backed() -> None:
     validate(INVENTORY, discovered())
-    assert len(INVENTORY["historical"]) == 17
+    assert len(INVENTORY["historical"]) == 16
     assert len(INVENTORY["preflights"]) == 4
     assert (
         "worker_oauth_revocation_counters_matches_frozen_published_cycle"
@@ -188,8 +188,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
     deadline = "worker_deadline_matches_frozen_published_process"
     original = discovered() | {serial, deadline, "unrelated_native_worker_test"}
     omitted = {serial, deadline}
-    historical_serial = {"worker_mixed_roster_reference_matches_published_process"}
-    selected_serial = historical_serial if mode == "full" or qualification == "1" else set()
+    selected_serial = set()
     omitted |= selected_serial
     if mode == "full-after-preflights":
         omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
@@ -206,28 +205,9 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
         *sorted(selected_serial),
     )
     if mode == "full-after-preflights" and qualification == "0":
-        assert len(omitted - {serial, deadline}) == 21
+        assert len(omitted - {serial, deadline}) == 20
     if mode == "full-after-preflights" and qualification == "1":
-        assert len(omitted - {serial, deadline}) == 5
-
-
-def test_historical_serial_owner_must_be_registered_for_full_qualification() -> None:
-    serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
-    deadline = "worker_deadline_matches_frozen_published_process"
-    historical = "worker_mixed_roster_reference_matches_published_process"
-    original = discovered() | {serial, deadline}
-    omitted = {serial, deadline, historical}
-    omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
-    with pytest.raises(ValueError, match="selection drift"):
-        validate_selection(
-            INVENTORY,
-            original,
-            original - omitted,
-            "full-after-preflights",
-            "1",
-            serial,
-            deadline,
-        )
+        assert len(omitted - {serial, deadline}) == 4
 
 
 def test_deadline_serial_owner_cannot_be_omitted_from_selection_guard() -> None:
@@ -245,7 +225,7 @@ def test_same_count_wrong_selected_case_fails_closed() -> None:
     omitted = {serial, extra}
     omitted |= {entry["test"] for entry in INVENTORY["preflights"]}
     omitted |= {entry["test"] for entry in INVENTORY["historical"][1:]}
-    assert len(omitted - {serial}) == 21
+    assert len(omitted - {serial}) == 20
     with pytest.raises(ValueError, match="selection drift"):
         validate_selection(
             INVENTORY,

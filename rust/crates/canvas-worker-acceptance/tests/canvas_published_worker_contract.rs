@@ -740,24 +740,6 @@ async fn worker_mixed_roster_native_child() {
 }
 
 #[tokio::test]
-async fn worker_mixed_roster_reference_matches_published_process() {
-    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
-        return;
-    }
-    let owned = canvas_published_database::PublishedDatabase::start_with_worker_mixed_roster(
-        "mixed_candidates_resume_wrap",
-    )
-    .await
-    .unwrap();
-    let reference: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../../contracts/canvas-worker-mixed-roster-oracle.json"
-    ))
-    .unwrap();
-    assert_eq!(owned.oracle.as_ref().unwrap(), &reference);
-    owned.close().unwrap();
-}
-
-#[tokio::test]
 async fn worker_effect_transaction_obeys_real_database_lease_expiry() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         return;

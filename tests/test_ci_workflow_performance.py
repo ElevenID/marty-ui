@@ -3822,7 +3822,6 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "worker_body_timeout_native_child",
         "worker_timeout_matches_frozen_published_process",
         "worker_timeout_native_child",
-        "worker_mixed_roster_reference_matches_published_process",
         "worker_mixed_roster_matches_frozen_published_process",
         "worker_mixed_roster_native_child",
         "worker_provider_completion_reference_matches_published_process",
