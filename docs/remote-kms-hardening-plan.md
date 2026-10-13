@@ -17928,3 +17928,20 @@ private-key/key-material names. This is a source-built local product proof,
 not signed release qualification. The harness follow-up branch and UI release
 workflow pin still need review, grouped PRs, hosted CI and signed artifact
 publication before installed/cutover/recovery acceptance can be claimed.
+
+2026-10-13 grouped integration harness PR: local full-stack proof prompted a
+single follow-up integration commit `0e45d4d22c50152bcd53124e7e00bc0155bb9947`
+and [marty-integration-tests #435](https://github.com/ElevenID/marty-integration-tests/pull/435).
+It prepares v1.2.86, removes the obsolete `marty-common` wheel requirement
+only for current four-image Rust stacks, binds the signed OpenBao plugin
+image, provisions disposable scoped HMAC signing grants and TLS, and uses a
+pinned network-only Python probe rather than assuming the signed migrations
+image contains Python. The historical official three-image workflows retain
+their explicit exception. Self-review corrected three old Compose test
+expectations that still demanded a plaintext integration-secret master key or
+omitted the new fourth image. The full integration unit suite passed 1,020
+tests with two skipped; all eight local public-stack cases passed against the
+source-built migrations image plus exact signed UI/services/OpenBao digests.
+Compose config and shell syntax passed. PR #435 is open and its hosted CI,
+protected merge and signed release are pending. Do not pin v1.2.86 in UI until
+its protected signed source archive and provenance are verified.
