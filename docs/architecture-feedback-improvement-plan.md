@@ -4031,7 +4031,10 @@ then merged as `14809afc1`. The PR release-contract job took 11m15s and the
 protected CI workflow took 30m45s under different validation scopes. Neither
 duration is a speedup claim. The missing authenticated read has a separately
 reviewed runtime fix in [#1307](https://github.com/ElevenID/marty-ui/pull/1307),
-which still requires protected validation before promotion.
+which passed exact-head and full protected
+[CI](https://github.com/ElevenID/marty-ui/actions/runs/38336427543) and merged as
+`5ee6a84a1` at 02:53:55 UTC. The protected CI workflow ran from 02:20:37 to
+02:53:29 UTC (32m52s); this is qualification time, not a speedup claim.
 
 October 13 A6 planner-document PR fast-path candidate (local):
 `docs/architecture-test-obligations.md` records diagnostic test ownership but
@@ -4046,7 +4049,7 @@ combined-head checks remain full. The exact classifier regression and full
 no P1-P3 issue. Hosted before/after timing and merge validation are pending;
 no saving is claimed.
 
-October 13 runtime follow-up (local, not yet merged): Issuance now reads
+October 13 runtime follow-up (merged in #1307): Issuance now reads
 `/internal/revocation-profiles/{profile_id}/issuance-context` with the existing
 internal service token. Revocation Profile requires that token even when its
 internal auth configuration is absent and returns only profile ID, organization
@@ -4055,8 +4058,9 @@ tests cover unconfigured/missing/wrong tokens, public-route isolation, correct
 internal response, no credential-template token forwarding, and same-/cross-org
 readiness. Package-scoped Rust checks and focused tests passed; independent
 review found no P1-P3 issue. The A3 planner evidence and its focused test now
-match the corrected runtime behavior (54 passed, one existing skip). Hosted PR and protected-gate validation are
-still required; no duration improvement is claimed.
+match the corrected runtime behavior (54 passed, one existing skip). Hosted
+exact-head and protected-gate validation passed before merge; no duration
+improvement is claimed.
 
 ## Design references
 
