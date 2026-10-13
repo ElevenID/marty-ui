@@ -18223,3 +18223,10 @@ was started at the same exact SHA; it is pending at this checkpoint. The
 concurrent prior-main full CI run `38442315487` is for `77ad373406` and cannot
 qualify the corrected main. Wait for the exact-head full run before making a
 new no-write claim.
+
+2026-10-13 external acceptance access: the maintainer confirmed that real
+AWS, Azure and GCP provider access and a physical wallet/device test context
+are not provisioned yet. Keep K6 and the physical-device portion of K8/K9
+open; local adapters, mocks and disposable OpenBao do not satisfy those
+acceptance gates. Continue independent exact-release and installed-stack
+qualification while access is arranged.
