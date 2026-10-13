@@ -17664,3 +17664,19 @@ its isolated database-contract step, and the OpenBao DIDComm plugin lane
 remains in coordinated PostgreSQL/Raft recovery; neither has reported a
 failure or completed. No source/merge/full-main success or release claim is
 asserted yet. Git tag and GitHub release `v1.1.245` were still absent.
+
+2026-10-13 UI #1315 source-head CI outcome: run `38374343103` attempt 1
+failed the Canvas job and CI Gate on `ceb4230c16be165a0979bd7ac7ae3b9cee36cf7b`.
+The current Rust mixed-roster preflight passed; the historical pinned
+mixed-roster oracle was not the reported failure. The sole Canvas test
+failure was `renewal_packaged_main_recovers_historical_keyed_offer`:
+its packaged issuance child never returned the expected healthy `/health`
+response, yielding `None` at `renewal_main_replay.rs:115`. The test
+suppresses child stderr, so attempt 1 does not distinguish process exit,
+configuration failure, port collision or slow startup. Other Canvas target
+tests and OpenBao coordinated recovery passed. Attempt 2 failed-job rerun
+was already in progress when checked; do not start a duplicate run or claim
+the PR green before that attempt completes. If it repeats, inspect or
+improve owned child diagnostics and KMS fixture readiness locally before
+another hosted run; do not weaken KMS-only startup or drop the recovery
+assertions to clear CI.
