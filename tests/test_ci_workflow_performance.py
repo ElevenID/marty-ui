@@ -3578,8 +3578,12 @@ def _assert_required_canvas_target_completion(published: str) -> None:
         "if (( expected_skipped_config_tests == 0 )); then"
     )
     assert 'run-canvas-config-proofs.py" verify "$composition_executable"' in published
-    assert 'flow_tests=$("$flow_executable" --list)' in published
-    assert "Flow executable changed its exact nine-case owner inventory" in published
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable")' in published
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'flow_tests=$("$1" --list)' in flow_inventory
+    assert "Flow executable changed its exact nine-case owner inventory" in flow_inventory
     assert 'report_target_timing flow "$flow_started" "$flow_status" "$flow_end"' in published
     assert (
         published.count("grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1'") == 2
@@ -3848,10 +3852,10 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         "grep -Fx 'didcomm_fresh_http_admission_composes_reservation_and_delivery: test'"
         in published
     )
-    assert (
-        "'didcomm_http_admission_recovers_real_keyed_reservation: test'"
-        in published
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
     )
+    assert "'didcomm_http_admission_recovers_real_keyed_reservation: test'" in flow_inventory
     assert (
         "grep -Fx 'didcomm_fresh_gateway_admission_preserves_public_projection_without_legacy_fallback: test'"
         in published
@@ -3862,15 +3866,15 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         "'didcomm_flow_grpc_provider_preserves_keyed_admission: test'"
-        in published
+        in flow_inventory
     )
     assert (
         "'flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http: test'"
-        in published
+        in flow_inventory
     )
     assert (
         "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
-        in published
+        in flow_inventory
     )
     assert (
         "grep -Fx 'didcomm_unkeyed_grpc_initiation_composes_real_delivery: test'"

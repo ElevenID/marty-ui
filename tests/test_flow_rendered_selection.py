@@ -147,7 +147,9 @@ def test_actual_loader_factory_and_mandatory_gate_are_registered():
     assert ".env_clear()" in source
     assert "GrpcIssuanceProvider::new" not in source
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     assert (
         "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
-        in script
+        in inventory
     )

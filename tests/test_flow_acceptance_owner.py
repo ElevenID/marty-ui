@@ -32,15 +32,15 @@ def test_flow_cases_have_one_required_source_and_runner_owner():
     for name in FLOW_OUTER:
         assert len(re.findall(rf"async fn {name}\(\)", flow_source)) == 1
         assert f"async fn {name}()" not in canvas_source
-        assert runner.count(f"'{name}: test'") == 1
+        assert runner.count(f"'{name}: test'") == 0
         assert flow_inventory.count(f"'{name}: test'") == 1
     for name in FLOW_NESTED:
         assert len(re.findall(rf"(?:async )?fn {name}\(\)", nested_source)) == 1
-        assert runner.count(f"public_startup::{name}: test'") == 1
+        assert runner.count(f"public_startup::{name}: test'") == 0
         assert flow_inventory.count(f"public_startup::{name}: test'") == 1
-    assert 'flow_tests=$("$flow_executable" --list)' in runner
+    assert 'flow_tests=$(bash "$(dirname "${BASH_SOURCE[0]}")/list-flow-acceptance-cases.sh" "$flow_executable")' in runner
     assert '"$flow_executable" --nocapture --test-threads=4' in runner
-    assert "Flow executable changed its exact nine-case owner inventory" in runner
+    assert "Flow executable changed its exact nine-case owner inventory" in flow_inventory
     assert "flow_status == 0" in runner
     flow_only = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
     assert "list-flow-acceptance-cases.sh" in flow_only
