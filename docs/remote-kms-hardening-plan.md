@@ -17946,6 +17946,22 @@ Compose config and shell syntax passed. PR #435 is open and its hosted CI,
 protected merge and signed release are pending. Do not pin v1.2.86 in UI until
 its protected signed source archive and provenance are verified.
 
+2026-10-13 integration #435 self-review correction: the first hosted head
+passed all CI checks but review found two substantive gaps. The default
+`python_artifact_map` requirement still broke current four-image callers in
+official release/binding checks, and disposable nonrenewable grants expired
+after one hour although supported official lanes can run three hours. Commit
+`3f2cc53` derives wheel requirements from the manifest for every caller,
+validates the OpenBao plugin image and optional historical wheel in official
+stack environment binding, and gives narrowly scoped disposable grants a
+four-hour lifetime. The historical three-image lane still requires its wheel.
+On this corrected head, 1,021 unit tests passed with two skipped; all eight
+public-stack cases passed after regenerating the scoped grants in the live
+local project; the four-image manifest renderer, Ruff, Compose, shell syntax
+and diff checks passed. The corrected PR head is pushed; its new hosted CI
+and security review remain pending. Do not merge based on the prior green
+head alone.
+
 2026-10-13 UI integration with protected main: upstream UI #1317 merged as
 `e07d667bc4e74d4b1f1e647adba402899a648e7a` while the broad KMS release
 fix was local. It correctly adopted schema-v3 qualification but shortened the
