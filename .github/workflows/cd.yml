@@ -864,6 +864,30 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
+      - name: Resolve the release-locked Core acceptance producer
+        id: core-producer
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(jq -er '.components[] | select(.name == "marty-core-python" and .repository == "ElevenID/marty-core") | .commit' marty-ui/release/stack-lock.json)"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ElevenID/marty-core
+          ref: ${{ steps.core-producer.outputs.commit }}
+          path: core-producer
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Build the non-publishable KMS and wallet input producer
+        working-directory: core-producer
+        shell: bash
+        run: >-
+          cargo build --locked --release -p marty-test-wallet
+          --bin marty-kms-positive-verifier-input
+          --bin marty-test-signer-agent
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-integration-source-${{ github.run_id }}
@@ -944,9 +968,17 @@ jobs:
           python scripts/credentials_verifier_artifact.py run \
             --pin config/credentials-verifier-oracle.json --provenance-verified \
             --evidence work/evidence/oracle.json
-          python scripts/credentials_verifier_artifact.py run-transaction \
-            --pin work/transaction-pin.json --provenance-verified \
-            --evidence work/evidence/transaction.json
+          infra=../marty-ui/deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python ../marty-ui/scripts/with_disposable_verifier_kms.py \
+            --openbao-image "$openbao_image" \
+            --producer "$GITHUB_WORKSPACE/core-producer/target/release/marty-kms-positive-verifier-input" \
+            --agent "$GITHUB_WORKSPACE/core-producer/target/release/marty-test-signer-agent" \
+            --evidence-output work/evidence/verifier-kms-fixture.json \
+            -- python scripts/credentials_verifier_artifact.py run-transaction \
+              --pin work/transaction-pin.json --provenance-verified \
+              --evidence work/evidence/transaction.json
           python scripts/credentials_verifier_artifact.py compare-transaction-evidence \
             --oracle work/evidence/oracle.json \
             --transaction work/evidence/transaction.json \
@@ -961,7 +993,9 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
-          path: integration-tests/work/evidence/verifier-differential.json
+          path: |
+            integration-tests/work/evidence/verifier-differential.json
+            integration-tests/work/evidence/verifier-kms-fixture.json
           if-no-files-found: error
           retention-days: 90
 

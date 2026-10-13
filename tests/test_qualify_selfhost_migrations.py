@@ -172,6 +172,23 @@ def test_verify_only_rejects_incorrect_packaged_behavior(
         verify_rust_database_probe(["docker", "compose"], {}, run)
 
 
+def test_verify_only_recovers_from_one_fresh_docker_network_drop() -> None:
+    positive_attempts = 0
+
+    def run(args: list[str], environment: dict[str, str], timeout: int = 90
+            ) -> subprocess.CompletedProcess[str]:
+        nonlocal positive_attempts
+        if args[-1:] == [VERIFY_ONLY_CATALOG_QUERY]:
+            return result(args, "0\n")
+        if args[-1].endswith("--verify-only") and "/bin/sh" in args:
+            positive_attempts += 1
+            return result(args, status=1 if positive_attempts == 1 else 0)
+        return result(args, status=1)
+
+    verify_rust_database_probe(["docker", "compose"], {}, run)
+    assert positive_attempts == 2
+
+
 def test_rejects_mutable_or_foreign_image() -> None:
     validate_images(IMAGES)
     for role, bad in (
