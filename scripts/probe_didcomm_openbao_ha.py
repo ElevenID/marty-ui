@@ -160,8 +160,15 @@ def run() -> None:
                 "OpenBao listener",
                 lambda base=base: request(base, "GET", "sys/health")[0] in (501, 503),
             )
+        # Init can take longer on a cold CI runner; do not retry a timed-out
+        # init because the server may have committed it before the response.
         initialized = require_status(
-            bases[0], "PUT", "sys/init", "", {"secret_shares": 1, "secret_threshold": 1}
+            bases[0],
+            "PUT",
+            "sys/init",
+            "",
+            {"secret_shares": 1, "secret_threshold": 1},
+            timeout=30,
         )
         unseal_key = initialized["keys"][0]
         root = initialized["root_token"]

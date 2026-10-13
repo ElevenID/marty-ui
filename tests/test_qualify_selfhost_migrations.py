@@ -44,7 +44,7 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                                          "POSTGRES_USER": "marty",
                                          "POSTGRES_PASSWORD_FILE":
                                              "/run/secrets/marty_db_password"},
-                         "healthcheck": {"test": ["CMD-SHELL", "pg_isready -U marty -d marty"],
+                         "healthcheck": {"test": ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U marty -d marty"],
                                          "interval": "2s", "retries": 30},
                          "secrets": [{"source": "marty_db_password",
                                       "target": "/run/secrets/marty_db_password"}]},
@@ -233,6 +233,19 @@ def test_model_rejects_profile_network_port_or_secret_escape(tmp_path: Path) -> 
         edit(changed)
         with pytest.raises(QualificationError):
             validate_model(changed, IMAGES, tmp_path, PROJECT)
+
+
+def test_postgres_readiness_rejects_socket_only_initialization_server(
+    tmp_path: Path,
+) -> None:
+    source = model(tmp_path)
+    validate_model(source, IMAGES, tmp_path, PROJECT)
+    socket_only = deepcopy(source)
+    socket_only["services"]["postgres"]["healthcheck"]["test"] = [
+        "CMD-SHELL", "pg_isready -U marty -d marty",
+    ]
+    with pytest.raises(QualificationError, match="dependency wiring changed"):
+        validate_model(socket_only, IMAGES, tmp_path, PROJECT)
 
 
 def test_migration_entrypoint_requires_native_notification_completion() -> None:
