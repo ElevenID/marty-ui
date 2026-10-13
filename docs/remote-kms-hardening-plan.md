@@ -17776,3 +17776,26 @@ but is not the failing subject. The failing release step operates on the
 native services image and needs fresh KMS/wallet input from the preserved
 Core producer. The release workflow must provision and bind that input,
 then repeat local exact-image proof before a new hosted release attempt.
+
+2026-10-13 release-fix continuation: integration harness PR
+`ElevenID/marty-integration-tests#433` is open at `ea8544c`. It requires
+four images for current releases, reconciles the public-only Core verifier
+producer, and retires the historical published-Rust transaction runtime lane
+that cannot supply the new KMS input. The two official historical three-image
+workflow pins retain only an explicit test-harness exception. Its first CI
+head exposed that obsolete lane; the corrective head has 12 completed
+successful checks, one skipped and one neutral, with two still running at the
+latest poll. The full local integration unit suite passed 1,019 tests with
+two skips before that correction; the focused post-correction selection
+passed 304 with two skips. UI release-fix commits `71ba36eb9` and
+`b6ab6396a` remain local and unpushed. The latter provisions a disposable
+TLS OpenBao with separate scoped, non-exportable issuer and holder keys,
+starts the Core test signer agents, and feeds public KMS-issued input to the
+exact signed services image. The local positive gate passed all eight checks;
+tampered issuer signature and private-JWK negative probes rejected, as did
+empty stdin. The exact-image fresh schema probe passed twice locally. These
+are local proofs, not hosted or installed acceptance. Next: finish #433 CI
+and protected merge, release and pin the corrected harness, review and land
+the broad UI release-fix PR, repeat exact-image hosted qualification and
+protected publication, then run installed KMS-only provider/device, clean
+database and cutover/recovery acceptance. Keep the goal active.
