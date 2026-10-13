@@ -18213,3 +18213,13 @@ The corrected PR was explicitly enqueued through GitHub's protected merge
 queue after all exact-head checks passed; it entered at position 2. Do not
 dispatch exact-main full CI until its queued merge commit becomes protected
 `main`.
+
+2026-10-13 protected UI release correction: #1321 merged through the queue as
+`4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` after all five merge-group
+workflows passed, including full CI `38440249980`, isolated Canvas databases,
+OpenBao plugin and coordinated PostgreSQL/Raft recovery. Protected `main`
+matched that SHA. A fresh full `ci.yml` workflow-dispatch run `38444511880`
+was started at the same exact SHA; it is pending at this checkpoint. The
+concurrent prior-main full CI run `38442315487` is for `77ad373406` and cannot
+qualify the corrected main. Wait for the exact-head full run before making a
+new no-write claim.
