@@ -1019,9 +1019,10 @@ jobs:
             --redis-image "$redis_image" \
             --openbao-image "$openbao_image" > native-schema.json
           jq -e --arg migrations "$migrations_image" --arg services "$services_image" '
-            .schema == "marty.selfhost-migrations-qualification/v2" and
+            .schema == "marty.selfhost-migrations-qualification/v3" and
             .migrations_image == $migrations and .services_image == $services and
             .native_schemas == "verified" and .private_key_storage == "absent" and
+            .verify_only_database == "reachable-unreachable-malformed-read-only" and
             .profile == "selfhost-production" and .runs == "2"
           ' native-schema.json >/dev/null
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
