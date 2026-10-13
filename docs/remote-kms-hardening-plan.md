@@ -18129,3 +18129,17 @@ environment variable configured. This does not prove that hosted or user-held
 provider access is unavailable; it does mean the current local machine cannot
 run real AWS/Azure/GCP BYOK acceptance yet. Keep K6 open and obtain a scoped
 real-provider execution context after the signed installed stack is qualified.
+
+2026-10-13 UI #1319 corrected-head qualification: all pull-request checks on
+`f3dd42f11453aaeb3a7d8e17ea5c4a1011fd8cea` passed, including CI Gate,
+CodeQL Actions/Rust, release contracts, service images, native Rust contracts,
+Canvas isolated database contracts and OpenBao plugin PostgreSQL/Raft recovery
+(CI run `38415379825`). The sole earlier automated review thread was resolved
+after rechecking the tenant standard-issuer default and its DSC-sorts-first
+Rust test. Branch protection then admitted #1319 to merge queue position 1.
+Synthetic merge-group head `e473ef4ef7c17ac91f95f96c6e38c7e55f75c481`
+is running required checks; protected merge is not yet complete. The failed
+`v1.1.245` claim on preceding main `218abd1e2` (run `38415199385`) explicitly
+reported missing exact-main full Canvas qualification. Once #1319 lands, run
+the manual full CI lane at its exact main SHA before a fresh claim; do not
+reuse the preceding claim's evidence.
