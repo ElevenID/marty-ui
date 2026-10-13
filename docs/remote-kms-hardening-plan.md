@@ -18052,3 +18052,9 @@ Signing Keys and release-evidence Clippy with warnings denied, Rust public-PEM
 positive/negative conversion, 48 Python release/workflow tests, Ruff and diff
 checks passed. The corrected PR head needs its own hosted CI/CodeQL and review
 evaluation; the prior head's checks do not qualify it.
+The protected v1.2.86 source archive was also extracted with the repository's
+bounded verified-source extractor. The current stack-lock plus four immutable
+OCI digests produced a validated eight-component manifest, and that exact
+released harness rendered seven immutable image bindings, including UI,
+services, migrations and OpenBao DIDComm. This validates release adapter
+structure, not candidate binaries or publication.
