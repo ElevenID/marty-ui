@@ -18263,3 +18263,16 @@ No release transaction or tag was created. A new exact-main full CI run
 `38454924907` was dispatched once to restore valid latest-run evidence;
 wait for it to pass before making a new claim. Preserve the failed claim as
 immutable evidence and do not relax the latest-run policy for this incident.
+
+2026-10-13 replacement full-CI attempt 1 result: run `38454924907` failed
+in the Canvas matrix after every other selected job passed, including OpenBao
+coordinated PostgreSQL/Raft recovery, native Rust contracts and release
+contracts. The sole failed Canvas subtest was
+`renewal_packaged_main_recovers_historical_keyed_offer`: its isolated packaged
+Issuance child did not answer `/health` within the test's short readiness
+window (`None` versus the expected healthy JSON). That same test passed on
+the identical protected-main SHA in run `38444511880`; no product-code change
+separates the attempts. Preserve this failed attempt and investigate any
+repeat as a real startup or fixture-timing issue. To avoid another full CI
+run, only failed jobs of `38454924907` were rerun as attempt 2; its result is
+pending. Do not claim from attempt 1.
