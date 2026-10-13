@@ -35,6 +35,22 @@ def test_checksum_manifest_rejects_duplicate_and_path_entries(tmp_path: Path) ->
             checksum_entries(checksums)
 
 
+def test_handoff_rejects_symlinked_checksum_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    for name in handoff.REQUIRED:
+        (tmp_path / name).write_bytes(b"")
+    checksum_path = tmp_path / "SHA256SUMS"
+    original_is_symlink = Path.is_symlink
+    monkeypatch.setattr(
+        Path,
+        "is_symlink",
+        lambda path: path == checksum_path or original_is_symlink(path),
+    )
+    with pytest.raises(ValueError, match="checksum manifest must not be a symlink"):
+        audit(tmp_path, "v1.2.3")
+
+
 def test_exact_asset_handoff_binds_both_transaction_stages(tmp_path: Path, monkeypatch) -> None:
     source = "b" * 40
     archive_digest = "a" * 64

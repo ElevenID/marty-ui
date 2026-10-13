@@ -60,7 +60,10 @@ def audit(directory: Path, tag: str) -> dict:
     missing = sorted(name for name in REQUIRED if not (directory / name).is_file())
     if missing:
         raise ValueError("public self-host handoff assets missing: " + ", ".join(missing))
-    checksums = checksum_entries(directory / "SHA256SUMS")
+    checksum_path = directory / "SHA256SUMS"
+    if checksum_path.is_symlink():
+        raise ValueError("release checksum manifest must not be a symlink")
+    checksums = checksum_entries(checksum_path)
     for name in sorted(REQUIRED - {"SHA256SUMS"}):
         path = directory / name
         if path.is_symlink() or checksums.get(name) != file_digest(path):
