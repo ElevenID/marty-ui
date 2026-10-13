@@ -346,9 +346,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             environment["PASSPORT_BUREAU_CALLBACK_URL"],
             witness["profile_callback_url"],
         )
-        gateway = compose["services"][witness["profile_gateway_service"]][
-            "environment"
-        ]
+        gateway = compose["services"][witness["profile_gateway_service"]]["environment"]
         self.assertEqual(gateway["PASSPORT_NATIVE_GATEWAY_ENABLED"], "true")
         self.assertEqual(gateway["PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED"], "false")
 
@@ -453,7 +451,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
         )
         ingress = profile["services"][witness["profile_consumer_service"]]
         signer = profile["services"][witness["profile_provider_service"]]
-        self.assertEqual(ingress["environment"]["PASSPORT_PROVIDER_INGRESS_ENABLED"], "true")
+        self.assertEqual(
+            ingress["environment"]["PASSPORT_PROVIDER_INGRESS_ENABLED"], "true"
+        )
         self.assertEqual(
             ingress["environment"]["PASSPORT_PROVIDER_SIGNER_URL"],
             witness["profile_signer_url"],
@@ -465,9 +465,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertEqual(
             signer["environment"]["SERVICE_NAME"], "passport_callback_signer_supported"
         )
-        self.assertIn(
-            witness["profile_provider_service"], ingress["depends_on"]
-        )
+        self.assertIn(witness["profile_provider_service"], ingress["depends_on"])
 
     def test_beta_bureau_has_a_distinct_callback_signer_witness(self) -> None:
         """Record the beta-only signer operation without narrowing CI."""
@@ -530,8 +528,12 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "true",
         )
         self.assertEqual(signer["environment"]["ENVIRONMENT"], "beta")
-        self.assertEqual(signer["environment"]["PASSPORT_CALLBACK_SIGNER_ENABLED"], "true")
-        self.assertEqual(signer["environment"]["SERVICE_NAME"], "passport_callback_signer")
+        self.assertEqual(
+            signer["environment"]["PASSPORT_CALLBACK_SIGNER_ENABLED"], "true"
+        )
+        self.assertEqual(
+            signer["environment"]["SERVICE_NAME"], "passport_callback_signer"
+        )
         self.assertIn(witness["profile_provider_service"], bureau["depends_on"])
         self.assertIn("passport-callback-signing", bureau["networks"])
         self.assertIn("passport-callback-signing", signer["networks"])
@@ -2123,7 +2125,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "async fn object(&self, endpoint: Option<Url>)",
                 "impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {",
             ),
-            "route": ("pub fn credential_template_router(", "async fn create_template("),
+            "route": (
+                "pub fn credential_template_router(",
+                "async fn create_template(",
+            ),
             "handler": (
                 "async fn get_internal_issuance_context(",
                 "async fn get_internal_credential_configurations(",
@@ -2135,7 +2140,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("readiness_binding", "evidence", "config"),
             ("readiness_startup_marker", "readiness_startup_evidence", "startup"),
             ("readiness_url_marker", "readiness_startup_evidence", "startup"),
-            ("readiness_registration_marker", "readiness_startup_evidence", "registration"),
+            (
+                "readiness_registration_marker",
+                "readiness_startup_evidence",
+                "registration",
+            ),
             ("readiness_callsite_marker", "readiness_request_evidence", "inputs"),
             ("readiness_object_marker", "readiness_request_evidence", "request"),
             ("readiness_base_marker", "readiness_request_evidence", "request"),
@@ -2143,9 +2152,21 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("readiness_get_marker", "readiness_request_evidence", "get"),
             ("readiness_response_marker", "readiness_request_evidence", "get"),
             ("readiness_provider_route_marker", "readiness_provider_evidence", "route"),
-            ("readiness_provider_method_marker", "readiness_provider_evidence", "route"),
-            ("readiness_provider_handler_marker", "readiness_provider_evidence", "handler"),
-            ("readiness_deployment_marker", "readiness_deployment_evidence", "base_compose"),
+            (
+                "readiness_provider_method_marker",
+                "readiness_provider_evidence",
+                "route",
+            ),
+            (
+                "readiness_provider_handler_marker",
+                "readiness_provider_evidence",
+                "handler",
+            ),
+            (
+                "readiness_deployment_marker",
+                "readiness_deployment_evidence",
+                "base_compose",
+            ),
             (
                 "readiness_deployment_marker",
                 "readiness_native_deployment_evidence",
@@ -2189,6 +2210,91 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     assert_markers(changed)
         self.assertNotIn(
             "marty-credential-template",
+            {dep["name"] for dep in packages["marty-issuance-service"]["dependencies"]},
+        )
+
+    def test_issuance_revocation_profile_http_consumer_is_shadow_only(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/revocation-profile/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-revocation-profile"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("binding") == 'values.get("REVOCATION_PROFILE_SERVICE_URL")'
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        for source_key, markers in (
+            ("evidence", ("binding",)),
+            (
+                "runtime_evidence",
+                ("readiness_runtime_marker", "lifecycle_runtime_marker"),
+            ),
+            (
+                "readiness_evidence",
+                ("readiness_request_marker", "readiness_send_marker"),
+            ),
+            (
+                "lifecycle_evidence",
+                ("allocation_marker", "revocation_marker", "lifecycle_send_marker"),
+            ),
+            (
+                "provider_evidence",
+                (
+                    "profile_route_marker",
+                    "allocation_route_marker",
+                    "revocation_route_marker",
+                ),
+            ),
+        ):
+            source = (ROOT / edge[source_key]).read_text(encoding="utf-8")
+            for marker in markers:
+                with self.subTest(source=source_key, marker=marker):
+                    self.assertIn(edge[marker], source)
+        runtime_source = (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8")
+        for constructor_marker in (
+            edge["readiness_runtime_marker"],
+            edge["lifecycle_runtime_marker"],
+        ):
+            with self.subTest(constructor=constructor_marker):
+                constructor_args = runtime_source.split(constructor_marker, 1)[1].split(
+                    ")?", 1
+                )[0]
+                self.assertIn(
+                    "config.revocation_profile_service_url.clone()", constructor_args
+                )
+        provider_source = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        for route_marker, handler in (
+            ("profile_route_marker", "get(get_profile)"),
+            ("allocation_route_marker", "post(reserve_index)"),
+            ("revocation_route_marker", "post(process_revocation)"),
+        ):
+            with self.subTest(route=route_marker):
+                route_body = provider_source.split(edge[route_marker], 1)[1].split(
+                    ".route(", 1
+                )[0]
+                self.assertIn(handler, route_body)
+        with (ROOT / edge["deployment_evidence"]).open(encoding="utf-8") as source:
+            compose = yaml.safe_load(source)
+        self.assertEqual(
+            compose["services"][edge["deployment_service"]]["environment"][
+                "REVOCATION_PROFILE_SERVICE_URL"
+            ],
+            "http://revocation-profile:8013",
+        )
+        self.assertIn(
+            edge["deployment_marker"],
+            (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8"),
+        )
+        self.assertNotIn(
+            "marty-revocation-profile",
             {dep["name"] for dep in packages["marty-issuance-service"]["dependencies"]},
         )
 
@@ -2254,6 +2360,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     for edge in result["observed_non_cargo_consumers"]
                     if edge["producer"] == producer
                     and edge["package"] == "marty-issuance-service"
+                    and edge.get("binding")
+                    != 'values.get("REVOCATION_PROFILE_SERVICE_URL")'
                 ]
                 self.assertEqual(len(edges), 1)
                 edge = edges[0]

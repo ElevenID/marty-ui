@@ -4009,6 +4009,19 @@ speedup claim. Any independent build or overlap still needs exact candidate
 image identity, resource-contention evidence, and free-tier cache/artifact
 limits.
 
+October 13 A0/A3 candidate: Revocation Profile has a second, non-Cargo
+consumer in Issuance beyond the already-recorded gRPC initiation validator.
+The native Issuance runtime passes `REVOCATION_PROFILE_SERVICE_URL` to its
+Canvas readiness document provider and credential lifecycle status allocator.
+Those clients request the provider's profile-read, reserve-index, and
+process-revocation HTTP routes; the default `issuance-native` Compose profile
+binds the URL. The new shadow edge records both client paths and all three
+provider routes without changing the selected Rust matrix. Local planner tests
+passed (54 tests, one existing skip, 481 subtests), and the broader CI workflow
+suite passed (148 tests); Ruff, format, and diff checks passed. Independent
+review found no P1-P3 issue. Hosted exact-head/protected validation is required
+before promotion; no feedback saving is claimed.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

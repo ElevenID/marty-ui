@@ -586,6 +586,31 @@ OBSERVED_NON_CARGO_CONSUMERS = {
     ],
     "marty-revocation-profile": [
         {
+            # Issuance also consumes Revocation Profile over HTTP: Canvas
+            # readiness reads a profile, while credential lifecycle reserves
+            # an index and publishes revocation through internal routes.
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/config.rs",
+            "binding": 'values.get("REVOCATION_PROFILE_SERVICE_URL")',
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "readiness_runtime_marker": "HttpCanvasReadinessDocumentProvider::new(",
+            "lifecycle_runtime_marker": "PostgresCredentialLifecycle::new(",
+            "readiness_evidence": "rust/services/issuance/src/canvas_readiness_runtime.rs",
+            "readiness_request_marker": '&["v1", "revocation-profiles", profile_id]',
+            "readiness_send_marker": "self.client.get(endpoint).send().await",
+            "lifecycle_evidence": "rust/services/issuance/src/credential_lifecycle.rs",
+            "allocation_marker": '"{}/internal/revocation-profiles/{profile_id}/reserve-index"',
+            "revocation_marker": '"{}/internal/revocation-profiles/{profile_id}/process-revocation"',
+            "lifecycle_send_marker": "request.send().await",
+            "provider_evidence": "rust/services/revocation-profile/src/http.rs",
+            "profile_route_marker": '"/v1/revocation-profiles/{profile_id}"',
+            "allocation_route_marker": '"/internal/revocation-profiles/{profile_id}/reserve-index"',
+            "revocation_route_marker": '"/internal/revocation-profiles/{profile_id}/process-revocation"',
+            "deployment_evidence": "docker-compose.profile.issuance-native.yml",
+            "deployment_service": "issuance-native",
+            "deployment_marker": "REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013",
+        },
+        {
             "package": "marty-issuance-service",
             "evidence": "rust/services/issuance/src/config.rs",
             "binding": "RP_GRPC_TARGET",
