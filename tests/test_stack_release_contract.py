@@ -858,6 +858,23 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
+def test_verifier_kms_producer_checkout_is_an_immutable_release_locked_commit() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    verifier = jobs["verifier-differential"]
+    lock = json.loads(_text("release/stack-lock.json"))
+    core = next(component for component in lock["components"]
+                if component["name"] == "marty-core-python")
+    checkout = next(step for step in verifier["steps"]
+                    if step.get("with", {}).get("repository") == "ElevenID/marty-core")
+    assert checkout["with"]["ref"] == core["commit"]
+    assert "${{" not in checkout["with"]["ref"]
+    assert checkout["with"]["persist-credentials"] is False
+    script = next(step["run"] for step in verifier["steps"]
+                  if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
+    assert "--jwk-tool" in script
+    assert "with_disposable_verifier_kms.py" in script
+
+
 def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     native = jobs["native-schema-image-qualification"]

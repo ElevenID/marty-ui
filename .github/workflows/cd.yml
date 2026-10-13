@@ -870,17 +870,17 @@ jobs:
           path: marty-ui
           persist-credentials: false
       - name: Resolve the release-locked Core acceptance producer
-        id: core-producer
         shell: bash
         run: |
           set -euo pipefail
           commit="$(jq -er '.components[] | select(.name == "marty-core-python" and .repository == "ElevenID/marty-core") | .commit' marty-ui/release/stack-lock.json)"
-          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
-          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          test "$commit" = f0819fa0a7783eaebc2efaa105908809244c75a4
+      # Keep the checkout ref literal. The preceding check binds it to the
+      # release lock without allowing lock content to select executable source.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ElevenID/marty-core
-          ref: ${{ steps.core-producer.outputs.commit }}
+          ref: f0819fa0a7783eaebc2efaa105908809244c75a4
           path: core-producer
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
@@ -893,6 +893,10 @@ jobs:
           cargo build --locked --release -p marty-test-wallet
           --bin marty-kms-positive-verifier-input
           --bin marty-test-signer-agent
+      - name: Build the Rust public-key fixture converter
+        working-directory: marty-ui/rust
+        shell: bash
+        run: cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-integration-source-${{ github.run_id }}
@@ -980,6 +984,7 @@ jobs:
             --openbao-image "$openbao_image" \
             --producer "$GITHUB_WORKSPACE/core-producer/target/release/marty-kms-positive-verifier-input" \
             --agent "$GITHUB_WORKSPACE/core-producer/target/release/marty-test-signer-agent" \
+            --jwk-tool "$GITHUB_WORKSPACE/marty-ui/rust/target/release/public-kms-jwk" \
             --evidence-output work/evidence/verifier-kms-fixture.json \
             -- python scripts/credentials_verifier_artifact.py run-transaction \
               --pin work/transaction-pin.json --provenance-verified \

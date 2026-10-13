@@ -1101,7 +1101,12 @@ impl RegistryStore {
             });
             services.insert(
                 0,
-                managed_openbao_service(endpoint, &managed_keys, inventory_complete),
+                managed_openbao_service(
+                    organization_id,
+                    endpoint,
+                    &managed_keys,
+                    inventory_complete,
+                ),
             );
         }
         let configured_default = requested_default.as_deref().is_some_and(|id| {
@@ -1314,14 +1319,28 @@ fn active_managed_profile_references(
     references
 }
 
-fn managed_openbao_service(endpoint: &str, keys: &[ManagedKey], inventory_complete: bool) -> Value {
+fn managed_openbao_service(
+    organization_id: &str,
+    endpoint: &str,
+    keys: &[ManagedKey],
+    inventory_complete: bool,
+) -> Value {
     let purposes = key_purposes()
         .into_iter()
         .map(|purpose| purpose.id)
         .collect::<Vec<_>>();
+    let standard_issuer = crate::bootstrap::tenant_standard_key_reference(
+        organization_id,
+        crate::bootstrap::STANDARD_ISSUER_ES256_KEY_ID,
+    );
     let default_reference = keys
         .iter()
-        .find(|key| !key.lti_only)
+        .find(|key| key.reference == standard_issuer && !key.lti_only)
+        .or_else(|| {
+            keys.iter()
+                .find(|key| key.reference.starts_with("cred-issuer-") && !key.lti_only)
+        })
+        .or_else(|| keys.iter().find(|key| !key.lti_only))
         .map(|key| key.reference.as_str())
         .unwrap_or_default();
     let references = keys
@@ -2400,7 +2419,7 @@ mod tests {
 
     #[test]
     fn managed_openbao_accepts_passport_profile_wire_format() {
-        let managed = managed_openbao_service("http://openbao:8200", &[], true);
+        let managed = managed_openbao_service("org-a", "http://openbao:8200", &[], true);
         assert!(managed["credential_formats"]
             .as_array()
             .unwrap()
@@ -2425,7 +2444,7 @@ mod tests {
                 lti_only: false,
             },
         ];
-        let service = managed_openbao_service("http://openbao:8200", &keys, true);
+        let service = managed_openbao_service("org-a", "http://openbao:8200", &keys, true);
         assert_eq!(service["key_reference"], "cred-issuer-2");
         assert_eq!(
             service["key_aliases"],
@@ -2436,8 +2455,46 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("EdDSA")));
-        let only_lti = managed_openbao_service("http://openbao:8200", &keys[..1], true);
+        let only_lti = managed_openbao_service("org-a", "http://openbao:8200", &keys[..1], true);
         assert_eq!(only_lti["key_reference"], "");
+    }
+
+    #[test]
+    fn managed_service_defaults_to_standard_issuer_even_when_dsc_sorts_first() {
+        let org = "00000000-0000-0000-0000-000000000001";
+        let issuer = crate::bootstrap::tenant_standard_key_reference(
+            org,
+            crate::bootstrap::STANDARD_ISSUER_ES256_KEY_ID,
+        );
+        let dsc = crate::bootstrap::tenant_standard_key_reference(org, "cred-dsc-marty-primary");
+        let keys = vec![
+            ManagedKey {
+                reference: dsc,
+                algorithm: "ES256".into(),
+                lti_only: false,
+            },
+            ManagedKey {
+                reference: issuer.clone(),
+                algorithm: "ES256".into(),
+                lti_only: false,
+            },
+        ];
+        let service = managed_openbao_service(org, "http://openbao:8200", &keys, true);
+        assert_eq!(service["key_reference"], issuer);
+        let resolved = resolve(ResolveRequest {
+            registry: json!({"key_reference_purposes": {}, "services": [service.clone()],
+                "default_service_id": MANAGED_OPENBAO_SERVICE_ID}),
+            service: Some(service),
+            keys: keys
+                .iter()
+                .map(|key| json!({"id": key.reference, "algorithm": key.algorithm}))
+                .collect(),
+            credential_format: None,
+            key_purpose: None,
+            algorithm: Some("ES256".into()),
+        })
+        .unwrap();
+        assert_eq!(resolved.key_reference.as_deref(), Some(issuer.as_str()));
     }
 
     #[test]
@@ -2608,7 +2665,7 @@ mod tests {
         assert!(!reads.contains(&revoked.to_owned()));
         assert!(!reads.contains(&deleted.to_owned()));
         assert!(reads.contains(&unsafe_key));
-        let service = managed_openbao_service(&endpoint, &keys, complete);
+        let service = managed_openbao_service("org-a", &endpoint, &keys, complete);
         assert_eq!(service["key_reference"], own);
         assert_eq!(service["key_count"], 2);
         assert_eq!(service["status"], "degraded");

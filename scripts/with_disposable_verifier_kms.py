@@ -22,10 +22,6 @@ import time
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPSHandler, ProxyHandler, Request, build_opener
 
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.hazmat.primitives.serialization import load_pem_public_key
-
-
 IMAGE = re.compile(r"(?:quay\.io/openbao/openbao)@sha256:[0-9a-f]{64}\Z")
 ISSUER_KID = "did:example:verifier-runtime-gate-issuer#key-1"
 HOLDER_KID = "did:example:runtime-gate-holder"
@@ -82,23 +78,29 @@ class Bao:
         return json.loads(payload) if payload else {}
 
 
-def public_jwk(pem: str, *, issuer: bool) -> dict[str, str]:
-    key = load_pem_public_key(pem.encode("ascii"))
-    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(
-        key.curve, ec.SECP256R1
-    ):
+def public_jwk(pem: str, tool: Path, *, issuer: bool) -> dict[str, str]:
+    try:
+        result = subprocess.run([str(tool)], input=pem, capture_output=True,
+                                text=True, timeout=10, check=False)
+        if result.returncode or len(result.stdout) > 16 * 1024:
+            raise FixtureError("Rust public-key conversion failed")
+        parsed = json.loads(result.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise FixtureError("Rust public-key conversion failed") from exc
+    if not isinstance(parsed, dict) or parsed.get("kty") != "EC" or parsed.get("crv") != "P-256":
         raise FixtureError("OpenBao returned a non-P-256 public key")
-    numbers = key.public_numbers()
-    def coordinate(value: int) -> str:
-        return base64.urlsafe_b64encode(value.to_bytes(32, "big")).rstrip(b"=").decode("ascii")
-    jwk = {"kty": "EC", "crv": "P-256", "x": coordinate(numbers.x),
-           "y": coordinate(numbers.y)}
+    try:
+        jwk = {name: parsed[name] for name in ("kty", "crv", "x", "y")}
+    except KeyError as exc:
+        raise FixtureError("OpenBao returned incomplete public coordinates") from exc
+    if any(not isinstance(value, str) or not value for value in jwk.values()):
+        raise FixtureError("OpenBao returned malformed public coordinates")
     if issuer:
         jwk.update({"kid": ISSUER_KID, "alg": "ES256"})
     return jwk
 
 
-def create_key(bao: Bao, name: str, *, issuer: bool) -> dict[str, str]:
+def create_key(bao: Bao, name: str, tool: Path, *, issuer: bool) -> dict[str, str]:
     bao.request("POST", f"transit/keys/{name}", {
         "type": "ecdsa-p256", "exportable": False, "allow_plaintext_backup": False,
     })
@@ -111,7 +113,7 @@ def create_key(bao: Bao, name: str, *, issuer: bool) -> dict[str, str]:
     pem = data.get("keys", {}).get(str(latest), {}).get("public_key")
     if not isinstance(pem, str):
         raise FixtureError("OpenBao public key is unavailable")
-    return public_jwk(pem, issuer=issuer)
+    return public_jwk(pem, tool, issuer=issuer)
 
 
 def scoped_token(bao: Bao, name: str) -> str:
@@ -171,12 +173,13 @@ def start_agent(binary: Path, environment: dict[str, str], endpoint: str) -> sub
     raise FixtureError("Core signer agent socket was not ready")
 
 
-def execute(openbao_image: str, producer: Path, agent: Path,
+def execute(openbao_image: str, producer: Path, agent: Path, jwk_tool: Path,
             command: list[str], evidence_output: Path | None = None) -> int:
     if not IMAGE.fullmatch(openbao_image):
         raise FixtureError("OpenBao fixture image must use the pinned upstream digest")
-    if not producer.is_absolute() or not producer.is_file() or not agent.is_absolute() or not agent.is_file():
-        raise FixtureError("Core fixture executables must be absolute files")
+    if any(not tool.is_absolute() or not tool.is_file()
+           for tool in (producer, agent, jwk_tool)):
+        raise FixtureError("Rust fixture executables must be absolute files")
     if not command:
         raise FixtureError("a verifier qualification command is required")
     if evidence_output is not None and evidence_output.exists():
@@ -218,8 +221,8 @@ def execute(openbao_image: str, producer: Path, agent: Path,
             bao.request("POST", "sys/mounts/transit", {"type": "transit"})
             issuer_name = "positive-issuer-" + secrets.token_hex(4)
             holder_name = "positive-holder-" + secrets.token_hex(4)
-            issuer_public = create_key(bao, issuer_name, issuer=True)
-            holder_public = create_key(bao, holder_name, issuer=False)
+            issuer_public = create_key(bao, issuer_name, jwk_tool, issuer=True)
+            holder_public = create_key(bao, holder_name, jwk_tool, issuer=False)
             issuer_token = scoped_token(bao, issuer_name)
             holder_token = scoped_token(bao, holder_name)
             require_cross_scope_denial(bao, issuer_token, holder_name)
@@ -296,12 +299,13 @@ def main() -> int:
     parser.add_argument("--openbao-image", required=True)
     parser.add_argument("--producer", type=Path, required=True)
     parser.add_argument("--agent", type=Path, required=True)
+    parser.add_argument("--jwk-tool", type=Path, required=True)
     parser.add_argument("--evidence-output", type=Path)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     try:
-        return execute(args.openbao_image, args.producer, args.agent,
+        return execute(args.openbao_image, args.producer, args.agent, args.jwk_tool,
                        command, args.evidence_output)
     except FixtureError as exc:
         parser.exit(1, f"Disposable KMS verifier fixture failed: {exc}\n")

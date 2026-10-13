@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::{documents, profiles, registry};
 
 pub const MANAGED_SERVICE_ID: &str = "managed-openbao-transit";
+pub const STANDARD_ISSUER_ES256_KEY_ID: &str = "cred-issuer-marty-es256";
 pub const FLOW_ENVELOPE_KEY: &str = "flow-response-envelope-marty-aes256";
 pub const NOTIFICATION_ENVELOPE_KEY: &str = "notification-webhook-envelope-marty-aes256";
 
@@ -37,7 +38,7 @@ pub struct KeySpec {
 
 pub const STANDARD_KEYS: &[KeySpec] = &[
     KeySpec {
-        id: "cred-issuer-marty-es256",
+        id: STANDARD_ISSUER_ES256_KEY_ID,
         name: "Marty ES256 issuer key",
         key_type: "ecdsa-p256",
         algorithm: "ES256",
