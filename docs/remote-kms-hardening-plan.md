@@ -18166,3 +18166,22 @@ and full CI `38425975502`. Stack release workflow run `38432681890` was
 dispatched from this claim on the same protected SHA and is in progress.
 Do not infer image qualification, promotion or KMS-only acceptance from the
 claim alone; inspect the transaction checkpoints and exact signed images.
+
+2026-10-13 exact-main release qualification result: stack-release run
+`38432681890` completed with failure before promotion or publication. Four
+candidate image digests were recorded and their hosted-runner attestations
+verified against protected main `e473ef4ef7c17ac91f95f96c6e38c7e55f75c481`.
+The native-schema-image-qualification job `115427407034` failed because its
+Rust migration verify-only probe could not reach the disposable database after
+three attempts. Running the same signed services and migrations images through
+the local disposable qualification passed twice; the hosted Linux-only failure
+needs diagnosis, including the readability of Compose file-backed secrets by
+the nonroot migration image. The verifier-differential job `115427406991`
+failed because its disposable OpenBao TLS endpoint did not become ready. Its
+frozen Credentials oracle reported `canonical.oid4vp-positive-runtime-not-exercised`,
+which is prior oracle evidence; the immediate job failure was the OpenBao
+fixture startup. Diagnose and locally replay both failures, batch corrections
+into a grouped PR, then rerun exact-main release qualification. The failed
+transaction and job logs are immutable evidence; no tag or GitHub release was
+published by this run. Real AWS/Azure/GCP BYOK, physical device/wallet, full
+installed/cutover/recovery and final clean-schema acceptance remain open.
