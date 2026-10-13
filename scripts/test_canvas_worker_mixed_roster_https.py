@@ -6,15 +6,15 @@ never changes a worker clock, schedule, job, lease or candidate row. The signer
 is a synthetic transport fixture, not remote-signing or crypto qualification.
 """
 
-from contextlib import ExitStack
 import copy
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+from contextlib import ExitStack
+from pathlib import Path
 
 from canvas_worker_mixed_roster_https_fixture import MixedRosterHttpsFixture
 
@@ -68,6 +68,12 @@ def assert_transport(fixture, observation):
     return actual
 
 
+def assert_grant_transport(fixture):
+    sign_count = fixture.signer_operations.count("sign_lti_tool_assertion")
+    assert fixture.grant_operations == ["mint_issuance_canvas"] * sign_count
+    assert len(fixture.grant_requests) == len(fixture.grant_inputs) == sign_count
+
+
 def wait_marker(child, path, timeout):
     deadline = time.monotonic() + timeout
     while not path.is_file():
@@ -92,6 +98,7 @@ def diagnostic_transport_counts(fixture, observations, stage_index):
     with (
         fixture.server.RequestHandlerClass.request_observation_lock,
         fixture.signer_server.RequestHandlerClass.request_observation_lock,
+        fixture.grant_server.RequestHandlerClass.request_observation_lock,
     ):
         counts = [
             f"{field} observed={len(getattr(fixture, field))} "
@@ -138,6 +145,10 @@ def run_case(executable, matrix, case, reference):
         environment.update(
             MARTY_CANVAS_WORKER_MIXED_ROSTER_NATIVE_ORIGIN=fixture.origin,
             MARTY_CANVAS_WORKER_MIXED_ROSTER_SIGNER_ORIGIN=fixture.signer_origin,
+            MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_ORIGIN=fixture.grant_origin,
+            MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_TOKEN_FILE=str(
+                fixture.grant_token_file
+            ),
             MARTY_CANVAS_WORKER_MIXED_ROSTER_CASE=case["name"],
             MARTY_CANVAS_WORKER_MIXED_ROSTER_CONTROL=str(control),
             SSL_CERT_FILE=str(fixture.cert),
@@ -166,9 +177,11 @@ def run_case(executable, matrix, case, reference):
                 with (
                     fixture.server.RequestHandlerClass.request_observation_lock,
                     fixture.signer_server.RequestHandlerClass.request_observation_lock,
+                    fixture.grant_server.RequestHandlerClass.request_observation_lock,
                 ):
                     if index:
                         assert_transport(fixture, observations[index - 1])
+                        assert_grant_transport(fixture)
                     else:
                         assert not fixture.failures
                         assert all(
@@ -183,6 +196,8 @@ def run_case(executable, matrix, case, reference):
                     remaining_timeout(deadline, STAGE_TIMEOUT_SECONDS),
                 )
                 snapshots.append(assert_transport(fixture, observation))
+                with fixture.grant_server.RequestHandlerClass.request_observation_lock:
+                    assert_grant_transport(fixture)
                 # This acknowledgment follows BOTH durable and transport
                 # comparisons. Rust performs only the specified idle restart,
                 # after stage 1's ack and before consuming stage 2's ready.
@@ -196,6 +211,8 @@ def run_case(executable, matrix, case, reference):
                 f"Native mixed-roster child failed with status {child.returncode}"
             )
             assert_transport(fixture, observations[-1])
+            with fixture.grant_server.RequestHandlerClass.request_observation_lock:
+                assert_grant_transport(fixture)
         except BaseException as error:
             failure = error
             raise
@@ -228,6 +245,7 @@ def run_case(executable, matrix, case, reference):
                         + diagnostic_tail(stderr_file)
                     )
     assert_transport(fixture, observations[-1])
+    assert_grant_transport(fixture)
     print(
         f"Native worker mixed-roster {case['name']} passed "
         f"({len(snapshots)} stages, "

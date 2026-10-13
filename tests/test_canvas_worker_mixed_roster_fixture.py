@@ -1,13 +1,14 @@
 """Synthetic transport integrity, not worker parity or cryptographic qualification."""
 
 import base64
-from http.client import HTTPConnection, HTTPSConnection
+import hashlib
 import importlib
-from io import BytesIO
 import json
-from pathlib import Path
 import ssl
 import time
+from http.client import HTTPConnection, HTTPSConnection
+from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode, urlsplit
 
@@ -29,10 +30,19 @@ def matrix():
     )
 
 
-def request(fixture, method, path, *, signer=False, body=None, headers=None):
-    origin = urlsplit(fixture.signer_origin if signer else fixture.origin)
+def request(
+    fixture, method, path, *, signer=False, grant=False, body=None, headers=None
+):
+    assert not (signer and grant)
+    origin = urlsplit(
+        fixture.grant_origin
+        if grant
+        else fixture.signer_origin
+        if signer
+        else fixture.origin
+    )
     assert origin.hostname == "127.0.0.1" and origin.port
-    if signer:
+    if signer or grant:
         assert origin.scheme == "http"
         client = HTTPConnection(origin.hostname, origin.port, timeout=5)
     else:
@@ -72,6 +82,30 @@ def signing_input(module, fixture):
                 "jti": "synthetic-fixture-only",
             },
         )
+    )
+
+
+def signing_grant(module, payload):
+    now = int(time.time())
+    claims = {
+        "version": 1,
+        "origin": "issuance_canvas",
+        "operation_id": "canvas-lti:synthetic-fixture-only",
+        "organization_id": "org-review",
+        "route": "/internal/compat/issuer-dids/sign",
+        "service_id": None,
+        "issuer_did": module.ISSUER_DID,
+        "key_reference": module.SIGNING_KEY_REFERENCE,
+        "key_purpose": "lti_tool_signing",
+        "algorithm": "RS256",
+        "payload_sha256_b64": encoded(hashlib.sha256(payload).digest()),
+        "issued_at": now,
+        "expires_at": now + 30,
+        "nonce": "synthetic-fixture-grant-nonce",
+    }
+    bound_input = module._bound_input(claims)
+    return encoded(
+        {"claims": claims, "hmac": module._synthetic_grant_hmac(bound_input)}
     )
 
 
@@ -150,7 +184,13 @@ def test_every_frozen_stage_serves_distinct_roster_membership_and_scores(
             ]
             assert fixture.failures == []
     assert not fixture.thread.is_alive() and not fixture.signer_thread.is_alive()
-    assert fixture.server.socket.fileno() == fixture.signer_server.socket.fileno() == -1
+    assert not fixture.grant_thread.is_alive()
+    assert (
+        fixture.server.socket.fileno()
+        == fixture.signer_server.socket.fileno()
+        == fixture.grant_server.socket.fileno()
+        == -1
+    )
 
 
 def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
@@ -174,18 +214,41 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
         assert status == 200 and resolved["ok"] is True
         assert resolved["issuer_did"] == fixture_module.ISSUER_DID
         assert resolved["verification_method_id"] == fixture_module.VERIFICATION_METHOD
+        assert resolved["signing_key_reference"] == fixture_module.SIGNING_KEY_REFERENCE
         assert set(resolved["public_jwk"]) == {"kid", "kty", "alg", "use", "n", "e"}
         assertion_input = signing_input(fixture_module, fixture)
+        assertion_bytes = assertion_input.encode()
+        grant = signing_grant(fixture_module, assertion_bytes)
+        grant_claims = json.loads(
+            base64.urlsafe_b64decode(grant + "=" * (-len(grant) % 4))
+        )["claims"]
+        bound_input = fixture_module._bound_input(grant_claims)
+        with pytest.raises(AssertionError):
+            fixture_module._validate_signing_grant(
+                grant, assertion_bytes, [b"unrelated-bound-input"]
+            )
+        assert request(
+            fixture,
+            "POST",
+            "/v1/transit/hmac/marty-sign-grant-issuance-canvas-v1/sha2-256",
+            grant=True,
+            headers={"X-Vault-Token": fixture_module.GRANT_MINT_TOKEN},
+            body=json.dumps({"input": base64.b64encode(bound_input).decode()}),
+        ) == (
+            200,
+            {"data": {"hmac": fixture_module._synthetic_grant_hmac(bound_input)}},
+        )
         sign_path = "/internal/signing-keys/issuer-dids/sign?organization_id=org-review"
         status, signed = request(
             fixture,
             "POST",
             sign_path,
             signer=True,
-            headers={"X-API-Key": fixture_module.ISSUER_SIGN_KEY},
-            body=json.dumps(
-                {**selectors, "payload_b64": encoded(assertion_input.encode())}
-            ),
+            headers={
+                "X-API-Key": fixture_module.ISSUER_SIGN_KEY,
+                "X-Marty-Signing-Grant": grant,
+            },
+            body=json.dumps({**selectors, "payload_b64": encoded(assertion_bytes)}),
         )
         assert status == 200
         assert signed == {
@@ -223,6 +286,7 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
             "resolve_lti_tool_identity",
             "sign_lti_tool_assertion",
         ]
+        assert fixture.grant_operations == ["mint_issuance_canvas"]
         assert fixture.token_scopes == [
             fixture_module.NRPS_SCOPE,
             fixture_module.AGS_SCOPE,
@@ -248,6 +312,9 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
             fixture.requests
             == fixture.signer_requests
             == fixture.signer_operations
+            == fixture.grant_operations
+            == fixture.grant_requests
+            == fixture.grant_inputs
             == fixture.token_scopes
             == []
         )
@@ -281,20 +348,22 @@ def test_invalid_supported_requests_fail_without_retaining_body_details(
         if signer
         else "Synthetic Canvas token contract failed"
     )
-    with pytest.raises(AssertionError, match=failure):
-        with fixture_module.MixedRosterHttpsFixture(matrix) as fixture:
-            fixture.set_stage(matrix["cases"][0]["stages"][0])
-            assert request(
-                fixture,
-                "GET" if signer else "POST",
-                "/wrong-contract",
-                signer=signer,
-                body=None if signer else "synthetic-secret-sentinel",
-            ) == (500, {})
-            assert fixture.failures == [failure]
-            assert fixture.signer_operations == fixture.token_scopes == []
-            with pytest.raises(AssertionError, match=failure):
-                fixture.set_stage(matrix["cases"][0]["stages"][1])
+    with (
+        pytest.raises(AssertionError, match=failure),
+        fixture_module.MixedRosterHttpsFixture(matrix) as fixture,
+    ):
+        fixture.set_stage(matrix["cases"][0]["stages"][0])
+        assert request(
+            fixture,
+            "GET" if signer else "POST",
+            "/wrong-contract",
+            signer=signer,
+            body=None if signer else "synthetic-secret-sentinel",
+        ) == (500, {})
+        assert fixture.failures == [failure]
+        assert fixture.signer_operations == fixture.token_scopes == []
+        with pytest.raises(AssertionError, match=failure):
+            fixture.set_stage(matrix["cases"][0]["stages"][1])
 
 
 @pytest.mark.parametrize("size", [1, 16384])
