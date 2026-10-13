@@ -1,7 +1,12 @@
 """Keep the opt-in self-host preparation outside the stack publication gate."""
 
+import json
+import re
+import shutil
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).parents[1]
@@ -58,6 +63,44 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
         "actions/attest-build-provenance@")]) == 2
     assert any("cosign sign" in step.get("run", "") for step in steps)
     assert all("imagetools create" not in step.get("run", "") for step in steps)
+
+
+def test_selfhost_inputs_fail_before_expensive_release_builds() -> None:
+    jobs = workflow()["jobs"]
+    steps = jobs["validate-stack"]["steps"]
+    preflight = next(index for index, step in enumerate(steps)
+                     if step.get("name") == "Reject invalid self-host image inputs before release builds")
+    provenance = next(index for index, step in enumerate(steps)
+                      if step.get("name") == "Verify release artifact provenance")
+    assert preflight < provenance
+    assert steps[preflight]["if"] == "inputs.prepare_selfhost_lock == true"
+    assert "exact registry-qualified independent image digests" in steps[preflight]["run"]
+    assert "docker compose --profile '*'" in steps[preflight]["run"]
+    assert "($external[0] | keys | sort)" in steps[preflight]["run"]
+    for job_name in ("build-ui", "build-services", "build-openbao-didcomm",
+                     "build-selfhost-lock-roles"):
+        assert "validate-stack" in jobs[job_name]["needs"] or (
+            job_name == "build-selfhost-lock-roles" and "qualify-release" in jobs[job_name]["needs"]
+        )
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq unavailable locally")
+def test_early_selfhost_input_filter_rejects_both_dispatch_mistakes() -> None:
+    steps = workflow()["jobs"]["validate-stack"]["steps"]
+    source = next(step["run"] for step in steps if step.get("name") ==
+                  "Reject invalid self-host image inputs before release builds")
+    match = re.search(r"\| jq -e '(.*?)' > external-services\.json", source, re.S)
+    assert match is not None
+    image = "docker.io/library/nginx@sha256:" + "a" * 64
+    valid = {"edge": image}
+    for payload, passes in (
+        (json.dumps(valid), True),
+        (json.dumps({"edge": "nginx@sha256:" + "a" * 64}), False),
+        ("{edge:" + image + "}", False),
+    ):
+        result = subprocess.run(["jq", "-e", match.group(1)], input=payload,
+                                text=True, capture_output=True, check=False)
+        assert (result.returncode == 0) is passes
 
 
 def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() -> None:
