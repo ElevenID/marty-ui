@@ -17552,3 +17552,12 @@ Do not claim `v1.1.245` from either failed main SHA. After #1312 passes and
 merges, require full CI workflow-dispatch success on the then-exact protected
 main SHA, then revisit the no-write claim. The tag and GitHub release remain
 absent at this check; stack lock remains eligible, not published.
+
+2026-10-13 PR #1312 self-review correction: the synthetic signer still required
+an obsolete five-field signing body after resolving a remote key reference.
+The production Rust `SignBody` includes `key_reference`, so the fixture would
+reject a valid request with HTTP 500. Local commit `1d0877524` updates the
+fixture's exact body check and focused request to require the resolved remote
+reference; 49 focused Python tests, Ruff and diff checks passed. It was pushed
+to #1312's existing feature branch. Exact-head CI `38358837111` and
+protected merge remain open. No prior failed full run is release evidence.
