@@ -18008,3 +18008,16 @@ The expanded local release/bootstrap selection subsequently passed 196 tests
 with four existing skips, including stack manifest, release transaction,
 pre-promotion, tag gate, UI asset/bootstrap, installed OpenBao and Signing Keys
 boundary checks. Full candidate-image release qualification is still due.
+
+2026-10-13 grouped UI PR: full branch review against protected main covered
+the Rust bootstrap, live OpenBao/runtime paths, four-image release workflow,
+verifier fixture, registry/JWKS assertions, and signed source pin. Signing
+Keys library passed 196 tests with nine ignored under Rust 1.95; package
+formatting and Clippy with denied warnings passed. The initial workspace-wide
+`cargo fmt --all --check` could not execute on Windows because the command
+line exceeded the OS path-length limit; package-level formatting passed.
+The broad branch was pushed as [marty-ui #1319](https://github.com/ElevenID/marty-ui/pull/1319)
+at `e149cc0bcc5c4283177841d1fc744dba84b121da`. Its hosted CI, CodeQL,
+review and protected merge are pending. Do not treat local source-built
+migrations with previous signed services/UI/plugin images as final exact-head
+signed-image qualification.
