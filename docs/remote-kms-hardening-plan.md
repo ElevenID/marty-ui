@@ -17883,3 +17883,16 @@ issuer resolution, offer recovery and positive wallet issuance. Do not relax
 ownership validation or add compatibility fallback. The running disposable
 stack contains the diagnostic Redis change and must be reset before claiming
 any clean-slate acceptance.
+
+Implementation direction for this blocker: retain the seven standard key
+purposes and shared-key relationships (for example VC JWT and SD-JWT profiles
+share one ES256 issuer key), but derive each persisted OpenBao key reference
+from the organization scope through the existing managed-key naming contract.
+Carry that same reference through OpenBao creation, public JWK `kid`, DID
+verification methods, registry purpose bindings, and seeded issuer profiles.
+The canonical `tenant_managed_key_name` guard already accepts such references;
+the static `*-marty-*` names do not. Preserve the frozen Python reference
+corpus as historical evidence and mark its expected bootstrap differences
+explicitly in tests. A tuple-derived key per profile would split the existing
+shared-key relationship, so use tenant-scoped standard identities unless a
+review of feature tests proves a more specific mapping is required.
