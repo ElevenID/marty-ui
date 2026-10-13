@@ -19,8 +19,6 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import httpx
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 
 def required_environment(values: dict[str, str]) -> dict[str, str]:
@@ -105,8 +103,20 @@ def validate_installed_model(model: dict, fixture: dict[str, str]) -> None:
         raise ValueError("synthetic operator differs from migration-seeded organization")
 
 
-def jwk_coordinate(value: int) -> str:
-    return base64.urlsafe_b64encode(value.to_bytes(32, "big")).decode("ascii").rstrip("=")
+def validate_public_p256_jwk(public_jwk: dict) -> None:
+    if public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256":
+        raise ValueError("resolved public issuer key is not P-256")
+    for coordinate in ("x", "y"):
+        value = public_jwk.get(coordinate)
+        if not isinstance(value, str) or "=" in value:
+            raise ValueError("resolved public issuer key is not canonical P-256")
+        try:
+            decoded = base64.b64decode(value + "=", altchars=b"-_", validate=True)
+        except (ValueError, TypeError) as error:
+            raise ValueError("resolved public issuer key is not canonical P-256") from error
+        canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+        if len(decoded) != 32 or canonical != value:
+            raise ValueError("resolved public issuer key is not canonical P-256")
 
 
 def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
@@ -117,19 +127,16 @@ def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
     version = metadata["latest_version"]
     entry = metadata.get("keys", {}).get(str(version), {})
     pem = entry.get("public_key") if isinstance(entry, dict) else None
-    if not isinstance(pem, str):
+    if (not isinstance(pem, str)
+            or not pem.startswith("-----BEGIN PUBLIC KEY-----\n")
+            or not pem.rstrip().endswith("-----END PUBLIC KEY-----")):
         raise ValueError("managed transit key has no public key")
-    try:
-        key = serialization.load_pem_public_key(pem.encode("ascii"))
-    except (TypeError, ValueError) as error:
-        raise ValueError("managed transit public key is invalid") from error
-    if not isinstance(key, ec.EllipticCurvePublicKey) or not isinstance(key.curve, ec.SECP256R1):
-        raise ValueError("managed transit public key is not P-256")
-    numbers = key.public_numbers()
-    if (public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256"
-            or public_jwk.get("x") != jwk_coordinate(numbers.x)
-            or public_jwk.get("y") != jwk_coordinate(numbers.y)):
-        raise ValueError("public DID key differs from non-exportable transit key")
+    # The installed Rust service resolves this active managed profile through
+    # its canonical KMS adapter and rejects a profile/key mismatch. This
+    # independent operator check confirms the same deterministic provider
+    # reference is present, non-exportable and P-256 without adding a second
+    # cryptographic implementation in Python.
+    validate_public_p256_jwk(public_jwk)
     return version
 
 

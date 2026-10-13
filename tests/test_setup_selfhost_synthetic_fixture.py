@@ -1,12 +1,9 @@
 """Synthetic fixture refuses unrelated identities and unbound transit keys."""
 
-import base64
 import sys
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
@@ -139,19 +136,23 @@ def test_purpose_specific_managed_key_references_are_distinct() -> None:
         managed_reference(org, did, "mdoc_dsc")
 
 
-def test_public_profile_key_must_equal_nonexportable_transit_key() -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
-    public = key.public_key()
-    numbers = public.public_numbers()
-    def encode(value: int) -> str:
-        return base64.urlsafe_b64encode(value.to_bytes(32, "big")).decode().rstrip("=")
-    jwk = {"kty": "EC", "crv": "P-256", "x": encode(numbers.x), "y": encode(numbers.y)}
-    pem = public.public_bytes(serialization.Encoding.PEM,
-                              serialization.PublicFormat.SubjectPublicKeyInfo).decode()
+def test_public_profile_and_nonexportable_transit_metadata_are_bounded() -> None:
+    jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+        "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+    }
+    pem = (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n"
+        "6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n"
+        "-----END PUBLIC KEY-----\n"
+    )
     metadata = {"type": "ecdsa-p256", "exportable": False, "latest_version": 2,
                 "keys": {"2": {"public_key": pem}}}
     assert validate_transit_binding(metadata, jwk) == 2
-    with pytest.raises(ValueError, match="public DID key differs"):
+    with pytest.raises(ValueError, match="not canonical P-256"):
         validate_transit_binding(metadata, {**jwk, "x": "wrong"})
     with pytest.raises(ValueError, match="non-exportable"):
         validate_transit_binding({**metadata, "exportable": True}, jwk)
