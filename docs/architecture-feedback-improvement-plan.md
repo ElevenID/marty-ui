@@ -1,9 +1,11 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-11 UTC checkpoint; UI main `b3603a401`).
+Status: active implementation (2026-10-13 UTC checkpoint; UI main `4d1dfb87c`).
 Self-host preparation and opt-in consumer probes through #1266 are merged, but
-there is no qualified or released self-host bundle or standalone verifier.
+there is no qualified or released self-host bundle or independently qualified
+standalone verifier. Core v0.2.2 publishes a headless verifier preview bundle;
+its external-user handoff remains unqualified.
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
@@ -35,6 +37,17 @@ Earlier failed main evidence remains ineligible for release/reuse. UI #1201's
 fourth-file worker-only pilot and #1202's dedicated self-host acceptance owner
 are now merged after protected validation. Historical checkpoints below are
 not current merge-status claims.
+
+October 13 release/handoff checkpoint: UI #1319, #1320, and #1321 merged the
+four-image/KMS release path, TCP-ready disposable migration probes, and nonroot
+release fixtures. Exact-main CI run 38454924907 passed on its second attempt
+after one Canvas packaged-process startup probe failed to reach health within
+the existing five-second inner wait; no Canvas coverage was removed. Claim run
+38467010823 passed for source `4d1dfb87c`. The opt-in digest-locked Stack
+release run 38467181336 is in progress. Its preparation artifact, if produced,
+is explicitly unqualified: installed customer journey, KMS custody, final
+signatures, public asset closure, and independent download/install replay are
+still separate gates. No speedup is attributed to these release repairs.
 
 October 9 delivery checkpoint: UI #1205 moved the nine Flow admission and
 consumer cases to a dedicated acceptance owner without dropping the 139-case
