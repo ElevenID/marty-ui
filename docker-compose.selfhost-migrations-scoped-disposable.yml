@@ -10,7 +10,7 @@ services:
       POSTGRES_PASSWORD_FILE: /run/secrets/marty_db_password
     secrets: [marty_db_password]
     healthcheck:
-      test: [CMD-SHELL, "pg_isready -U marty -d marty"]
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U marty -d marty"]
       interval: 2s
       retries: 30
     networks: [private]
