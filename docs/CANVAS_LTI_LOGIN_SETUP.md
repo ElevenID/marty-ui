@@ -117,15 +117,14 @@ Expected:
 ### Feature 7: Canvas Evidence Event
 
 The preferred demo evidence path is the seeder's signed AGS quiz score event. The
-legacy ingest endpoint is disabled by default; enable it only for the demo and let
-the seeder construct the timestamp, nonce, and HMAC signature without printing the
-shared secret.
+legacy ingest endpoint is disabled by default; enable it in the beta service
+environment for this demo and let the seeder construct the timestamp, nonce, and
+HMAC signature without printing the shared secret.
 
 ```bash
 cd marty-ui
-CANVAS_LEGACY_EVENT_INGEST_ENABLED=true \
 CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true \
-PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file .env.tunnel.beta.local
+make canvas-real-seed BETA_ENV_FILE=.env.tunnel.beta.local
 ```
 
 Check:
@@ -150,7 +149,7 @@ Run the real Canvas seeder:
 
 ```bash
 cd marty-ui
-PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file .env.tunnel.beta.local
+make canvas-real-seed BETA_ENV_FILE=.env.tunnel.beta.local
 ```
 
 The seeder is idempotent and now creates:

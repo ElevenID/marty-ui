@@ -2,7 +2,7 @@
 
 This lane runs a source-pinned, unmodified Canvas LMS against the deployed Marty development system at `https://beta.elevenidllc.com`. Canvas is publicly reachable at `https://canvas-test.elevenidllc.com` through the beta stack's existing Cloudflare tunnel.
 
-It is intentionally separate from `docker-compose.profile.canvas-real.yml`, `scripts/seed_canvas_real.py`, and the Canvas sandbox. Those tools remain useful for deterministic development, but their Rails-runner bootstrap, localhost metadata bridge, synthetic AGS event path, and Canvas Credentials receiver are not portability evidence.
+It is intentionally separate from `docker-compose.profile.canvas-real.yml`, the packaged Rust Canvas demo seeder, and the Canvas sandbox. Those tools remain useful for deterministic development, but their Rails-runner bootstrap, localhost metadata bridge, synthetic AGS event path, and Canvas Credentials receiver are not portability evidence.
 
 ## Current implementation boundary
 

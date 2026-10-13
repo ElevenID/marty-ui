@@ -7,14 +7,20 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 action="${1:-config}"
 env_file="${2:-.env.canvas-disposable.local}"
-project="${CANVAS_DISPOSABLE_PROJECT:-marty-canvas-disposable-local}"
-
-if [[ ! "$project" =~ ^marty-canvas-disposable-[a-z0-9-]+$ ]]; then
-  echo "CANVAS_DISPOSABLE_PROJECT must start with marty-canvas-disposable-" >&2
-  exit 2
-fi
 if [[ ! -f "$env_file" ]]; then
   echo "Create $env_file from config/canvas/disposable-seed.env.example" >&2
+  exit 2
+fi
+
+env_value() {
+  local name="$1"
+  sed -n "s/^${name}=//p" "$env_file" | tail -n 1 | tr -d '\r'
+}
+
+project="${CANVAS_DISPOSABLE_PROJECT:-$(env_value CANVAS_DISPOSABLE_PROJECT)}"
+project="${project:-marty-canvas-disposable-local}"
+if [[ ! "$project" =~ ^marty-canvas-disposable-[a-z0-9-]+$ ]]; then
+  echo "CANVAS_DISPOSABLE_PROJECT must start with marty-canvas-disposable-" >&2
   exit 2
 fi
 export CANVAS_DISPOSABLE_PROJECT="$project"
@@ -25,11 +31,6 @@ compose=(docker compose --env-file "$env_file" -p "$project"
   -f docker-compose.profile.canvas-real.yml
   -f docker-compose.profile.canvas-sandbox.yml
   -f docker-compose.profile.canvas-disposable.yml)
-
-env_value() {
-  local name="$1"
-  sed -n "s/^${name}=//p" "$env_file" | tail -n 1 | tr -d '\r'
-}
 
 validate_disposable_endpoints() {
     [[ "$(env_value MARTY_API_BASE_URL)" == "http://gateway:8000" ]] || {

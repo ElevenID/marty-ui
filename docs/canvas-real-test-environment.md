@@ -49,13 +49,13 @@ Canvas LMS compose profile, and exposes Canvas at
 
 ### Seeder behavior
 
-The seeder script lives at:
+The Rust seeder is packaged in the migrations image at:
 
-- `scripts/seed_canvas_real.py`
+- `/usr/local/bin/marty-canvas-demo-seed`
 
 By default it will:
 
-1. Upsert an ElevenID Canvas platform through the gateway at `http://localhost:8000/v1/integrations/canvas/platforms`
+1. Upsert an ElevenID Canvas platform through the Compose gateway at `http://gateway:8000/v1/integrations/canvas/platforms`
 2. Sync Canvas's real LTI `client_id` and `deployment_id` back onto the platform.
 3. Refresh platform JWKS/OIDC metadata via `POST /v1/integrations/canvas/platforms/{id}/jwks-refresh`
 4. Upsert a Canvas program binding for the Marty organization when `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`

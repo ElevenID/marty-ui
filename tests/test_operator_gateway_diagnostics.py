@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import importlib
 import logging
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,11 +45,6 @@ class TransportFailureClient(RecordingClient):
         raise httpx.ConnectError(
             "private transport detail", request=httpx.Request("POST", url)
         )
-
-
-def import_canvas_seed():
-    sys.modules.pop("scripts.seed_canvas_real", None)
-    return importlib.import_module("scripts.seed_canvas_real")
 
 
 def test_shared_gateway_actor_rejects_service_credential_only_configuration() -> None:
@@ -100,9 +93,8 @@ def test_debug_diagnostic_authenticates_gateway_and_redacts_secrets(
     ]:
         assert secret not in caplog.text
 
-
-def test_debug_and_canvas_seed_fail_fast_with_only_service_key(
-    monkeypatch, caplog, capsys
+def test_debug_diagnostic_fails_fast_with_only_service_key(
+    monkeypatch, caplog
 ) -> None:
     monkeypatch.delenv("MARTY_API_KEY", raising=False)
     monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")
@@ -117,12 +109,6 @@ def test_debug_and_canvas_seed_fail_fast_with_only_service_key(
     assert debug_issuance.main(client_factory) == 2
     assert not debug_factory_called
     assert "private-service-key" not in caplog.text
-
-    seed_canvas_real = import_canvas_seed()
-    monkeypatch.setattr(sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed"])
-    assert seed_canvas_real.main() == 2
-    assert "private-service-key" not in capsys.readouterr().out
-
 
 def test_debug_diagnostic_handles_transport_status_and_json_failures_without_leaks(
     monkeypatch, caplog
@@ -142,40 +128,3 @@ def test_debug_diagnostic_handles_transport_status_and_json_failures_without_lea
         "private malformed JSON",
     ]:
         assert secret not in caplog.text
-
-
-def test_canvas_seed_keeps_internal_application_credentials_separate(
-    monkeypatch,
-) -> None:
-    seed_canvas_real = import_canvas_seed()
-    monkeypatch.setenv("MARTY_API_BASE_URL", "https://gateway.example")
-    monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
-    monkeypatch.setenv("ISSUANCE_INTERNAL_API_BASE_URL", "http://issuance-native:8005")
-    monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")
-    gateway = seed_canvas_real.resolve_gateway_actor(
-        required_scopes=("integrations:write",)
-    )
-    assert gateway.base_url == "https://gateway.example"
-    assert gateway.api_key == "private-gateway-actor-key"
-
-    source = open(seed_canvas_real.__file__, encoding="utf-8").read()
-    assert "connector_cfg.internal_issuance_base_url" in source
-    assert "connector_cfg.internal_issuance_api_key" in source
-
-
-def test_canvas_seed_rejects_missing_or_gateway_routed_internal_configuration(
-    monkeypatch, capsys
-) -> None:
-    seed_canvas_real = import_canvas_seed()
-    monkeypatch.setattr(sys, "argv", ["seed_canvas_real.py", "--skip-canvas-lms-seed"])
-    monkeypatch.setenv("MARTY_API_KEY", "private-gateway-actor-key")
-    monkeypatch.setenv("ISSUANCE_API_KEY", "private-service-key")
-    monkeypatch.delenv("ISSUANCE_INTERNAL_API_BASE_URL", raising=False)
-    assert seed_canvas_real.main() == 2
-
-    monkeypatch.setenv("MARTY_API_BASE_URL", "http://localhost:8000")
-    monkeypatch.setenv("ISSUANCE_INTERNAL_API_BASE_URL", "http://localhost:8000/")
-    assert seed_canvas_real.main() == 2
-    output = capsys.readouterr().out
-    assert "private-gateway-actor-key" not in output
-    assert "private-service-key" not in output

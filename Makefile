@@ -730,10 +730,10 @@ canvas-real-status: ## Show real Canvas LMS status
 
 canvas-real-seed: ## Seed ElevenID Canvas platform/binding (and optional Canvas test course/user)
 	@echo "$(BLUE)Seeding real Canvas LMS + ElevenID platform/binding...$(NC)"
-	@PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file "$(BETA_ENV_FILE)"
+	@bash scripts/run-canvas-real-seed.sh "$(BETA_ENV_FILE)"
 	@echo "$(GREEN)✓ Canvas seed completed$(NC)"
 
-canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the seed script
+canvas-real-bootstrap: canvas-real-up canvas-real-seed ## Start real Canvas and run the Rust seed
 	@echo "$(GREEN)✓ Canvas real bootstrap complete$(NC)"
 
 deploy-prod: ## Deploy with secrets from OCI Vault (no .env.production needed)
