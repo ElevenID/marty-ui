@@ -73,14 +73,9 @@ struct JourneyStages {
 }
 
 fn validate_requested_journey_completion(
-    is_disposable: bool,
     requested: JourneyStages,
     completed: JourneyStages,
 ) -> Result<(), &'static str> {
-    // An explicitly requested evidence run must fail closed in beta too.
-    if !is_disposable && !requested.evidence {
-        return Ok(());
-    }
     if requested.application && !completed.application {
         return Err("Canvas application stage did not complete");
     }
@@ -495,7 +490,6 @@ pub async fn run_seed(
     let wallet_requested = evidence_requested && connector.demo_wallet_claim_enabled;
     let mirror_requested = wallet_requested && connector.demo_mirror_publish_enabled;
     validate_requested_journey_completion(
-        env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
         JourneyStages {
             application: application_requested,
             evidence: evidence_requested,
@@ -590,9 +584,29 @@ mod tests {
             wallet: false,
             mirror: false,
         };
-        assert!(validate_requested_journey_completion(true, requested, incomplete).is_err());
-        assert!(validate_requested_journey_completion(false, requested, incomplete).is_err());
-        assert!(validate_requested_journey_completion(true, requested, requested).is_ok());
+        assert!(validate_requested_journey_completion(requested, incomplete).is_err());
+        assert!(validate_requested_journey_completion(requested, requested).is_ok());
+        let application_only = JourneyStages {
+            application: true,
+            evidence: false,
+            transition: false,
+            wallet: false,
+            mirror: false,
+        };
+        assert_eq!(
+            validate_requested_journey_completion(application_only, incomplete),
+            Ok(())
+        );
+        assert_eq!(
+            validate_requested_journey_completion(
+                application_only,
+                JourneyStages {
+                    application: false,
+                    ..incomplete
+                }
+            ),
+            Err("Canvas application stage did not complete")
+        );
         assert!(!has_mirror_delivery(
             &json!({"publish": {"delivered_count": 0, "failed_count": 1}})
         ));
