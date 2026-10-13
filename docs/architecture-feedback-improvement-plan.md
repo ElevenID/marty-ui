@@ -44,10 +44,23 @@ release fixtures. Exact-main CI run 38454924907 passed on its second attempt
 after one Canvas packaged-process startup probe failed to reach health within
 the existing five-second inner wait; no Canvas coverage was removed. Claim run
 38467010823 passed for source `4d1dfb87c`. The opt-in digest-locked Stack
-release run 38467181336 is in progress. Its preparation artifact, if produced,
-is explicitly unqualified: installed customer journey, KMS custody, final
-signatures, public asset closure, and independent download/install replay are
-still separate gates. No speedup is attributed to these release repairs.
+release run 38467181336 passed Stack technical qualification but its optional
+bundle preparation rejected unqualified Docker Hub references (`nginx@sha256:...`
+instead of `docker.io/library/nginx@sha256:...`). Corrected run 38470482002
+was canceled before publication after PowerShell dispatch quoting stripped the
+JSON field quotes. Run 38473299581 was dispatched with validated JSON on stdin;
+technical Stack qualification, bundle preparation, and the prepared-consumer
+preflight passed on source `4d1dfb87c`. Its digest-locked ZIP, image lock, and
+unqualified descriptor also passed a local archive-only check and 31-service
+Docker Compose render. After protected environment approval, publication
+failed before creating a tag or release because its operator identity check
+required an exact `strings` output line while Go coalesced the correct
+`SHA:tag` token with adjacent static data. PR #1323 changes that publisher
+check to require the exact token as a substring; native binary execution and
+provenance checks remain. The prepared artifact remains explicitly unqualified:
+installed customer journey, KMS custody, final signatures, public asset
+closure, and independent download/install replay are still separate gates. No
+speedup is attributed to these release repairs.
 
 October 9 delivery checkpoint: UI #1205 moved the nine Flow admission and
 consumer cases to a dedicated acceptance owner without dropping the 139-case
