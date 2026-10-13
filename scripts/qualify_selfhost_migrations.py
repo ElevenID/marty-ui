@@ -197,7 +197,7 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and services["postgres"]["command"] is None
             and services["postgres"]["entrypoint"] is None
             and services["postgres"]["healthcheck"] == {
-                "test": ["CMD-SHELL", "pg_isready -U marty -d marty"],
+                "test": ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U marty -d marty"],
                 "interval": "2s", "retries": 30}
             and services["postgres"]["secrets"] == [{
                 "source": "marty_db_password",
