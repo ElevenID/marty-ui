@@ -14,7 +14,7 @@ protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
 Replacement exact-main full CI `38454924907` passed on attempt 2. Fresh
 no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
 to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
-transaction `38467187658` is running; qualify all four image roles and release
+transaction `38467181336` is running; qualify all four image roles and release
 gates before publication. The prior failed claims and release transaction are
 immutable evidence, not promotion candidates. After signed-image qualification,
 prove clean installed
@@ -18309,3 +18309,11 @@ workflows and latest exact-main full CI `38454924907`. Protected main still
 matched and the tag remained absent, so stack release run `38467187658` was
 dispatched with `claim_run_id=38467010823`. Wait for its qualification gates;
 do not treat a running transaction as a signed published release.
+
+Release-run concurrency correction: another `cd.yml` dispatch, run
+`38467181336`, began four seconds earlier using the same claim and transaction
+ID and had already passed resolution and entered image builds. The later run
+`38467187658` remained pending and was cancelled before any jobs started to
+avoid duplicate CI and conflicting promotion. Follow the live earlier run
+`38467181336`; its downloaded resolved-transaction artifact matches claim
+`38467010823` and source SHA `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
