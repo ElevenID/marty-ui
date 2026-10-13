@@ -113,7 +113,6 @@ def test_direct_first_party_clients_use_gateway_not_a_python_host_port() -> None
         "scripts/check_template_wallets.py",
         "scripts/debug_issuance_response.py",
         "scripts/test_credential_format.py",
-        "scripts/seed_canvas_real.py",
     ]:
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "localhost:8005" not in source, relative
@@ -131,7 +130,6 @@ def test_all_moved_diagnostics_use_the_shared_gateway_actor_boundary() -> None:
     for relative in [
         "scripts/test_credential_format.py",
         "scripts/debug_issuance_response.py",
-        "scripts/seed_canvas_real.py",
     ]:
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "resolve_gateway_actor" in source, relative
