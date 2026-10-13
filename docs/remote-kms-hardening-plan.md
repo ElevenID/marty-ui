@@ -17896,3 +17896,35 @@ corpus as historical evidence and mark its expected bootstrap differences
 explicitly in tests. A tuple-derived key per profile would split the existing
 shared-key relationship, so use tenant-scoped standard identities unless a
 review of feature tests proves a more specific mapping is required.
+
+2026-10-13 tenant-bound bootstrap implementation and clean local stack:
+UI release-fix branch commit `80a4e8a84` now derives each of the seven
+standard OpenBao key references from the organization UUID and retains their
+existing purpose and shared-profile relationships. The same reference flows
+through OpenBao creation, public JWK `kid`, DID verification methods, registry
+purpose bindings and seeded issuer profiles. Bootstrap rejects an existing
+key with the wrong type or `exportable=true`, including standard keys.
+Historical Python corpus remains unchanged; its comparator explicitly
+normalizes only these naming and derived-managed-service differences. All 18
+corpus cases matched. Signing Keys library tests: 196 passed, 9 ignored;
+affected UI Python release/bootstrap tests: 61 passed; Ruff, Rust formatting,
+Clippy with warnings denied, and diff check passed.
+
+The canonical local migrations Dockerfile built source image
+`marty-migrations:kms-tenant-local` (local manifest
+`sha256:e76f93b16ea3d9c1d7d22368e5e0ac38783ed294c036312cea4087e2d0fae0f3`).
+After deleting the earlier diagnostic Compose project and volumes, a fresh
+project `marty-kms-tenant-local-20261013` started successfully using that
+source-built migrations image, while the UI, services and OpenBao plugin used
+the exact signed digests from failed release run `38390398846`. The signed
+migrations digest was deliberately overridden for this source test. Direct
+Signing Keys issuer-DID resolution
+returned 200 with a tenant-bound ES256 signing reference and no public
+fallback. All eight `tests/oss_stack` cases passed, including durable offer
+recovery and positive wallet credential issuance. Disposable OpenBao reported
+all seven standard keys `exportable=false`, and the former static ES256 key
+was absent. The local PostgreSQL schema had no tables or columns matching
+private-key/key-material names. This is a source-built local product proof,
+not signed release qualification. The harness follow-up branch and UI release
+workflow pin still need review, grouped PRs, hosted CI and signed artifact
+publication before installed/cutover/recovery acceptance can be claimed.
