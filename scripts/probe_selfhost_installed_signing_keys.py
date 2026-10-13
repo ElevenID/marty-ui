@@ -9,6 +9,7 @@ import os
 import re
 import secrets
 import subprocess
+import uuid
 from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
@@ -21,7 +22,10 @@ SERVICES = re.compile(r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{
 ORG_ID = "00000000-0000-0000-0000-000000000001"
 OTHER_ORG = "00000000-0000-0000-0000-000000000002"
 PRIVATE_JWK_FIELDS = {"d", "p", "q", "dp", "dq", "qi", "oth"}
-EXPECTED_KIDS = {"cred-issuer-marty-es256", "cred-issuer-marty-eddsa"}
+def expected_kids(organization_id: str) -> set[str]:
+    tenant = uuid.uuid5(uuid.NAMESPACE_URL, organization_id).hex
+    return {f"cred-issuer-{tenant}-marty-es256",
+            f"cred-issuer-{tenant}-marty-eddsa"}
 
 
 def require(ok: bool, reason: str) -> None:
@@ -145,7 +149,7 @@ def validate_jwks(raw: str, *, organization_id: str, present: bool) -> int:
                 and isinstance(key.get("kty"), str) and key["kty"]
                 for key in keys), "Signing JWKS contains malformed or private keys")
     if present:
-        require(EXPECTED_KIDS.issubset({key["kid"] for key in keys}),
+        require(expected_kids(organization_id).issubset({key["kid"] for key in keys}),
                 "Signing JWKS lacks the migration-owned issuer keys")
     return len(keys)
 

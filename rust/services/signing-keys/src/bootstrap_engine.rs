@@ -7,8 +7,9 @@ use thiserror::Error;
 
 use crate::bootstrap::{
     backfill_scoped_did_documents, did_key, issuer_profiles_key, jwks_key, seed_did_and_jwks,
-    seed_issuer_profiles, seed_signing_registry, signing_registry_key, KeyRecord, KeySpec,
-    FLOW_ENVELOPE_KEY, NOTIFICATION_ENVELOPE_KEY, STANDARD_KEYS,
+    seed_issuer_profiles, seed_signing_registry, signing_registry_key,
+    tenant_standard_key_reference, KeyRecord, KeySpec, FLOW_ENVELOPE_KEY,
+    NOTIFICATION_ENVELOPE_KEY, STANDARD_KEYS,
 };
 use crate::documents;
 
@@ -237,6 +238,7 @@ pub trait Backend {
         address: &str,
         token: &str,
         spec: KeySpec,
+        reference: &str,
         create: bool,
     ) -> Result<KeyRecord, String>;
     async fn load(&mut self, key: &str) -> Result<Option<Value>, String>;
@@ -327,7 +329,7 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
     for spec in &disposable {
         disposable_records.push(
             backend
-                .key(address, identity_token, *spec, false)
+                .key(address, identity_token, *spec, spec.id, false)
                 .await
                 .map_err(RunError::Identity)?,
         );
@@ -336,7 +338,13 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
     for spec in STANDARD_KEYS {
         records.push(
             backend
-                .key(address, identity_token, *spec, true)
+                .key(
+                    address,
+                    identity_token,
+                    *spec,
+                    &tenant_standard_key_reference(&org, spec.id),
+                    true,
+                )
                 .await
                 .map_err(RunError::Identity)?,
         );
@@ -349,7 +357,6 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
             .load(&registry_key)
             .await
             .map_err(RunError::Identity)?,
-        &org,
         &records,
     )
     .map_err(|error| RunError::Identity(error.to_string()))?;

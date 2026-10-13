@@ -65,13 +65,6 @@ for key in "$csca_key" "$dsc_key"; do
 done
 
 for spec in \
-    cred-issuer-marty-es256:ecdsa-p256 \
-    cred-issuer-marty-es384:ecdsa-p384 \
-    cred-issuer-marty-rs256:rsa-2048 \
-    lti-tool-marty-rs256:rsa-2048 \
-    oid4vp-verifier-marty-es256:ecdsa-p256 \
-    cred-issuer-marty-eddsa:ed25519 \
-    cred-dsc-marty-primary:ecdsa-p256 \
     "$csca_key":ecdsa-p256 \
     "$dsc_key":ecdsa-p256 \
     passport-artifact-marty-aes256:aes256-gcm96; do
@@ -104,14 +97,14 @@ fi
 printf '%s' "$service_token" > "$service_tmp"
 printf '%s' "$callback_token" > "$callback_tmp"
 
-service_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities transit/sign/cred-issuer-marty-es256)
+service_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-bureau-callback-marty-hmac)
 callback_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/keys/passport-bureau-callback-marty-hmac)
 callback_verify_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/verify/passport-bureau-callback-marty-hmac)
 provider_verify_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/verify/passport-provider-callback-synthetic)
 provider_hmac_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-provider-callback-synthetic)
 provider_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/keys/passport-provider-callback-synthetic)
-callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-marty-es256)
+callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_create_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities auth/token/create)
 service_create_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities auth/token/create)
 case "$service_caps" in

@@ -40,12 +40,17 @@ scoped to the protected local acceptance tuple.
 
 The historical Python source and producer were removed after the corpus was
 committed. `scripts/check_migration_bootstrap_reference.py` compares the
-active Rust binary directly with the immutable JSON fixture. The Python
+active Rust binary with the immutable JSON fixture. Current KMS hardening
+translates only two intentional differences in the expected result: standard
+OpenBao keys now have tenant-bound names, and the managed service is derived
+from live inventory instead of persisted with a mounted-token marker. The
+comparison still checks ordered effects, state, failures and retry behavior
+in all 18 cases. The Python
 `scripts/passport_disposable_identity.py` remains demo/test tooling and is not
 copied into the migration image. The separate `issuance-migrations` Compose
 job already uses the Rust `marty-issuance-service migrate` owner.
 
-## Local acceptance on 2026-10-11
+## Historical local acceptance on 2026-10-11
 
 The migration image built with `docker build -f services/Dockerfile.migrations`.
 The final image had no `python` or `pip` command and no `.py` or `.whl` under

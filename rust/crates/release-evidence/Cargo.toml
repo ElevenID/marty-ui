@@ -11,6 +11,7 @@ publish = false
 base64.workspace = true
 chrono.workspace = true
 flate2.workspace = true
+marty-crypto = { workspace = true, features = ["jwk"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -40,3 +41,7 @@ path = "src/kubernetes_native_cli.rs"
 [[bin]]
 name = "render-envoy-native-issuance"
 path = "src/envoy_cli.rs"
+
+[[bin]]
+name = "public-kms-jwk"
+path = "src/public_kms_jwk.rs"

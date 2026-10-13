@@ -693,6 +693,7 @@ jobs:
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
+          OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         working-directory: marty-ui
         shell: bash
@@ -702,7 +703,8 @@ jobs:
             --arg version "$VERSION" \
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
-            --arg migrations_digest "$MIGRATIONS_DIGEST" '
+            --arg migrations_digest "$MIGRATIONS_DIGEST" \
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" '
             .components += [{
               name: "marty-ui",
               repository: "ElevenID/marty-ui",
@@ -716,6 +718,9 @@ jobs:
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
                 {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/migrations", digest: $migrations_digest,
+                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
+                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
+                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
@@ -814,7 +819,7 @@ jobs:
           python ../marty-ui/scripts/wait_for_public_services.py \
             --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
-          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations"')"
+          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations" && $0 != "openbao-grant-bootstrap" && $0 != "signing-integration-tls-bootstrap"')"
           if [ -n "$unexpected_exits" ]; then
             echo "Public-stack services exited unexpectedly:"
             echo "$unexpected_exits"
@@ -864,6 +869,13 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Build the Rust public-key fixture converter
+        working-directory: marty-ui/rust
+        shell: bash
+        run: cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-integration-source-${{ github.run_id }}
@@ -986,12 +998,18 @@ jobs:
           python scripts/credentials_verifier_artifact.py run \
             --pin config/credentials-verifier-oracle.json --provenance-verified \
             --evidence work/evidence/oracle.json
-          python scripts/run_remote_kms_verifier_fixture.py \
-            --producer ../core-source/target/debug/marty-kms-positive-verifier-input \
-            --agent ../core-source/target/debug/marty-test-signer-agent -- \
-            python scripts/credentials_verifier_artifact.py run-transaction \
-            --pin work/transaction-pin.json --provenance-verified \
-            --evidence work/evidence/transaction.json
+          infra=../marty-ui/deploy-config/passport-supported-disposable-infra-images.json
+          test "$(jq -er '.schema' "$infra")" = marty.passport-supported-disposable-infra-images/v1
+          openbao_image="$(jq -er '.images.openbao.reference' "$infra")"
+          python ../marty-ui/scripts/with_disposable_verifier_kms.py \
+            --openbao-image "$openbao_image" \
+            --producer "$GITHUB_WORKSPACE/core-source/target/debug/marty-kms-positive-verifier-input" \
+            --agent "$GITHUB_WORKSPACE/core-source/target/debug/marty-test-signer-agent" \
+            --jwk-tool "$GITHUB_WORKSPACE/marty-ui/rust/target/release/public-kms-jwk" \
+            --evidence-output work/evidence/verifier-kms-fixture.json \
+            -- python scripts/credentials_verifier_artifact.py run-transaction \
+              --pin work/transaction-pin.json --provenance-verified \
+              --evidence work/evidence/transaction.json
           python scripts/credentials_verifier_artifact.py compare-transaction-evidence \
             --oracle work/evidence/oracle.json \
             --transaction work/evidence/transaction.json \
@@ -1006,7 +1024,9 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
-          path: integration-tests/work/evidence/verifier-differential.json
+          path: |
+            integration-tests/work/evidence/verifier-differential.json
+            integration-tests/work/evidence/verifier-kms-fixture.json
           if-no-files-found: error
           retention-days: 90
 

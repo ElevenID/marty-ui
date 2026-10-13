@@ -113,18 +113,21 @@ impl Backend for MemoryBackend<'_> {
         _address: &str,
         token: &str,
         spec: KeySpec,
+        reference: &str,
         create: bool,
     ) -> Result<KeyRecord, String> {
         self.role(token);
-        if let Some(data) = self.keys.get(spec.id) {
-            if !create && (data["type"] != spec.key_type || data["exportable"] != false) {
-                return Err("Disposable ICAO key must be precreated and non-exportable".into());
+        if let Some(data) = self.keys.get(reference) {
+            if data["type"] != spec.key_type || data["exportable"] != false {
+                return Err(format!(
+                    "OpenBao key {reference} must have the expected type and be non-exportable"
+                ));
             }
         } else if create {
             self.effects
-                .push(format!("openbao.post:transit/keys/{}", spec.id));
+                .push(format!("openbao.post:transit/keys/{reference}"));
             self.keys.insert(
-                spec.id.into(),
+                reference.into(),
                 json!({"type":spec.key_type, "exportable":false}),
             );
         } else {
@@ -133,9 +136,11 @@ impl Backend for MemoryBackend<'_> {
         let pem = self.input["public_pem_by_type"][spec.key_type]
             .as_str()
             .ok_or_else(|| format!("missing test public PEM for {}", spec.key_type))?;
-        let public_jwk = public_jwk_from_pem(spec, pem).map_err(|error| error.to_string())?;
+        let mut public_jwk = public_jwk_from_pem(spec, pem).map_err(|error| error.to_string())?;
+        public_jwk["kid"] = json!(reference);
         Ok(KeyRecord {
             spec,
+            reference: reference.into(),
             public_jwk,
             latest_version: json!(1),
         })
@@ -258,6 +263,9 @@ pub async fn replay(invocation: &Value) -> Result<Value, String> {
             );
         }
     }
+    if let Some(existing) = input["existing_openbao_keys"].as_object() {
+        keys.extend(existing.clone());
+    }
     let mut memory = MemoryBackend {
         input,
         effects: vec![],
@@ -329,5 +337,34 @@ mod tests {
             disconnected["error_tags"],
             json!(["Database connectivity verification failed"])
         );
+    }
+
+    #[tokio::test]
+    async fn existing_exportable_standard_key_fails_closed() {
+        let org = "00000000-0000-0000-0000-000000000001";
+        let reference = crate::bootstrap::tenant_standard_key_reference(
+            org,
+            crate::bootstrap::STANDARD_KEYS[0].id,
+        );
+        let corpus: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../contracts/migration-bootstrap-python-reference.json"
+        ))
+        .unwrap();
+        let clean = corpus["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|case| case["name"] == "clean_apply")
+            .unwrap();
+        let mut input = clean["input"].clone();
+        input["existing_openbao_keys"] = json!({
+            reference: {"type":"ecdsa-p256", "exportable":true}
+        });
+        let result = replay(&json!({"input": input})).await.unwrap();
+        assert_eq!(result["exit_codes"], json!([1]));
+        assert!(!result["state"]["redis"]
+            .as_object()
+            .unwrap()
+            .contains_key(&crate::bootstrap::signing_registry_key(org)));
     }
 }

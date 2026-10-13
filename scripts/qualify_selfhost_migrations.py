@@ -337,11 +337,20 @@ def verify_rust_database_probe(
                       "Verify-only catalog preflight failed").strip()
     require(re.fullmatch(r"[0-9]+", before) is not None,
             "Verify-only catalog preflight is invalid")
-    _checked(run([*compose, "run", "--no-deps", "--rm", "--entrypoint", "/bin/sh",
-                  "db-migrate", "-ec", ". /app/load-secrets-env.sh; "
-                  "exec /usr/local/bin/marty-migration-bootstrap --verify-only"],
-                 environment, 120),
-             "Rust migration verify-only could not reach disposable database")
+    reachable = [*compose, "run", "--no-deps", "--rm", "--entrypoint", "/bin/sh",
+                 "db-migrate", "-ec", ". /app/load-secrets-env.sh; "
+                 "exec /usr/local/bin/marty-migration-bootstrap --verify-only"]
+    # A fresh Docker network can briefly drop the first new container even
+    # after PostgreSQL reports healthy. Every attempt still executes the real
+    # released binary; the catalog equality check below fences all attempts.
+    for _ in range(3):
+        positive = run(reachable, environment, 120)
+        if positive.returncode == 0:
+            break
+    else:
+        raise QualificationError(
+            "Rust migration verify-only could not reach disposable database after three attempts"
+        )
     sentinel = "verify-only-probe-secret"
     def invalid_database(url: str) -> subprocess.CompletedProcess[str]:
         return run([

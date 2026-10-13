@@ -4537,6 +4537,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "flate2",
+ "marty-crypto",
  "prost",
  "serde",
  "serde_json",

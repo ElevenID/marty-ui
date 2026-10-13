@@ -12,6 +12,7 @@ use thiserror::Error;
 use crate::{documents, profiles, registry};
 
 pub const MANAGED_SERVICE_ID: &str = "managed-openbao-transit";
+pub const STANDARD_ISSUER_ES256_KEY_ID: &str = "cred-issuer-marty-es256";
 pub const FLOW_ENVELOPE_KEY: &str = "flow-response-envelope-marty-aes256";
 pub const NOTIFICATION_ENVELOPE_KEY: &str = "notification-webhook-envelope-marty-aes256";
 
@@ -37,7 +38,7 @@ pub struct KeySpec {
 
 pub const STANDARD_KEYS: &[KeySpec] = &[
     KeySpec {
-        id: "cred-issuer-marty-es256",
+        id: STANDARD_ISSUER_ES256_KEY_ID,
         name: "Marty ES256 issuer key",
         key_type: "ecdsa-p256",
         algorithm: "ES256",
@@ -97,8 +98,20 @@ pub const STANDARD_KEYS: &[KeySpec] = &[
 #[derive(Clone, Debug)]
 pub struct KeyRecord {
     pub spec: KeySpec,
+    pub reference: String,
     pub public_jwk: Value,
     pub latest_version: Value,
+}
+
+pub fn tenant_standard_key_reference(org: &str, id: &str) -> String {
+    let prefix = crate::domain::MANAGED_KEY_PREFIXES
+        .iter()
+        .find(|prefix| id.starts_with(**prefix))
+        .expect("standard bootstrap key has a managed prefix");
+    let tenant = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_URL, org.as_bytes())
+        .simple()
+        .to_string();
+    format!("{prefix}{tenant}-{}", &id[prefix.len()..])
 }
 
 pub fn public_jwk_from_pem(spec: KeySpec, public_pem: &str) -> Result<Value, BootstrapError> {
@@ -162,12 +175,9 @@ fn object_or_empty(existing: Option<Value>) -> Map<String, Value> {
 
 pub fn seed_signing_registry(
     existing: Option<Value>,
-    org: &str,
     records: &[KeyRecord],
 ) -> Result<Value, BootstrapError> {
     let mut doc = object_or_empty(existing);
-    let aliases: Vec<Value> = records.iter().map(|record| json!(record.spec.id)).collect();
-    let algorithms: BTreeSet<&str> = records.iter().map(|record| record.spec.algorithm).collect();
     let purposes: BTreeSet<&str> = records
         .iter()
         .flat_map(|record| record.spec.purposes.iter().copied())
@@ -176,27 +186,10 @@ pub fn seed_signing_registry(
         .iter()
         .flat_map(|record| record.spec.formats.iter().copied())
         .collect();
-    let algorithms_json = json!(algorithms);
-    let managed = json!({
-        "id": MANAGED_SERVICE_ID, "name": "Marty managed OpenBao transit",
-        "description": "Managed by the Marty service stack and seeded during clean-slate migrations.",
-        "service_type": "openbao-transit", "provider": "openbao",
-        "provider_label": "OpenBao Transit", "protocol": "vault-transit",
-        "category": "service-hsm", "endpoint": "", "region": "", "mount": "transit",
-        "namespace": "", "auth_mode": "service_token",
-        "auth_reference": "Managed by Marty service stack",
-        "key_reference": "cred-issuer-marty-es256", "key_aliases": aliases,
-        "algorithms": algorithms_json, "status": "configured", "managed": true,
-        "read_only": true, "managed_by": "Marty service stack",
-        "organization_id": org, "key_count": records.len(),
-        "capabilities": {"discover_keys": true, "sign": true, "rotate_keys": false,
-            "upload_public_keys": false, "delete_keys": false,
-            "multiple_key_references": true, "public_key_export": true,
-            "supported_algorithms": algorithms_json},
-        "signature_encoding": "raw_ieee_p1363",
-        "key_purposes": purposes, "credential_formats": formats,
-    });
-    let mut services = vec![managed];
+    // Signing Keys derives the managed OpenBao service from live inventory on
+    // read. Storing it here would make the registry fail its own stored-service
+    // validation, which correctly forbids persisted mounted service tokens.
+    let mut services = Vec::new();
     if let Some(existing) = doc.get("services").and_then(Value::as_array) {
         services.extend(
             existing
@@ -225,12 +218,12 @@ pub fn seed_signing_registry(
     let mut managed_bindings = object_or_empty(all_bindings.remove(MANAGED_SERVICE_ID));
     for record in records {
         let purposes = json!(record.spec.purposes);
-        if let Some(previous) = managed_bindings.get(record.spec.id) {
+        if let Some(previous) = managed_bindings.get(&record.reference) {
             if previous != &purposes {
-                return Err(BootstrapError::ConflictingPurpose(record.spec.id.into()));
+                return Err(BootstrapError::ConflictingPurpose(record.reference.clone()));
             }
         }
-        managed_bindings.insert(record.spec.id.into(), purposes);
+        managed_bindings.insert(record.reference.clone(), purposes);
     }
     all_bindings.insert(MANAGED_SERVICE_ID.into(), Value::Object(managed_bindings));
     doc.insert("key_reference_purposes".into(), Value::Object(all_bindings));
@@ -341,7 +334,10 @@ pub fn seed_did_and_jwks(
     let mut doc = object_or_empty(existing);
     doc.insert("id".into(), json!(issuer_did));
     doc.insert("controller".into(), json!(issuer_did));
-    let key_ids: BTreeSet<&str> = records.iter().map(|record| record.spec.id).collect();
+    let key_ids: BTreeSet<&str> = records
+        .iter()
+        .flat_map(|record| [record.reference.as_str(), record.spec.id])
+        .collect();
     let mut methods: Vec<Value> = vec![];
     if let Some(existing) = doc.get("verificationMethod").and_then(Value::as_array) {
         for method in existing {
@@ -383,11 +379,11 @@ pub fn seed_did_and_jwks(
     for record in records {
         let vm_id = format!(
             "{issuer_did}#{}",
-            documents::did_fragment("", Some(record.spec.id))
+            documents::did_fragment("", Some(&record.reference))
         );
         let mut jwk = record.public_jwk.clone();
         if let Some(object) = jwk.as_object_mut() {
-            object.insert("kid".into(), json!(record.spec.id));
+            object.insert("kid".into(), json!(record.reference));
         }
         let method = json!({"id": vm_id, "type": "JsonWebKey", "controller": issuer_did,
             "publicKeyJwk": jwk});
@@ -501,11 +497,13 @@ pub fn seed_issuer_profiles(
         let existing = by_id
             .iter()
             .position(|profile| profile.get("id").and_then(Value::as_str) == Some(spec.id));
+        let key_reference = tenant_standard_key_reference(org, spec.key);
         let mut profile = json!({
             "id": spec.id, "organization_id": org, "name": spec.name,
             "issuer_did": issuer_did, "issuer_url": issuer_url,
-            "signing_service_id": MANAGED_SERVICE_ID, "signing_key_reference": spec.key,
-            "verification_method_id": format!("{issuer_did}#{}", documents::did_fragment("", Some(spec.key))),
+            "signing_service_id": MANAGED_SERVICE_ID,
+            "signing_key_reference": key_reference,
+            "verification_method_id": format!("{issuer_did}#{}", documents::did_fragment("", Some(&key_reference))),
             "key_purpose": spec.purpose, "credential_format": spec.format,
             "algorithm": spec.algorithm, "status": "active",
         });
@@ -589,6 +587,9 @@ mod tests {
 
     fn records(clean: &Value) -> Vec<KeyRecord> {
         let pems = &clean["input"]["public_pem_by_type"];
+        let org = clean["input"]["environment"]["MARTY_ORG_ID"]
+            .as_str()
+            .unwrap();
         STANDARD_KEYS
             .iter()
             .map(|spec| {
@@ -596,6 +597,7 @@ mod tests {
                     public_jwk_from_pem(*spec, pems[spec.key_type].as_str().unwrap()).unwrap();
                 KeyRecord {
                     spec: *spec,
+                    reference: tenant_standard_key_reference(org, spec.id),
                     public_jwk,
                     latest_version: json!(1),
                 }
@@ -603,8 +605,30 @@ mod tests {
             .collect()
     }
 
+    fn scoped_historical_expected(value: &Value, org: &str) -> Value {
+        fn replace(value: &str, org: &str) -> String {
+            STANDARD_KEYS.iter().fold(value.to_owned(), |text, spec| {
+                text.replace(spec.id, &tenant_standard_key_reference(org, spec.id))
+            })
+        }
+        match value {
+            Value::String(text) => json!(replace(text, org)),
+            Value::Array(values) => json!(values
+                .iter()
+                .map(|value| scoped_historical_expected(value, org))
+                .collect::<Vec<_>>()),
+            Value::Object(values) => Value::Object(
+                values
+                    .iter()
+                    .map(|(key, value)| (replace(key, org), scoped_historical_expected(value, org)))
+                    .collect(),
+            ),
+            _ => value.clone(),
+        }
+    }
+
     #[test]
-    fn clean_registry_did_jwks_and_profiles_match_python() {
+    fn clean_registry_did_jwks_and_profiles_match_python_except_derived_managed_service() {
         let clean = case("clean_apply");
         let env = &clean["input"]["environment"];
         let org = env["MARTY_ORG_ID"].as_str().unwrap();
@@ -612,16 +636,34 @@ mod tests {
         let url = env["MARTY_ISSUER_BASE_URL"].as_str().unwrap();
         let expected = &clean["state"]["redis"];
         let records = records(&clean);
+        let mut expected_registry = expected[signing_registry_key(org)].clone();
+        let managed = &expected_registry["services"][0];
         assert_eq!(
-            seed_signing_registry(None, org, &records).unwrap(),
-            expected[signing_registry_key(org)]
+            managed["auth_reference"], "Managed by Marty service stack",
+            "the historical Python corpus must remain unchanged"
+        );
+        expected_registry["services"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        let registry = seed_signing_registry(None, &records).unwrap();
+        assert!(registry["services"].as_array().unwrap().is_empty());
+        assert_eq!(
+            registry,
+            scoped_historical_expected(&expected_registry, org)
         );
         let (did_doc, jwks) = seed_did_and_jwks(None, org, did, &records);
-        assert_eq!(did_doc, expected[did_key(org, Some(did))]);
-        assert_eq!(jwks, expected[jwks_key(org)]);
+        assert_eq!(
+            did_doc,
+            scoped_historical_expected(&expected[did_key(org, Some(did))], org)
+        );
+        assert_eq!(
+            jwks,
+            scoped_historical_expected(&expected[jwks_key(org)], org)
+        );
         assert_eq!(
             seed_issuer_profiles(None, org, did, url),
-            expected[issuer_profiles_key(org)]
+            scoped_historical_expected(&expected[issuer_profiles_key(org)], org)
         );
     }
 
@@ -665,7 +707,7 @@ mod tests {
                 did,
                 url
             ),
-            customer["state"]["redis"][issuer_profiles_key(org)]
+            scoped_historical_expected(&customer["state"]["redis"][issuer_profiles_key(org)], org)
         );
 
         let backfill = case("backfill_mixed_did");
@@ -682,8 +724,14 @@ mod tests {
             }
         }
         let (did_doc, jwks) = seed_did_and_jwks(current, org, did, &records);
-        assert_eq!(did_doc, backfill["state"]["redis"][did_key(org, Some(did))]);
-        assert_eq!(jwks, backfill["state"]["redis"][jwks_key(org)]);
+        assert_eq!(
+            did_doc,
+            scoped_historical_expected(&backfill["state"]["redis"][did_key(org, Some(did))], org)
+        );
+        assert_eq!(
+            jwks,
+            scoped_historical_expected(&backfill["state"]["redis"][jwks_key(org)], org)
+        );
     }
 
     #[test]
@@ -699,9 +747,43 @@ mod tests {
         ] {
             let initial =
                 json!({"default_service_id": default, "services": [{"id":"customer-hsm"}]});
-            let result = seed_signing_registry(Some(initial), "org", &records).unwrap();
+            let result = seed_signing_registry(Some(initial), &records).unwrap();
             assert_eq!(result["default_service_id"], MANAGED_SERVICE_ID);
-            assert_eq!(result["services"][1]["id"], "customer-hsm");
+            assert_eq!(result["services"][0]["id"], "customer-hsm");
         }
+    }
+
+    #[test]
+    fn stale_bootstrap_managed_entry_is_removed_without_dropping_customer_service() {
+        let records = records(&case("clean_apply"));
+        let initial = json!({"services": [
+            {"id": MANAGED_SERVICE_ID, "auth_mode": "service_token",
+                "auth_reference": "Managed by Marty service stack"},
+            {"id": "customer-hsm", "service_type": "aws-kms"}
+        ]});
+        let result = seed_signing_registry(Some(initial), &records).unwrap();
+        assert_eq!(
+            result["services"],
+            json!([{"id": "customer-hsm", "service_type": "aws-kms"}])
+        );
+    }
+
+    #[test]
+    fn standard_bootstrap_references_are_tenant_bound_and_shared_profiles_stay_shared() {
+        let org = "00000000-0000-0000-0000-000000000001";
+        for spec in STANDARD_KEYS {
+            let reference = tenant_standard_key_reference(org, spec.id);
+            assert!(crate::registry::tenant_managed_key_name(org, &reference));
+            assert!(!crate::registry::tenant_managed_key_name(
+                "another-org",
+                &reference
+            ));
+            assert_ne!(reference, spec.id);
+        }
+        let profiles =
+            seed_issuer_profiles(None, org, "did:example:issuer", "https://issuer.example");
+        let vc = &profiles["profiles"][0]["signing_key_reference"];
+        let sd_jwt = &profiles["profiles"][1]["signing_key_reference"];
+        assert_eq!(vc, sd_jwt);
     }
 }

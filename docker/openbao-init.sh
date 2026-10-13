@@ -76,36 +76,8 @@ else
     bao secrets enable -address="${BAO_ADDR}" transit
 fi
 
-# Create issuer signing keys (ECDSA P-256 for SD-JWT/mDL, RSA for legacy)
-echo "Creating credential signing keys..."
-
-# Primary issuer key (ECDSA P-256) — used for SD-JWT-VC, mDL, OID4VCI
-bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-es256 \
-    type=ecdsa-p256 2>/dev/null || echo "  cred-issuer-marty-es256 already exists"
-
-# Secondary issuer key (ECDSA P-384) — for higher-assurance credentials
-bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-es384 \
-    type=ecdsa-p384 2>/dev/null || echo "  cred-issuer-marty-es384 already exists"
-
-# RSA issuer key — for legacy VCs and SOD signing
-bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-rs256 \
-    type=rsa-2048 2>/dev/null || echo "  cred-issuer-marty-rs256 already exists"
-
-# Purpose-bound RSA key for Canvas LTI tool assertions
-bao write -address="${BAO_ADDR}" -f transit/keys/lti-tool-marty-rs256 \
-    type=rsa-2048 2>/dev/null || echo "  lti-tool-marty-rs256 already exists"
-
-# Purpose-bound ECDSA key for signed OID4VP authorization requests
-bao write -address="${BAO_ADDR}" -f transit/keys/oid4vp-verifier-marty-es256 \
-    type=ecdsa-p256 2>/dev/null || echo "  oid4vp-verifier-marty-es256 already exists"
-
-# EdDSA key — for DID-based credential issuance
-bao write -address="${BAO_ADDR}" -f transit/keys/cred-issuer-marty-eddsa \
-    type=ed25519 2>/dev/null || echo "  cred-issuer-marty-eddsa already exists"
-
-# Document Signer Certificate (DSC) key for eMRTD/DTC
-bao write -address="${BAO_ADDR}" -f transit/keys/cred-dsc-marty-primary \
-    type=ecdsa-p256 2>/dev/null || echo "  cred-dsc-marty-primary already exists"
+# Rust migration bootstrap creates tenant-bound, non-exportable standard
+# signing keys. Infrastructure initialization must not create global keys.
 
 # Encryption key for backup/data-at-rest
 bao write -address="${BAO_ADDR}" -f transit/keys/cred-encrypt-marty-aes \
@@ -288,22 +260,22 @@ path "transit/sign/vcapi-holder-*" {
 
 # Purpose-bound protocol keys are deliberately outside the credential-key
 # wildcard so a caller cannot substitute them across signing domains.
-path "transit/sign/lti-tool-marty-rs256" {
+path "transit/sign/lti-tool-*" {
   capabilities = ["create", "update"]
 }
-path "transit/verify/lti-tool-marty-rs256" {
+path "transit/verify/lti-tool-*" {
   capabilities = ["create", "update"]
 }
-path "transit/keys/lti-tool-marty-rs256" {
+path "transit/keys/lti-tool-*" {
   capabilities = ["read"]
 }
-path "transit/sign/oid4vp-verifier-marty-es256" {
+path "transit/sign/oid4vp-verifier-*" {
   capabilities = ["create", "update"]
 }
-path "transit/verify/oid4vp-verifier-marty-es256" {
+path "transit/verify/oid4vp-verifier-*" {
   capabilities = ["create", "update"]
 }
-path "transit/keys/oid4vp-verifier-marty-es256" {
+path "transit/keys/oid4vp-verifier-*" {
   capabilities = ["read"]
 }
 

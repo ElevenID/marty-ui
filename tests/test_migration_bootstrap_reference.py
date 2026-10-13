@@ -60,7 +60,7 @@ def test_candidate_receives_only_explicit_simulated_inputs(monkeypatch):
         invocation = json.loads(input)
         assert invocation["input"]["environment"]["BAO_ADDR"] == "http://openbao.test:8200"
         case = cases[invocation["name"]]
-        return SimpleNamespace(returncode=0, stdout=json.dumps({key: case[key] for key in ("exit_codes", "effects", "state", "error_tags")}), stderr="")
+        return SimpleNamespace(returncode=0, stdout=json.dumps(comparison.expected_for_case(case)), stderr="")
 
     monkeypatch.setattr(comparison.subprocess, "run", fake_run)
     assert comparison.check(["fixture-candidate"]) == []

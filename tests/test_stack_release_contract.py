@@ -813,9 +813,9 @@ def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> 
         step for step in steps
         if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle"
     )
-    assert "scripts/run_remote_kms_verifier_fixture.py" in verifier["run"]
+    assert "scripts/with_disposable_verifier_kms.py" in verifier["run"]
     assert "--bin marty-test-signer-agent" in producer["run"]
-    assert "--agent ../core-source/target/debug/marty-test-signer-agent" in verifier["run"]
+    assert "--agent \"$GITHUB_WORKSPACE/core-source/target/debug/marty-test-signer-agent\"" in verifier["run"]
     assert "compare-transaction-evidence" in verifier["run"]
 
 
@@ -881,6 +881,21 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
+def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    verifier = jobs["verifier-differential"]
+    producer = next(step for step in verifier["steps"]
+                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
+    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
+    script = next(step["run"] for step in verifier["steps"]
+                  if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
+    assert "--jwk-tool" in script
+    assert "with_disposable_verifier_kms.py" in script
+
+
 def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     native = jobs["native-schema-image-qualification"]
@@ -921,7 +936,7 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
 
 
-def test_public_stack_smoke_uses_three_role_adapter_contract() -> None:
+def test_public_stack_smoke_binds_all_four_kms_images() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     smoke = jobs["public-stack-smoke"]
     plugin = jobs["didcomm-plugin-image-qualification"]
@@ -931,9 +946,9 @@ def test_public_stack_smoke_uses_three_role_adapter_contract() -> None:
     script = build["run"]
 
     assert "build-openbao-didcomm" in smoke["needs"]
-    assert "OPENBAO_DIDCOMM_DIGEST" not in build["env"]
-    assert script.count('{type: "oci"') == 3
-    assert 'marty-ui-oss/openbao-didcomm' not in script
+    assert build["env"]["OPENBAO_DIDCOMM_DIGEST"] == "${{ needs.build-openbao-didcomm.outputs.digest }}"
+    assert script.count('{type: "oci"') == 4
+    assert 'marty-ui-oss/openbao-didcomm' in script
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
 
