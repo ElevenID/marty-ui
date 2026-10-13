@@ -18239,3 +18239,13 @@ PostgreSQL/Raft recovery. The tag and GitHub release for `v1.1.245` were
 absent and protected `main` still matched the run SHA. A fresh no-write claim
 was dispatched as run `38454706545`; do not start a new release transaction
 unless this exact claim passes and its artifact is verified.
+
+2026-10-13 claim evidence correction: no-write claim `38454706545` failed its
+full-Canvas evidence check. The exact-main run `38444511880` did pass, but a
+later independent `ci.yml` workflow-dispatch run `38448996211` on the same
+SHA was cancelled after roughly one minute. The release gate deliberately
+checks the latest full qualification, so it selected that cancelled run.
+No release transaction or tag was created. A new exact-main full CI run
+`38454924907` was dispatched once to restore valid latest-run evidence;
+wait for it to pass before making a new claim. Preserve the failed claim as
+immutable evidence and do not relax the latest-run policy for this incident.
