@@ -14,8 +14,11 @@ protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
 Replacement exact-main full CI `38454924907` passed on attempt 2. Fresh
 no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
 to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
-transaction `38467181336` has passed all four image-level release gates and
-is waiting for protected `stack-release` environment approval. The prior failed claims and release transaction are
+transaction `38467181336` passed all four image-level release gates, then was
+cancelled before publication after its opt-in self-host image-lock preparation
+failed on short Docker Hub names. Preserve its qualified checkpoint; correct
+the external image input and establish the intended publication decision
+before any resume. The prior failed claims and release transaction are
 immutable evidence, not promotion candidates. After signed-image qualification,
 prove clean installed
 KMS-only database/runtime writes, DIDComm and integration-secret recovery,
@@ -1243,7 +1246,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Provider adapters pin AWS/Azure/GCP key versions and check provider response identities; real cloud key/certificate acceptance remains. Seven origin-specific non-exportable HMAC keys, scoped grant mint/verify policies, one-use Redis consumption and Gateway/Flow/Issuance producers are implemented. Signing Keys binds the consumed grant to the selected remote key and exact bytes before KMS use. Exact-head CI, installed-image qualification and real-provider acceptance remain. |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Credentials #313 is merged, Python DIDComm/secret/gRPC and legacy issuer adapters and old tests are removed, native HTTP owner is required, and Python gRPC runtime is disabled. Published artifact inspection and native UI cutover remain release gates. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 pushed head `72de77de6` passed all 22 exact-head jobs, CodeQL, policy and organization checks. Two automated wallet-pairing findings were fixed and resolved. Local plugin, Raft restore/failover, assembled schema and native service probes passed. The #1294 mainline reconciliation retains public-only CSCA fixtures, adds a public-certificate acceptance test and live storage CI cases; focused Rust and workflow tests passed, while full local validation and new hosted checks remain. Published artifacts, real cloud and physical device acceptance remain. |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192 and follow-up UI PRs through #1321 are merged. Protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` passed exact-main full CI `38454924907` on attempt 2. Fresh claim `38467010823` passed; stack release `38467181336` qualified all four image gates and waits for protected environment approval. Signed publication, installed journey, real providers/device and cutover/recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192 and follow-up UI PRs through #1321 are merged. Protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` passed exact-main full CI `38454924907` on attempt 2. Fresh claim `38467010823` passed; stack release `38467181336` qualified all four image gates but was cancelled before publication following a failed opt-in self-host lock preparation. Signed publication, installed journey, real providers/device and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
@@ -18335,3 +18338,33 @@ fixture. GitHub run status is `waiting`; its pending deployment names the
 protected `stack-release` environment and reviewer `burdettadam`. Publication
 requires that environment approval. No tag, GitHub release, promoted version
 image or installed-stack acceptance is claimed from this qualified candidate.
+
+2026-10-13 release cancellation and self-host input diagnosis: run
+`38467181336` reached the protected `stack-release` approval wait with a
+qualified checkpoint, but then completed `cancelled`; `publish-manifest` was
+cancelled, no approval review appears in the run history, and tag `v1.1.245`
+remains absent. Its opt-in `prepare-selfhost-image-lock` job failed with
+`ImageLockError: edge must be an exact OCI sha256 reference`. The supplied
+external-image JSON used short Docker Hub names (`nginx@sha256:...`,
+`redis@sha256:...`, `postgres@sha256:...`); the Python lock builder requires
+fully qualified `docker.io/library/...@sha256:...` references. The workflow's
+earlier jq check accepted the short names, so align that preflight with the
+canonical Python contract or supply fully qualified exact references on a
+resume. Do not silently relax the lock builder or claim self-host preparation
+passed. The qualified checkpoint artifact can potentially support a resume,
+but the cancellation reason and publication decision must be established
+before another release dispatch. The later duplicate run `38467187658` was
+already cancelled while pending and cannot supply the prepared bundle.
+
+Local self-host input follow-up: the exact six-service external map can keep
+the same digests while spelling the Docker Hub roles as
+`docker.io/library/nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d`
+for `edge` and `tunnel-nginx-proxy`,
+`docker.io/library/redis@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065`
+for `redis`, and
+`docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c`
+for `postgres`; the two Keycloak roles retain their existing fully qualified
+`quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2`.
+The six values passed the canonical Python exact-image and Compose-repository
+checks locally; registry inspection confirmed the three Docker Hub digests.
+This fixes the input shape only; self-host bundle qualification has not passed.
