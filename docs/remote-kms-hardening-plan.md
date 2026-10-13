@@ -16,9 +16,10 @@ no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
 to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
 transaction `38467181336` passed all four image-level release gates, then was
 cancelled before publication after its opt-in self-host image-lock preparation
-failed on short Docker Hub names. Preserve its qualified checkpoint; correct
-the external image input and establish the intended publication decision
-before any resume. The prior failed claims and release transaction are
+failed on short Docker Hub names. A separate replacement release run
+`38470482002` is building from the same claim. Follow that run, preserve the
+prior qualified checkpoint, and inspect its optional self-host result before
+publication. The prior failed claims and release transaction are
 immutable evidence, not promotion candidates. After signed-image qualification,
 prove clean installed
 KMS-only database/runtime writes, DIDComm and integration-secret recovery,
@@ -18368,3 +18369,13 @@ for `postgres`; the two Keycloak roles retain their existing fully qualified
 The six values passed the canonical Python exact-image and Compose-repository
 checks locally; registry inspection confirmed the three Docker Hub digests.
 This fixes the input shape only; self-host bundle qualification has not passed.
+
+2026-10-13 concurrent replacement release: a separate `cd.yml` dispatch,
+run `38470482002`, appeared on protected main while the cancellation was being
+diagnosed. I did not launch it. Its resolved artifact names the same claim
+`38467010823`, transaction ID
+`2dd5380432e35b797d94a342b819cba84a6ae5a7e541bcc9cc0210a7a7f4d1f3`,
+source SHA `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` and tag `v1.1.245`,
+but begins again from the `claimed` state; UI/services builds are active.
+Follow this one run to qualification and inspect any optional self-host input
+result. Do not dispatch another transaction while it is live.
