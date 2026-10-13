@@ -58,10 +58,10 @@ impl WalletTransport for WalletHttp {
         }
         let response = request.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
-        let body = response.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
-            return Err(format!("wallet issuance request failed ({status}): {body}"));
+            return Err(format!("wallet issuance request failed ({status})"));
         }
+        let body = response.text().await.map_err(|e| e.to_string())?;
         if body.is_empty() {
             Ok(Value::Null)
         } else {

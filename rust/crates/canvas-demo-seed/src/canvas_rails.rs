@@ -187,19 +187,9 @@ pub async fn run_lti_setup<T: CanvasDockerTransport + Sync>(
         .await
         .map_err(|error| format!("Canvas Rails setup failed: {error}"))?;
     if output.exit_code != 0 {
-        let combined = [output.stdout.trim(), output.stderr.trim()]
-            .into_iter()
-            .filter(|text| !text.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n");
         return Err(format!(
-            "Canvas Rails setup failed (exit {}): {}",
-            output.exit_code,
-            if combined.is_empty() {
-                "no output"
-            } else {
-                &combined
-            }
+            "Canvas Rails setup failed (exit {})",
+            output.exit_code
         ));
     }
     for line in output.stdout.lines().rev() {
@@ -329,9 +319,8 @@ pub async fn canvas_admin_exists<T: CanvasDockerTransport + Sync>(
         .map_err(|error| format!("Canvas admin state check failed: {error}"))?;
     if output.exit_code != 0 {
         return Err(format!(
-            "Canvas admin state check failed (exit {}): {}",
-            output.exit_code,
-            output.stderr.trim()
+            "Canvas admin state check failed (exit {})",
+            output.exit_code
         ));
     }
     Ok(output.stdout.lines().any(|line| line.trim() == "yes"))
@@ -367,9 +356,8 @@ pub async fn ensure_canvas_initial_data<T: CanvasDockerTransport + Sync>(
         .map_err(|error| format!("Canvas initial data setup failed: {error}"))?;
     if output.exit_code != 0 {
         return Err(format!(
-            "Canvas initial data setup failed (exit {}): {}",
-            output.exit_code,
-            output.stderr.trim()
+            "Canvas initial data setup failed (exit {})",
+            output.exit_code
         ));
     }
     if !canvas_admin_exists(transport, cfg).await? {
@@ -398,9 +386,8 @@ pub async fn mint_canvas_admin_token<T: CanvasDockerTransport + Sync>(
     }).await.map_err(|error| format!("Canvas admin token minting failed: {error}"))?;
     if output.exit_code != 0 {
         return Err(format!(
-            "Canvas admin token minting failed (exit {}): {}",
-            output.exit_code,
-            output.stderr.trim()
+            "Canvas admin token minting failed (exit {})",
+            output.exit_code
         ));
     }
     output

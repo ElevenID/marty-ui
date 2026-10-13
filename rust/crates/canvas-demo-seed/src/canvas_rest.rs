@@ -122,13 +122,15 @@ impl CanvasRestTransport for CanvasRestHttp {
             .await
             .map_err(|e| CanvasRestError::Other(e.to_string()))?;
         let status = response.status();
+        // Canvas may echo submitted form fields, including the demo learner
+        // password, in validation failures. Keep only the HTTP status.
+        if !status.is_success() {
+            return Err(CanvasRestError::Http(status.as_u16(), String::new()));
+        }
         let body = response
             .text()
             .await
             .map_err(|e| CanvasRestError::Other(e.to_string()))?;
-        if !status.is_success() {
-            return Err(CanvasRestError::Http(status.as_u16(), body));
-        }
         if body.is_empty() {
             return Ok(Value::Null);
         }

@@ -120,6 +120,8 @@ The preferred demo evidence path is the seeder's signed AGS quiz score event. Th
 legacy ingest endpoint is disabled by default; enable it in the beta service
 environment for this demo and let the seeder construct the timestamp, nonce, and
 HMAC signature without printing the shared secret.
+Set `CANVAS_LEGACY_EVENT_INGEST_ENABLED=true` in the running beta issuance
+service environment before the demo, then restart that service.
 
 ```bash
 cd marty-ui

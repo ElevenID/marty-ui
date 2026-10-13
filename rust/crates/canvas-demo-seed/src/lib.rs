@@ -133,10 +133,10 @@ impl GatewayTransport for GatewayHttp {
         }
         let response = request.send().await.map_err(|e| e.to_string())?;
         let status = response.status();
-        let body = response.text().await.map_err(|e| e.to_string())?;
         if !status.is_success() {
-            return Err(format!("Canvas gateway request failed ({status}): {body}"));
+            return Err(format!("Canvas gateway request failed ({status})"));
         }
+        let body = response.text().await.map_err(|e| e.to_string())?;
         if body.is_empty() {
             Ok(Value::Null)
         } else {

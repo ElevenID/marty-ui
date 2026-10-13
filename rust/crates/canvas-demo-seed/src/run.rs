@@ -35,17 +35,16 @@ fn env_first(env: &HashMap<String, String>, names: &[&str]) -> Option<String> {
     })
 }
 
-fn validate_disposable_secret(
-    env: &HashMap<String, String>,
+// The preflight accepts presence flags only; no credential value can enter its
+// result or the CLI summary through this boundary.
+fn validate_disposable_evidence_settings(
+    is_disposable: bool,
     evidence_enabled: bool,
-) -> Result<(), String> {
-    if env.contains_key("CANVAS_DISPOSABLE_PROJECT")
-        && evidence_enabled
-        && env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_none()
-    {
+    has_evidence_secret: bool,
+) -> Result<(), &'static str> {
+    if is_disposable && evidence_enabled && !has_evidence_secret {
         return Err(
-            "Disposable Canvas evidence requires an explicit CANVAS_CREDENTIALS_SHARED_SECRET"
-                .into(),
+            "Disposable Canvas evidence requires an explicit CANVAS_CREDENTIALS_SHARED_SECRET",
         );
     }
     Ok(())
@@ -173,10 +172,10 @@ async fn create_demo_application(
         .await
         .map_err(|error| error.to_string())?;
     let status = response.status();
-    let body = response.text().await.map_err(|error| error.to_string())?;
     if !status.is_success() {
-        return Err(format!("Demo application create failed ({status}): {body}"));
+        return Err(format!("Demo application create failed ({status})"));
     }
+    let body = response.text().await.map_err(|error| error.to_string())?;
     let result: Value = serde_json::from_str(&body).map_err(|error| error.to_string())?;
     if !result.is_object() || value_id(&result["id"]).is_none() {
         return Err("Demo application create did not return an application payload".into());
@@ -190,7 +189,11 @@ pub async fn run_seed(
     env: &HashMap<String, String>,
     database_url: &str,
 ) -> Result<Value, String> {
-    validate_disposable_secret(env, config.connector.demo_evidence_event_enabled)?;
+    validate_disposable_evidence_settings(
+        env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
+        config.connector.demo_evidence_event_enabled,
+        env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_some(),
+    )?;
     let mut connector = config.connector.clone();
     let wallet_proof = if connector.open_badge_scenario_enabled
         && connector.demo_application_seed_enabled
@@ -432,7 +435,9 @@ pub async fn run_seed(
 
 #[cfg(test)]
 mod tests {
-    use super::{has_ags_evidence_response, run_seed, validate_disposable_secret};
+    use super::{
+        env_first, has_ags_evidence_response, run_seed, validate_disposable_evidence_settings,
+    };
     use crate::build_run_config;
     use serde_json::json;
     use std::collections::HashMap;
@@ -452,14 +457,21 @@ mod tests {
             "CANVAS_DISPOSABLE_PROJECT".to_owned(),
             "marty-canvas-disposable-local".to_owned(),
         )]);
-        assert!(validate_disposable_secret(&env, true).is_err());
+        let valid = |env: &HashMap<String, String>| {
+            validate_disposable_evidence_settings(
+                env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
+                true,
+                env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_some(),
+            )
+        };
+        assert!(valid(&env).is_err());
         env.insert("CANVAS_CREDENTIALS_SHARED_SECRET".into(), "  ".into());
-        assert!(validate_disposable_secret(&env, true).is_err());
+        assert!(valid(&env).is_err());
         env.insert(
             "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
             "local-only-secret".into(),
         );
-        assert!(validate_disposable_secret(&env, true).is_ok());
+        assert!(valid(&env).is_ok());
     }
 
     #[tokio::test]

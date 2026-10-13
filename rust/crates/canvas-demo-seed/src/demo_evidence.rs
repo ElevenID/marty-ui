@@ -235,10 +235,10 @@ pub async fn send_signed_ags(
         .await
         .map_err(|e| e.to_string())?;
     let status = response.status();
-    let body = response.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("Canvas AGS score event failed ({status}): {body}"));
+        return Err(format!("Canvas AGS score event failed ({status})"));
     }
+    let body = response.text().await.map_err(|e| e.to_string())?;
     if body.is_empty() {
         Ok(Value::Null)
     } else {

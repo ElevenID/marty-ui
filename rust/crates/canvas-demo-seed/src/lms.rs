@@ -23,7 +23,7 @@ fn id(value: &Value) -> Result<String, String> {
 
 fn rest_error(error: CanvasRestError) -> String {
     match error {
-        CanvasRestError::Http(code, body) => format!("Canvas REST request failed ({code}): {body}"),
+        CanvasRestError::Http(code, _) => format!("Canvas REST request failed ({code})"),
         CanvasRestError::Other(message) => message,
     }
 }
@@ -207,4 +207,16 @@ pub async fn seed_canvas_lms_objects<
         summary["quiz"] = quiz_surface;
     }
     Ok(CanvasLmsSeedResult { summary })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rest_error;
+    use crate::CanvasRestError;
+
+    #[test]
+    fn canvas_http_error_does_not_echo_learner_password() {
+        let error = CanvasRestError::Http(422, "pseudonym[password]=private-value".into());
+        assert_eq!(rest_error(error), "Canvas REST request failed (422)");
+    }
 }
