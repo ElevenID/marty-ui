@@ -18095,3 +18095,14 @@ Ruff and diff checks passed. Hold a #1319 correction push until #1318 reaches
 protected `main`, then merge its actual protected commit and push one corrected
 head for required CI. The local merge of #1318's PR head is still uncommitted
 in the UI worktree and is only a conflict-resolution rehearsal.
+
+2026-10-13 protected-main reconciliation: UI #1318 merged through its green
+merge group as `218abd1e2391788f3186b229984f4b25aba58b7d`. The UI #1319
+rehearsal was aborted and replaced with an actual merge of this protected-main
+commit. The resolved workflow uses the attested, SHA-256 and Git-tree checked
+Core v0.2.2 source archive from #1318 and the disposable OpenBao/JWK fixture
+from #1319, with only one Core producer build. The merged branch passed 69
+release/transaction tests, Ruff and diff checks locally and was pushed to
+UI #1319 at `f3dd42f11453aaeb3a7d8e17ea5c4a1011fd8cea`. Its new
+exact-head hosted checks and subsequent merge-group run remain required;
+earlier green checks on `f20cd40b0` cannot qualify this merge head.
