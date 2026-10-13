@@ -18491,3 +18491,16 @@ workflow step and its tests; local 51-pass/1-skip focused tests and the
 six-role Compose render passed again. Its fresh hosted CI and protected
 merge remain pending. Do not make a new exact-main claim until the final
 preflight PR and any required CI correction have landed.
+
+Release sequencing refinement: an exact-main full CI workflow-dispatch run
+`38483617850` was independently queued for protected main `79f398b08`
+after #1324 merged. It is the policy-required full qualification run for
+that source; do not dispatch a duplicate. #1323 remains open and outside the
+merge queue while its clean-head CI runs. Its early input preflight is a
+cost-saving guard, not required for the already validated six-role external
+map or for the KMS runtime. If exact-main CI passes and main remains at
+`79f398b08`, proceed with a fresh no-write claim and one release on that
+exact source rather than spending another full CI cycle solely to include
+#1323. Keep #1323 for later protected merge and do not let it silently
+advance main during this transaction. This supersedes the preceding
+wait-for-preflight claim sequencing, not its final quality goal.
