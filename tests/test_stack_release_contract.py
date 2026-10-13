@@ -796,6 +796,29 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
     assert "validate-sbom" in verifier["run"]
 
 
+def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
+    release = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    steps = release["jobs"]["verifier-differential"]["steps"]
+    producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
+    assert "--source-digest \"$commit\"" in producer["run"]
+    assert "--deny-self-hosted-runners" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
+    assert "--expected-sha256 \"$digest\"" in producer["run"]
+    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert "cargo +1.97.1 build --locked" in producer["run"]
+    verifier = next(
+        step for step in steps
+        if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle"
+    )
+    assert "scripts/with_disposable_verifier_kms.py" in verifier["run"]
+    assert "--bin marty-test-signer-agent" in producer["run"]
+    assert "--agent \"$GITHUB_WORKSPACE/core-source/target/debug/marty-test-signer-agent\"" in verifier["run"]
+    assert "compare-transaction-evidence" in verifier["run"]
+
+
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     workflow = _text(".github/workflows/cd.yml")
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
@@ -858,17 +881,15 @@ def test_stack_release_uses_read_only_default_permissions() -> None:
         assert permissions.get("security-events") != "write"
 
 
-def test_verifier_kms_producer_checkout_is_an_immutable_release_locked_commit() -> None:
+def test_verifier_kms_producer_is_an_attested_release_locked_commit() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     verifier = jobs["verifier-differential"]
-    lock = json.loads(_text("release/stack-lock.json"))
-    core = next(component for component in lock["components"]
-                if component["name"] == "marty-core-python")
-    checkout = next(step for step in verifier["steps"]
-                    if step.get("with", {}).get("repository") == "ElevenID/marty-core")
-    assert checkout["with"]["ref"] == core["commit"]
-    assert "${{" not in checkout["with"]["ref"]
-    assert checkout["with"]["persist-credentials"] is False
+    producer = next(step for step in verifier["steps"]
+                    if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert 'select(.repository == "ElevenID/marty-core")' in producer["run"]
+    assert 'all(.[]; . == [$commit, $version])' in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
     script = next(step["run"] for step in verifier["steps"]
                   if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle")
     assert "--jwk-tool" in script

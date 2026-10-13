@@ -1043,6 +1043,23 @@ split. A7 remains deferred. The current Core main selector includes deleted and
 renamed files, package-owned non-Rust fixtures, and unknown-input fallback;
 an older local checkout must not be used to reimplement those fixes.
 
+October 13 A7 outcome: Core [#359](https://github.com/ElevenID/marty-core/pull/359)
+merged the preflight separation after #355 while retaining the required
+security, compatibility, and aggregate gates. On current-main parentage,
+the successful [#355 PR run](https://github.com/ElevenID/marty-core/actions/runs/38186561651)
+spent 32s in Fast Rust Preflight, 498s in Affected Rust Tests, 538s in
+Rust Lint and Compatibility, and 820s in the parallel KMS Role and Public-Key
+Graphs job. That KMS job spent 528s on graph checks and 268s on disposable
+OpenBao issuer signing. The successful [protected merge run](https://github.com/ElevenID/marty-core/actions/runs/38187637906)
+spent 36s in preflight and 730s in Windows Platform Tests; the later
+[exact-main dispatch](https://github.com/ElevenID/marty-core/actions/runs/38189217476)
+spent 33s in preflight and 1039s in Windows Platform Tests. Preflight is no
+longer the measured tail, so the separation objective is implemented; these
+runs have different event scopes and code from the older baseline and do not
+prove a numeric end-to-end speedup. Further A7 work should inspect compatible
+build reuse inside the 528s KMS graph step and Windows platform tail before
+adding another job or cache layer. Do not omit the 268s real OpenBao proof.
+
 ## Next renewal decomposition: bounded obligations (unpublished)
 
 The additive library owner is
