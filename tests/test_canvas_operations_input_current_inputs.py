@@ -21,6 +21,7 @@ ADDITIONAL = frozenset(
     {
         "contracts/canvas-operations-input-oracle.json",
         "contracts/canvas-worker-consumer-range-oracle.json",
+        "rust/services/issuance/tests/support/canvas_operations_input_http.rs",
         "rust/services/issuance/tests/support/canvas_published_database.rs",
         "scripts/prepare_canvas_published_schema.py",
     }
@@ -112,6 +113,39 @@ def _assert_dispatch(root: Path, evidence: dict) -> None:
     assert 'format!("contracts/canvas-{scenario}-scenarios.json")' in harness
 
 
+def _assert_replay_links(root: Path) -> None:
+    fast = (root / "rust/services/issuance/src/canvas_operations.rs").read_text(
+        encoding="utf-8"
+    )
+    fast_import = fast.split("mod input_http {", 1)[1].split("\n    }", 1)[0]
+    assert '"/tests/support/canvas_operations_input_http.rs"' in fast_import, (
+        "Review fast operations-input HTTP helper inclusion"
+    )
+    fast_cases = fast.split(
+        "async fn frozen_operations_input_rejections_do_not_require_postgres()", 1
+    )[1].split("async fn every_frozen_operation_is_mounted", 1)[0]
+    assert "input_http::request_case(&router, case)" in fast_cases, (
+        "Review fast operations-input HTTP helper callsite"
+    )
+
+    replay = (
+        root / "rust/services/issuance/tests/support/canvas_operations_read_replay.rs"
+    ).read_text(encoding="utf-8")
+    replay_import = replay.split("/// Exercise the unchanged handlers", 1)[0]
+    assert '#[path = "canvas_operations_input_http.rs"]' in replay_import, (
+        "Review database operations-input HTTP helper inclusion"
+    )
+    assert (
+        "pub(super) use input_http::{request_body, request_case};" in replay_import
+    ), "Review database operations-input HTTP helper export"
+    database_cases = replay.split("let mut real_database_cases = 0;", 1)[1].split(
+        "assert_eq!(real_database_cases, 39);", 1
+    )[0]
+    assert "request_case(&router, case).await" in database_cases, (
+        "Review database operations-input HTTP helper callsite"
+    )
+
+
 def check_inputs(evidence: dict, root: Path) -> None:
     assert_current_inputs(
         evidence,
@@ -124,12 +158,78 @@ def check_inputs(evidence: dict, root: Path) -> None:
         additional_inputs=ADDITIONAL,
     )
     _assert_dispatch(root, evidence)
+    _assert_replay_links(root)
 
 
 def test_operations_input_current_capture_inputs() -> None:
     evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
     check_inputs(evidence, ROOT)
-    assert len(evidence["sha256"]) == 6
+    assert len(evidence["sha256"]) == 7
+
+
+def test_operations_input_http_helper_drift_fails(tmp_path: Path) -> None:
+    evidence = json.loads(EVIDENCE.read_text(encoding="utf-8"))
+    for name in evidence["sha256"]:
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / name).read_bytes())
+    helper = (
+        tmp_path
+        / "rust/services/issuance/tests/support/canvas_operations_input_http.rs"
+    )
+    helper.write_bytes(helper.read_bytes() + b"\n// drift\n")
+    with pytest.raises(AssertionError, match="operations-input input drift"):
+        check_inputs(evidence, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("source", "original", "message"),
+    [
+        (
+            "rust/services/issuance/src/canvas_operations.rs",
+            '"/tests/support/canvas_operations_input_http.rs"',
+            "fast operations-input HTTP helper inclusion",
+        ),
+        (
+            "rust/services/issuance/src/canvas_operations.rs",
+            "input_http::request_case(&router, case)",
+            "fast operations-input HTTP helper callsite",
+        ),
+        (
+            "rust/services/issuance/tests/support/canvas_operations_read_replay.rs",
+            '#[path = "canvas_operations_input_http.rs"]',
+            "database operations-input HTTP helper inclusion",
+        ),
+        (
+            "rust/services/issuance/tests/support/canvas_operations_read_replay.rs",
+            "pub(super) use input_http::{request_body, request_case};",
+            "database operations-input HTTP helper export",
+        ),
+        (
+            "rust/services/issuance/tests/support/canvas_operations_read_replay.rs",
+            "request_case(&router, case).await",
+            "database operations-input HTTP helper callsite",
+        ),
+    ],
+)
+def test_operations_input_http_helper_links_fail_closed(
+    tmp_path: Path, source: str, original: str, message: str
+) -> None:
+    for name in (
+        "rust/services/issuance/src/canvas_operations.rs",
+        "rust/services/issuance/tests/support/canvas_operations_read_replay.rs",
+    ):
+        target = tmp_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / name).read_bytes())
+    target = tmp_path / source
+    text = target.read_text(encoding="utf-8")
+    assert original in text
+    target.write_text(
+        text.replace(original, "removed-helper-link", 1), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match=message):
+        _assert_replay_links(tmp_path)
 
 
 def test_operations_input_producer_drift_fails(tmp_path: Path) -> None:
