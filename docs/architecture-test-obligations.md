@@ -146,3 +146,18 @@ authentication chain so future dependency review cannot infer HTTP coverage
 from the gRPC witness alone. This is shadow dependency
 evidence only: service changes still select the complete Rust workspace, and
 the existing real database/process tests remain required.
+
+## Trust Profile-to-Organization authorization input
+
+Trust Profile reads `ORG_GRPC_TARGET`, injects its native Organization gRPC
+control plane into the application, and checks organization-scoped requests
+through `GetMember`. The client sends the configured service token, checks that
+the returned user and organization match the request, requires active
+membership, then checks the requested permission or owner/console access.
+Organization authenticates and serves the membership lookup; base Compose
+binds the `trust-profile` service to `organization:9002`. The A3 planner now
+records source-scoped witnesses for the request, authorization decisions,
+provider handler and registration, and deployment binding. This is diagnostic
+dependency evidence, not independent proof of gRPC runtime behavior or
+permission to narrow the protected Rust checks. Existing service tests retain
+their owners and execution requirements.
