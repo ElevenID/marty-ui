@@ -17574,3 +17574,14 @@ clean. It entered the protected merge queue at position 1 on combined head
 `56e79f2ba9c6eb88688a3978fdc8f1ed680db6de`; merge-group CI run
 `38362290721` and companion workflows are in progress. This source pass is
 not yet an exact-protected-main full qualification or release claim.
+
+2026-10-13 protected merge and exact-main release qualification:
+UI #1312 passed all five merge-group workflows on combined head
+`56e79f2ba9c6eb88688a3978fdc8f1ed680db6de`, including CI run
+`38362290721` with the corrected Canvas preflight, complete Canvas job and
+OpenBao recovery. The queue merged #1312 to protected main at that same SHA
+at `2026-10-13T07:55:51Z`. Full `ci.yml` workflow-dispatch run
+`38365906320` was started on `main` at that exact SHA; it is pending at this
+checkpoint. This separate full run must pass before `prepare-stack-tag.yml`
+can claim `v1.1.245`. Preserve both previous failed full runs as evidence;
+no tag, release, or signed installed acceptance is claimed here.
