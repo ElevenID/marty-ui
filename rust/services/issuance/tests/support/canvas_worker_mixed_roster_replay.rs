@@ -284,6 +284,14 @@ pub async fn replay(
             "synthetic-mixed-roster-issuer-sign-key-0001".into(),
         ),
         ("SIGNING_KEYS_INTERNAL_URL".into(), signer_origin.into()),
+        (
+            "BAO_ADDR".into(),
+            std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_ORIGIN").unwrap(),
+        ),
+        (
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE".into(),
+            std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_TOKEN_FILE").unwrap(),
+        ),
     ]);
     let stages = case["stages"].as_array().unwrap();
     let expected = reference["observations"].as_array().unwrap();
