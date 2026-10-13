@@ -17945,3 +17945,17 @@ source-built migrations image plus exact signed UI/services/OpenBao digests.
 Compose config and shell syntax passed. PR #435 is open and its hosted CI,
 protected merge and signed release are pending. Do not pin v1.2.86 in UI until
 its protected signed source archive and provenance are verified.
+
+2026-10-13 UI integration with protected main: upstream UI #1317 merged as
+`e07d667bc4e74d4b1f1e647adba402899a648e7a` while the broad KMS release
+fix was local. It correctly adopted schema-v3 qualification but shortened the
+public smoke candidate back to three OCI images to fit v1.2.84's adapter.
+That temporary correction cannot qualify the KMS-only stack as one signed
+transaction. A new local UI worktree/branch
+`security/kms-release-qualification-broad-20261013` starts from this protected
+main, cherry-picks the unique verifier KMS and tenant-bound bootstrap fixes,
+and restores all four signed digests in the public smoke candidate. Its local
+release/bootstrap selection passed 62 tests. The old UI release-fix worktree
+is preserved unpushed. Hold the new UI branch until integration #435 merges
+and its v1.2.86 source archive is signed, then pin that exact digest/commit
+once and run the complete local release matrix before hosted CI.
