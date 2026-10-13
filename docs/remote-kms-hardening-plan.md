@@ -18121,3 +18121,11 @@ keys; both keys were non-exportable and cross-key signing was denied. This
 qualifies the pinned producer input locally, not the final signed services
 image or completed release transaction. UI #1319 corrected-head CI run
 `38415379825` is still in progress.
+
+2026-10-13 external-provider readiness check: this local shell has no AWS,
+Azure or GCP CLI installed and no standard AWS profile/access-key/web-identity,
+Azure tenant/client/federated-token, or Google application-credentials
+environment variable configured. This does not prove that hosted or user-held
+provider access is unavailable; it does mean the current local machine cannot
+run real AWS/Azure/GCP BYOK acceptance yet. Keep K6 open and obtain a scoped
+real-provider execution context after the signed installed stack is qualified.
