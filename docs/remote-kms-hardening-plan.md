@@ -18468,3 +18468,14 @@ requirement. After the final checks passed, the PR was explicitly added to
 the protected merge queue at position 1. Protected merge, fresh claim,
 publication, installed consumer, real provider/device and cutover evidence
 remain open.
+
+Self-host preflight follow-up: UI PR #1323 was restacked on reviewed #1324
+and its overlapping alternate operator check removed. The previous #1323
+head is preserved locally as
+`backup/selfhost-input-preflight-prestack-20261013`; current head
+`982f21613` adds only early external-image JSON and all-profile Compose
+role-closure validation before costly release builds. Focused local tests:
+51 passed, one `jq` execution case skipped on Windows. A local Docker
+Compose v5.4.0 all-profile render matched all six external roles in the
+prepared `v1.1.245` input map. Its new hosted CI is running. PR #1324's
+protected merge-group CI remains active at this checkpoint.
