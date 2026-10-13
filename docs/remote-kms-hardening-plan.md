@@ -18106,3 +18106,18 @@ release/transaction tests, Ruff and diff checks locally and was pushed to
 UI #1319 at `f3dd42f11453aaeb3a7d8e17ea5c4a1011fd8cea`. Its new
 exact-head hosted checks and subsequent merge-group run remain required;
 earlier green checks on `f20cd40b0` cannot qualify this merge head.
+
+2026-10-13 attested Core verifier input qualification: the release-pinned
+`marty-core-workspace-0.2.2.tar.gz` downloaded from Core v0.2.2 matched SHA-256
+`3674878ae6cfbfcdce6270eeb69f0a5e614d820b5e1437ddbcd0f20f61acc8b3`.
+GitHub attestation verification accepted tag `refs/tags/v0.2.2`, source commit
+`f0819fa0a7783eaebc2efaa105908809244c75a4` and a hosted runner. The
+bounded extractor checked the archive root and content against that exact Git
+tree. The extracted archive built both locked Rust test-wallet producer and
+signer-agent binaries under Rust 1.97.1. A fresh disposable OpenBao TLS
+fixture used those binaries and the native Rust public-JWK converter to
+produce a valid SD-JWT presentation with separate remote issuer and holder
+keys; both keys were non-exportable and cross-key signing was denied. This
+qualifies the pinned producer input locally, not the final signed services
+image or completed release transaction. UI #1319 corrected-head CI run
+`38415379825` is still in progress.
