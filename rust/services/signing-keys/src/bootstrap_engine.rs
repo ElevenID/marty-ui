@@ -349,7 +349,6 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
             .load(&registry_key)
             .await
             .map_err(RunError::Identity)?,
-        &org,
         &records,
     )
     .map_err(|error| RunError::Identity(error.to_string()))?;
