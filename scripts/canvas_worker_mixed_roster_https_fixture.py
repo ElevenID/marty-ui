@@ -97,9 +97,11 @@ def _validate_signing_grant(value, payload, minted_inputs):
 
 
 class MixedRosterHttpsFixture(WorkerHttpsFixture):
-    def __init__(self, matrix):
+    def __init__(self, matrix, *, signer_contract="grant_bound"):
         super().__init__()
+        assert signer_contract in {"grant_bound", "pinned_published"}
         self.matrix = matrix
+        self.signer_contract = signer_contract
         self.signer_requests = []
         self.token_scopes = []
         self.signer_operations = []
@@ -198,7 +200,7 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                 assert parse_qs(url.query) == expected_query
                 expected_key = (
                     ISSUER_SIGN_KEY
-                    if path == "issuer-dids/sign"
+                    if path == "issuer-dids/sign" and owner.signer_contract == "grant_bound"
                     else "synthetic-startup-api-key"
                 )
                 assert self.headers.get("X-API-Key") == expected_key
@@ -218,23 +220,22 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                     owner.signer_operations.append("resolve_lti_tool_identity")
                     # Match the existing controlled signer contract's public
                     # selector shape. No key or credential is generated here.
-                    _respond(
-                        self,
-                        {
-                            "ok": True,
-                            "issuer_did": ISSUER_DID,
-                            "verification_method_id": VERIFICATION_METHOD,
-                            "signing_key_reference": SIGNING_KEY_REFERENCE,
-                            "public_jwk": {
-                                "kid": VERIFICATION_METHOD,
-                                "kty": "RSA",
-                                "alg": "RS256",
-                                "use": "sig",
-                                "n": "public-modulus",
-                                "e": "AQAB",
-                            },
+                    resolution = {
+                        "ok": True,
+                        "issuer_did": ISSUER_DID,
+                        "verification_method_id": VERIFICATION_METHOD,
+                        "public_jwk": {
+                            "kid": VERIFICATION_METHOD,
+                            "kty": "RSA",
+                            "alg": "RS256",
+                            "use": "sig",
+                            "n": "public-modulus",
+                            "e": "AQAB",
                         },
-                    )
+                    }
+                    if owner.signer_contract == "grant_bound":
+                        resolution["signing_key_reference"] = SIGNING_KEY_REFERENCE
+                    _respond(self, resolution)
                 except (AssertionError, KeyError, ValueError, TypeError):
                     owner.failures.append("Synthetic signer resolution contract failed")
                     _respond(self, {}, 500)
@@ -245,29 +246,34 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                         "issuer-dids/sign", {"organization_id": ["org-review"]}
                     )
                     body = json.loads(_body(self))
-                    assert set(body) == {
+                    expected_fields = {
                         "issuer_did",
                         "credential_format",
                         "key_purpose",
-                        "key_reference",
                         "payload_b64",
                         "algorithm",
                     }
+                    if owner.signer_contract == "grant_bound":
+                        expected_fields.add("key_reference")
+                    assert set(body) == expected_fields
                     assert body["issuer_did"] == ISSUER_DID
                     assert body["credential_format"] == "lti_tool_jwt"
                     assert body["key_purpose"] == "lti_tool_signing"
-                    assert body["key_reference"] == SIGNING_KEY_REFERENCE
                     assert body["algorithm"] == "RS256"
                     payload = _decode(body["payload_b64"])
                     owner._validate_assertion(payload.decode("ascii"))
-                    with (
-                        owner.grant_server.RequestHandlerClass.request_observation_lock
-                    ):
-                        _validate_signing_grant(
-                            self.headers["X-Marty-Signing-Grant"],
-                            payload,
-                            owner.grant_inputs,
-                        )
+                    if owner.signer_contract == "grant_bound":
+                        assert body["key_reference"] == SIGNING_KEY_REFERENCE
+                        with (
+                            owner.grant_server.RequestHandlerClass.request_observation_lock
+                        ):
+                            _validate_signing_grant(
+                                self.headers["X-Marty-Signing-Grant"],
+                                payload,
+                                owner.grant_inputs,
+                            )
+                    else:
+                        assert self.headers.get("X-Marty-Signing-Grant") is None
                     owner.signer_operations.append("sign_lti_tool_assertion")
                     _respond(
                         self,
