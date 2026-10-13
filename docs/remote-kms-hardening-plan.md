@@ -17799,3 +17799,13 @@ and protected merge, release and pin the corrected harness, review and land
 the broad UI release-fix PR, repeat exact-image hosted qualification and
 protected publication, then run installed KMS-only provider/device, clean
 database and cutover/recovery acceptance. Keep the goal active.
+
+2026-10-13 protected integration landing: #433's corrected head `24f1b06`
+passed its exact-head source, policy, security, CodeQL, artifact and oracle
+checks. A review thread about the retired historical transaction lane was
+resolved after confirming the lane was removed and its frozen pin preserved.
+Protected main merged #433 as `f3e9e4b01fb10bf77dde31c6672998399ad2d88e`.
+The PR also prepared version 1.2.85 and corrected README coverage claims.
+Annotated `v1.2.85` now points to that exact protected-main commit; release
+workflow `38396954947` is in progress. Do not pin it in UI until its signed
+source archive, digest, SBOM and provenance are published and verified.
