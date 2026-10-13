@@ -18200,3 +18200,12 @@ signer agent and public-JWK tool. Sixty focused Python release/schema tests,
 Ruff, Python compilation and diff checks passed. The release workflow still
 needs hosted CI, protected merge, an exact-main claim and a fresh signed-image
 qualification; the prior failed transaction cannot be promoted.
+
+2026-10-13 UI release-correction PR #1321 exact-head CI run `38436511066`
+completed successfully on `22460a595ba2f387d278410e96ceae1ad404a1a8`.
+This includes release contracts, native Rust contracts, isolated Canvas
+databases, service images and OpenBao DIDComm plugin with coordinated
+PostgreSQL/Raft integration-secret recovery. CodeQL, organization quality,
+dependency review and policy checks also passed; no inline review finding was
+reported. Protected merge and a new exact-main full CI run remain required
+before a fresh `v1.1.245` no-write claim and release transaction.
