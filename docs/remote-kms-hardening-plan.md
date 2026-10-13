@@ -11,12 +11,13 @@ the service or release boundary.
 Current gate (2026-10-13): Core #355, Credentials #313, the grouped UI feature
 #1192 and subsequent UI hardening PRs through #1321 are merged. The corrected
 protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
-Exact-main full CI `38444511880` passed, but a later cancelled duplicate run
-invalidated it under the release claim's latest-run rule. Replacement full CI
-`38454924907` is running; wait for its terminal success, then make one fresh
-no-write `v1.1.245` claim and qualify a new signed stack transaction. The
-prior failed claims and failed release transaction are immutable evidence, not
-promotion candidates. After signed-image qualification, prove clean installed
+Replacement exact-main full CI `38454924907` passed on attempt 2. Fresh
+no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
+to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
+transaction `38467187658` is running; qualify all four image roles and release
+gates before publication. The prior failed claims and release transaction are
+immutable evidence, not promotion candidates. After signed-image qualification,
+prove clean installed
 KMS-only database/runtime writes, DIDComm and integration-secret recovery,
 feature journeys, cutover and rollback. Real AWS/Azure/GCP and physical-device
 acceptance remain open because access is not provisioned. Do not mark K6,
@@ -18287,3 +18288,24 @@ hosted intermittent startup miss. A neighboring packaged-Issuance acceptance
 test already uses a longer bounded health probe with early child-exit detection
 for busy runners; use that as the focused fixture correction if attempt 2
 repeats the failure. No local or hosted pass substitutes for the release gates.
+
+2026-10-13 replacement full-CI result: run `38454924907` attempt 2 completed
+successfully on protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
+Only the failed Canvas job was rerun; all other selected jobs had passed on
+attempt 1. The latest workflow-dispatch full CI on that exact SHA is now this
+successful run, superseding the cancelled duplicate for the release gate.
+Tag `v1.1.245` was absent and main still matched the qualified SHA. Fresh
+no-write claim `38467010823` was dispatched; wait for its terminal result and
+inspect its claim artifact before starting a new stack release transaction.
+
+2026-10-13 fresh release claim and transaction: no-write claim `38467010823`
+completed successfully and published `stack-release-claim-v1.1.245`. Its
+`release-transaction.json` is `claimed` with transaction ID
+`2dd5380432e35b797d94a342b819cba84a6ae5a7e541bcc9cc0210a7a7f4d1f3`,
+source SHA `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`, stack-lock digest
+`sha256:eb0b92f9df2445f37bf2be6feb8bbc0ed821018674ac2be49462c54894cae924`,
+and all four version tags absent. Evidence names the successful merge-group
+workflows and latest exact-main full CI `38454924907`. Protected main still
+matched and the tag remained absent, so stack release run `38467187658` was
+dispatched with `claim_run_id=38467010823`. Wait for its qualification gates;
+do not treat a running transaction as a signed published release.
