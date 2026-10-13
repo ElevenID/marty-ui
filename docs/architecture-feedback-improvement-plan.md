@@ -4025,10 +4025,25 @@ format, and diff checks passed. GitHub review identified the P2 runtime gap
 and then a missing source-chain assertion before merge. The evidence now binds
 the client GET, handler authorization, required user header, and 401 response
 mapping; independent re-review found no remaining P1-P3 issue. The corrected
-head still requires hosted exact-head and
-protected validation before promotion; no feedback saving is claimed. The
-missing authenticated read requires a separately reviewed runtime fix with
-permission-preserving tests.
+head passed exact-head [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38330401501)
+and full protected [combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38331644771),
+then merged as `14809afc1`. The PR release-contract job took 11m15s and the
+protected CI workflow took 30m45s under different validation scopes. Neither
+duration is a speedup claim. The missing authenticated read has a separately
+reviewed runtime fix in [#1307](https://github.com/ElevenID/marty-ui/pull/1307),
+which still requires protected validation before promotion.
+
+October 13 A6 planner-document PR fast-path candidate (local):
+`docs/architecture-test-obligations.md` records diagnostic test ownership but
+is not a shipped runtime or release-bundle input. Allow it as auxiliary input
+only when an exact planner source/test file also changes, so the bounded
+planner and workflow-policy tests can replace the full repository release
+suite on that PR head. Document-only, mixed code/workflow, missing-base, and
+merge-group inputs retain their prior conservative selection; all protected
+combined-head checks remain full. The exact classifier regression and full
+148-test workflow-policy suite passed locally, and independent review found
+no P1-P3 issue. Hosted before/after timing and merge validation are pending;
+no saving is claimed.
 
 October 13 runtime follow-up (local, not yet merged): Issuance now reads
 `/internal/revocation-profiles/{profile_id}/issuance-context` with the existing
