@@ -193,6 +193,93 @@ def test_every_frozen_stage_serves_distinct_roster_membership_and_scores(
     )
 
 
+def test_pinned_published_signer_keeps_historical_request_shape(fixture_module, matrix):
+    with fixture_module.MixedRosterHttpsFixture(
+        matrix, signer_contract="pinned_published"
+    ) as fixture:
+        fixture.set_stage(matrix["cases"][0]["stages"][0])
+        selectors = {
+            "issuer_did": fixture_module.ISSUER_DID,
+            "credential_format": "lti_tool_jwt",
+            "key_purpose": "lti_tool_signing",
+            "algorithm": "RS256",
+        }
+        resolve_path = "/internal/signing-keys/resolve-issuer-did?" + urlencode(
+            {"organization_id": "org-review", **selectors}
+        )
+        status, resolved = request(
+            fixture,
+            "GET",
+            resolve_path,
+            signer=True,
+            headers={"X-API-Key": "synthetic-startup-api-key"},
+        )
+        assert status == 200
+        assert set(resolved) == {
+            "ok",
+            "issuer_did",
+            "verification_method_id",
+            "public_jwk",
+        }
+        assert "signing_key_reference" not in resolved
+        sign_path = "/internal/signing-keys/issuer-dids/sign?organization_id=org-review"
+        status, signed = request(
+            fixture,
+            "POST",
+            sign_path,
+            signer=True,
+            headers={"X-API-Key": "synthetic-startup-api-key"},
+            body=json.dumps(
+                {
+                    **selectors,
+                    "payload_b64": encoded(
+                        signing_input(fixture_module, fixture).encode()
+                    ),
+                }
+            ),
+        )
+        assert status == 200 and signed["signature_raw_b64"] == fixture_module.SIGNATURE
+        assert fixture.signer_operations == [
+            "resolve_lti_tool_identity",
+            "sign_lti_tool_assertion",
+        ]
+        assert (
+            fixture.grant_operations
+            == fixture.grant_requests
+            == fixture.grant_inputs
+            == []
+        )
+        assert fixture.failures == []
+
+
+def test_grant_bound_signer_rejects_historical_unsigned_request(fixture_module, matrix):
+    with (
+        pytest.raises(
+            AssertionError, match="Synthetic signer assertion contract failed"
+        ),
+        fixture_module.MixedRosterHttpsFixture(matrix) as fixture,
+    ):
+        fixture.set_stage(matrix["cases"][0]["stages"][0])
+        assert request(
+            fixture,
+            "POST",
+            "/internal/signing-keys/issuer-dids/sign?organization_id=org-review",
+            signer=True,
+            headers={"X-API-Key": fixture_module.ISSUER_SIGN_KEY},
+            body=json.dumps(
+                {
+                    "issuer_did": fixture_module.ISSUER_DID,
+                    "credential_format": "lti_tool_jwt",
+                    "key_purpose": "lti_tool_signing",
+                    "algorithm": "RS256",
+                    "payload_b64": encoded(
+                        signing_input(fixture_module, fixture).encode()
+                    ),
+                }
+            ),
+        ) == (500, {})
+
+
 def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
     fixture_module, matrix
 ):
