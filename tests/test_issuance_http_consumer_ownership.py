@@ -86,5 +86,10 @@ def test_canvas_manual_routes_use_gateway_not_direct_native_or_legacy_ports():
         '"${MARTY_API_BASE_URL:-http://localhost:8000}/v1/integrations/canvas/ags'
         not in guide
     )
-    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true" in guide
-    assert "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true" in guide
+    disposable = guide.split("Disposable fixture demo values", 1)[1].split("For beta,", 1)[0]
+    beta = guide.rsplit("For beta,", 1)[1]
+    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true" in disposable
+    assert "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true" in disposable
+    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=false" in beta
+    assert "CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=false" in beta
+    assert "CANVAS_LEGACY_EVENT_INGEST_ENABLED=true" not in beta

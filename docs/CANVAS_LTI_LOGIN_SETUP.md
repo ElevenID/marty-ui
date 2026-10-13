@@ -201,6 +201,7 @@ Minimum ElevenID values:
 
 Disposable fixture demo values (do not use these synthetic evidence settings on beta):
 
+- `CANVAS_LEGACY_EVENT_INGEST_ENABLED=true`
 - `CANVAS_OPEN_BADGE_SCENARIO_ENABLED=true`
 - `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`
 - `CANVAS_PROGRAM_BINDING_EVIDENCE_TYPE=canvas.quiz_score`
