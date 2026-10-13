@@ -17680,3 +17680,16 @@ the PR green before that attempt completes. If it repeats, inspect or
 improve owned child diagnostics and KMS fixture readiness locally before
 another hosted run; do not weaken KMS-only startup or drop the recovery
 assertions to clear CI.
+
+2026-10-13 UI #1315 source rerun and protected queue: failed-job attempt 2
+of `38374343103` passed Canvas and CI Gate; all required PR checks are green
+on exact source head `ceb4230c16be165a0979bd7ac7ae3b9cee36cf7b`. The
+first attempt's renewal-health failure remains evidence of a possible
+startup timing/diagnostic weakness, not a KMS-only feature regression claim.
+GitHub reports #1315 already queued. PR #1316 is ahead on merge-group head
+`75f48bec6521bb0c76e481f83ab8882091d16ade` (CI `38380586417`), and
+#1315's combined merge-group head is
+`9b5d14559efd6630d463e9457ee3a3590571de06` (CI `38381184034`,
+queued at this checkpoint). Protected main is `60e94ab382c67b4cc5db1a85096440b31fcd46b8`.
+Do not dispatch full-main CI until #1315 actually merges and exact main is
+known; no tag or signed release has been qualified.
