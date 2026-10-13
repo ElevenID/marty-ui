@@ -4020,10 +4020,12 @@ the provider requires it. For an existing profile, the provider returns 401
 and the readiness client substitutes an empty document. The new shadow edge
 records both client paths and this failed-read semantics without changing the
 selected Rust matrix. Local planner tests passed (54 tests, one existing skip,
-484 subtests), and the broader CI workflow suite passed (148 tests); Ruff,
-format, and diff checks passed. GitHub review identified this P2 runtime gap
-before merge. The corrected evidence passed independent re-review with no
-remaining P1-P3 issue. The corrected head still requires hosted exact-head and
+486 subtests), and the broader CI workflow suite passed (148 tests); Ruff,
+format, and diff checks passed. GitHub review identified the P2 runtime gap
+and then a missing source-chain assertion before merge. The evidence now binds
+the client GET, handler authorization, required user header, and 401 response
+mapping; independent re-review found no remaining P1-P3 issue. The corrected
+head still requires hosted exact-head and
 protected validation before promotion; no feedback saving is claimed. The
 missing authenticated read requires a separately reviewed runtime fix with
 permission-preserving tests.

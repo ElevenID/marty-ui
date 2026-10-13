@@ -2254,7 +2254,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 (
                     "profile_route_marker",
                     "profile_auth_marker",
+                    "profile_auth_delegate_marker",
                     "profile_user_marker",
+                    "profile_unauthorized_status_marker",
                     "allocation_route_marker",
                     "revocation_route_marker",
                 ),
@@ -2291,12 +2293,20 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "async fn activate_profile(", 1
         )[0]
         self.assertIn(edge["profile_auth_marker"], profile_handler)
+        authorization_handler = provider_source.split("    async fn authorize(", 1)[
+            1
+        ].split("\n    }\n}", 1)[0]
+        self.assertIn(edge["profile_auth_delegate_marker"], authorization_handler)
         user_id_extractor = provider_source.split("fn current_user_id(", 1)[1].split(
             "#[derive(Debug, Error)]", 1
         )[0]
         self.assertIn(edge["profile_user_marker"], user_id_extractor)
         self.assertIn(".filter(|value| !value.trim().is_empty())", user_id_extractor)
         self.assertIn("ApiError::Unauthorized(", user_id_extractor)
+        error_response = provider_source.split("impl IntoResponse for ApiError {", 1)[
+            1
+        ].split("#[cfg(test)]", 1)[0]
+        self.assertIn(edge["profile_unauthorized_status_marker"], error_response)
         for route_marker, handler in (
             ("profile_route_marker", "get(get_profile)"),
             ("allocation_route_marker", "post(reserve_index)"),
