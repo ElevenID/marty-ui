@@ -907,6 +907,48 @@ jobs:
           python -m pip install --disable-pip-version-check
           --require-hashes --only-binary=:all:
           --requirement requirements/official-py312.lock
+      - name: Build the exact attested Core KMS verifier producer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pin=integration-tests/config/credentials-verifier-positive-producer.json
+          jq -e '.schema == "elevenid.credentials-verifier-positive-producer/v1"
+            and .repository == "ElevenID/marty-core"
+            and (.release_tag | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+            and (.commit | test("^[0-9a-f]{40}$"))
+            and (.source_asset | test("^marty-core-workspace-[0-9]+\\.[0-9]+\\.[0-9]+\\.tar\\.gz$"))
+            and (.source_digest | test("^sha256:[0-9a-f]{64}$"))' "$pin" >/dev/null
+          tag="$(jq -r '.release_tag' "$pin")"
+          commit="$(jq -r '.commit' "$pin")"
+          asset="$(jq -r '.source_asset' "$pin")"
+          digest="$(jq -r '.source_digest' "$pin")"
+          version="${tag#v}"
+          test "$asset" = "marty-core-workspace-${version}.tar.gz"
+          jq -e --arg commit "$commit" --arg version "$version" \
+            '[.components[] | select(.repository == "ElevenID/marty-core") | [.commit, .version]]
+              | length > 0 and all(.[]; . == [$commit, $version])' \
+            marty-ui/release/stack-lock.json >/dev/null
+          mkdir core-input
+          gh release download "$tag" --repo ElevenID/marty-core --pattern "$asset" --dir core-input
+          gh attestation verify "core-input/$asset" --repo ElevenID/marty-core \
+            --source-ref "refs/tags/$tag" --source-digest "$commit" --deny-self-hosted-runners
+          git init --quiet core-history
+          git -C core-history config core.autocrlf false
+          git -C core-history -c transfer.fsckObjects=true fetch --no-tags \
+            https://github.com/ElevenID/marty-core.git "$commit"
+          test "$(git -C core-history rev-parse FETCH_HEAD)" = "$commit"
+          git -C core-history update-ref HEAD "$commit"
+          git -C core-history read-tree "$commit"
+          python marty-ui/scripts/extract_verified_source.py \
+            --archive "core-input/$asset" --destination core-source \
+            --expected-root "marty-core-${version}" --expected-sha256 "$digest" \
+            --history core-history --expected-commit "$commit"
+          rustup toolchain install 1.97.1 --profile minimal
+          cargo +1.97.1 build --locked --manifest-path core-source/Cargo.toml \
+            -p marty-test-wallet --bin marty-kms-positive-verifier-input \
+            --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
       - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
@@ -944,7 +986,10 @@ jobs:
           python scripts/credentials_verifier_artifact.py run \
             --pin config/credentials-verifier-oracle.json --provenance-verified \
             --evidence work/evidence/oracle.json
-          python scripts/credentials_verifier_artifact.py run-transaction \
+          python scripts/run_remote_kms_verifier_fixture.py \
+            --producer ../core-source/target/debug/marty-kms-positive-verifier-input \
+            --agent ../core-source/target/debug/marty-test-signer-agent -- \
+            python scripts/credentials_verifier_artifact.py run-transaction \
             --pin work/transaction-pin.json --provenance-verified \
             --evidence work/evidence/transaction.json
           python scripts/credentials_verifier_artifact.py compare-transaction-evidence \

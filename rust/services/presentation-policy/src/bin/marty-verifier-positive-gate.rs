@@ -1,4 +1,4 @@
-use std::{io::Read, sync::Arc};
+use std::{collections::BTreeSet, io::Read, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -245,6 +245,33 @@ fn require(condition: bool, message: &str) -> Result<(), String> {
     condition.then_some(()).ok_or_else(|| message.into())
 }
 
+fn policy_failure_codes(evaluated: &Value) -> String {
+    let mut codes = BTreeSet::new();
+    for code in evaluated["error_codes"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|code| {
+            !code.is_empty()
+                && code.len() <= 64
+                && code
+                    .chars()
+                    .all(|character| character.is_ascii_alphanumeric() || character == '_')
+        })
+    {
+        codes.insert(code);
+        if codes.len() == 8 {
+            break;
+        }
+    }
+    if codes.is_empty() {
+        "UNCLASSIFIED".into()
+    } else {
+        codes.into_iter().collect::<Vec<_>>().join(",")
+    }
+}
+
 async fn execute(input: GateInput) -> Result<Value, String> {
     input.validate()?;
     let GateInput {
@@ -334,10 +361,12 @@ async fn execute(input: GateInput) -> Result<Value, String> {
     )?;
     let evaluated = evaluate_verified_facts_for_policy(facts, &policy, &request)
         .map_err(|_| "canonical policy evaluation failed")?;
-    require(
-        evaluated["result"] == "passed",
-        "canonical policy result did not pass",
-    )?;
+    if evaluated["result"] != "passed" {
+        return Err(format!(
+            "canonical policy result did not pass ({})",
+            policy_failure_codes(&evaluated)
+        ));
+    }
     require(
         evaluated["decision"] == "allow",
         "canonical policy decision did not allow",
@@ -421,5 +450,25 @@ mod tests {
         let encoded = public_fixture().to_string();
         let input = read_input(encoded.as_bytes()).expect("parser-only fixture");
         assert!(execute(input).await.is_err());
+    }
+
+    #[test]
+    fn failure_diagnostic_exposes_only_bounded_policy_codes() {
+        let evaluated = json!({
+            "error_codes": ["CredentialMissing", "CredentialMissing", "invalid:secret"],
+            "credential_results": [{"errors": ["secret payload"]}],
+            "decision_reason": "another secret"
+        });
+        assert_eq!(policy_failure_codes(&evaluated), "CredentialMissing");
+        assert_eq!(
+            policy_failure_codes(&json!({
+                "error_codes": ["Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Later"]
+            })),
+            "Later,Repeat"
+        );
+        assert_eq!(
+            policy_failure_codes(&json!({"error_codes": []})),
+            "UNCLASSIFIED"
+        );
     }
 }
