@@ -1946,6 +1946,22 @@ fn public_issuer_jwk(candidate: &Value) -> Result<Value, PublicSigningError> {
     Ok(public)
 }
 
+fn managed_key_binding_sha256(organization_id: &str, profile: &Value) -> Option<String> {
+    let service_id = profile.get("signing_service_id")?.as_str()?;
+    let key_reference = profile.get("signing_key_reference")?.as_str()?;
+    let mut digest = Sha256::new();
+    for value in [
+        "marty-managed-key-binding-v1",
+        organization_id,
+        service_id,
+        key_reference,
+    ] {
+        digest.update(value.as_bytes());
+        digest.update([0]);
+    }
+    Some(hex::encode(digest.finalize()))
+}
+
 async fn resolve_public_issuer_identity(
     State(state): State<AppState>,
     Query(scope): Query<OrganizationScope>,
@@ -2010,8 +2026,20 @@ async fn resolve_public_issuer_identity(
         Ok(jwk) => jwk,
         Err(error) => return error.into_response(),
     };
-    Json(json!({"identity": identity_projection(&profile), "public_jwk": public_jwk}))
-        .into_response()
+    let Some(managed_key_binding_sha256) =
+        managed_key_binding_sha256(&scope.organization_id, &profile)
+    else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Managed issuer identity has no custody binding.",
+        );
+    };
+    Json(json!({
+        "identity": identity_projection(&profile),
+        "public_jwk": public_jwk,
+        "managed_key_binding_sha256": managed_key_binding_sha256,
+    }))
+    .into_response()
 }
 
 async fn publish_public_issuer_didcomm_key_agreement(
@@ -9653,6 +9681,19 @@ mod public_contract_tests {
         private["d"] = json!("private-scalar");
         assert!(public_issuer_jwk(&private).is_err());
         assert!(public_issuer_jwk(&json!({"d": "private-only"})).is_err());
+        let profile = json!({
+            "signing_service_id": "managed-openbao-transit",
+            "signing_key_reference": "cred-issuer-key-a"
+        });
+        assert_eq!(
+            managed_key_binding_sha256("org-a", &profile).as_deref(),
+            Some("795e3bc59e96474ffd1791289dd82098a7dfb2655799b7075b45d4359cf45b5c")
+        );
+        assert_ne!(
+            managed_key_binding_sha256("org-b", &profile),
+            managed_key_binding_sha256("org-a", &profile)
+        );
+        assert!(managed_key_binding_sha256("org-a", &json!({})).is_none());
     }
 
     #[tokio::test]

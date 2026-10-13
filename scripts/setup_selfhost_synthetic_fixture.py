@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -170,6 +171,16 @@ def profile_proof(selector: dict, reference: str, version: int) -> dict:
             "key_version": version}
 
 
+def managed_key_binding(organization_id: str, reference: str) -> str:
+    values = ("marty-managed-key-binding-v1", organization_id,
+              "managed-openbao-transit", reference)
+    digest = hashlib.sha256()
+    for value in values:
+        digest.update(value.encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 async def keycloak_user(client: httpx.AsyncClient, fixture: dict[str, str],
                         admin_password: str) -> None:
     token_result = await client.post("/realms/master/protocol/openid-connect/token", data={
@@ -265,6 +276,9 @@ async def provision(fixture: dict[str, str]) -> dict:
                 if not isinstance(resolved, dict) or resolved.get("identity") != profile:
                     raise ValueError("resolved public identity differs from created profile")
                 reference = managed_reference(org, did, purpose)
+                if resolved.get("managed_key_binding_sha256") != managed_key_binding(org,
+                                                                                     reference):
+                    raise ValueError("resolved public identity uses an unexpected managed key")
                 response = await bao.get(f"/v1/transit/keys/{quote(reference)}", headers={
                     "X-Vault-Token": audit_token})
                 response.raise_for_status()

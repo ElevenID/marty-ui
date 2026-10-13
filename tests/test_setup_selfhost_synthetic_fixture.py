@@ -7,6 +7,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
+    managed_key_binding,
     managed_reference,
     profile_proof,
     required_environment,
@@ -134,6 +135,13 @@ def test_purpose_specific_managed_key_references_are_distinct() -> None:
     assert issuer != verifier
     with pytest.raises(ValueError, match="unsupported"):
         managed_reference(org, did, "mdoc_dsc")
+
+
+def test_managed_key_binding_is_scoped_to_org_service_and_reference() -> None:
+    binding = managed_key_binding("org-a", "cred-issuer-key-a")
+    assert binding == "795e3bc59e96474ffd1791289dd82098a7dfb2655799b7075b45d4359cf45b5c"
+    assert binding != managed_key_binding("org-b", "cred-issuer-key-a")
+    assert binding != managed_key_binding("org-a", "cred-issuer-key-b")
 
 
 def test_public_profile_and_nonexportable_transit_metadata_are_bounded() -> None:
