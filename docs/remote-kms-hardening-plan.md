@@ -18458,3 +18458,13 @@ the new main SHA, then launch one release transaction with validated self-host
 inputs. Do not reuse the old claim: `resolve-transaction` requires the
 workflow source SHA to equal the claim source SHA. Real cloud BYOK and device
 acceptance access is still not provisioned.
+
+PR #1324 follow-up: its exact-head CI completed successfully, including
+CodeQL Actions/Rust, workflow quality, release contracts, Rust service and
+Canvas contracts, OpenBao DIDComm plugin image, and the final CI gate. Both
+operator artifacts from failed run `38473299581` also passed GitHub
+attestation verification with the exact main source SHA and hosted-runner
+requirement. After the final checks passed, the PR was explicitly added to
+the protected merge queue at position 1. Protected merge, fresh claim,
+publication, installed consumer, real provider/device and cutover evidence
+remain open.
