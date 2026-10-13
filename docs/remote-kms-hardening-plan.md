@@ -17757,3 +17757,22 @@ The release workflow still needs to provision real scoped remote keys and
 run that producer against the exact services image before this gate can pass.
 Keep both local branches unpushed until a broad reviewed correction batch
 is ready; no hosted retry or release claim is justified yet.
+
+2026-10-13 release-fix self-review: the first strict four-image harness edit
+would have broken two official workflows still pinned to a published
+three-image historical release. The integration branch now requires all four
+digests by default for current KMS release smoke, while only the two named
+historical official workflows opt into three-image rendering. That exception
+is test-harness-only; it cannot select a product runtime or qualify the new
+stack. The reconciled integration verifier producer and renderer passed
+418 unit tests with two skips after this correction. UI `cd.yml` now
+requires the actual v3 schema report and its reachable/unreachable/malformed
+read-only field; 56 focused stack-release/schema tests passed. Both changes
+are local commits (`705541a` in integration tests, `71ba36e` in UI), not
+pushed. Exact released services image `sha256:fab0b36807a0acb603b3c04fc0fa06fc7ecfb2f205f1aeb6a076e65a905401fb`
+was directly executed with empty stdin and rejected it as expected; the
+old Credentials oracle's missing positive-gate binary was checked separately
+but is not the failing subject. The failing release step operates on the
+native services image and needs fresh KMS/wallet input from the preserved
+Core producer. The release workflow must provision and bind that input,
+then repeat local exact-image proof before a new hosted release attempt.
