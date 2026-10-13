@@ -282,9 +282,7 @@ def run(case_name):
         == worker_source_sha256()["issuance.infrastructure.api.canvas_routes"]
     )
     child = None
-    # The frozen published Python image predates grant-bound signer requests.
-    # Native replay retains the fixture's strict grant-bound default.
-    with MixedRosterHttpsFixture(matrix, signer_contract="pinned_published") as https:
+    with MixedRosterHttpsFixture(matrix) as https:
         engine = create_engine(DATABASE, hide_parameters=True)
         try:
             preserved = seed_worker_database(engine, https.origin, spec, shared)
