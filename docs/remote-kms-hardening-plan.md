@@ -18039,3 +18039,16 @@ without purpose selects the standard issuer; Signing Keys library now passes
 197 tests with nine ignored and Clippy with denied warnings. These local
 corrections are not yet in the PR head. Initial hosted CI is still running;
 reinspect its complete results before the one batched correction push.
+
+2026-10-13 correction head: the grouped fix is pushed to UI #1319 as
+`f20cd40b0`. The release verifier fixture was exercised locally with the
+release-locked Core test-wallet producer and two actual scoped OpenBao signer
+agents, plus the new Rust public-JWK converter. It produced a fresh SD-JWT
+presentation; both remote keys were non-exportable, cross-key signing was
+denied, and the fixture wrote its expected evidence. This is disposable
+source-built local evidence, not the signed services-image verifier gate.
+Rust ownership, 197 Signing Keys library tests (nine ignored), package fmt,
+Signing Keys and release-evidence Clippy with warnings denied, Rust public-PEM
+positive/negative conversion, 48 Python release/workflow tests, Ruff and diff
+checks passed. The corrected PR head needs its own hosted CI/CodeQL and review
+evaluation; the prior head's checks do not qualify it.
