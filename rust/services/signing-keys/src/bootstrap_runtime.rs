@@ -263,35 +263,38 @@ impl Backend for LiveBackend {
         address: &str,
         token: &str,
         spec: KeySpec,
+        reference: &str,
         create: bool,
     ) -> Result<KeyRecord, String> {
-        let mut data = self.bao_key(address, token, spec.id).await?;
+        let mut data = self.bao_key(address, token, reference).await?;
         if data.is_none() && create {
             self.bao(
                 Method::POST,
                 address,
                 token,
-                &format!("transit/keys/{}", spec.id),
+                &format!("transit/keys/{reference}"),
                 Some(json!({"type":spec.key_type})),
             )
             .await?;
-            data = self.bao_key(address, token, spec.id).await?;
+            data = self.bao_key(address, token, reference).await?;
         }
-        let data = data.ok_or_else(|| format!("OpenBao key {} is missing", spec.id))?;
-        if !create && (data["type"] != spec.key_type || data["exportable"] != false) {
-            return Err("Disposable ICAO key must be precreated and non-exportable".into());
+        let data = data.ok_or_else(|| format!("OpenBao key {reference} is missing"))?;
+        if data["type"] != spec.key_type || data["exportable"] != false {
+            return Err(format!(
+                "OpenBao key {reference} must have the expected type and be non-exportable"
+            ));
         }
         let versions = data["keys"]
             .as_object()
             .filter(|values| !values.is_empty())
-            .ok_or_else(|| format!("OpenBao key {} has no public key versions", spec.id))?;
+            .ok_or_else(|| format!("OpenBao key {reference} has no public key versions"))?;
         let latest = data.get("latest_version").cloned().unwrap_or(Value::Null);
         let version = if latest.is_null() || latest == 0 || latest == "" {
             versions
                 .keys()
                 .filter_map(|key| key.parse::<u64>().ok())
                 .max()
-                .ok_or_else(|| format!("OpenBao key {} has no public key versions", spec.id))?
+                .ok_or_else(|| format!("OpenBao key {reference} has no public key versions"))?
                 .to_string()
         } else {
             latest
@@ -304,13 +307,15 @@ impl Backend for LiveBackend {
             .ok_or_else(|| {
                 format!(
                     "OpenBao key {} does not expose public key material",
-                    spec.id
+                    reference
                 )
             })?;
-        let public_jwk =
+        let mut public_jwk =
             public_jwk_from_openbao(spec, material).map_err(|error| error.to_string())?;
+        public_jwk["kid"] = json!(reference);
         Ok(KeyRecord {
             spec,
+            reference: reference.into(),
             public_jwk,
             latest_version: latest,
         })
