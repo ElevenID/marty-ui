@@ -17641,3 +17641,17 @@ mixed-roster preflight already passed in exact-main full run `38366813277`;
 its historical process failure remains immutable evidence. Require a new
 exact-main full run only after #1315 has passed source and protected queue
 checks and merged. The tag and signed installed-release gates remain open.
+
+2026-10-13 concurrent PR ownership correction: the author of UI #1315
+explicitly requested that this particular full-main historical published
+process oracle remain and reverted the two retirement follow-up commits.
+Its current head is `ceb4230c16be165a0979bd7ac7ae3b9cee36cf7b`, whose final diff
+isolates the old five-field signer request shape inside the pinned historical
+oracle while the current Rust fixture continues to require remote key
+reference and grant. The PR title/body were corrected to describe that
+actual diff. The prior retirement commit `e4ef8e59f` remains local and is
+not the PR's final implementation. Do not assert this historical replay has
+been retired. The test-only published-image comparison is distinct from a
+production fallback; continue to require KMS-only production boundaries and
+signed installed acceptance. PR source CI on this later head is pending;
+do not use the cancelled or prior-head CI runs as release evidence.
