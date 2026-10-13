@@ -395,7 +395,11 @@ def qualify(images: dict[str, str], *,
             value = root_token if name != "marty_db_password" else secrets.token_hex(32)
             path.write_text(value, encoding="ascii")
             if os.name == "posix":
-                path.chmod(0o600)
+                # Compose bind-mounts file-backed secrets without changing
+                # their host mode. The migration images run as nonroot, so
+                # mirror Docker secret readability while the parent 0700
+                # directory keeps the disposable files private on the host.
+                path.chmod(0o444)
         environment = os.environ.copy()
         environment.update({
             "PROBE_MIGRATIONS_IMAGE": images["migrations"],

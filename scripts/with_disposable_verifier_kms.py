@@ -190,6 +190,11 @@ def execute(openbao_image: str, producer: Path, agent: Path, jwk_tool: Path,
             root.chmod(0o700)
         tls = root / "tls"
         tls.mkdir(mode=0o700)
+        if os.name == "posix":
+            # The OpenBao image drops root before generating its dev TLS
+            # certificate. Docker bind mounts retain this host directory's
+            # mode; only the private 0700 parent is host-traversable.
+            tls.chmod(0o777)
         container = "marty-verifier-kms-" + secrets.token_hex(8)
         root_token = secrets.token_hex(24)
         agents: list[subprocess.Popen] = []
