@@ -18065,3 +18065,19 @@ isolated provider HMAC verification and seven origin-bound signing-grant keys.
 Self-host bootstrap Python selection passed 17 tests with three Windows-only
 POSIX skips. Corrected-head hosted CI run `38407302994` has started; no final
 result is claimed yet.
+
+2026-10-13 corrected-head hosted CI checkpoint: UI #1319 remains open at
+`f20cd40b0e3ea7aed615852aae5c39349053ff49`. Run `38407302994` has
+passed its Rust service contracts, service-image build, release contract,
+feature regression, lint, security, UI, MIP browser and public protocol jobs;
+CodeQL Actions and Rust, organization policy, workflow quality and dependency
+review have also passed. The Canvas isolated database contracts and OpenBao
+DIDComm plugin image's coordinated PostgreSQL/Raft recovery job are still
+actively running. They are not terminal or skipped, so do not merge or claim
+CI qualification yet. The sole automated inline review comment was made on
+the earlier `e149cc0bc` head; the issuer-default selection it flagged is
+corrected and covered by a focused Rust resolver test on the current head.
+The exact four-image release claim must follow the protected merge, because
+the claim workflow requires the dispatch SHA to equal protected `main` and
+the stack-tag policy requires exact-main merge-group and full CI evidence.
+Tag `v1.1.245` and its GitHub release were absent at this checkpoint.
