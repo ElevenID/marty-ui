@@ -1969,7 +1969,7 @@ async fn resolve_public_issuer_identity(
     };
     let resolved = match compatibility
         .resolve_issuer_did(&ResolveIssuerDidRequest {
-            organization_id: scope.organization_id,
+            organization_id: scope.organization_id.clone(),
             issuer_did: input.issuer_did,
             verification_method_id: None,
             credential_format: Some(input.credential_format),
@@ -1985,6 +1985,19 @@ async fn resolve_public_issuer_identity(
         return public_error(
             StatusCode::CONFLICT,
             "Resolved issuer identity does not match its active managed profile.",
+        );
+    }
+    let current_jwk = match compatibility
+        .provider_public_key_for_profile(&scope.organization_id, &profile)
+        .await
+    {
+        Ok(jwk) => jwk,
+        Err(error) => return error.into_response(),
+    };
+    if !same_current_managed_key(&resolved, &current_jwk) {
+        return public_error(
+            StatusCode::CONFLICT,
+            "Published issuer identity does not match its current managed KMS key.",
         );
     }
     let Some(jwk) = resolved.get("public_jwk") else {
@@ -2364,7 +2377,7 @@ fn managed_csca_import(
                 "Managed CSCA public key is unavailable.",
             )
         })?;
-    if !documents::same_public_jwk(&expected_public_jwk, provider_public_jwk) {
+    if !same_current_managed_key(resolved, provider_public_jwk) {
         return Err(public_failure(
             StatusCode::CONFLICT,
             "Published CSCA identity does not match its current managed KMS key.",
@@ -2394,6 +2407,12 @@ fn same_managed_identity(profile: &Value, resolved: &Value) -> bool {
                             == Some(value)
                 })
         })
+}
+
+fn same_current_managed_key(resolved: &Value, current: &Value) -> bool {
+    resolved
+        .get("public_jwk")
+        .is_some_and(|published| documents::same_public_jwk(published, current))
 }
 
 async fn generate_public_issuer_csr(
@@ -2459,10 +2478,7 @@ async fn generate_public_issuer_csr(
         Ok(jwk) => jwk,
         Err(error) => return error.into_response(),
     };
-    if !resolved
-        .get("public_jwk")
-        .is_some_and(|jwk| documents::same_public_jwk(jwk, &current_jwk))
-    {
+    if !same_current_managed_key(&resolved, &current_jwk) {
         return public_error(
             StatusCode::CONFLICT,
             "Published issuer identity does not match its current managed KMS key.",
@@ -3152,10 +3168,7 @@ async fn checked_dsc_profile_key(
         .provider_public_key_for_profile(organization_id, profile)
         .await
         .map_err(dsc_compat_failure)?;
-    if !resolved
-        .get("public_jwk")
-        .is_some_and(|published| documents::same_public_jwk(published, &current))
-    {
+    if !same_current_managed_key(&resolved, &current) {
         return Err(public_failure(
             StatusCode::CONFLICT,
             "Published identity differs from its current managed KMS key.",
@@ -9802,6 +9815,23 @@ mod public_contract_tests {
         for private in ["id", "signing_service_id", "signing_key_reference"] {
             assert!(projection.get(private).is_none());
         }
+    }
+
+    #[test]
+    fn managed_identity_requires_the_current_provider_public_key() {
+        let published = json!({
+            "issuer_profile": {},
+            "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x-a", "y": "y-a"}
+        });
+        let current = json!({
+            "kty": "EC", "crv": "P-256", "x": "x-a", "y": "y-a", "kid": "private-ref"
+        });
+        assert!(same_current_managed_key(&published, &current));
+        assert!(!same_current_managed_key(
+            &published,
+            &json!({"kty": "EC", "crv": "P-256", "x": "x-b", "y": "y-a"})
+        ));
+        assert!(!same_current_managed_key(&json!({}), &current));
     }
 
     #[test]
