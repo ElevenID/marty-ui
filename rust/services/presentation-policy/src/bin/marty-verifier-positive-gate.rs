@@ -1,4 +1,4 @@
-use std::{io::Read, sync::Arc};
+use std::{collections::BTreeSet, io::Read, sync::Arc};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -246,7 +246,8 @@ fn require(condition: bool, message: &str) -> Result<(), String> {
 }
 
 fn policy_failure_codes(evaluated: &Value) -> String {
-    let mut codes = evaluated["error_codes"]
+    let mut codes = BTreeSet::new();
+    for code in evaluated["error_codes"]
         .as_array()
         .into_iter()
         .flatten()
@@ -258,14 +259,16 @@ fn policy_failure_codes(evaluated: &Value) -> String {
                     .chars()
                     .all(|character| character.is_ascii_alphanumeric() || character == '_')
         })
-        .take(8)
-        .collect::<Vec<_>>();
-    codes.sort_unstable();
-    codes.dedup();
+    {
+        codes.insert(code);
+        if codes.len() == 8 {
+            break;
+        }
+    }
     if codes.is_empty() {
         "UNCLASSIFIED".into()
     } else {
-        codes.join(",")
+        codes.into_iter().collect::<Vec<_>>().join(",")
     }
 }
 
@@ -457,6 +460,12 @@ mod tests {
             "decision_reason": "another secret"
         });
         assert_eq!(policy_failure_codes(&evaluated), "CredentialMissing");
+        assert_eq!(
+            policy_failure_codes(&json!({
+                "error_codes": ["Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Repeat", "Later"]
+            })),
+            "Later,Repeat"
+        );
         assert_eq!(
             policy_failure_codes(&json!({"error_codes": []})),
             "UNCLASSIFIED"
