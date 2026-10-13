@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-11 (America/Denver).
+Status: active. Updated: 2026-10-13 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -17605,3 +17605,39 @@ A new full `ci.yml` dispatch `38366813277` was created on current main
 older run's teardown at this checkpoint. Do not claim the tag until the new
 run succeeds and protected main still equals its SHA. Check for an existing
 same-SHA dispatch before any further run to avoid duplicate CI cost.
+
+2026-10-13 full qualification blocker and local correction: exact-main full
+CI `38366813277` completed with Canvas failure and consequent CI Gate failure.
+The grant-aware current Rust mixed-roster preflight passed all seven stages;
+the separate full-only historical Python-process replay failed its first
+stage after the shared HTTPS fixture required remote signing grants. The old
+published process does not use that grant protocol. Do not restore a
+grantless signing path to satisfy historical replay. UI branch
+`codex/kms-canvas-retire-historical-20261013` from protected main `5f6f6f51c`
+removes that one obsolete process replay and its CI ownership/serial timing,
+while retaining the frozen observation corpus and current Rust HTTPS/DB
+mixed-roster matrix. It records the retired test identity in the immutable
+package-migration inventory and adjusts exact tier/registration/phase guards.
+Local checks so far: 148 workflow-policy, 60 tier-inventory, 97 database
+timing/mixed-roster, and 80 timeout/corpus tests passed; Rust formatting,
+Ruff, shell syntax and diff checks passed. The complete slow Canvas shell
+runner suite is still running. This branch is not yet pushed, merged, or
+qualified; tag, release and signed installed acceptance remain open.
+
+2026-10-13 consolidated Canvas PR correction: a concurrent UI PR #1315 had
+proposed a test-only historical signer mode so the old Python image could
+replay without a remote signing grant. To preserve the user's KMS-only and
+no-old-behavior direction while avoiding a second feature PR and its CI
+charge, the reviewed retirement commit `e4ef8e59f` was applied to that open
+PR, and its interim historical signer-mode changes were reverted. Final PR
+head `811378c45da1e9754484c9e39677c8911d07585e` has exactly the
+retirement diff against protected main; PR title/body now describe the final
+change. Source-head CI and protected merge are pending. The affected local
+Canvas shell-runner cases passed in batches after stale expected child/skip
+counts were corrected; 148 workflow-policy, 60 tier, 97 database timing and
+mixed-roster, and 80 timeout/corpus tests passed. Ruff, targeted Rust
+formatting, shell syntax and diff checks passed. The current grant-aware Rust
+mixed-roster preflight already passed in exact-main full run `38366813277`;
+its historical process failure remains immutable evidence. Require a new
+exact-main full run only after #1315 has passed source and protected queue
+checks and merged. The tag and signed installed-release gates remain open.
