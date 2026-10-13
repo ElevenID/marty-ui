@@ -17561,3 +17561,16 @@ fixture's exact body check and focused request to require the resolved remote
 reference; 49 focused Python tests, Ruff and diff checks passed. It was pushed
 to #1312's existing feature branch. Exact-head CI `38358837111` and
 protected merge remain open. No prior failed full run is release evidence.
+
+2026-10-13 corrected Canvas fixture qualification: UI #1312 exact source head
+`1d08775240ba738ff1b4c7c3079321f238ea098d` passed all 21 CI jobs in
+run `38358837111`, including the previously failing published mixed-roster
+preflight, broader Canvas database contracts, OpenBao/plugin Raft recovery,
+Rust contracts, release contracts and CI Gate. Policy, organization quality,
+and CodeQL workflows also passed on that source head. Both automated review
+findings (exact signing-body remote reference and grant HMAC input binding)
+were corrected and their threads resolved; branch protection marked the PR
+clean. It entered the protected merge queue at position 1 on combined head
+`56e79f2ba9c6eb88688a3978fdc8f1ed680db6de`; merge-group CI run
+`38362290721` and companion workflows are in progress. This source pass is
+not yet an exact-protected-main full qualification or release claim.
