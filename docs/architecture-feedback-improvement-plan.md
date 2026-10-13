@@ -3972,16 +3972,42 @@ run](https://github.com/ElevenID/marty-ui/actions/runs/38317587976) passed,
 including Canvas and the final gate, before merge. This is not evidence of
 a feedback-time saving.
 
-October 12 A0/A6 Flow acceptance inventory follow-up (reviewed local
-candidate): the full Canvas runner and the narrow Flow-source PR runner now
+October 12 A0/A6 Flow acceptance inventory follow-up
+([UI #1305](https://github.com/ElevenID/marty-ui/pull/1305), merged as
+`0e50b9ff4`): the full Canvas runner and the narrow Flow-source PR runner now
 call the same exact nine-case `list-flow-acceptance-cases.sh` guard. The full
 runner still executes the Flow target, accounts for its status, and retains
 protected Canvas coverage; the shared guard fails on missing, extra, or
 substituted names. The A0 inventory records the five live parent cases, four
-helper/control cases, and runtime inputs. Focused local policy tests passed
-(nine owner/runner tests plus one missing-Flow negative); Ruff and shell
-syntax checks passed, and independent review found no P1-P3 issue. Hosted
-validation and any feedback-time measurement remain pending.
+helper/control cases, and runtime inputs. The first exact-head run caught
+three release-policy tests still reading the former inline roster. The
+corrected tests require both the shared roster and the full-runner call to
+it; 247 targeted local tests passed with one existing skip, Ruff passed, and
+independent review found no remaining P1-P3 issue. The corrected
+[PR run](https://github.com/ElevenID/marty-ui/actions/runs/38322995391)
+and full protected
+[combined-head run](https://github.com/ElevenID/marty-ui/actions/runs/38325251659)
+passed before merge. The protected Canvas job took 20m43s; this single run
+does not establish an attributable feedback-time saving. A0's broader input
+closure and A6's unproven selectors remain open.
+
+October 13 protected Canvas timing checkpoint: #1305's combined-head Canvas
+job took 20m43s. Its serial critical-path steps were reusable test-executable
+compilation (284s), public self-host image build (268s), and isolated database
+contracts (425s); the timing artifact records 249s inside the Bookworm compile
+phase and a 424.952s published-Canvas database group. Within that group,
+worker, composition, and self-host targets overlap, so their durations must
+not be summed. The worker scenario evidence includes real retry and roster
+expiry waits of 44.178s, 33.831s, and 32.883s; shortening those would change
+the timed behavior under test. The first two serial build steps account for
+552s before database qualification and remain the largest non-test-scenario
+candidate for further reuse or safe overlap. Directly copying the first step's
+outputs into the image would be unsound: it builds dev/test-profile executables,
+whereas the Dockerfile's pinned Bookworm builder uses `--release` and a
+different binary list. This one warm protected run is not a before/after
+speedup claim. Any independent build or overlap still needs exact candidate
+image identity, resource-contention evidence, and free-tier cache/artifact
+limits.
 
 ## Design references
 
