@@ -17835,3 +17835,51 @@ with its isolated project volumes. No integration correction PR or UI PR
 has been pushed, and no full public-stack or installed acceptance is claimed.
 Do not use v1.2.85 as release qualification input until the corrected harness
 is locally started and then signed/pinned.
+
+2026-10-13 local public-stack progress and remaining product blocker: the
+follow-up integration harness branch now provisions disposable scoped signing
+grants and TLS, binds the exact four signed image digests, and starts the full
+stack locally with all services healthy. Five public health checks passed.
+The complete eight-case public-stack selection passed six and failed the
+offer-recovery and positive-credential issuance cases: Flow reported
+`FLOW.PROVIDER_UNAVAILABLE: issuance`, and native Issuance returned 503
+`issuer context is unavailable`. Direct Signing Keys inspection narrowed this
+to `GET /internal/registry/{org}` returning 500 `stored signing registry is
+malformed: plaintext signing credential is unsupported`. The clean-slate
+bootstrap in `rust/services/signing-keys/src/bootstrap.rs` seeds managed
+OpenBao metadata with nonempty `auth_reference: "Managed by Marty service
+stack"`; `rust/services/signing-keys/src/registry.rs` correctly rejects any
+stored nonempty plaintext `auth_reference`. The following checkpoint records
+the broader fix after a second stored-service rejection was found. Do not
+weaken the reader or add a legacy fallback. Re-run the local exact-image public journeys after
+the corrected native image exists. The two local branches remain unpushed;
+the released v1.2.85 harness does not include these corrections. Next group
+the product and harness fixes into their broad PRs, pass local installed
+acceptance, then hosted CI, signed harness and stack publication, and final
+clean-database/provider/device/cutover/recovery qualification.
+
+2026-10-13 Signing Keys seed correction and second local blocker: the UI
+release-fix worktree now removes the persisted managed OpenBao service from
+`seed_signing_registry`; Signing Keys already synthesizes this service from
+live inventory in `with_managed_service`. This retains clean-slate defaults,
+purpose bindings and any customer services without storing either a plaintext
+`auth_reference` or the mounted `service_token` mode. The historical Python
+corpus remains immutable; the Rust comparison explicitly removes its obsolete
+managed service before asserting the rest of the seed. All 203 Signing Keys
+library tests ran: 194 passed, 9 ignored. Package formatting passed after
+correction. The source correction is local UI commit `89b480d3b`, not pushed.
+In the disposable exact-image local stack, removing the seeded
+managed service from its isolated Redis registry restored `GET
+/internal/registry/{org}` from 500/422 to 200. This was a diagnostic data
+edit only, not proof that the existing signed services image is fixed.
+The public stack still passed only six of eight cases. Direct issuer-DID
+resolution now returns 422 `Managed signing key does not belong to this tenant
+and profile.` The clean-slate bootstrap seeds static references such as
+`cred-issuer-marty-es256`, while current registry ownership requires a
+tenant-prefixed or issuer/profile tuple-derived managed reference. Next
+replace those static bootstrap key/profile/binding references with the
+canonical tenant/profile-derived references and re-run clean local bootstrap,
+issuer resolution, offer recovery and positive wallet issuance. Do not relax
+ownership validation or add compatibility fallback. The running disposable
+stack contains the diagnostic Redis change and must be reset before claiming
+any clean-slate acceptance.
