@@ -4013,14 +4013,20 @@ October 13 A0/A3 candidate: Revocation Profile has a second, non-Cargo
 consumer in Issuance beyond the already-recorded gRPC initiation validator.
 The native Issuance runtime passes `REVOCATION_PROFILE_SERVICE_URL` to its
 Canvas readiness document provider and credential lifecycle status allocator.
-Those clients request the provider's profile-read, reserve-index, and
+Those clients attempt the provider's profile-read, reserve-index, and
 process-revocation HTTP routes; the default `issuance-native` Compose profile
-binds the URL. The new shadow edge records both client paths and all three
-provider routes without changing the selected Rust matrix. Local planner tests
-passed (54 tests, one existing skip, 481 subtests), and the broader CI workflow
-suite passed (148 tests); Ruff, format, and diff checks passed. Independent
-review found no P1-P3 issue. Hosted exact-head/protected validation is required
-before promotion; no feedback saving is claimed.
+binds the URL. Review found the readiness GET sends no `x-user-id`, although
+the provider requires it. For an existing profile, the provider returns 401
+and the readiness client substitutes an empty document. The new shadow edge
+records both client paths and this failed-read semantics without changing the
+selected Rust matrix. Local planner tests passed (54 tests, one existing skip,
+484 subtests), and the broader CI workflow suite passed (148 tests); Ruff,
+format, and diff checks passed. GitHub review identified this P2 runtime gap
+before merge. The corrected evidence passed independent re-review with no
+remaining P1-P3 issue. The corrected head still requires hosted exact-head and
+protected validation before promotion; no feedback saving is claimed. The
+missing authenticated read requires a separately reviewed runtime fix with
+permission-preserving tests.
 
 ## Design references
 

@@ -2239,7 +2239,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ),
             (
                 "readiness_evidence",
-                ("readiness_request_marker", "readiness_send_marker"),
+                (
+                    "readiness_request_marker",
+                    "readiness_send_marker",
+                    "readiness_rejection_marker",
+                ),
             ),
             (
                 "lifecycle_evidence",
@@ -2249,6 +2253,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "provider_evidence",
                 (
                     "profile_route_marker",
+                    "profile_auth_marker",
+                    "profile_user_marker",
                     "allocation_route_marker",
                     "revocation_route_marker",
                 ),
@@ -2270,7 +2276,27 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertIn(
                     "config.revocation_profile_service_url.clone()", constructor_args
                 )
+        readiness_source = (ROOT / edge["readiness_evidence"]).read_text(
+            encoding="utf-8"
+        )
+        readiness_object = readiness_source.split("async fn object(", 1)[1].split(
+            "#[async_trait]", 1
+        )[0]
+        self.assertIn(edge["readiness_send_marker"], readiness_object)
+        self.assertIn(edge["readiness_rejection_marker"], readiness_object)
+        self.assertIn("return Map::new();", readiness_object)
+        self.assertNotIn('"x-user-id"', readiness_object)
         provider_source = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        profile_handler = provider_source.split("async fn get_profile(", 1)[1].split(
+            "async fn activate_profile(", 1
+        )[0]
+        self.assertIn(edge["profile_auth_marker"], profile_handler)
+        user_id_extractor = provider_source.split("fn current_user_id(", 1)[1].split(
+            "#[derive(Debug, Error)]", 1
+        )[0]
+        self.assertIn(edge["profile_user_marker"], user_id_extractor)
+        self.assertIn(".filter(|value| !value.trim().is_empty())", user_id_extractor)
+        self.assertIn("ApiError::Unauthorized(", user_id_extractor)
         for route_marker, handler in (
             ("profile_route_marker", "get(get_profile)"),
             ("allocation_route_marker", "post(reserve_index)"),
