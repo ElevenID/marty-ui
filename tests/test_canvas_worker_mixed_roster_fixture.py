@@ -248,7 +248,13 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
                 "X-API-Key": fixture_module.ISSUER_SIGN_KEY,
                 "X-Marty-Signing-Grant": grant,
             },
-            body=json.dumps({**selectors, "payload_b64": encoded(assertion_bytes)}),
+            body=json.dumps(
+                {
+                    **selectors,
+                    "key_reference": fixture_module.SIGNING_KEY_REFERENCE,
+                    "payload_b64": encoded(assertion_bytes),
+                }
+            ),
         )
         assert status == 200
         assert signed == {

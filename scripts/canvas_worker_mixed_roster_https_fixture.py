@@ -249,12 +249,14 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                         "issuer_did",
                         "credential_format",
                         "key_purpose",
+                        "key_reference",
                         "payload_b64",
                         "algorithm",
                     }
                     assert body["issuer_did"] == ISSUER_DID
                     assert body["credential_format"] == "lti_tool_jwt"
                     assert body["key_purpose"] == "lti_tool_signing"
+                    assert body["key_reference"] == SIGNING_KEY_REFERENCE
                     assert body["algorithm"] == "RS256"
                     payload = _decode(body["payload_b64"])
                     owner._validate_assertion(payload.decode("ascii"))
