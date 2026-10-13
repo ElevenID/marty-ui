@@ -17585,3 +17585,11 @@ at `2026-10-13T07:55:51Z`. Full `ci.yml` workflow-dispatch run
 checkpoint. This separate full run must pass before `prepare-stack-tag.yml`
 can claim `v1.1.245`. Preserve both previous failed full runs as evidence;
 no tag, release, or signed installed acceptance is claimed here.
+
+2026-10-13 CI-cost correction: another exact-main full `ci.yml` dispatch
+`38365905681` was created one second before `38365906320` on the identical
+protected SHA `56e79f2ba9c6eb88688a3978fdc8f1ed680db6de` and is running.
+The latter was still pending with zero jobs; it was cancelled to avoid a
+duplicate full qualification charge. Use `38365905681` as the authoritative
+full-run candidate after checking its final conclusion. The cancelled run
+is preserved as immutable operational evidence, not a failed source gate.
