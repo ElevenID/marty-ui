@@ -881,6 +881,11 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     assert "deploy-config/passport-supported-disposable-infra-images.json" in script
     assert "--services-image \"$services_image\"" in script
     assert "--migrations-image \"$migrations_image\"" in script
+    assert 'marty.selfhost-migrations-qualification/v3' in script
+    assert 'marty.selfhost-migrations-qualification/v3' in _text(
+        "scripts/qualify_selfhost_migrations.py")
+    assert 'reachable-unreachable-malformed-read-only' in script
+    assert '.runs == "2"' in script
     assert any(item.get("with", {}).get("name") ==
                "stack-release-native-schema-gate-${{ github.run_id }}"
                for item in native["steps"])
@@ -891,6 +896,23 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
                    if item.get("name") == "Persist exact gate evidence")
     assert "sha256sum gates/native/native-schema.json" in persist
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
+
+
+def test_public_stack_smoke_uses_three_role_adapter_contract() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    smoke = jobs["public-stack-smoke"]
+    plugin = jobs["didcomm-plugin-image-qualification"]
+    release = jobs["qualify-release"]
+    build = next(step for step in smoke["steps"]
+                 if step.get("name") == "Build candidate stack manifest")
+    script = build["run"]
+
+    assert "build-openbao-didcomm" in smoke["needs"]
+    assert "OPENBAO_DIDCOMM_DIGEST" not in build["env"]
+    assert script.count('{type: "oci"') == 3
+    assert 'marty-ui-oss/openbao-didcomm' not in script
+    assert "build-openbao-didcomm" in plugin["needs"]
+    assert "didcomm-plugin-image-qualification" in release["needs"]
 
 
 def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> None:
