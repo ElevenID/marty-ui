@@ -171,7 +171,7 @@ if [ "${service_token_missing}" != "1" ]; then
     if ! BAO_TOKEN="${existing_service_token}" bao token lookup -address="${BAO_ADDR}" >/dev/null 2>&1; then
         echo "Existing credential-service token is not accepted by OpenBao; minting a replacement..."
         service_token_missing=1
-    elif ! BAO_TOKEN="${existing_service_token}" bao write -address="${BAO_ADDR}" transit/sign/cred-issuer-marty-es256 input=dGVzdA== >/dev/null 2>&1; then
+    elif ! BAO_TOKEN="${existing_service_token}" bao token capabilities -address="${BAO_ADDR}" transit/sign/cred-issuer-tenant-scope-probe | grep -q update; then
         echo "Existing credential-service token cannot sign credential keys; minting a replacement..."
         service_token_missing=1
     fi

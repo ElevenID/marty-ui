@@ -99,9 +99,12 @@ def test_exact_runtime_render_has_no_host_ports_or_root_secret(tmp_path):
 
 
 def test_jwks_requires_seeded_public_keys_and_other_tenant_empty():
+    tenant = probe.expected_kids(probe.ORG_ID)
+    es256 = next(kid for kid in tenant if kid.endswith("-es256"))
+    eddsa = next(kid for kid in tenant if kid.endswith("-eddsa"))
     valid = {"organization_id": probe.ORG_ID,
-             "keys": [{"kid": "cred-issuer-marty-es256", "kty": "EC", "x": "public"},
-                      {"kid": "cred-issuer-marty-eddsa", "kty": "OKP", "x": "public"}]}
+             "keys": [{"kid": es256, "kty": "EC", "x": "public"},
+                      {"kid": eddsa, "kty": "OKP", "x": "public"}]}
     assert probe.validate_jwks(json.dumps(valid), organization_id=probe.ORG_ID,
                                present=True) == 2
     empty = {"organization_id": probe.OTHER_ORG, "keys": []}
@@ -114,6 +117,9 @@ def test_jwks_requires_seeded_public_keys_and_other_tenant_empty():
          "keys": [{**valid["keys"][0], "d": "private"}]},
         {"organization_id": probe.ORG_ID,
          "keys": [{"kid": "unrelated", "kty": "OKP"}]},
+        {"organization_id": probe.ORG_ID,
+         "keys": [{"kid": "cred-issuer-marty-es256", "kty": "EC"},
+                  {"kid": "cred-issuer-marty-eddsa", "kty": "OKP"}]},
     ):
         with pytest.raises(probe.migrations.QualificationError):
             probe.validate_jwks(json.dumps(changed),
@@ -152,8 +158,8 @@ def test_runtime_uses_private_service_and_tears_down_after_business_read(tmp_pat
                                   capture_output=True, text=True)
         if args[-1].endswith(probe.ORG_ID):
             output = json.dumps({"organization_id": probe.ORG_ID,
-                                 "keys": [{"kid": "cred-issuer-marty-es256", "kty": "EC"},
-                                          {"kid": "cred-issuer-marty-eddsa", "kty": "OKP"}]})
+                                 "keys": [{"kid": next(kid for kid in probe.expected_kids(probe.ORG_ID) if kid.endswith("-es256")), "kty": "EC"},
+                                          {"kid": next(kid for kid in probe.expected_kids(probe.ORG_ID) if kid.endswith("-eddsa")), "kty": "OKP"}]})
         elif args[-1].endswith(probe.OTHER_ORG):
             output = json.dumps({"organization_id": probe.OTHER_ORG, "keys": []})
         else:

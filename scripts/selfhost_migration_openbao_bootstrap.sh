@@ -63,19 +63,19 @@ denies() {
         exit 1
     fi
 }
-allows "$migration_token" transit/keys/cred-issuer-marty-es256 read
+allows "$migration_token" transit/keys/cred-issuer-tenant-scope-probe read
 allows "$migration_token" transit/keys/notification-webhook-envelope-marty-aes256 read
 denies "$migration_token" transit/decrypt/notification-webhook-envelope-marty-aes256
 denies "$migration_token" auth/token/create
 allows "$notification_token" transit/keys/notification-webhook-envelope-marty-aes256 read
 allows "$notification_token" transit/encrypt/notification-webhook-envelope-marty-aes256 update
 allows "$notification_token" transit/decrypt/notification-webhook-envelope-marty-aes256 update
-denies "$notification_token" transit/sign/cred-issuer-marty-es256
+denies "$notification_token" transit/sign/cred-issuer-tenant-scope-probe
 denies "$notification_token" auth/token/create
 allows "$grant_verify_token" transit/verify/marty-sign-grant-issuance-credential-v1/sha2-256 update
 denies "$grant_verify_token" transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256
 denies "$grant_verify_token" auth/token/create
-allows "$signing_keys_token" transit/keys/cred-issuer-marty-es256 read
+allows "$signing_keys_token" transit/keys/cred-issuer-tenant-scope-probe read
 denies "$signing_keys_token" auth/token/create
 
 umask 077

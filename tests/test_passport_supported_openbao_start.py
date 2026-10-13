@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import os
 import secrets
 import shutil
@@ -140,6 +141,21 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
                 f"bao token capabilities transit/keys/{expected}",
             )
             assert probe.stdout.splitlines() == ["ecdsa-p256", "false", "read"]
+        inventory = docker(
+            "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
+            "--env", "BAO_ADDR=http://openbao:8200",
+            "--mount", "type=bind,src=" + str(token_file)
+            + ",dst=/run/secrets/bao_root_token,readonly",
+            image, "-c", "BAO_TOKEN=$(cat /run/secrets/bao_root_token); "
+            "export BAO_TOKEN; bao list -format=json transit/keys",
+        )
+        keys = set(json.loads(inventory.stdout))
+        assert not keys.intersection({
+            "cred-issuer-marty-es256", "cred-issuer-marty-es384",
+            "cred-issuer-marty-rs256", "cred-issuer-marty-eddsa",
+            "cred-dsc-marty-primary", "lti-tool-marty-rs256",
+            "oid4vp-verifier-marty-es256",
+        })
     inspection = docker("inspect", name, "--format", "{{json .Config.Env}}").stdout
     logs = docker("logs", name)
     assert root_token not in inspection + logs.stdout + logs.stderr

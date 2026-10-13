@@ -173,7 +173,7 @@ def run() -> None:
             ),
             ("GET", "didcomm/keys/tenant_a/sender", None),
             ("POST", "didcomm/keys/tenant_a/sender/rotate", {}),
-            ("GET", "transit/keys/cred-issuer-marty-es256", None),
+            ("GET", "transit/keys/cred-issuer-tenant-scope-probe", None),
             ("POST", "auth/token/create", {"policies": ["root"]}),
             ("GET", "sys/mounts", None),
         ]:

@@ -115,6 +115,8 @@ def test_cli_accepts_windows_utf8_bom(tmp_path, monkeypatch) -> None:
             str(output),
             "--active-kid-output",
             str(kid),
+            "--key-name",
+            "lti-tool-marty-rs256",
         ],
     )
 
