@@ -1824,6 +1824,12 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ),
             ("runtime_marker", "runtime_evidence", "", ""),
             ("startup_marker", "runtime_evidence", "", ""),
+            (
+                "startup_token_marker",
+                "runtime_evidence",
+                "NativeTrustProfileControlPlane::connect_lazy(",
+                "runtime.mark_healthy(TrustProfileDependency::ControlPlane)",
+            ),
             ("injection_marker", "runtime_evidence", "", ""),
             ("connection_marker", "request_evidence", "", ""),
             (
@@ -1867,6 +1873,18 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "request_evidence",
                 "async fn membership(",
                 "#[async_trait]",
+            ),
+            (
+                "owner_permission_marker",
+                "request_evidence",
+                "impl TrustProfileControlPlane for NativeTrustProfileControlPlane",
+                "#[cfg(test)]",
+            ),
+            (
+                "console_permission_marker",
+                "request_evidence",
+                "impl TrustProfileControlPlane for NativeTrustProfileControlPlane",
+                "#[cfg(test)]",
             ),
             (
                 "permission_marker",
