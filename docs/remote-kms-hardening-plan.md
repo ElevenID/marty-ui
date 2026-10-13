@@ -18021,3 +18021,21 @@ at `e149cc0bcc5c4283177841d1fc744dba84b121da`. Its hosted CI, CodeQL,
 review and protected merge are pending. Do not treat local source-built
 migrations with previous signed services/UI/plugin images as final exact-head
 signed-image qualification.
+
+2026-10-13 UI #1319 first-head correction batch, held locally until validation:
+hosted Python lint/ownership failed because the new verifier fixture imported
+Python cryptography for public PEM conversion. The fixture now calls a bounded
+`marty-release-evidence` Rust CLI using the canonical Core public-JWK parser;
+the local Rust ownership guard, conversion of a corpus P-256 public PEM,
+invalid-PEM rejection, package Clippy and 48 workflow/release tests passed.
+CodeQL marked four high checkout-taint alerts where a release-lock string
+selected executable Core source. The checkout now pins literal protected Core
+SHA `f0819fa0a7783eaebc2efaa105908809244c75a4` and checks that the lock
+matches before execution. Automated review found the read-time managed
+service picked the DSC key before the issuer because inventory sorts by name.
+The local correction explicitly prefers the tenant's standard ES256 issuer,
+then other tenant issuer keys, before any other non-LTI key. A resolve test
+without purpose selects the standard issuer; Signing Keys library now passes
+197 tests with nine ignored and Clippy with denied warnings. These local
+corrections are not yet in the PR head. Initial hosted CI is still running;
+reinspect its complete results before the one batched correction push.
