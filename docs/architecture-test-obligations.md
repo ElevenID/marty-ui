@@ -126,3 +126,21 @@ DIDComm test Python, pinned PostgreSQL/producer/Redis images, and the public
 startup scripts remain execution inputs. This is an execution-owner inventory,
 not a complete transitive dependency closure or permission to narrow mixed,
 unknown, protected, or release inputs.
+
+## Issuance-to-Revocation Profile runtime input
+
+Issuance has two independent non-Cargo transports to Revocation Profile. The
+existing gRPC initiation validator reads `RP_GRPC_TARGET`. The HTTP client
+reads `REVOCATION_PROFILE_SERVICE_URL`: Canvas readiness attempts a GET to
+`/v1/revocation-profiles/{profile_id}`, while credential lifecycle posts to
+`/internal/revocation-profiles/{profile_id}/reserve-index` and
+`/internal/revocation-profiles/{profile_id}/process-revocation`. The default
+`issuance-native` Compose profile binds that URL to
+`http://revocation-profile:8013`; Revocation Profile owns all three HTTP
+routes. The readiness GET currently sends no `x-user-id`; the provider's
+profile-read handler requires one, so an existing profile yields 401 and the
+client turns the response into an empty document. The A3 planner records both
+transports and this failure semantics so future dependency review cannot infer
+working HTTP coverage from the gRPC witness. This is shadow dependency
+evidence only: service changes still select the complete Rust workspace, and
+the existing real database/process tests remain required.
