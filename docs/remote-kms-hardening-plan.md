@@ -17728,3 +17728,32 @@ publication result from that run is usable. The surviving run
 Follow that handle and do not dispatch a third run. The concurrency race
 incurred duplicate partial build work despite the immediate pre-dispatch
 run-list check; retain this evidence when reviewing CI cost.
+
+2026-10-13 signed-image qualification failure and local replay: surviving
+stack run `38390398846` recorded four exact digests in its immutable
+`stack-release-digests-38390398846` artifact, and the OpenBao DIDComm
+image qualification passed. The run failed three independent gates before
+publication: `public-stack-smoke` used pinned integration harness v1.2.84,
+whose renderer required exactly three OCI images and rejected the new
+four-image KMS stack; `verifier-differential` called the shipping Rust
+positive gate with empty stdin, which now correctly requires a public
+KMS-issued credential and wallet presentation; `native-schema-image-
+qualification` reported that Rust verify-only could not reach its disposable
+database. No tag or release was published. Local replay on Docker Desktop
+with the exact signed migrations and services digests from the run passed
+the complete fresh disposable self-host probe in 26 seconds: two
+migration/schema passes, verify-only reachable/unreachable/malformed
+read-only checks, and private-key storage absent, returning schema v3.
+The hosted database failure remains unexplained and must not be called
+fixed by that single local pass. Separate review found the CD workflow
+still demanded evidence schema v2 even though the probe returns v3; the
+local UI release-fix worktree corrects it and requires the new verify-only
+field. The preserved integration branch `security/remote-kms-acceptance-
+20261007` already contained digest-pinned Core KMS/wallet producer and stdin
+wiring. Its two commits were reconciled onto integration main together with
+strict four-image OpenBao binding in local branch `security/kms-four-image-
+release-harness-20261013`; 329 focused unit tests passed, two skipped.
+The release workflow still needs to provision real scoped remote keys and
+run that producer against the exact services image before this gate can pass.
+Keep both local branches unpushed until a broad reviewed correction batch
+is ready; no hosted retry or release claim is justified yet.
