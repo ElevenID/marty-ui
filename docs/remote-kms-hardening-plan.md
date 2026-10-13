@@ -18004,3 +18004,7 @@ broad UI branch remains local, unpushed. Next run the complete local release
 matrix and self-review its whole diff, then open one grouped UI PR for hosted
 CI. Exact signed UI/services/migrations/plugin publication and final
 installed, provider/device, cutover and recovery qualification remain open.
+The expanded local release/bootstrap selection subsequently passed 196 tests
+with four existing skips, including stack manifest, release transaction,
+pre-promotion, tag gate, UI asset/bootstrap, installed OpenBao and Signing Keys
+boundary checks. Full candidate-image release qualification is still due.
