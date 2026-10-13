@@ -18058,3 +18058,10 @@ OCI digests produced a validated eight-component manifest, and that exact
 released harness rendered seven immutable image bindings, including UI,
 services, migrations and OpenBao DIDComm. This validates release adapter
 structure, not candidate binaries or publication.
+The current UI branch's four edited OpenBao shell scripts passed syntax checks
+inside the pinned OpenBao image. `scripts/probe_signing_keys_openbao_policy.py`
+passed against a fresh disposable OpenBao instance for six managed prefixes,
+isolated provider HMAC verification and seven origin-bound signing-grant keys.
+Self-host bootstrap Python selection passed 17 tests with three Windows-only
+POSIX skips. Corrected-head hosted CI run `38407302994` has started; no final
+result is claimed yet.
