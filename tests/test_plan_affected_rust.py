@@ -1815,20 +1815,118 @@ class AffectedRustPlannerTests(unittest.TestCase):
         ]
         self.assertEqual(len(edges), 1)
         edge = edges[0]
-        self.assertIn(
-            edge["binding"], (ROOT / edge["evidence"]).read_text(encoding="utf-8")
+        markers = (
+            (
+                "binding",
+                "evidence",
+                "let organization_grpc_target =",
+                "let service_token =",
+            ),
+            ("runtime_marker", "runtime_evidence", "", ""),
+            ("startup_marker", "runtime_evidence", "", ""),
+            ("injection_marker", "runtime_evidence", "", ""),
+            ("connection_marker", "request_evidence", "", ""),
+            (
+                "authentication_marker",
+                "request_evidence",
+                "fn request<T>",
+                "pub async fn check_health",
+            ),
+            (
+                "request_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "request_organization_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "request_user_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "user_identity_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "organization_identity_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "active_marker",
+                "request_evidence",
+                "async fn membership(",
+                "#[async_trait]",
+            ),
+            (
+                "permission_marker",
+                "request_evidence",
+                "impl TrustProfileControlPlane for NativeTrustProfileControlPlane",
+                "",
+            ),
+            (
+                "callsite_marker",
+                "callsite_evidence",
+                "pub async fn organization_profiles(",
+                "pub async fn organization_profile(",
+            ),
+            (
+                "provider_authentication_marker",
+                "provider_evidence",
+                "async fn get_member(",
+                "async fn add_member(",
+            ),
+            (
+                "provider_marker",
+                "provider_evidence",
+                "async fn get_member(",
+                "async fn add_member(",
+            ),
+            ("provider_registration_marker", "provider_registration_evidence", "", ""),
+            (
+                "deployment_marker",
+                "deployment_evidence",
+                f"\n  {edge['deployment_service']}:\n",
+                "\n  applicant:\n",
+            ),
         )
-        self.assertIn(
-            edge["runtime_marker"],
-            (ROOT / edge["runtime_evidence"]).read_text(encoding="utf-8"),
-        )
-        control_plane = (
-            ROOT / "rust/services/trust-profile/src/control_plane.rs"
-        ).read_text(encoding="utf-8")
-        self.assertIn(
-            "OrganizationServiceClient::new(endpoint.connect_lazy())", control_plane
-        )
-        self.assertIn(".get_member(self.request(GetMemberRequest", control_plane)
+        sources = {
+            path: (ROOT / path).read_text(encoding="utf-8")
+            for _, source, _, _ in markers
+            if (path := edge[source])
+        }
+
+        def scoped_parts(content: str, start: str, end: str) -> tuple[str, str, str]:
+            start_pos = content.index(start) + len(start) if start else 0
+            end_pos = content.index(end, start_pos) if end else len(content)
+            return content[:start_pos], content[start_pos:end_pos], content[end_pos:]
+
+        def assert_markers(snapshot: dict[str, str]) -> None:
+            for marker, source, start, end in markers:
+                _, body, _ = scoped_parts(snapshot[edge[source]], start, end)
+                self.assertEqual(body.count(edge[marker]), 1, marker)
+
+        assert_markers(sources)
+        for marker, source, start, end in markers:
+            with self.subTest(marker=marker):
+                path = edge[source]
+                before, body, after = scoped_parts(sources[path], start, end)
+                changed = dict(sources)
+                changed[path] = (
+                    before + body.replace(edge[marker], "removed-edge", 1) + after
+                )
+                with self.assertRaises(AssertionError):
+                    assert_markers(changed)
         self.assertNotIn(
             "marty-organization",
             {dep["name"] for dep in packages["marty-trust-profile"]["dependencies"]},
