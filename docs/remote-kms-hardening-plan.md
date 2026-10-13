@@ -17975,3 +17975,32 @@ release/bootstrap selection passed 62 tests. The old UI release-fix worktree
 is preserved unpushed. Hold the new UI branch until integration #435 merges
 and its v1.2.86 source archive is signed, then pin that exact digest/commit
 once and run the complete local release matrix before hosted CI.
+
+2026-10-13 integration and production-bootstrap continuation: integration
+[PR #435](https://github.com/ElevenID/marty-integration-tests/pull/435) merged
+to protected main as `ac80ff32798780af4fd2641f24565e653af3b9c1`; all
+checks on its corrected head passed. [v1.2.86](https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.86)
+published a source archive with SHA-256
+`f576e13c9f87037e635df702b56f51f65376578f16dfeb1a007d1e8241d6e975`.
+The downloaded archive matched both the release digest and SHA256SUMS, and
+GitHub attestation verification bound it to that protected merge commit,
+`refs/tags/v1.2.86`, and a GitHub-hosted runner. The broad UI branch pins
+that exact version, commit, archive digest and provenance in
+`release/stack-lock.json` (local commit `e149cc0bc`); 42 release contract
+tests passed.
+
+The same broad UI branch now has local commit `a88d0667e`, which removes
+seven global static standard signing-key creations from production OpenBao
+initialization. Rust migration bootstrap alone provisions tenant-bound,
+non-exportable standard keys. Purpose-specific LTI/OID4VP OpenBao ACLs now
+match scoped references; self-host token renewal and disposable policy probes
+no longer depend on a global issuer key. Installed Signing Keys JWKS probing
+requires tenant-derived `kid` values, and the Canvas public-JWKS exporter
+requires an explicit key reference. A disposable live OpenBao bootstrap ran
+twice and confirmed no old global signing keys in inventory while scoped
+passport keys remained non-exportable and readable by the service token.
+The related focused suite passed 31 tests; Ruff and diff checks passed. The
+broad UI branch remains local, unpushed. Next run the complete local release
+matrix and self-review its whole diff, then open one grouped UI PR for hosted
+CI. Exact signed UI/services/migrations/plugin publication and final
+installed, provider/device, cutover and recovery qualification remain open.
