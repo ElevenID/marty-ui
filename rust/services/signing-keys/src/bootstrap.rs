@@ -162,12 +162,9 @@ fn object_or_empty(existing: Option<Value>) -> Map<String, Value> {
 
 pub fn seed_signing_registry(
     existing: Option<Value>,
-    org: &str,
     records: &[KeyRecord],
 ) -> Result<Value, BootstrapError> {
     let mut doc = object_or_empty(existing);
-    let aliases: Vec<Value> = records.iter().map(|record| json!(record.spec.id)).collect();
-    let algorithms: BTreeSet<&str> = records.iter().map(|record| record.spec.algorithm).collect();
     let purposes: BTreeSet<&str> = records
         .iter()
         .flat_map(|record| record.spec.purposes.iter().copied())
@@ -176,27 +173,10 @@ pub fn seed_signing_registry(
         .iter()
         .flat_map(|record| record.spec.formats.iter().copied())
         .collect();
-    let algorithms_json = json!(algorithms);
-    let managed = json!({
-        "id": MANAGED_SERVICE_ID, "name": "Marty managed OpenBao transit",
-        "description": "Managed by the Marty service stack and seeded during clean-slate migrations.",
-        "service_type": "openbao-transit", "provider": "openbao",
-        "provider_label": "OpenBao Transit", "protocol": "vault-transit",
-        "category": "service-hsm", "endpoint": "", "region": "", "mount": "transit",
-        "namespace": "", "auth_mode": "service_token",
-        "auth_reference": "Managed by Marty service stack",
-        "key_reference": "cred-issuer-marty-es256", "key_aliases": aliases,
-        "algorithms": algorithms_json, "status": "configured", "managed": true,
-        "read_only": true, "managed_by": "Marty service stack",
-        "organization_id": org, "key_count": records.len(),
-        "capabilities": {"discover_keys": true, "sign": true, "rotate_keys": false,
-            "upload_public_keys": false, "delete_keys": false,
-            "multiple_key_references": true, "public_key_export": true,
-            "supported_algorithms": algorithms_json},
-        "signature_encoding": "raw_ieee_p1363",
-        "key_purposes": purposes, "credential_formats": formats,
-    });
-    let mut services = vec![managed];
+    // Signing Keys derives the managed OpenBao service from live inventory on
+    // read. Storing it here would make the registry fail its own stored-service
+    // validation, which correctly forbids persisted mounted service tokens.
+    let mut services = Vec::new();
     if let Some(existing) = doc.get("services").and_then(Value::as_array) {
         services.extend(
             existing
@@ -604,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn clean_registry_did_jwks_and_profiles_match_python() {
+    fn clean_registry_did_jwks_and_profiles_match_python_except_derived_managed_service() {
         let clean = case("clean_apply");
         let env = &clean["input"]["environment"];
         let org = env["MARTY_ORG_ID"].as_str().unwrap();
@@ -612,10 +592,19 @@ mod tests {
         let url = env["MARTY_ISSUER_BASE_URL"].as_str().unwrap();
         let expected = &clean["state"]["redis"];
         let records = records(&clean);
+        let mut expected_registry = expected[signing_registry_key(org)].clone();
+        let managed = &expected_registry["services"][0];
         assert_eq!(
-            seed_signing_registry(None, org, &records).unwrap(),
-            expected[signing_registry_key(org)]
+            managed["auth_reference"], "Managed by Marty service stack",
+            "the historical Python corpus must remain unchanged"
         );
+        expected_registry["services"]
+            .as_array_mut()
+            .unwrap()
+            .remove(0);
+        let registry = seed_signing_registry(None, &records).unwrap();
+        assert!(registry["services"].as_array().unwrap().is_empty());
+        assert_eq!(registry, expected_registry);
         let (did_doc, jwks) = seed_did_and_jwks(None, org, did, &records);
         assert_eq!(did_doc, expected[did_key(org, Some(did))]);
         assert_eq!(jwks, expected[jwks_key(org)]);
@@ -699,9 +688,24 @@ mod tests {
         ] {
             let initial =
                 json!({"default_service_id": default, "services": [{"id":"customer-hsm"}]});
-            let result = seed_signing_registry(Some(initial), "org", &records).unwrap();
+            let result = seed_signing_registry(Some(initial), &records).unwrap();
             assert_eq!(result["default_service_id"], MANAGED_SERVICE_ID);
-            assert_eq!(result["services"][1]["id"], "customer-hsm");
+            assert_eq!(result["services"][0]["id"], "customer-hsm");
         }
+    }
+
+    #[test]
+    fn stale_bootstrap_managed_entry_is_removed_without_dropping_customer_service() {
+        let records = records(&case("clean_apply"));
+        let initial = json!({"services": [
+            {"id": MANAGED_SERVICE_ID, "auth_mode": "service_token",
+                "auth_reference": "Managed by Marty service stack"},
+            {"id": "customer-hsm", "service_type": "aws-kms"}
+        ]});
+        let result = seed_signing_registry(Some(initial), &records).unwrap();
+        assert_eq!(
+            result["services"],
+            json!([{"id": "customer-hsm", "service_type": "aws-kms"}])
+        );
     }
 }
