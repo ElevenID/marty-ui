@@ -17705,3 +17705,16 @@ full run to succeed while main remains exact, then perform the no-write
 stack-tag claim. Source attempt 1's unrelated renewal-health failure and
 successful failed-job attempt 2 remain recorded; the queue itself was green.
 No tag, signed image, installed KMS-only matrix, or cutover is claimed.
+
+2026-10-13 exact-main release progression: full `ci.yml` workflow-dispatch
+run `38384795362` succeeded on protected main
+`9b5d14559efd6630d463e9457ee3a3590571de06`, including Canvas,
+OpenBao DIDComm, Rust contracts and CI Gate. Canvas took longer than its
+source rerun but finished successfully; do not infer a test failure from
+its duration. The exact-main no-write `v1.1.245` claim run `38390245195`
+was dispatched by another operator/process and succeeded. With no CD run
+for this claim present, stack-release workflow `38390378067` was
+dispatched once with `claim_run_id=38390245195`. Its build, signature,
+attestation, installed qualification and protected publication gates are
+still pending. This checkpoint does not assert a tag, release image,
+installed KMS-only journey or cutover.
