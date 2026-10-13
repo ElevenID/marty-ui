@@ -17593,3 +17593,15 @@ The latter was still pending with zero jobs; it was cancelled to avoid a
 duplicate full qualification charge. Use `38365905681` as the authoritative
 full-run candidate after checking its final conclusion. The cancelled run
 is preserved as immutable operational evidence, not a failed source gate.
+
+2026-10-13 protected-main advance during full qualification: main advanced
+from #1312 merge SHA `56e79f2ba9c6eb88688a3978fdc8f1ed680db6de` to
+`5f6f6f51c1019f84a05fbfa4ff8ecd706b057c94` when #1301 merged. All
+five merge-group workflows passed on the newer SHA. The full run
+`38365905681` on the older SHA could no longer satisfy the claim's exact-main
+predicate; cancellation was requested, and its long jobs show cancellation.
+A new full `ci.yml` dispatch `38366813277` was created on current main
+`5f6f6f51c1019f84a05fbfa4ff8ecd706b057c94`; it is pending behind the
+older run's teardown at this checkpoint. Do not claim the tag until the new
+run succeeds and protected main still equals its SHA. Check for an existing
+same-SHA dispatch before any further run to avoid duplicate CI cost.
