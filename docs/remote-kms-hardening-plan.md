@@ -18209,3 +18209,7 @@ PostgreSQL/Raft integration-secret recovery. CodeQL, organization quality,
 dependency review and policy checks also passed; no inline review finding was
 reported. Protected merge and a new exact-main full CI run remain required
 before a fresh `v1.1.245` no-write claim and release transaction.
+The corrected PR was explicitly enqueued through GitHub's protected merge
+queue after all exact-head checks passed; it entered at position 2. Do not
+dispatch exact-main full CI until its queued merge commit becomes protected
+`main`.
