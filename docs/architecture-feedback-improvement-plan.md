@@ -4030,6 +4030,18 @@ protected validation before promotion; no feedback saving is claimed. The
 missing authenticated read requires a separately reviewed runtime fix with
 permission-preserving tests.
 
+October 13 runtime follow-up (local, not yet merged): Issuance now reads
+`/internal/revocation-profiles/{profile_id}/issuance-context` with the existing
+internal service token. Revocation Profile requires that token even when its
+internal auth configuration is absent and returns only profile ID, organization
+ID, and status. The public user-authorized read is unchanged. Router and client
+tests cover unconfigured/missing/wrong tokens, public-route isolation, correct
+internal response, no credential-template token forwarding, and same-/cross-org
+readiness. Package-scoped Rust checks and focused tests passed; independent
+review found no P1-P3 issue. The A3 planner evidence and its focused test now
+match the corrected runtime behavior (54 passed, one existing skip). Hosted PR and protected-gate validation are
+still required; no duration improvement is claimed.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

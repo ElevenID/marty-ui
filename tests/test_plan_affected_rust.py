@@ -2122,7 +2122,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "fn append_segments(",
             ),
             "get": (
-                "async fn object(&self, endpoint: Option<Url>)",
+                "    async fn object(\n",
                 "impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {",
             ),
             "route": (
@@ -2194,6 +2194,11 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 _, body, _ = scoped_parts(snapshot[edge[source]], scope)
                 if marker == "readiness_object_marker":
                     self.assertEqual(body.count(edge[marker]), 2, marker)
+                elif marker == "readiness_endpoint_marker":
+                    template_read = body.split("let credential_template =", 1)[1].split(
+                        "let profile_id =", 1
+                    )[0]
+                    self.assertIn(edge[marker], template_read, marker)
                 else:
                     self.assertIn(edge[marker], body, marker)
 
@@ -2235,13 +2240,19 @@ class AffectedRustPlannerTests(unittest.TestCase):
             ("evidence", ("binding",)),
             (
                 "runtime_evidence",
-                ("readiness_runtime_marker", "lifecycle_runtime_marker"),
+                (
+                    "readiness_runtime_marker",
+                    "readiness_token_marker",
+                    "lifecycle_runtime_marker",
+                ),
             ),
             (
                 "readiness_evidence",
                 (
                     "readiness_request_marker",
+                    "readiness_token_marker_client",
                     "readiness_send_marker",
+                    "readiness_header_marker",
                     "readiness_rejection_marker",
                 ),
             ),
@@ -2278,6 +2289,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertIn(
                     "config.revocation_profile_service_url.clone()", constructor_args
                 )
+        readiness_constructor = runtime_source.split(
+            edge["readiness_runtime_marker"], 1
+        )[1].split(")?", 1)[0]
+        self.assertIn(edge["readiness_token_marker"], readiness_constructor)
         readiness_source = (ROOT / edge["readiness_evidence"]).read_text(
             encoding="utf-8"
         )
@@ -2285,30 +2300,39 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "#[async_trait]", 1
         )[0]
         self.assertIn(edge["readiness_send_marker"], readiness_object)
+        self.assertIn(edge["readiness_header_marker"], readiness_object)
         self.assertIn(edge["readiness_rejection_marker"], readiness_object)
         self.assertIn("return Map::new();", readiness_object)
-        self.assertNotIn('"x-user-id"', readiness_object)
+        readiness_documents = readiness_source.split(
+            "impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {",
+            1,
+        )[1].split("#[cfg(test)]", 1)[0]
+        self.assertIn(edge["readiness_request_marker"], readiness_documents)
+        self.assertIn(edge["readiness_token_marker_client"], readiness_documents)
+        self.assertIn("&self.credential_template_base_url,", readiness_documents)
+        self.assertIn("                None,", readiness_documents)
         provider_source = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
-        profile_handler = provider_source.split("async fn get_profile(", 1)[1].split(
-            "async fn activate_profile(", 1
-        )[0]
+        profile_handler = provider_source.split(
+            "async fn get_internal_issuance_context(", 1
+        )[1].split("async fn activate_profile(", 1)[0]
         self.assertIn(edge["profile_auth_marker"], profile_handler)
-        authorization_handler = provider_source.split("    async fn authorize(", 1)[
+        self.assertIn("IssuanceReadinessProfileResponse", profile_handler)
+        authorization_handler = provider_source.split("    fn authorize_required(", 1)[
             1
-        ].split("\n    }\n}", 1)[0]
+        ].split("\n    }", 1)[0]
         self.assertIn(edge["profile_auth_delegate_marker"], authorization_handler)
-        user_id_extractor = provider_source.split("fn current_user_id(", 1)[1].split(
-            "#[derive(Debug, Error)]", 1
-        )[0]
-        self.assertIn(edge["profile_user_marker"], user_id_extractor)
-        self.assertIn(".filter(|value| !value.trim().is_empty())", user_id_extractor)
-        self.assertIn("ApiError::Unauthorized(", user_id_extractor)
+        self.assertIn("self.expected_token.is_none()", authorization_handler)
+        token_auth = provider_source.split(
+            "    fn authorize(&self, headers: &HeaderMap)", 1
+        )[1].split("    fn authorize_required(", 1)[0]
+        self.assertIn(edge["profile_user_marker"], token_auth)
+        self.assertIn("ApiError::Unauthorized(", token_auth)
         error_response = provider_source.split("impl IntoResponse for ApiError {", 1)[
             1
         ].split("#[cfg(test)]", 1)[0]
         self.assertIn(edge["profile_unauthorized_status_marker"], error_response)
         for route_marker, handler in (
-            ("profile_route_marker", "get(get_profile)"),
+            ("profile_route_marker", "get(get_internal_issuance_context)"),
             ("allocation_route_marker", "post(reserve_index)"),
             ("revocation_route_marker", "post(process_revocation)"),
         ):

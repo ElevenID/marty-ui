@@ -521,6 +521,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(HttpCanvasReadinessDocumentProvider::new(
             &config.credential_template_service_url,
             config.revocation_profile_service_url.clone(),
+            config.internal_service_token.as_deref(),
             config.dependency_timeout,
         )?),
         Arc::new(LiveCanvasReadinessChallengeProvider::new_with_grant(
