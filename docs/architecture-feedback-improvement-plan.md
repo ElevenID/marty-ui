@@ -4036,7 +4036,8 @@ which passed exact-head and full protected
 `5ee6a84a1` at 02:53:55 UTC. The protected CI workflow ran from 02:20:37 to
 02:53:29 UTC (32m52s); this is qualification time, not a speedup claim.
 
-October 13 A6 planner-document PR fast-path candidate (local):
+October 13 A6 planner-document PR fast path (merged in
+[#1308](https://github.com/ElevenID/marty-ui/pull/1308)):
 `docs/architecture-test-obligations.md` records diagnostic test ownership but
 is not a shipped runtime or release-bundle input. Allow it as auxiliary input
 only when an exact planner source/test file also changes, so the bounded
@@ -4046,8 +4047,13 @@ code/workflow, missing-base, and
 merge-group inputs retain their prior conservative selection; all protected
 combined-head checks remain full. The exact classifier regression and full
 148-test workflow-policy suite passed locally, and independent review found
-no P1-P3 issue. Hosted before/after timing and merge validation are pending;
-no saving is claimed.
+no P1-P3 issue. The workflow change itself required the full
+[PR matrix](https://github.com/ElevenID/marty-ui/actions/runs/38339387058)
+(02:57:38–03:27:11 UTC, 29m33s) and passed full protected
+[combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38341820227)
+(03:27:49–03:52:15 UTC, 24m26s), merging as `8845181f8`. These runs have
+different scopes and do not measure a fast-path saving; the first eligible
+planner-plus-obligation-document PR is the next pilot.
 
 October 13 runtime follow-up (merged in #1307): Issuance now reads
 `/internal/revocation-profiles/{profile_id}/issuance-context` with the existing
@@ -4061,6 +4067,20 @@ review found no P1-P3 issue. The A3 planner evidence and its focused test now
 match the corrected runtime behavior (54 passed, one existing skip). Hosted
 exact-head and protected-gate validation passed before merge; no duration
 improvement is claimed.
+
+October 13 A0/A3 first eligible pilot: Trust Profile uses Organization gRPC to
+authorize organization-scoped profile operations. The existing shadow edge
+now records the service target, startup injection, authenticated `GetMember`
+request, request/response identity and active-membership checks, permission
+decision, provider authentication/lookup and registration, and the
+`trust-profile` Compose binding. Source-scoped one-marker-at-a-time mutations
+guard the chain; the obligation inventory records the runtime input without
+claiming a live gRPC qualification. Planner tests passed on current main (54
+passed, one existing skip, 507 subtests); Ruff and diff checks passed, and
+independent review found no remaining P1-P3 issue. This source-plus-auxiliary-
+document change is the first pilot of #1308's PR-only selector. Service changes
+and protected merge groups still select full Rust checks. No hosted timing or
+speedup is claimed yet.
 
 ## Design references
 
