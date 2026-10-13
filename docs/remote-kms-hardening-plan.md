@@ -17655,3 +17655,12 @@ been retired. The test-only published-image comparison is distinct from a
 production fallback; continue to require KMS-only production boundaries and
 signed installed acceptance. PR source CI on this later head is pending;
 do not use the cancelled or prior-head CI runs as release evidence.
+
+2026-10-13 live qualification watch: UI #1315 source-head CI run
+`38374343103` targets `ceb4230c16be165a0979bd7ac7ae3b9cee36cf7b`.
+At the latest authoritative job poll, release contracts, Rust lint,
+Rust contracts and the other completed lanes passed. Canvas remains in
+its isolated database-contract step, and the OpenBao DIDComm plugin lane
+remains in coordinated PostgreSQL/Raft recovery; neither has reported a
+failure or completed. No source/merge/full-main success or release claim is
+asserted yet. Git tag and GitHub release `v1.1.245` were still absent.
