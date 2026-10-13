@@ -796,6 +796,29 @@ def test_verifier_scans_request_the_frozen_cyclonedx_schema() -> None:
     assert "validate-sbom" in verifier["run"]
 
 
+def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> None:
+    release = yaml.safe_load(_text(".github/workflows/cd.yml"))
+    steps = release["jobs"]["verifier-differential"]["steps"]
+    producer = next(step for step in steps if step.get("name") == "Build the exact attested Core KMS verifier producer")
+    assert "config/credentials-verifier-positive-producer.json" in producer["run"]
+    assert "gh attestation verify" in producer["run"]
+    assert "--source-ref \"refs/tags/$tag\"" in producer["run"]
+    assert "--source-digest \"$commit\"" in producer["run"]
+    assert "--deny-self-hosted-runners" in producer["run"]
+    assert "extract_verified_source.py" in producer["run"]
+    assert "--expected-sha256 \"$digest\"" in producer["run"]
+    assert "--expected-commit \"$commit\"" in producer["run"]
+    assert "cargo +1.97.1 build --locked" in producer["run"]
+    verifier = next(
+        step for step in steps
+        if step.get("name") == "Verify and exercise the exact services digest against the immutable oracle"
+    )
+    assert "scripts/run_remote_kms_verifier_fixture.py" in verifier["run"]
+    assert "--bin marty-test-signer-agent" in producer["run"]
+    assert "--agent ../core-source/target/debug/marty-test-signer-agent" in verifier["run"]
+    assert "compare-transaction-evidence" in verifier["run"]
+
+
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     workflow = _text(".github/workflows/cd.yml")
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]
