@@ -165,6 +165,9 @@ def check(archive: Path, lock: Path, transaction: Path, receipt_path: Path,
                     raise ValueError(f"installed Compose {kind}.{name} has a missing bundle file")
     return {"schema": "marty.selfhost-consumer-preflight/v1",
             "qualification": "unqualified", "archive_sha256": receipt["archive_sha256"],
+            "image_lock_sha256": receipt["image_lock_sha256"],
+            "transaction_sha256": receipt["transaction_sha256"],
+            "release": receipt["release"],
             "source_sha": receipt["source_sha"], "run_id": receipt["run_id"],
             "service_count": len(services)}
 

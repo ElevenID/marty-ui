@@ -1774,6 +1774,24 @@ mod tests {
     }
 
     #[test]
+    fn no_canvas_issuance_accepts_absent_canvas_secret_without_disabling_issuance() {
+        let config = IssuanceServiceConfig::from_values(values(&[
+            ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
+            ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
+            ("CANVAS_MIRROR_WORKER_ENABLED", "false"),
+            ("CANVAS_CREDENTIALS_SHARED_SECRET_FILE", ""),
+            ("ISSUER_BASE_URL", "https://issuer.example.invalid"),
+        ]))
+        .expect("no-Canvas issuance configuration");
+        assert!(!config.canvas_portable_enabled);
+        assert!(!config.canvas_legacy_event_ingest_enabled);
+        assert!(!config.canvas_mirror_automation.enabled);
+        assert!(config.canvas_credentials_shared_secret.is_none());
+        assert!(config.canvas_credentials_shared_secret_file.is_none());
+        assert_eq!(config.issuer_base_url, "https://issuer.example.invalid");
+    }
+
+    #[test]
     fn passport_tenant_keys_are_validated_and_redacted() {
         let secret = "a".repeat(32);
         let json = format!("{{\"org-1\":\"{secret}\"}}");

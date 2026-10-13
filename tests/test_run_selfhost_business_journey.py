@@ -1,0 +1,306 @@
+"""Installed journey status gate refuses incomplete service closure and health."""
+
+import hashlib
+import json
+import shutil
+import subprocess
+import sys
+import uuid
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from run_selfhost_business_journey import (  # noqa: E402
+    BETA_SERVICES,
+    COMPLETED,
+    EXPECTED_SERVICES,
+    NOT_LOCAL,
+    installed_journey,
+    live_services,
+    parse_status,
+    required_secrets,
+    source_bound_fixture,
+    trusted_custody_keys,
+    verify_kms_custody,
+)
+
+
+def status_fixture() -> tuple[str, dict]:
+    model = {"services": {name: {"healthcheck": {"test": ["CMD", "true"]}}
+                          for name in EXPECTED_SERVICES}}
+    rows = [{"Service": name, "State": "exited" if name in COMPLETED else "running",
+             "ExitCode": 0, "Health": "healthy"}
+            for name in sorted(EXPECTED_SERVICES - NOT_LOCAL)]
+    return json.dumps(rows), model
+
+
+def test_exact_local_service_closure_passes_without_tunnel() -> None:
+    raw, model = status_fixture()
+    states = live_services(raw, model)
+    assert set(states) == EXPECTED_SERVICES - BETA_SERVICES - {"cloudflared"}
+
+
+def test_missing_service_and_unhealthy_gateway_fail_closed() -> None:
+    raw, model = status_fixture()
+    rows = json.loads(raw)
+    with pytest.raises(ValueError, match="exact local service closure"):
+        live_services(json.dumps(rows[:-1]), model)
+    for row in rows:
+        if row["Service"] == "gateway":
+            row["Health"] = "unhealthy"
+    with pytest.raises(ValueError, match="not healthy: gateway"):
+        live_services(json.dumps(rows), model)
+
+
+def test_failed_migration_or_duplicate_service_fails_closed() -> None:
+    raw, model = status_fixture()
+    rows = json.loads(raw)
+    for row in rows:
+        if row["Service"] == "db-migrate":
+            row["ExitCode"] = 1
+    with pytest.raises(ValueError, match="one-shot service did not complete"):
+        live_services(json.dumps(rows), model)
+    rows[-1] = dict(rows[0])
+    with pytest.raises(ValueError, match="duplicate or unnamed"):
+        live_services(json.dumps(rows), model)
+
+
+def test_compose_ndjson_status_is_accepted() -> None:
+    raw, _ = status_fixture()
+    rows = json.loads(raw)
+    assert parse_status("\n".join(json.dumps(row) for row in rows)) == rows
+
+
+def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    raw, model = status_fixture()
+    calls = []
+    active = False
+    setup_script = tmp_path / "setup.py"
+    setup_script.write_text("pass\n", encoding="utf-8")
+    integration = tmp_path / "integration"
+    integration.mkdir()
+    state = tmp_path / "state"
+    state.mkdir()
+
+    def fake_command(argv, **_kwargs):
+        nonlocal active
+        calls.append(argv)
+        if "ps" in argv:
+            return raw if active else "[]"
+        if "up" in argv:
+            active = True
+        if "down" in argv:
+            active = False
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    with pytest.raises(ValueError, match="signed custody evidence is absent"):
+        installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
+                          tmp_path, state, tmp_path / "compose.json", tmp_path / "secrets",
+                          model, integration, {}, setup_script,
+                          hashlib.sha256(setup_script.read_bytes()).hexdigest(),
+                          tmp_path / "custody.json", tmp_path / "custody.sig",
+                          tmp_path / "custody.pub",
+                          {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                           "image_lock_sha256": "c" * 64}, frozenset())
+    assert any("pull" in call for call in calls)
+    assert any("down" in call for call in calls)
+    assert active is False
+
+
+def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    (tmp_path / "old-state").write_text("keep", encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("Docker was touched"))
+    with pytest.raises(ValueError, match="fresh empty directory"):
+        installed_journey(["docker", "compose"], tmp_path, tmp_path,
+                          tmp_path / "compose.json", tmp_path / "secrets",
+                          {}, tmp_path, {},
+                          tmp_path / "setup.py", "0" * 64, tmp_path / "custody.json",
+                          tmp_path / "custody.sig", tmp_path / "custody.pub", {},
+                          frozenset())
+
+
+def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    evidence = tmp_path / "custody.json"
+    signature = tmp_path / "custody.sig"
+    public_key = tmp_path / "custody.pub"
+    signature.write_text("signature", encoding="utf-8")
+    public_key.write_text("public key", encoding="utf-8")
+    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64}
+    environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "organization_id": "org", "issuer_did": "did:example:wrong",
+                "verifier_did": "did:example:verifier",
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True}
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
+    with pytest.raises(ValueError, match="does not bind installed fixture"):
+        verify_kms_custody(evidence, signature, public_key, preflight, environment,
+                           trusted_keys)
+
+
+def test_unapproved_custody_signer_fails_before_signature_check(monkeypatch,
+                                                                tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    evidence = tmp_path / "evidence.json"
+    signature = tmp_path / "evidence.sig"
+    public_key = tmp_path / "attacker.pub"
+    for path in (evidence, signature, public_key):
+        path.write_text("attacker", encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
+    with pytest.raises(ValueError, match="signer is not approved"):
+        verify_kms_custody(evidence, signature, public_key, {}, {},
+                           frozenset({"a" * 64}))
+
+
+def test_source_policy_with_no_approved_keys_fails_closed(monkeypatch,
+                                                         tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    policy = {"schema": "marty.selfhost-kms-custody-trust-roots/v1",
+              "approved_public_key_sha256": []}
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: json.dumps(policy))
+    with pytest.raises(ValueError, match="signer is not approved"):
+        trusted_custody_keys(tmp_path, "a" * 40)
+
+
+@pytest.mark.parametrize("placeholder", [
+    "change-me-later", "CHANGE_ME_sign_grant_verify_token",
+    "replace-me", "replace_me_token", "placeholder",
+])
+def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path,
+                                              placeholder: str) -> None:
+    import run_selfhost_business_journey as runner
+
+    monkeypatch.setattr(runner, "EXPECTED_SECRET_NAMES", frozenset({"issuer_token"}))
+    (tmp_path / "issuer_token").write_text(placeholder, encoding="utf-8")
+    with pytest.raises(ValueError, match="placeholder: issuer_token"):
+        required_secrets(tmp_path)
+
+
+def test_fixture_hook_must_match_prepared_source_commit(monkeypatch,
+                                                        tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    path = tmp_path / "scripts" / "setup_selfhost_synthetic_fixture.py"
+    path.parent.mkdir()
+    path.write_bytes(b"print('reviewed')\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def git_result(argv, **_kwargs):
+        return "" if "status" in argv else "print('reviewed')\n"
+
+    monkeypatch.setattr(runner, "command", git_result)
+    source_bound_fixture(path, digest, tmp_path, "a" * 40)
+    with pytest.raises(ValueError, match="prepared source commit"):
+        source_bound_fixture(path, "b" * 64, tmp_path, "a" * 40)
+    with pytest.raises(ValueError, match="reviewed source hook"):
+        source_bound_fixture(tmp_path / "other.py", digest, tmp_path, "a" * 40)
+
+
+def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -> None:
+    if shutil.which("openssl") is None:
+        pytest.skip("OpenSSL is unavailable")
+    private = tmp_path / "short-lived.key"
+    public = tmp_path / "short-lived.pub"
+    evidence = tmp_path / "evidence.json"
+    signature = tmp_path / "evidence.sig"
+    subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
+                   check=True, capture_output=True)
+    subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)],
+                   check=True, capture_output=True)
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64}
+    environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "organization_id": "org", "issuer_did": "did:example:issuer",
+                "verifier_did": "did:example:verifier",
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "profile_proofs": custody_profile_proofs(environment)}
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private),
+                    "-in", str(evidence), "-out", str(signature)],
+                   check=True, capture_output=True)
+    approved = frozenset({hashlib.sha256(public.read_bytes()).hexdigest()})
+    assert verify_kms_custody(evidence, signature, public, preflight,
+                              environment, approved) == hashlib.sha256(evidence.read_bytes()).hexdigest()
+    changed = json.loads(json.dumps(document))
+    changed["profile_proofs"][0]["key_version"] = 2
+    evidence.write_text(json.dumps(changed), encoding="utf-8")
+    with pytest.raises(ValueError, match="installed journey command returned failure"):
+        verify_kms_custody(evidence, signature, public, preflight, environment, approved)
+
+
+def custody_profile_proofs(environment: dict[str, str]) -> list[dict]:
+    proofs = []
+    for did, purpose, prefix in (
+        (environment["SELFHOST_ISSUER_DID"], "vc_jwt_issuer", "cred-issuer-"),
+        (environment["SELFHOST_VERIFIER_DID"], "oid4vp_request_signing", "oid4vp-verifier-"),
+    ):
+        tuple_value = f'{environment["SELFHOST_ORG_ID"]}|{did}|{purpose}|SD_JWT_VC|ES256'
+        proofs.append({
+            "profile_selector": {"issuer_did": did, "key_purpose": purpose,
+                                 "credential_format": "SD_JWT_VC", "algorithm": "ES256"},
+            "key_reference": f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256",
+            "key_version": 1,
+        })
+    return proofs
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing", "duplicate", "extra", "wrong_selector", "wrong_reference",
+    "zero_version", "bool_version", "extra_field",
+])
+def test_custody_rejects_unbound_profile_proofs(monkeypatch, tmp_path: Path,
+                                                mutation: str) -> None:
+    import run_selfhost_business_journey as runner
+
+    evidence = tmp_path / "custody.json"
+    signature = tmp_path / "custody.sig"
+    public_key = tmp_path / "custody.pub"
+    signature.write_text("signature", encoding="utf-8")
+    public_key.write_text("public key", encoding="utf-8")
+    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64}
+    environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+    proofs = custody_profile_proofs(environment)
+    if mutation == "missing":
+        proofs = []
+    elif mutation == "duplicate":
+        proofs[1] = proofs[0]
+    elif mutation == "extra":
+        proofs.append(proofs[0])
+    elif mutation == "wrong_selector":
+        proofs[0]["profile_selector"]["issuer_did"] = "did:example:other"
+    elif mutation == "wrong_reference":
+        proofs[0]["key_reference"] = "cred-issuer-unbound-es256"
+    elif mutation == "zero_version":
+        proofs[0]["key_version"] = 0
+    elif mutation == "bool_version":
+        proofs[0]["key_version"] = True
+    else:
+        proofs[0]["extra"] = "unreviewed"
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "organization_id": "org", "issuer_did": environment["SELFHOST_ISSUER_DID"],
+                "verifier_did": environment["SELFHOST_VERIFIER_DID"],
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "profile_proofs": proofs}
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("signature check was called"))
+    with pytest.raises(ValueError, match="signed KMS custody profile proof"):
+        verify_kms_custody(evidence, signature, public_key, preflight, environment,
+                           trusted_keys)

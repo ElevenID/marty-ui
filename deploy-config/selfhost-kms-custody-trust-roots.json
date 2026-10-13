@@ -1,0 +1,6 @@
+{
+  "schema": "marty.selfhost-kms-custody-trust-roots/v1",
+  "approved_public_key_sha256": [
+    "6afd0295132f08c31fe81c96a4b4f174d62918ee33e71434ac11096f68c980e0"
+  ]
+}
