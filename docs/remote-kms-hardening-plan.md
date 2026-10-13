@@ -18276,3 +18276,14 @@ separates the attempts. Preserve this failed attempt and investigate any
 repeat as a real startup or fixture-timing issue. To avoid another full CI
 run, only failed jobs of `38454924907` were rerun as attempt 2; its result is
 pending. Do not claim from attempt 1.
+
+Local follow-up on the Canvas readiness miss: Rust 1.97.1 built the exact
+`canvas_published_schema_contract` target and native Issuance binary offline
+from the unchanged candidate source. The single
+`renewal_packaged_main_recovers_historical_keyed_offer` test passed against
+the oracle-pinned disposable PostgreSQL image, including verified cleanup
+(1/1, 136 filtered, 10.02 seconds). This narrows but does not explain the
+hosted intermittent startup miss. A neighboring packaged-Issuance acceptance
+test already uses a longer bounded health probe with early child-exit detection
+for busy runners; use that as the focused fixture correction if attempt 2
+repeats the failure. No local or hosted pass substitutes for the release gates.
