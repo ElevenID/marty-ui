@@ -18185,3 +18185,18 @@ into a grouped PR, then rerun exact-main release qualification. The failed
 transaction and job logs are immutable evidence; no tag or GitHub release was
 published by this run. Real AWS/Azure/GCP BYOK, physical device/wallet, full
 installed/cutover/recovery and final clean-schema acceptance remain open.
+
+2026-10-13 grouped release-gate correction: UI PR #1321, branch
+`security/kms-release-gate-correction-20261013`, commit `22460a595`, fixes
+both disposable Linux fixture permissions. Compose file-backed secrets retain
+the host file's `0600` mode, which blocks the nonroot migration image; the
+probe now uses read-only `0444` files inside a host-private `0700` directory.
+The pinned OpenBao image drops root to `openbao` before generating dev TLS
+files, so the verifier fixture now makes only its disposable TLS subdirectory
+writable under a host-private `0700` parent. A Linux container reproduced both
+permission denials and the corrected read/write behavior. The full local
+verifier fixture passed with the pinned OpenBao image and real Rust producer,
+signer agent and public-JWK tool. Sixty focused Python release/schema tests,
+Ruff, Python compilation and diff checks passed. The release workflow still
+needs hosted CI, protected merge, an exact-main claim and a fresh signed-image
+qualification; the prior failed transaction cannot be promoted.
