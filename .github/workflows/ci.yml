@@ -134,7 +134,7 @@ jobs:
                 scripts/ci/plan_affected_rust.py|tests/test_plan_affected_rust.py)
                   planner_source=true
                   ;;
-                docs/architecture-feedback-improvement-plan.md) ;;
+                docs/architecture-feedback-improvement-plan.md|docs/architecture-test-obligations.md) ;;
                 *) planner_candidate=false ;;
               esac
             done

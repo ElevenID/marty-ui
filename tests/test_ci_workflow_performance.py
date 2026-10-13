@@ -3106,6 +3106,7 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         "scripts/ci/plan_affected_rust.py",
         "tests/test_plan_affected_rust.py",
         "docs/architecture-feedback-improvement-plan.md",
+        "docs/architecture-test-obligations.md",
     ]
     exact = _classify_changed_paths(
         planner_paths, tmp_path, combined=True, include_planner_plan=True
@@ -3117,10 +3118,19 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
             [source], tmp_path, include_planner_plan=True
         )[0]
         assert selected["planner_only"] == selected["release"] == "true"
-    document_only = _classify_changed_paths(
-        [planner_paths[2]], tmp_path, include_planner_plan=True
-    )[0]
-    assert document_only["planner_only"] == "false"
+    for document in planner_paths[2:]:
+        document_only = _classify_changed_paths(
+            [document], tmp_path, include_planner_plan=True
+        )[0]
+        assert document_only["planner_only"] == "false"
+        bounded = _classify_changed_paths(
+            [planner_paths[0], document],
+            tmp_path,
+            combined=True,
+            include_planner_plan=True,
+        )[0]
+        assert bounded["planner_only"] == bounded["release"] == "true"
+        assert bounded["all"] == bounded["rust"] == "false"
     empty_diff = _classify_changed_paths(
         [], tmp_path, combined=True, include_planner_plan=True
     )[0]
