@@ -713,6 +713,7 @@ pub struct HttpCanvasReadinessDocumentProvider {
     client: Client,
     credential_template_base_url: Url,
     status_profile_base_url: Url,
+    status_profile_service_token: Option<String>,
 }
 
 impl std::fmt::Debug for HttpCanvasReadinessDocumentProvider {
@@ -732,6 +733,7 @@ impl HttpCanvasReadinessDocumentProvider {
     pub fn new(
         credential_template_base_url: &str,
         status_profile_base_url: Url,
+        status_profile_service_token: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, String> {
         let credential_template_base_url = Url::parse(credential_template_base_url)
@@ -745,14 +747,23 @@ impl HttpCanvasReadinessDocumentProvider {
             client,
             credential_template_base_url,
             status_profile_base_url,
+            status_profile_service_token: status_profile_service_token.map(str::to_owned),
         })
     }
 
-    async fn object(&self, endpoint: Option<Url>) -> Map<String, Value> {
+    async fn object(
+        &self,
+        endpoint: Option<Url>,
+        service_token: Option<&str>,
+    ) -> Map<String, Value> {
         let Some(endpoint) = endpoint else {
             return Map::new();
         };
-        let Ok(mut response) = self.client.get(endpoint).send().await else {
+        let mut request = self.client.get(endpoint);
+        if let Some(token) = service_token {
+            request = request.header("x-service-token", token);
+        }
+        let Ok(mut response) = request.send().await else {
             return Map::new();
         };
         if response.status() != StatusCode::OK
@@ -783,15 +794,18 @@ impl HttpCanvasReadinessDocumentProvider {
 impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {
     async fn documents(&self, credential_template_id: &str) -> CanvasReadinessDocuments {
         let credential_template = self
-            .object(append_segments(
-                &self.credential_template_base_url,
-                &[
-                    "internal",
-                    "credential-templates",
-                    credential_template_id,
-                    "issuance-context",
-                ],
-            ))
+            .object(
+                append_segments(
+                    &self.credential_template_base_url,
+                    &[
+                        "internal",
+                        "credential-templates",
+                        credential_template_id,
+                        "issuance-context",
+                    ],
+                ),
+                None,
+            )
             .await;
         let profile_id = credential_template
             .get("revocation_profile_id")
@@ -800,10 +814,18 @@ impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {
             .filter(|value| !value.is_empty());
         let credential_status_profile = match profile_id {
             Some(profile_id) => {
-                self.object(append_segments(
-                    &self.status_profile_base_url,
-                    &["v1", "revocation-profiles", profile_id],
-                ))
+                self.object(
+                    append_segments(
+                        &self.status_profile_base_url,
+                        &[
+                            "internal",
+                            "revocation-profiles",
+                            profile_id,
+                            "issuance-context",
+                        ],
+                    ),
+                    self.status_profile_service_token.as_deref(),
+                )
                 .await
             }
             None => Map::new(),
@@ -903,6 +925,7 @@ fn https_url(value: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use axum::{http::HeaderMap, response::IntoResponse, routing::get, Json, Router};
     use base64::engine::general_purpose::STANDARD;
     use chrono::TimeZone;
     use marty_crypto::jwk::public_key_pem_to_jwk;
@@ -914,6 +937,74 @@ mod tests {
         canvas_award_candidate::python_canonical_json,
         canvas_lti_tool_signing::CanvasLtiToolSigningError,
     };
+
+    #[tokio::test]
+    async fn readiness_profile_uses_only_the_service_authenticated_internal_read() {
+        let app = Router::new()
+            .route(
+                "/internal/credential-templates/{template_id}/issuance-context",
+                get(|headers: HeaderMap| async move {
+                    if headers.contains_key("x-service-token") {
+                        return StatusCode::BAD_REQUEST.into_response();
+                    }
+                    Json(json!({"revocation_profile_id": "profile-1"})).into_response()
+                }),
+            )
+            .route(
+                "/internal/revocation-profiles/{profile_id}/issuance-context",
+                get(|headers: HeaderMap| async move {
+                    if headers
+                        .get("x-service-token")
+                        .and_then(|value| value.to_str().ok())
+                        != Some("service-secret")
+                    {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    Json(json!({"id": "profile-1", "organization_id": "org-1", "status": "ACTIVE"}))
+                        .into_response()
+                }),
+            )
+            .route(
+                "/v1/revocation-profiles/{profile_id}",
+                get(|| async { StatusCode::GONE }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let authenticated = HttpCanvasReadinessDocumentProvider::new(
+            &base_url,
+            Url::parse(&base_url).unwrap(),
+            Some("service-secret"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let documents = authenticated.documents("template-1").await;
+        assert_eq!(
+            documents.credential_template["revocation_profile_id"],
+            "profile-1"
+        );
+        assert_eq!(documents.credential_status_profile["id"], "profile-1");
+        assert_eq!(
+            documents.credential_status_profile["organization_id"],
+            "org-1"
+        );
+        assert_eq!(documents.credential_status_profile["status"], "ACTIVE");
+
+        let unauthenticated = HttpCanvasReadinessDocumentProvider::new(
+            &base_url,
+            Url::parse(&base_url).unwrap(),
+            None,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(unauthenticated
+            .documents("template-1")
+            .await
+            .credential_status_profile
+            .is_empty());
+        server.abort();
+    }
 
     #[derive(Clone)]
     struct RsaFixture {
