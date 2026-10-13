@@ -18479,3 +18479,15 @@ role-closure validation before costly release builds. Focused local tests:
 Compose v5.4.0 all-profile render matched all six external roles in the
 prepared `v1.1.245` input map. Its new hosted CI is running. PR #1324's
 protected merge-group CI remains active at this checkpoint.
+
+Protected operator fix and clean preflight follow-up: #1324 merged via
+successful merge-group run `38480240114` at exact main
+`79f398b0824bfc9662c2fe49c00ab45a16f5ffff` on 2026-10-13. The
+OpenBao recovery, Canvas database, Rust service and release-contract jobs
+passed. #1323 was rebased onto that protected main, with its prior stacked
+head preserved locally as `backup/selfhost-input-preflight-stacked-20261013`.
+Current #1323 head `eae1115ec` changes only the early self-host preflight
+workflow step and its tests; local 51-pass/1-skip focused tests and the
+six-role Compose render passed again. Its fresh hosted CI and protected
+merge remain pending. Do not make a new exact-main claim until the final
+preflight PR and any required CI correction have landed.
