@@ -4038,7 +4038,8 @@ October 13 A6 planner-document PR fast-path candidate (local):
 is not a shipped runtime or release-bundle input. Allow it as auxiliary input
 only when an exact planner source/test file also changes, so the bounded
 planner and workflow-policy tests can replace the full repository release
-suite on that PR head. Document-only, mixed code/workflow, missing-base, and
+suite on that PR head. Document-only, missing/symlinked document, mixed
+code/workflow, missing-base, and
 merge-group inputs retain their prior conservative selection; all protected
 combined-head checks remain full. The exact classifier regression and full
 148-test workflow-policy suite passed locally, and independent review found
