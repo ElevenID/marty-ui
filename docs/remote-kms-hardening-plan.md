@@ -17536,3 +17536,19 @@ the publishing gate. Signed installed-image, real provider/device,
 cross-format, clean-schema, and cutover/rollback acceptance remain open.
 Reconcile this local checkpoint into the post-release evidence PR without
 moving protected main before the exact-main claim.
+
+2026-10-13 exact-main qualification correction: full CI run `38288999258`
+on `0dc0179d4e040350a4b3aee73af57c9bd4e67478` completed with a failed
+Canvas Rust service lane and consequent CI Gate failure. The owned published
+mixed-roster worker fixture produced `canvas_authoritative_read_failed` at
+its first stage. A second full run `38351807768` on later protected main
+`b12cd80401c989a02b33848ff50ab6c0c727f349` reproduced the same failure.
+The failing worker correctly rejected the fixture before signing because the
+historical replay omitted its remote signing-key reference and had no usable
+signing-grant Transit endpoint. UI PR #1312 updates only this fixture to
+exercise the grant-aware remote path, including exact grant binding and
+per-stage mint/sign assertions; source CI `38357163135` is in progress.
+Do not claim `v1.1.245` from either failed main SHA. After #1312 passes and
+merges, require full CI workflow-dispatch success on the then-exact protected
+main SHA, then revisit the no-write claim. The tag and GitHub release remain
+absent at this check; stack lock remains eligible, not published.
