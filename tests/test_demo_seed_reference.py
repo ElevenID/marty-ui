@@ -48,7 +48,7 @@ def test_provenance_uses_canonical_git_blob_bytes() -> None:
             "2c4b71cdc775e167e10e9b47e5b629dcf53b3e771dd6769f135dbb8a12d1bc83",
         ),
     }
-    marty_checkout = ROOT.parent.parent / "Marty"
+    marty_checkout = ROOT.parent / "Marty"
     for field, (path, expected) in source_paths.items():
         assert source[field] == expected
         if (marty_checkout / ".git").exists():

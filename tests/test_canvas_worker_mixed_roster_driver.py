@@ -1,14 +1,14 @@
 """Synthetic parent orchestration integrity, not native-worker qualification."""
 
-from copy import deepcopy
-from contextlib import contextmanager
 import importlib
 import json
-from pathlib import Path
-import tempfile
-from threading import Lock
 import sys
+import tempfile
 import time
+from contextlib import contextmanager
+from copy import deepcopy
+from pathlib import Path
+from threading import Lock
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +123,7 @@ def test_transport_comparison_requires_all_four_exact_frozen_traces(
         None,
         "wrong-trace",
         "late-between-stages",
+        "late-grant-between-stages",
         "child-exit",
         "early-child-exit-counts",
         "early-child-exit-diagnostic-failure",
@@ -131,6 +132,7 @@ def test_transport_comparison_requires_all_four_exact_frozen_traces(
         "final-timeout",
         "cleanup-timeout",
         "late-exit-request",
+        "late-grant-exit",
         "late-shutdown-request",
     ],
 )
@@ -156,6 +158,9 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             self.signer_server = SimpleNamespace(
                 RequestHandlerClass=SimpleNamespace(request_observation_lock=Lock())
             )
+            self.grant_server = SimpleNamespace(
+                RequestHandlerClass=SimpleNamespace(request_observation_lock=Lock())
+            )
             for field in TRACES:
                 setattr(self, field, [])
 
@@ -166,6 +171,11 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             self.cert = Path(self.certificates.name) / "synthetic-cert"
             self.origin = "https://127.0.0.1:1"
             self.signer_origin = "http://127.0.0.1:2/internal/signing-keys"
+            self.grant_origin = "http://127.0.0.1:3"
+            self.grant_token_file = Path(self.certificates.name) / "grant-mint-token"
+            self.grant_operations = []
+            self.grant_requests = []
+            self.grant_inputs = []
             fixtures.append(self)
             return self
 
@@ -178,12 +188,18 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             assert (
                 self.signer_server.RequestHandlerClass.request_observation_lock.locked()
             )
+            assert (
+                self.grant_server.RequestHandlerClass.request_observation_lock.locked()
+            )
             if index:
                 assert events[-1] == ("compare", index - 1)
             events.append(("stage", index))
             self.stage_index = index
             for field in TRACES:
                 setattr(self, field, [])
+            self.grant_operations = []
+            self.grant_requests = []
+            self.grant_inputs = []
 
         def __exit__(self, *_):
             events.append(("close", self.stage_index))
@@ -211,6 +227,8 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
                 raise native.subprocess.TimeoutExpired("synthetic-child", timeout)
             if failure == "late-exit-request" and len(self.communications) == 1:
                 fixtures[0].requests.append("unexpected-late-exit")
+            if failure == "late-grant-exit" and len(self.communications) == 1:
+                fixtures[0].grant_operations.append("unexpected-late-mint")
             if not self.killed:
                 self.returncode = 1 if failure == "final-exit" else 0
             return "synthetic-stdout", "synthetic-stderr"
@@ -236,6 +254,13 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
         assert (
             environment["MARTY_CANVAS_WORKER_MIXED_ROSTER_SIGNER_ORIGIN"]
             == fixture.signer_origin
+        )
+        assert (
+            environment["MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_ORIGIN"]
+            == fixture.grant_origin
+        )
+        assert environment["MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_TOKEN_FILE"] == str(
+            fixture.grant_token_file
         )
         assert environment["SSL_CERT_FILE"] == str(fixture.cert)
         assert Path(environment["SSL_CERT_DIR"]).is_dir()
@@ -268,10 +293,19 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             assert fixtures[
                 0
             ].signer_server.RequestHandlerClass.request_observation_lock.locked()
+            assert fixtures[
+                0
+            ].grant_server.RequestHandlerClass.request_observation_lock.locked()
         actual_touch(path, *args, **kwargs)
         events.append((kind, index))
         if failure == "late-between-stages" and kind == "stage-ack" and index == 0:
             fixtures[0].requests.append("unexpected-between-stages")
+        if (
+            failure == "late-grant-between-stages"
+            and kind == "stage-ack"
+            and index == 0
+        ):
+            fixtures[0].grant_operations.append("unexpected-late-mint")
 
     def wait(child, path, timeout):
         assert child is children[0]
@@ -301,6 +335,11 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             setattr(
                 fixtures[0], field, deepcopy(reference["observations"][index][field])
             )
+        fixtures[0].grant_operations = ["mint_issuance_canvas"] * fixtures[
+            0
+        ].signer_operations.count("sign_lti_tool_assertion")
+        fixtures[0].grant_requests = [{}] * len(fixtures[0].grant_operations)
+        fixtures[0].grant_inputs = [b"synthetic"] * len(fixtures[0].grant_operations)
         if failure == "wrong-trace" and index == 1:
             fixtures[0].token_scopes.append("unexpected-scope")
         actual_touch(path, exist_ok=False)
@@ -310,6 +349,7 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
         if events[-1][0] == "stage-ack" and events[-1][1] < 6:
             assert fixture.server.RequestHandlerClass.request_observation_lock.locked()
             assert fixture.signer_server.RequestHandlerClass.request_observation_lock.locked()
+            assert fixture.grant_server.RequestHandlerClass.request_observation_lock.locked()
         value = actual_compare(fixture, observation)
         index = reference["observations"].index(observation)
         events.append(("compare", index))
@@ -352,7 +392,7 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             assert "fixture_failures=1" in diagnostics
             assert private_payload not in diagnostics
             assert events == [("stage", 0), ("stage-ready", 0), ("close", 0)]
-        if failure == "late-between-stages":
+        if failure in {"late-between-stages", "late-grant-between-stages"}:
             assert "stage 0; diagnostic only" in "\n".join(caught.value.__notes__)
         if failure == "early-child-exit-diagnostic-failure":
             assert caught.value is early_error
@@ -372,7 +412,7 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             len(children[0].communications) == 2
             and children[0].communications[-1] == 60
         )
-    if failure == "late-between-stages":
+    if failure in {"late-between-stages", "late-grant-between-stages"}:
         assert fixtures[0].stage_index == 0
     if failure in {"wrong-trace", "child-exit", "marker-timeout", "cleanup-timeout"}:
         assert fixtures[0].stage_index == 1
@@ -431,12 +471,20 @@ def test_real_chatty_child_fails_promptly_with_bounded_tails_and_cleanup(
                 cert=root / "synthetic-unused-cert",
                 origin="https://127.0.0.1:1",
                 signer_origin="http://127.0.0.1:2/internal/signing-keys",
+                grant_origin="http://127.0.0.1:3",
+                grant_token_file=root / "grant-mint-token",
+                grant_operations=[],
+                grant_requests=[],
+                grant_inputs=[],
                 failures=[],
                 **{field: [] for field in TRACES},
                 server=SimpleNamespace(
                     RequestHandlerClass=SimpleNamespace(request_observation_lock=Lock())
                 ),
                 signer_server=SimpleNamespace(
+                    RequestHandlerClass=SimpleNamespace(request_observation_lock=Lock())
+                ),
+                grant_server=SimpleNamespace(
                     RequestHandlerClass=SimpleNamespace(request_observation_lock=Lock())
                 ),
                 set_stage=lambda stage: stages.append(stage["name"]),
