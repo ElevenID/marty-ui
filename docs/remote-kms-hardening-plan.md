@@ -18438,3 +18438,23 @@ and `support_state: experimental`; the successful first-attempt post-release
 consumer must run migrations, startup and the public business journey before
 any installed claim. GitHub run `38473299581` is `waiting` for reviewer
 `burdettadam` on protected `stack-release`; tag `v1.1.245` remains absent.
+
+2026-10-13 approved publication failure and operator check correction:
+`burdettadam` approved run `38473299581`, but `publish-manifest` failed
+before tag, GitHub release, signing or promotion. All four image gates and
+prepared self-host preflight remain passed. The downloaded amd64 and arm64
+operator ELFs each contain the exact
+`4d1dfb87cfb1df90bfabee8320bae8cd48e1733c:v1.1.245` bytes, but
+Rust concatenated the constant with adjacent `.rodata` text. The workflow's
+`strings -a | grep -Fx` demanded a whole line and rejected both. UI PR
+[#1324](https://github.com/ElevenID/marty-ui/pull/1324), commit `b71b9dfac`,
+checks the binary for the exact byte sequence with `grep -aFq`; it retains
+the amd64 executable identity check and source-bound GitHub attestations.
+Both downloaded artifacts passed the new byte check and failed the previous
+whole-line check; 44 release-contract tests and diff checks passed locally.
+Run `38473299581` is terminal `failure` and remains unpublished. Merge the
+reviewed fix, run exact-main checks, create a fresh no-write claim bound to
+the new main SHA, then launch one release transaction with validated self-host
+inputs. Do not reuse the old claim: `resolve-transaction` requires the
+workflow source SHA to equal the claim source SHA. Real cloud BYOK and device
+acceptance access is still not provisioned.
