@@ -2,7 +2,7 @@
 
 use crate::{
     ags_score_payload, application_payload, claim_wallet_credential, demo_scope,
-    docker_container_env_value, ensure_canvas_initial_data, lookup_transition,
+    docker_container_env_value, ensure_canvas_initial_data, install_platform, lookup_transition,
     mint_canvas_admin_token, refresh_platform_jwks, resolve_issuer_context, run_mirror_publish,
     seed_canvas_lms_objects, seed_open_badge_templates, send_signed_ags, upsert_binding,
     upsert_platform, CanonicalWalletProof, CanvasDocker, CanvasRailsConfig, CanvasRestHttp,
@@ -26,6 +26,13 @@ fn has_ags_evidence_response(value: &Value) -> bool {
     value.as_object().is_some_and(|fields| !fields.is_empty())
 }
 
+fn has_mirror_delivery(value: &Value) -> bool {
+    value["publish"]["delivered_count"]
+        .as_u64()
+        .is_some_and(|count| count > 0)
+        && value["publish"]["failed_count"].as_u64().unwrap_or(0) == 0
+}
+
 fn env_first(env: &HashMap<String, String>, names: &[&str]) -> Option<String> {
     names.iter().find_map(|name| {
         env.get(*name)
@@ -41,11 +48,50 @@ fn validate_disposable_evidence_settings(
     is_disposable: bool,
     evidence_enabled: bool,
     has_evidence_secret: bool,
+    ingest_enabled: bool,
 ) -> Result<(), &'static str> {
     if is_disposable && evidence_enabled && !has_evidence_secret {
         return Err(
             "Disposable Canvas evidence requires an explicit CANVAS_CREDENTIALS_SHARED_SECRET",
         );
+    }
+    if is_disposable && evidence_enabled && !ingest_enabled {
+        return Err(
+            "Disposable Canvas evidence requires CANVAS_LEGACY_EVENT_INGEST_ENABLED=true in issuance",
+        );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct JourneyStages {
+    application: bool,
+    evidence: bool,
+    transition: bool,
+    wallet: bool,
+    mirror: bool,
+}
+
+fn validate_requested_journey_completion(
+    is_disposable: bool,
+    requested: JourneyStages,
+    completed: JourneyStages,
+) -> Result<(), &'static str> {
+    // An explicitly requested evidence run must fail closed in beta too.
+    if !is_disposable && !requested.evidence {
+        return Ok(());
+    }
+    if requested.application && !completed.application {
+        return Err("Canvas application stage did not complete");
+    }
+    if requested.evidence && (!completed.evidence || !completed.transition) {
+        return Err("Canvas evidence or issuance transition did not complete");
+    }
+    if requested.wallet && !completed.wallet {
+        return Err("Canvas wallet claim did not complete");
+    }
+    if requested.mirror && !completed.mirror {
+        return Err("Canvas mirror publish did not complete");
     }
     Ok(())
 }
@@ -193,7 +239,14 @@ pub async fn run_seed(
         env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
         config.connector.demo_evidence_event_enabled,
         env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_some(),
+        env_first(env, &["CANVAS_LEGACY_EVENT_INGEST_ENABLED"])
+            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
     )?;
+    if !env.contains_key("CANVAS_DISPOSABLE_PROJECT")
+        && config.connector.demo_evidence_event_enabled
+    {
+        return Err("Beta Canvas evidence must use the authoritative LTI evidence sync; synthetic AGS score events are available only in the disposable fixture".into());
+    }
     let mut connector = config.connector.clone();
     let wallet_proof = if connector.open_badge_scenario_enabled
         && connector.demo_application_seed_enabled
@@ -243,7 +296,7 @@ pub async fn run_seed(
         )
         .await?;
     }
-    let platform_result = upsert_platform(&gateway, &gateway_cfg).await?;
+    let platform_result = upsert_platform(&gateway, &gateway_cfg, false).await?;
     let mut platform = platform_result.value;
     let mut platform_id =
         value_id(&platform["id"]).ok_or("Canvas platform upsert did not return an ID")?;
@@ -251,28 +304,37 @@ pub async fn run_seed(
     if config.canvas.enabled {
         match seed_lms(&config.canvas, &connector, &platform_id).await {
             Ok(seed) => {
+                if value_id(&seed["course"]["id"]).is_none()
+                    || value_id(&seed["developer_key"]["client_id"]).is_none()
+                    || value_id(&seed["external_tool"]["deployment_id"]).is_none()
+                {
+                    return Err("Canvas LMS seed did not confirm a course, developer key client ID, and external tool deployment ID".into());
+                }
                 let client_id = value_id(&seed["developer_key"]["client_id"])
                     .or_else(|| value_id(&platform["lti_client_id"]))
                     .unwrap_or_else(|| connector.lti_client_id.clone());
                 let deployment_id = value_id(&seed["external_tool"]["deployment_id"])
                     .or_else(|| value_id(&platform["lti_deployment_id"]))
                     .unwrap_or_else(|| connector.lti_deployment_id.clone());
-                if value_id(&platform["lti_client_id"]).as_deref() != Some(&client_id)
-                    || value_id(&platform["lti_deployment_id"]).as_deref() != Some(&deployment_id)
-                {
-                    connector.lti_client_id = client_id;
-                    connector.lti_deployment_id = deployment_id;
-                    gateway_cfg = GatewaySeedConfig::from(&connector);
-                    platform = upsert_platform(&gateway, &gateway_cfg).await?.value;
-                    platform_id = value_id(&platform["id"]).unwrap_or(platform_id);
-                }
+                connector.lti_client_id = client_id;
+                connector.lti_deployment_id = deployment_id;
+                gateway_cfg = GatewaySeedConfig::from(&connector);
+                platform = upsert_platform(&gateway, &gateway_cfg, true).await?.value;
+                platform_id = value_id(&platform["id"]).unwrap_or(platform_id);
                 canvas_seed = seed;
             }
-            Err(error) => warnings.push(format!("Canvas LMS seed failed: {error}")),
+            Err(error) => return Err(format!("Canvas LMS seed failed: {error}")),
         }
     }
     let refreshed = refresh_platform_jwks(&gateway, &gateway_cfg, &platform_id).await?;
     platform = refreshed["platform"].clone();
+    if config.canvas.enabled {
+        platform = install_platform(&gateway, &gateway_cfg, &platform_id).await?;
+    }
+    if let Some(account_id) = value_id(&platform["canvas_account_id"]) {
+        connector.canvas_account_id = account_id;
+        gateway_cfg = GatewaySeedConfig::from(&connector);
+    }
     let course_id = value_id(&canvas_seed["course"]["id"]);
     let quiz_id = if canvas_seed["quiz"].get("error").is_some() {
         None
@@ -283,6 +345,8 @@ pub async fn run_seed(
     let mut scope = seeded_scope.as_object().cloned().unwrap_or_default();
     scope.extend(admin_scope(env).as_object().cloned().unwrap_or_default());
     let scope = Value::Object(scope);
+    // Signed LTI launches expose course context, while the quiz is an evidence activity.
+    let binding_scope = demo_scope(scope["course_id"].as_str(), None, None, None);
     if connector.open_badge_scenario_enabled {
         seed_open_badge_templates(
             database_url,
@@ -294,9 +358,17 @@ pub async fn run_seed(
     }
     let binding = if connector.program_binding_seed_enabled {
         Some(
-            upsert_binding(&gateway, &gateway_cfg, &platform, &scope)
-                .await?
-                .value,
+            upsert_binding(
+                &gateway,
+                &gateway_cfg,
+                &platform,
+                &binding_scope,
+                &scope,
+                env_first(env, &["CANVAS_PROGRAM_BINDING_ACTIVATE"])
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
+            )
+            .await?
+            .value,
         )
     } else {
         None
@@ -417,6 +489,28 @@ pub async fn run_seed(
             Err(error) => warnings.push(format!("Canvas demo application failed: {error}")),
         }
     }
+    let application_requested =
+        connector.open_badge_scenario_enabled && connector.demo_application_seed_enabled;
+    let evidence_requested = application_requested && connector.demo_evidence_event_enabled;
+    let wallet_requested = evidence_requested && connector.demo_wallet_claim_enabled;
+    let mirror_requested = wallet_requested && connector.demo_mirror_publish_enabled;
+    validate_requested_journey_completion(
+        env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
+        JourneyStages {
+            application: application_requested,
+            evidence: evidence_requested,
+            transition: evidence_requested,
+            wallet: wallet_requested,
+            mirror: mirror_requested,
+        },
+        JourneyStages {
+            application: application.is_some(),
+            evidence: evidence.is_some(),
+            transition: transition.is_some(),
+            wallet: wallet.is_some(),
+            mirror: mirror.as_ref().is_some_and(has_mirror_delivery),
+        },
+    )?;
     Ok(json!({
         "platform": platform,
         "jwks_refreshed": refreshed["refreshed"],
@@ -436,7 +530,9 @@ pub async fn run_seed(
 #[cfg(test)]
 mod tests {
     use super::{
-        env_first, has_ags_evidence_response, run_seed, validate_disposable_evidence_settings,
+        env_first, has_ags_evidence_response, has_mirror_delivery, run_seed,
+        validate_disposable_evidence_settings, validate_requested_journey_completion,
+        JourneyStages,
     };
     use crate::build_run_config;
     use serde_json::json;
@@ -462,6 +558,8 @@ mod tests {
                 env.contains_key("CANVAS_DISPOSABLE_PROJECT"),
                 true,
                 env_first(env, &["CANVAS_CREDENTIALS_SHARED_SECRET"]).is_some(),
+                env_first(env, &["CANVAS_LEGACY_EVENT_INGEST_ENABLED"])
+                    .is_some_and(|value| value.eq_ignore_ascii_case("true")),
             )
         };
         assert!(valid(&env).is_err());
@@ -471,7 +569,36 @@ mod tests {
             "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
             "local-only-secret".into(),
         );
+        assert!(valid(&env).is_err());
+        env.insert("CANVAS_LEGACY_EVENT_INGEST_ENABLED".into(), "true".into());
         assert!(valid(&env).is_ok());
+    }
+
+    #[test]
+    fn disposable_full_journey_cannot_report_success_without_requested_evidence() {
+        let requested = JourneyStages {
+            application: true,
+            evidence: true,
+            transition: true,
+            wallet: true,
+            mirror: true,
+        };
+        let incomplete = JourneyStages {
+            application: true,
+            evidence: false,
+            transition: false,
+            wallet: false,
+            mirror: false,
+        };
+        assert!(validate_requested_journey_completion(true, requested, incomplete).is_err());
+        assert!(validate_requested_journey_completion(false, requested, incomplete).is_err());
+        assert!(validate_requested_journey_completion(true, requested, requested).is_ok());
+        assert!(!has_mirror_delivery(
+            &json!({"publish": {"delivered_count": 0, "failed_count": 1}})
+        ));
+        assert!(has_mirror_delivery(
+            &json!({"publish": {"delivered_count": 1}})
+        ));
     }
 
     #[tokio::test]
@@ -484,11 +611,36 @@ mod tests {
                 "http://issuance:8005".into(),
             ),
             ("CANVAS_DEMO_EVIDENCE_EVENT_ENABLED".into(), "true".into()),
+            ("CANVAS_DISPOSABLE_PROJECT".into(), "disposable-test".into()),
+            (
+                "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
+                "test-secret".into(),
+            ),
+            ("CANVAS_LEGACY_EVENT_INGEST_ENABLED".into(), "true".into()),
         ]);
         let config = build_run_config(&env, true, false).unwrap();
         let error = run_seed(&config, &env, "unreachable-database")
             .await
             .unwrap_err();
         assert!(error.contains("SIGNING_KEYS_HOLDER_PROOF_BASE_URL"));
+    }
+
+    #[tokio::test]
+    async fn beta_rejects_synthetic_ags_before_any_journey_side_effect() {
+        let env = HashMap::from([
+            ("MARTY_API_KEY".into(), "gateway-key".into()),
+            ("ISSUANCE_API_KEY".into(), "issuance-key".into()),
+            ("CANVAS_DEMO_EVIDENCE_EVENT_ENABLED".into(), "true".into()),
+            (
+                "ISSUANCE_INTERNAL_API_BASE_URL".into(),
+                "http://issuance:8005".into(),
+            ),
+        ]);
+        let config = build_run_config(&env, true, false).unwrap();
+        let error = run_seed(&config, &env, "unreachable-database")
+            .await
+            .err()
+            .unwrap();
+        assert!(error.contains("authoritative LTI evidence sync"));
     }
 }

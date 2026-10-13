@@ -75,6 +75,7 @@ async fn local_gateway_journey_has_no_db_or_canvas_side_effects() {
             "false".into(),
         ),
         ("CANVAS_PROGRAM_BINDING_SEED_ENABLED".into(), "true".into()),
+        ("CANVAS_PROGRAM_BINDING_COURSE_ID".into(), "course-1".into()),
         ("CANVAS_LMS_SEED_ENABLED".into(), "false".into()),
         (
             "SIGNING_KEYS_INTERNAL_API_KEY".into(),

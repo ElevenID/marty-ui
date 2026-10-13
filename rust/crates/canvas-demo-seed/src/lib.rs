@@ -90,6 +90,15 @@ impl Operation {
             timeout_seconds: 20,
         }
     }
+
+    fn post(url: String) -> Self {
+        Self {
+            method: "POST",
+            url,
+            payload: None,
+            timeout_seconds: 20,
+        }
+    }
 }
 
 #[async_trait]
@@ -372,6 +381,7 @@ pub fn application_template_payload(
 pub async fn upsert_platform<T: GatewayTransport + Sync>(
     transport: &T,
     cfg: &GatewaySeedConfig,
+    update_existing: bool,
 ) -> Result<UpsertResult, String> {
     let platforms = transport
         .request(Operation::get(format!(
@@ -385,12 +395,14 @@ pub async fn upsert_platform<T: GatewayTransport + Sync>(
         .ok_or("Unexpected Canvas platform list response from issuance API")?;
     let existing = platforms.iter().find(|item| {
         item.get("organization_id").and_then(Value::as_str) == Some(cfg.organization_id.as_str())
-            && item.get("canvas_account_id").and_then(Value::as_str)
-                == Some(cfg.canvas_account_id.as_str())
+            && item
+                .get("canvas_base_url")
+                .and_then(Value::as_str)
+                .is_some_and(|origin| {
+                    origin.trim_end_matches('/') == cfg.canvas_base_url.trim_end_matches('/')
+                })
     });
-    let mut payload = json!({
-        "organization_id": cfg.organization_id,
-        "canvas_account_id": cfg.canvas_account_id,
+    let payload = json!({
         "display_name": cfg.display_name,
         "canvas_base_url": cfg.canvas_base_url,
         "lti_client_id": cfg.lti_client_id,
@@ -398,17 +410,20 @@ pub async fn upsert_platform<T: GatewayTransport + Sync>(
         "enabled": true
     });
     if let Some(existing) = existing {
-        for key in [
-            "lti_issuer",
-            "lti_jwks_url",
-            "lti_jwks_json",
-            "lti_jwks_fetched_at",
-            "lti_jwks_expires_at",
-            "lti_openid_configuration",
-        ] {
-            if let Some(value) = existing.get(key).filter(|value| !value.is_null()) {
-                payload[key] = value.clone();
-            }
+        let matches_request = [
+            "display_name",
+            "canvas_base_url",
+            "lti_client_id",
+            "lti_deployment_id",
+        ]
+        .iter()
+        .all(|field| existing.get(*field) == payload.get(*field))
+            && existing.get("enabled").and_then(Value::as_bool) == Some(true);
+        if !update_existing || matches_request {
+            return Ok(UpsertResult {
+                action: "preserved",
+                value: existing.clone(),
+            });
         }
     }
     let (operation, action) = match existing.and_then(id) {
@@ -480,6 +495,46 @@ pub async fn refresh_platform_jwks<T: GatewayTransport + Sync>(
     Ok(refreshed)
 }
 
+pub async fn install_platform<T: GatewayTransport + Sync>(
+    transport: &T,
+    cfg: &GatewaySeedConfig,
+    platform_id: &str,
+) -> Result<Value, String> {
+    let registration = transport
+        .request(Operation::json(
+            "PUT",
+            format!(
+                "{}/v1/integrations/canvas/platforms/{platform_id}/lti-installation",
+                base(cfg)
+            ),
+            json!({
+                "lti_client_id": cfg.lti_client_id,
+                "lti_deployment_id": cfg.lti_deployment_id,
+                "rotate_config_token": false,
+                "revoke_config_token": false
+            }),
+        ))
+        .await?;
+    if registration.get("platform_id").and_then(Value::as_str) != Some(platform_id) {
+        return Err("Canvas LTI installation did not confirm the platform ID".into());
+    }
+    let platform = transport
+        .request(Operation::get(format!(
+            "{}/v1/integrations/canvas/platforms/{platform_id}",
+            base(cfg)
+        )))
+        .await?;
+    if platform.get("enabled").and_then(Value::as_bool) != Some(true)
+        || !matches!(
+            platform.get("registration_status").and_then(Value::as_str),
+            Some("installed" | "verified")
+        )
+    {
+        return Err("Canvas LTI platform is not installed and enabled".into());
+    }
+    Ok(platform)
+}
+
 pub fn binding_feature_flags(delivery_mode: &str) -> Value {
     let mirror = delivery_mode == "wallet_plus_canvas_mirror";
     json!({
@@ -493,22 +548,77 @@ pub fn binding_feature_flags(delivery_mode: &str) -> Value {
     })
 }
 
-pub fn binding_evidence_requirement(cfg: &GatewaySeedConfig, scope: &Value) -> Value {
+pub fn binding_evidence_requirement(
+    cfg: &GatewaySeedConfig,
+    evidence_scope: &Value,
+) -> Result<Value, String> {
     let score = cfg.program_binding_evidence_type.ends_with("_score");
+    let course_id = evidence_scope
+        .get("course_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("Canvas binding evidence requires a course ID")?;
     let rule = if score {
-        json!({"path": "assertion.score_percent", "operator": ">=", "value": cfg.program_binding_score_threshold})
+        json!({"min_score_percent": cfg.program_binding_score_threshold})
     } else {
-        json!({"path": "assertion.completed", "operator": "equals", "value": true})
+        json!({"completed": true})
     };
-    json!({
-        "evidence_type": "EXTERNAL_FACT",
-        "provider": "canvas",
+    Ok(json!({
+        "requirement_id": null,
+        "source": if score { "ags_result" } else { "canvas_rest" },
         "fact_type": cfg.program_binding_evidence_type,
-        "verification_method": if score { "SIGNED_AGS_SCORE" } else { "SIGNED_WEBHOOK" },
-        "scope": scope,
-        "auto_issue_on_permit": cfg.program_binding_auto_approve,
-        "pass_rule": rule
-    })
+        "scope": {
+            "course_id": course_id,
+            "activity_id": evidence_scope.get("quiz_id").or_else(|| evidence_scope.get("assignment_id")),
+            "module_id": evidence_scope.get("module_id"),
+            "line_item_url": null,
+            "resource_id": null
+        },
+        "pass_rule": rule,
+        "required": true
+    }))
+}
+
+fn binding_matches_policy(binding: &Value, desired: &Value) -> bool {
+    for field in [
+        "application_template_id",
+        "credential_template_id",
+        "display_name",
+        "auto_approve_on_evidence",
+        "canvas_scope",
+        "delivery_mode",
+        "approval_policy_set_id",
+        "deployment_profile_id",
+        "feature_flags",
+    ] {
+        if binding.get(field) != desired.get(field) {
+            return false;
+        }
+    }
+    let Some(actual) = binding
+        .get("evidence_requirements")
+        .and_then(Value::as_array)
+        .filter(|items| items.len() == 1)
+        .and_then(|items| items.first())
+    else {
+        return false;
+    };
+    let expected = &desired["evidence_requirements"][0];
+    for field in ["source", "fact_type", "pass_rule", "required"] {
+        if actual.get(field) != expected.get(field) {
+            return false;
+        }
+    }
+    for field in ["course_id", "activity_id", "module_id"] {
+        if actual["scope"].get(field).filter(|value| !value.is_null())
+            != expected["scope"]
+                .get(field)
+                .filter(|value| !value.is_null())
+        {
+            return false;
+        }
+    }
+    true
 }
 
 pub async fn upsert_binding<T: GatewayTransport + Sync>(
@@ -516,7 +626,12 @@ pub async fn upsert_binding<T: GatewayTransport + Sync>(
     cfg: &GatewaySeedConfig,
     platform: &Value,
     canvas_scope: &Value,
+    evidence_scope: &Value,
+    activate: bool,
 ) -> Result<UpsertResult, String> {
+    if cfg.program_binding_direct_issue {
+        return Err("Canvas direct issuance is unsupported by the program binding API".into());
+    }
     let platform_id = object_id(
         platform,
         "Canvas program binding seed requires a platform ID",
@@ -545,23 +660,37 @@ pub async fn upsert_binding<T: GatewayTransport + Sync>(
                 .unwrap_or(&empty_scope)
                 == canvas_scope
     });
+    let requirement = binding_evidence_requirement(cfg, evidence_scope)?;
     let payload = json!({
         "application_template_id": cfg.application_template_id,
         "credential_template_id": cfg.credential_template_id,
         "display_name": cfg.program_binding_display_name,
-        "flow_mode": "elevenid_orchestrated_canvas_evidence",
-        "direct_issue_enabled": cfg.program_binding_direct_issue,
         "auto_approve_on_evidence": cfg.program_binding_auto_approve,
-        "evidence_requirements": [binding_evidence_requirement(cfg, canvas_scope)],
+        "evidence_requirements": [requirement],
         "canvas_scope": canvas_scope,
         "delivery_mode": cfg.program_binding_delivery_mode,
-        "issuer_mode": "org_managed",
         "approval_policy_set_id": null,
         "deployment_profile_id": null,
-        "feature_flags": binding_feature_flags(&cfg.program_binding_delivery_mode),
-        "enabled": true
+        "feature_flags": binding_feature_flags(&cfg.program_binding_delivery_mode)
     });
+    let already_active = existing.is_some_and(|binding| {
+        binding.get("enabled").and_then(Value::as_bool) == Some(true)
+            && binding
+                .get("activated_at")
+                .is_some_and(|value| !value.is_null())
+    });
+    let same_policy = existing.is_some_and(|binding| binding_matches_policy(binding, &payload));
+    if already_active && !same_policy {
+        return Err("Active Canvas program binding differs from the requested seed policy; review and reconfigure it explicitly".into());
+    }
     let (operation, action) = match existing.and_then(id) {
+        Some(existing_id) if same_policy => (
+            Operation::get(format!(
+                "{}/v1/integrations/canvas/program-bindings/{existing_id}",
+                base(cfg)
+            )),
+            "preserved",
+        ),
         Some(existing_id) => (
             Operation::json(
                 "PUT",
@@ -586,10 +715,46 @@ pub async fn upsert_binding<T: GatewayTransport + Sync>(
         ),
     };
     let binding = transport.request(operation).await?;
-    object_id(
+    let binding_id = object_id(
         &binding,
         "Canvas program binding upsert did not return a valid binding payload",
     )?;
+    if !activate {
+        return Ok(UpsertResult {
+            action,
+            value: binding,
+        });
+    }
+    let binding_base = format!(
+        "{}/v1/integrations/canvas/program-bindings/{binding_id}",
+        base(cfg)
+    );
+    let validation = transport
+        .request(Operation::post(format!("{binding_base}/validate")))
+        .await?;
+    if validation.get("binding_id").and_then(Value::as_str) != Some(binding_id.as_str())
+        || validation.get("ready").and_then(Value::as_bool) != Some(true)
+        || validation.get("valid").and_then(Value::as_bool) != Some(true)
+    {
+        return Err(format!("Canvas program binding {binding_id} is staged but not ready; complete a signed staff LTI Deep Linking launch, then rerun the seed to validate and activate"));
+    }
+    if !already_active {
+        let activation = transport
+            .request(Operation::post(format!("{binding_base}/activate")))
+            .await?;
+        if activation.get("binding_id").and_then(Value::as_str) != Some(binding_id.as_str())
+            || activation.get("active").and_then(Value::as_bool) != Some(true)
+        {
+            return Err("Canvas program binding activation did not complete".into());
+        }
+    }
+    let binding = transport.request(Operation::get(binding_base)).await?;
+    if binding.get("enabled").and_then(Value::as_bool) != Some(true)
+        || binding.get("activated_at").is_none_or(Value::is_null)
+        || binding.get("validated_config_version") != binding.get("config_version")
+    {
+        return Err("Canvas program binding is not active at the validated config version".into());
+    }
     Ok(UpsertResult {
         action,
         value: binding,

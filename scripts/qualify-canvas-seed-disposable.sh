@@ -72,6 +72,10 @@ validate_disposable_endpoints() {
     [[ -n "$(env_value CANVAS_CREDENTIALS_SHARED_SECRET)" ]] || {
       echo "A disposable CANVAS_CREDENTIALS_SHARED_SECRET is required; Docker inspect fallback is forbidden" >&2; exit 2;
     }
+    if [[ "$(env_value CANVAS_DEMO_EVIDENCE_EVENT_ENABLED)" == "true" && "$(env_value CANVAS_LEGACY_EVENT_INGEST_ENABLED)" != "true" ]]; then
+      echo "Disposable Canvas AGS evidence requires CANVAS_LEGACY_EVENT_INGEST_ENABLED=true in the issuance service" >&2
+      exit 2
+    fi
     if grep -Eq '^(DATABASE_URL|DATABASE_HOST|POSTGRES_HOST|MARTY_DB_HOST)=' "$env_file"; then
       echo "Do not override the migration image's project-local database connection" >&2
       exit 2

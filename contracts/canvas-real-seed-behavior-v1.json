@@ -1,6 +1,43 @@
 {
   "schema": "marty.canvas-real-seed-behavior/v1",
   "source": "55bb69973:scripts/seed_canvas_real.py",
+  "api_corrections": {
+    "program_binding_rejected_fields": [
+      "flow_mode",
+      "direct_issue_enabled",
+      "issuer_mode",
+      "enabled"
+    ],
+    "platform_rejected_fields": [
+      "organization_id",
+      "canvas_account_id",
+      "lti_issuer",
+      "lti_jwks_url",
+      "lti_jwks_json",
+      "lti_jwks_fetched_at",
+      "lti_jwks_expires_at",
+      "lti_openid_configuration"
+    ],
+    "accepted_binding_requirements": [
+      {
+        "requirement_id": null,
+        "source": "ags_result",
+        "fact_type": "canvas.quiz_score",
+        "scope": {"course_id": "42", "activity_id": "9", "module_id": null, "line_item_url": null, "resource_id": null},
+        "pass_rule": {"min_score_percent": 80},
+        "required": true
+      },
+      {
+        "requirement_id": null,
+        "source": "canvas_rest",
+        "fact_type": "canvas.course_completion",
+        "scope": {"course_id": "42", "activity_id": "9", "module_id": null, "line_item_url": null, "resource_id": null},
+        "pass_rule": {"completed": true},
+        "required": true
+      }
+    ],
+    "reason": "The Rust issuance CanvasProgramBindingRequest denies these historical Python payload fields; binding activation uses separate validation and activation endpoints."
+  },
   "gateway_seed": {
     "operations": [
       {
