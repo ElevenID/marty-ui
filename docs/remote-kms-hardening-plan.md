@@ -18230,3 +18230,12 @@ are not provisioned yet. Keep K6 and the physical-device portion of K8/K9
 open; local adapters, mocks and disposable OpenBao do not satisfy those
 acceptance gates. Continue independent exact-release and installed-stack
 qualification while access is arranged.
+
+2026-10-13 corrected exact-main qualification: manual full CI run
+`38444511880` passed on protected `main`
+`4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`, including full Canvas,
+native Rust database contracts and OpenBao DIDComm plugin coordinated
+PostgreSQL/Raft recovery. The tag and GitHub release for `v1.1.245` were
+absent and protected `main` still matched the run SHA. A fresh no-write claim
+was dispatched as run `38454706545`; do not start a new release transaction
+unless this exact claim passes and its artifact is verified.
