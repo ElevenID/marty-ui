@@ -14,8 +14,8 @@ protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
 Replacement exact-main full CI `38454924907` passed on attempt 2. Fresh
 no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
 to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
-transaction `38467181336` is running; qualify all four image roles and release
-gates before publication. The prior failed claims and release transaction are
+transaction `38467181336` has passed all four image-level release gates and
+is waiting for protected `stack-release` environment approval. The prior failed claims and release transaction are
 immutable evidence, not promotion candidates. After signed-image qualification,
 prove clean installed
 KMS-only database/runtime writes, DIDComm and integration-secret recovery,
@@ -1243,7 +1243,7 @@ assembled Core matrix is still due.
 | K6 | Establish actual supported BYOK route/schema and tenant/certificate binding; integrate reference-only UX and server rejection of private material, preserving existing onboarding behavior. | In progress; public external OpenBao registration-to-issuer/certificate live Rust route passed. Provider adapters pin AWS/Azure/GCP key versions and check provider response identities; real cloud key/certificate acceptance remains. Seven origin-specific non-exportable HMAC keys, scoped grant mint/verify policies, one-use Redis consumption and Gateway/Flow/Issuance producers are implemented. Signing Keys binds the consumed grant to the selected remote key and exact bytes before KMS use. Exact-head CI, installed-image qualification and real-provider acceptance remain. |
 | K7 | Retire Credentials raw-key adapters, obsolete wheels and local private-key tests; prove native owner selection and published artifact behavior without old-data reads. | In progress; Credentials #313 is merged, Python DIDComm/secret/gRPC and legacy issuer adapters and old tests are removed, native HTTP owner is required, and Python gRPC runtime is disabled. Published artifact inspection and native UI cutover remain release gates. |
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 pushed head `72de77de6` passed all 22 exact-head jobs, CodeQL, policy and organization checks. Two automated wallet-pairing findings were fixed and resolved. Local plugin, Raft restore/failover, assembled schema and native service probes passed. The #1294 mainline reconciliation retains public-only CSCA fixtures, adds a public-certificate acceptance test and live storage CI cases; focused Rust and workflow tests passed, while full local validation and new hosted checks remain. Published artifacts, real cloud and physical device acceptance remain. |
-| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192 and follow-up UI PRs through #1321 are merged. Protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` passed exact-main full CI `38454924907` on attempt 2. Fresh claim `38467010823` passed; stack release `38467181336` is building the four-role candidate. Signed publication, installed journey, real providers/device and cutover/recovery remain. |
+| K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192 and follow-up UI PRs through #1321 are merged. Protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c` passed exact-main full CI `38454924907` on attempt 2. Fresh claim `38467010823` passed; stack release `38467181336` qualified all four image gates and waits for protected environment approval. Signed publication, installed journey, real providers/device and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
@@ -18317,3 +18317,21 @@ ID and had already passed resolution and entered image builds. The later run
 avoid duplicate CI and conflicting promotion. Follow the live earlier run
 `38467181336`; its downloaded resolved-transaction artifact matches claim
 `38467010823` and source SHA `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
+
+2026-10-13 four-role release qualification: active run `38467181336`
+successfully built the UI, services, migrations and OpenBao DIDComm images,
+recorded their immutable digests, and passed the public-stack smoke,
+verifier differential, native-schema image and DIDComm plugin image gates.
+The downloaded `stack-release-qualified-38467181336` transaction is
+`qualified`, still unpromoted and unpublished; the four downloaded gate-file
+SHA-256 hashes match its recorded hashes. The native-schema gate used the
+exact services/migrations digests twice against a fresh self-host production
+profile and reported 61 tables, 811 columns, `private_key_storage: absent`,
+native schema verification and verify-only database cases. The DIDComm plugin
+gate reports scoped token, Raft failover and Raft snapshot recovery passed.
+The verifier differential reports `status: matched`, no blockers, release
+clearance eligible, and a disposable non-exportable issuer/holder OpenBao
+fixture. GitHub run status is `waiting`; its pending deployment names the
+protected `stack-release` environment and reviewer `burdettadam`. Publication
+requires that environment approval. No tag, GitHub release, promoted version
+image or installed-stack acceptance is claimed from this qualified candidate.
