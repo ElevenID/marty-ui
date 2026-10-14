@@ -19811,3 +19811,23 @@ check passed, the extracted bundle test passed again, and 65 targeted
 Python deployment tests plus YAML/env uniqueness checks passed. Gateway's
 other gRPC edges and other Organization clients still need TLS cutover,
 followed by an installed connected graph proof.
+
+2026-10-14 beta Signing Keys TLS custody correction: the production Rust
+Signing Keys listener already rejects `SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE`
+and uses a public certificate plus versioned remote signer. The beta helper
+was inconsistent: it still generated a local CA private key and Signing Keys
+server private key, and the beta launcher required the latter. The grouped UI
+branch now makes the helper validate operator-provisioned public CA/server
+certificates, trusted OpenBao CA, scoped token file, HTTPS KMS origin, and
+positive signer version, rejecting retired local key-file settings/artifacts.
+The launcher now requires the Signing Keys KMS token and rejects retired TLS
+private-key settings in both beta env files. The beta runner test module
+passed (39 tests), including a real PowerShell invocation that rejects a
+retired Signing Keys key-file setting; both PowerShell files parsed, and
+`git diff --check` passed. The helper's positive path with an
+operator-provisioned signer remains unverified. This removes the helper's
+local TLS key generation but
+does not prove the provisioned certificate matches the non-exportable KMS
+signer or that the beta graph handshakes successfully. The old passport
+disposable fixture and coordinated-restore probe still contain TLS key-file
+paths and need retirement or replacement before KMS-only acceptance.
