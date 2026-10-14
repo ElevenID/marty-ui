@@ -20297,3 +20297,21 @@ model tests still distinguish current isolation from KMS custody. Focused
 passport tests passed 56 with one existing skip, and `git diff --check`
 passed. This gate prevents a false KMS acceptance receipt; it is not a
 substitute for implementing and proving the keyless passport journey.
+
+2026-10-14 coordinated-restore TLS custody correction staged in the grouped
+UI worktree: the opt-in real Rust/PostgreSQL/OpenBao restore probe no longer
+generates or passes a Signing Keys TLS private-key file. A new `signing-keys`
+profile reuses the disposable HTTPS OpenBao provisioning helper to create a
+non-exportable, non-backupable P-256 Transit signer, PKI-signed public
+certificate and CA, and sign-only scoped token with a foreign-key denial
+check. Signing Keys receives the public certificate and remote signer
+reference; its integration-secret TLS client verifies the public CA and
+server name. The first connected run exposed a certificate name mismatch
+from using `127.0.0.1`; the probe now connects as `localhost`, matching the
+issued certificate. The full coordinated restore then passed, including
+native Rust issuance/holder tests, real PostgreSQL and OpenBao Raft backup/
+restore, ciphertext read after restore, and the keyless Signing Keys TLS
+handshake. The existing Event Stream connected executable TLS proof also
+passed against the refactored shared helper. Python compilation and
+`git diff --check` passed. This removes the restore probe's local TLS key;
+the separate passport disposable fixture still requires conversion.
