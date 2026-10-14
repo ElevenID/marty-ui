@@ -19237,3 +19237,10 @@ provisioning path. Keep the explicit HTTPS signer origin separate from the
 existing HTTP `BAO_ADDR` until that infrastructure path is implemented. The
 other service TLS key-file mounts and Kubernetes Signing Keys manifest remain
 unconverted.
+
+Further MMF security review found the OpenBao HTTP client could follow a
+redirect while carrying the scoped `X-Vault-Token` header. Commit
+`4220406` disables redirects, passed no-default-feature platform tests and
+strict Clippy locally, and advanced [MMF PR #127](https://github.com/ElevenID/marty-microservices-framework/pull/127)
+from `a47e554` to `4220406`. Earlier CI results are historical; require the
+new exact-head checks before merge.
