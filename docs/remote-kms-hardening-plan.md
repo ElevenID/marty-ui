@@ -20161,3 +20161,16 @@ six self-host bundle executable tests, PowerShell parsing and diff checks
 passed. This is source/config/render evidence. A connected Compliance Profile
 business RPC and installed release remain acceptance work, as do the other
 open edges.
+
+2026-10-14 Deployment Profile-to-Organization K11 cutover staged alongside
+Compliance Profile in the grouped UI worktree. The Rust parser rejects
+`GRPC_INSECURE_ALLOWED=true` in beta and production, requires the complete
+remote OpenBao client identity and explicit HTTPS Organization target, and
+retains the existing eager shared keyless mTLS channel. Self-host, beta and
+Kubernetes set the HTTPS target and disable plaintext; beta mounts the public
+client certificate, KMS token and CA material. Shared beta identity validation
+now checks the Deployment Profile signer's scoped selector, certificate chain,
+SPIFFE SAN and client EKU. The seven Rust library tests and locked binary
+check passed; 156 focused Python deployment tests, six self-host bundle tests,
+PowerShell parsing and diff checks passed. Connected Deployment Profile
+business RPC and installed-image qualification remain open.
