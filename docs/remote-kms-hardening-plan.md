@@ -18638,3 +18638,17 @@ obsolete notification, with protected-branch and no-admin-bypass rules
 preserved. The combined focused local release/workflow suite passed
 85/85 after the rebase; fresh protected PR and merge-group checks are
 pending. Do not claim `v1.1.246` until #1328 and exact-main full CI pass.
+
+PR #1328 review follow-up: its rebased head passed all 29 reported PR checks,
+including the live OpenBao DIDComm recovery and Canvas database lanes, but
+GitHub kept the PR out of the merge queue because a review thread remained
+unresolved. The thread identified a real unattended-publication drift gap:
+the environment preflight accepted a required-reviewer rule even when the
+manifest declared `require_reviewers: false`; operator guidance also still
+instructed reviewers for every environment. Head `faf136b92` now rejects
+any required-reviewer rule in that case, updates the guidance, and covers
+both populated and empty reviewer rules. Focused local tests passed 86/86,
+`git diff --check` passed, and the live `stack-release` protection preflight
+passed. The addressed review thread was resolved. Fresh protected PR checks
+on this amended head and merge-group qualification are pending; do not reuse
+the superseded head's checks for a release claim.
