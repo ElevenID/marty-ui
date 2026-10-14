@@ -18783,3 +18783,11 @@ qualification remains pending. Review the new Linux CI result and run
 the prepared installed bundle with final signed images before merging
 and publishing a successor release; `v1.1.246` remains unqualified and
 immutable.
+
+The earlier PR CI run identified two stale bootstrap-token test fixtures;
+both are corrected, and a separate frozen KMS model-oracle repair was
+integrated from the concurrent PR branch update. Latest PR head is
+`aeae78d5864d23912bd81fd48db6f544ab0c9b51`. Local native-owner,
+bootstrap, and Notification contracts passed 104 tests with three
+platform skips. CI run `38525813271` is in progress. Do not merge on
+the canceled or failed earlier runs; require this head's complete gates.
