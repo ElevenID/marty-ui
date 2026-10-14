@@ -20219,3 +20219,14 @@ passed 159 tests including the graph guard, and six self-host bundle tests
 passed. This proves rendered selectors and removes the alias plaintext/TLS
 startup contradiction, not a connected alias-to-peer transaction or installed
 release.
+
+2026-10-14 follow-up alias audit: the Kubernetes `issuance` Deployment also
+ran the native Rust binary with no server TLS identity and no explicit
+`ISSUANCE_GRPC_ENABLED` override. It now sets that unused alias listener to
+`false`, retaining its existing HTTPS peer targets and public CA mount. The
+cross-platform alias test covers self-host, beta and Kubernetes; the focused
+consumer-binding and Kubernetes Issuance modules passed 113 tests. The native
+`issuance-native` gRPC owner remains enabled with its remote OpenBao server
+identity. The Kubernetes Service's legacy gRPC port still needs an exposure
+review before release; this change closes the listener but does not claim the
+whole alias surface is retired.
