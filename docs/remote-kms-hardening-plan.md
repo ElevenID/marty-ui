@@ -1397,6 +1397,29 @@ replacement. The UI's current temporary local Cargo path makes this cross-repo
 cutover testable before pinning a qualified MMF commit. Do not merge or publish
 the additive framework branch as KMS-only.
 
+The framework-side removal is now local MMF commit `7a15557`. The old
+`GrpcServerTlsMaterial`, `Identity::from_pem`, private-key fields and
+`from_pem_files` are removed from `mmf-platform`; the remaining
+`GrpcChannelFactory` handles only explicit plaintext or public-CA server TLS,
+while mTLS is available only through the keyless factory. The active gRPC
+client/server behavior contracts and framework tests have been rewritten
+without private-key fixtures, and the workload-security contract now requires
+a remote signer. Rust 1.93 full-workspace tests, formatting and strict Clippy
+passed after the removal. The historical retirement inventory still retains
+the contract filenames but their active behavior is keyless.
+
+MMF commits `ed3d54f` and `a041006` add a shared public-certificate-only
+loader and OpenBao identity setup with redacted diagnostics. Its 25
+no-default-feature platform tests and strict Clippy passed. Signing Keys in
+the UI worktree now uses this common loader and its binary check passed.
+The current UI local dependency intentionally exposes compile errors in Auth,
+Flow and Presentation Policy, which still import removed MMF PEM APIs; the
+other mTLS client/server routes and tests must be migrated in the same broad
+UI feature branch before either branch is pushed. The first broad UI
+`--all-targets` check also surfaced unrelated Core test-feature resolution
+errors, so production-library and feature-complete test checks must be
+separated during cutover review rather than attributing every error to K11.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
