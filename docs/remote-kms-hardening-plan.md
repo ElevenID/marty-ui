@@ -18824,3 +18824,10 @@ install paths while retaining SHA-256 verification. Local `cargo deny`
 passed advisories/bans/licenses/sources, locked Cargo metadata and
 workflow YAML parsed, and focused CI-planner tests passed. Require the
 new head's complete PR checks and merge-group checks before landing.
+
+Concurrent review follow-up `aa189a67e` bounds each wheel transfer
+with connection and per-attempt timeouts and adds a release-contract
+test that retains exact SHA-256 verification. Its focused local test
+passed; PR CI run `38582830023` is pending. Earlier run on `76a48d1c4`
+was canceled by this push after Rust Supply Chain passed; its release
+contract result must not be treated as qualification.
