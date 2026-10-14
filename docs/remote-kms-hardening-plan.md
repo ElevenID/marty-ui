@@ -19210,3 +19210,16 @@ mounted-file isolation validator could not read the three local
 development fixture, not evidence that the Applicant mount removal broke
 the physical-provider path. Retire that development private-key fixture in the
 grouped keyless TLS deployment change and rerun before beta qualification.
+
+2026-10-14 shared MMF keyless TLS feature PR: self-review found the custom
+Tonic connector should explicitly bound its TCP dial and TLS handshake waits;
+commit `a47e5547bddf737d9b4bca6775148b749c94a883` adds both timeouts.
+The clean `feat/keyless-grpc-tls-20261014` branch is based on current MMF
+`main` `c55d323e6aa64cad4f49308792f1d21eaab0ebc8`. Rust 1.93.0 full
+workspace tests, no-default-feature `mmf-platform` tests, strict all-targets
+workspace Clippy, formatting, and diff whitespace checks passed locally.
+Opened [MMF PR #127](https://github.com/ElevenID/marty-microservices-framework/pull/127)
+at that exact head; CI, license, policy, and organization-quality checks are
+queued. Keep the marty-ui workspace dependency local until this PR is reviewed
+and landed, then pin the merged immutable MMF revision and run the grouped UI
+qualification before its own PR.
