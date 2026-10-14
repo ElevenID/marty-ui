@@ -20124,3 +20124,13 @@ Kubernetes-native Issuance test module still fails on stale HTTPS/configuration
 expectations and needs reconciliation within the grouped PR. No connected
 Device Registration-to-Organization RPC or installed-image proof is claimed;
 the other listed K11 edges remain open.
+
+2026-10-14 Kubernetes Issuance regression-test reconciliation: updated the
+older `test_kubernetes_native_issuance.py` inventory for the staged HTTPS Auth
+and Issuance targets and Issuance's KMS-backed server TLS certificate, public
+CA, scoped token and key selector mounts. It explicitly excludes the retired
+`GRPC_WORKLOAD_TLS_SERVER_KEY` setting and preserves the inventory's
+mutation checks. The standalone module passed 34 tests; combined with the
+consumer-binding, workload-identity and beta-runner suites, 155 tests passed.
+This removes the stale test blocker recorded above but does not substitute
+for an installed-image or complete connected-graph acceptance.
