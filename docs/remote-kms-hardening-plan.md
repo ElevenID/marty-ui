@@ -20379,3 +20379,21 @@ OpenBao over authenticated HTTPS with its server key confined to the OpenBao
 container, and update the bootstrap order and model/ownership checks together.
 Until that runs end to end, the protected producer remains deliberately
 blocked by the keyless gate.
+
+2026-10-14 disposable HTTPS edge implementation, staged in the grouped UI
+worktree: added `marty-passport-keyless-edge`, a Rust listener that loads only
+a public certificate, an OpenBao CA certificate, a scoped token and a
+versioned Transit key reference. It builds its HTTPS server configuration
+through the shared MMF keyless TLS implementation; no TLS private-key file or
+local-signing fallback exists. The edge keeps the fixture's synthetic Flow
+callback behavior and forwards other requests to the fixed internal Gateway
+origin with the public Host and HTTPS forwarding headers. The public services
+image build/copy list now includes this disposable-profile binary. A Rust
+proxy/callback behavior test passed, the shared-image allowlist passed 11
+tests, and a connected local probe used real disposable OpenBao Transit to
+complete the HTTPS handshake, verify POST=204/GET=405 callback behavior, and
+confirm startup fails with a missing remote key. The OpenBao service and
+temporary token were removed after the probe. The binary is not wired into
+the passport Compose fixture yet; that still requires coordinated remote
+identity provisioning, HTTPS OpenBao bootstrap, replacement of nginx and
+the remaining workload private-key fixtures before protected acceptance.
