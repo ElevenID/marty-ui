@@ -19526,3 +19526,20 @@ This is stronger evidence than a signer unit test, but still a local
 source-built service proof, not a deployed-image, base/beta Compose, or
 end-to-end installed journey. The separate HTTP OpenBao path also remains
 outside HTTPS transport acceptance.
+
+The live outage proof exposed a deployment-readiness defect: base and
+self-host Compose, plus Kubernetes, checked only Signing Keys' ordinary
+HTTP port. The service could therefore be reported healthy/ready while
+its keyless integration-secret HTTPS listener could not sign. The grouped
+UI worktree now mounts the public listener CA into Signing Keys and makes
+both Compose healthchecks require a CA-verified HTTPS `/health` on port
+8018 as well as the HTTP check, with an 8-second health timeout.
+Kubernetes keeps HTTP liveness but uses an exec readiness probe for both
+ports; `curl --resolve signing-keys:8018:127.0.0.1` checks the local TLS
+listener with the correct certificate hostname without routing through
+a Service that has no ready endpoints yet. The Kubernetes installer
+already provisions the public `signing-keys-integration-secret-ca` Secret.
+Adjusted deployment contracts passed: 118 selected pytest cases and the
+12-model native base Compose matrix with negative policy inputs. This is
+configuration evidence; an installed-image health transition is still
+required before release acceptance.
