@@ -19295,3 +19295,19 @@ and a subsequent normal merge request returned successfully, but GitHub still
 reports PR OPEN / `mergeStateStatus=BLOCKED` with no review decision. Do not
 infer it landed. Recheck queue/review state, resolve the remaining protection
 gate through the normal path, then pin the actual merged revision in UI.
+
+2026-10-14 Presentation Policy listener TLS moved into the same grouped UI
+worktree keyless deployment cutover. Self-host and Kubernetes now provide its
+public certificate, shared OpenBao HTTPS CA, and a distinct scoped
+`pp_tls_kms_token` with versioned Transit key reference, and no longer mount
+or create `pp_workload_server_key` for those stacks. Source config already
+rejects `GRPC_WORKLOAD_TLS_SERVER_KEY`. The production examples, secret
+catalog, installer, ConfigMap/Deployment, installed-runtime expected mounts,
+and workload-identity documentation were reconciled. Focused Kubernetes and
+workload-identity Python tests passed 49/49; self-host installed-plan/secret
+closure tests passed 29/29; frozen deployment CLI passed 8/8; Compose parse
+and shell syntax passed. These are deployment-contract checks, not a live
+OpenBao TLS handshake. Beta and disposable passport Compose still contain
+Presentation Policy key-file paths, and other production workloads still
+mount private TLS keys. Complete the remaining keyless deployment cutover
+and real signer provisioning before UI PR/release qualification.
