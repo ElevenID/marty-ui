@@ -20230,3 +20230,18 @@ consumer-binding and Kubernetes Issuance modules passed 113 tests. The native
 identity. The Kubernetes Service's legacy gRPC port still needs an exposure
 review before release; this change closes the listener but does not claim the
 whole alias surface is retired.
+
+2026-10-14 alias exposure retirement staged in the grouped UI worktree: the
+base Compose `issuance` HTTP alias now explicitly disables its gRPC listener
+and publishes only HTTP port 8005. This carries into beta; a rendered
+`docker compose -f docker-compose.base.yml -f docker-compose.beta.yml config`
+check confirmed only `127.0.0.1:8005` is published and
+`ISSUANCE_GRPC_ENABLED=false`. The Kubernetes alias Deployment and Service
+likewise declare only port 8005. `issuance-native` retains the KMS-backed
+gRPC port 9005 used by Flow. The ownership guard now rejects reintroduced
+alias gRPC ports, and the base native inventory recognizes the deployed TLS
+selectors. The three focused Python modules passed 178 tests and
+`git diff --check` passed. A broader self-host snapshot module remains red
+against the previously frozen model because the grouped TLS custody changes
+have not yet been reconciled into its independent expected model; that is a
+release qualification item, not evidence of runtime acceptance.
