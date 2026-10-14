@@ -18671,3 +18671,45 @@ this SHA, so `workflow_dispatch` CI run `38517257686` was started against
 `main` and verified to have the same `headSha`. Wait for all jobs in that
 run to pass before claiming `v1.1.246`; then verify main remains at the
 same SHA and the tag, release, and four registry version tags are unused.
+
+Concurrent `v1.1.246` publication and installed-consumer findings:
+another release actor claimed the tag on prior main
+`7853a728772a7850859f0b7811195fe618c5a48d` in claim run
+`38513063253`, then published it in successful stack run `38513276617`
+at 2026-10-14T05:32:41Z, twelve seconds before #1328 merged. The
+annotated Git tag resolves to that source; the public GitHub release has
+17 assets, and its signed transaction ID is
+`4c4e8282a1e36d48e7ac9dfd8f9be5657ad93195213b6b1eb5899c71aa7d1a24`.
+All four image gates and exact digests passed. Do not create another
+`v1.1.246` claim or move the immutable tag. The separately dispatched
+exact-main CI `38517257686` on #1328's final SHA remains useful for the
+policy-only successor but cannot qualify the already published source.
+
+Automatic prepared consumer `38517215831` failed at the extracted
+OpenBao bootstrap helper. A local WSL Docker reproduction with the exact
+prepared ZIP, receipt, descriptor, image lock and qualified transaction
+(`149b20674bb0dbb053346875de597e0b0f3e09789157a998f1b80cfa8b2d41dd`)
+showed that the disposable probe launched plain OpenBao, while the shipped
+helper correctly requires a DIDComm plugin mounted at `didcomm/`. Branch
+`fix/selfhost-prepared-plugin-probe-20261013` now launches the released
+plugin image by exact digest, registers and mounts it, and locally passes
+the extracted bootstrap probe with distinct scoped tokens and owned
+cleanup. Focused tests passed 35/35 (three platform skips).
+
+The next local installed Signing Keys rehearsal exposed a separate
+fresh-install failure after scoped token minting. The disposable
+bootstrap originally wrote token files as root, unreadable by the runner;
+the branch now runs that one-shot container as the host UID/GID and
+guards the Compose model against root drift. The rehearsal then reached
+the exact released `db-migrate` image and failed Rust KMS/DID bootstrap
+with OpenBao HTTP 403. The released self-host Compose gives `db-migrate`
+the long-lived `openbao_service_token`, whose `credential-service` policy
+permits runtime reads/sign/envelope operations but not creation of the
+tenant-bound signing keys and flow envelope key. This is a real clean
+install blocker, not merely a probe fixture error. Keep `v1.1.246`
+published evidence immutable but do not call its prepared bundle
+qualified. Implement a distinct, bounded bootstrap token/policy and
+wire it through production self-host/other applicable stacks, then prove
+the complete local installed probes before one grouped fix PR and a new
+release version. Real cloud KMS/device and full public business journey
+remain unprovisioned.
