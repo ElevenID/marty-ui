@@ -20029,3 +20029,7 @@ rosters were staged together. Local checks passed: 43 Issuance config tests,
 `git diff --check`. This is source/config/artifact-render evidence only; no
 actual installed Issuance-to-Flow mTLS RPC or signed release artifact has
 been qualified. Other graph edges and private-key fixtures remain open.
+The next self-review caught a stale Flow provider contract that still
+constructed Issuance through the ordinary plaintext factory. It now asserts
+the deployed Issuance channel is `Keyless` at the explicit HTTPS target;
+the full `marty-flow --test provider_behavior` suite passed (8 tests).
