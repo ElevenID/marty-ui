@@ -20012,3 +20012,20 @@ keyless Auth service/client transport path, but not startup of the full
 Auth/Gateway binaries with their Postgres, Redis, OIDC and routing
 dependencies or the installed multi-service artifact. That remains K11
 acceptance work before claiming the deployed edge is complete.
+
+2026-10-14 Flow-to-Issuance K11 cutover staged in the same grouped UI
+worktree. Flow's deployed configuration now rejects
+`GRPC_INSECURE_ALLOWED=true`, requires an explicit HTTPS Issuance target with
+its remote workload client identity, and uses the MMF keyless mTLS channel for
+Issuance rather than the ordinary plaintext factory. The native Issuance
+gRPC listener now requires a complete OpenBao server identity in beta or
+production, rejects the retired server private-key file selector, and serves
+through the MMF keyless client-verifying acceptor. Self-host/beta Compose,
+Kubernetes, deploy secret creation, secret catalog, examples, and fixture
+rosters were staged together. Local checks passed: 43 Issuance config tests,
+44 Flow library tests, 12 Flow startup tests, locked binary checks for both,
+139 focused Python deployment tests, extracted self-host bundle render,
+8 deployment-catalog frozen CLI tests, parsed YAML/PowerShell/Bash, and
+`git diff --check`. This is source/config/artifact-render evidence only; no
+actual installed Issuance-to-Flow mTLS RPC or signed release artifact has
+been qualified. Other graph edges and private-key fixtures remain open.
