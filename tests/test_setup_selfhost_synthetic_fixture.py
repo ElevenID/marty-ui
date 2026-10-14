@@ -1,11 +1,11 @@
 """Synthetic fixture refuses unrelated identities and unbound transit keys."""
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import ec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
@@ -27,6 +27,7 @@ def fixture_env() -> dict[str, str]:
         "SELFHOST_ISSUER_DID", "SELFHOST_VERIFIER_DID",
         "SELFHOST_SECRET_ROOT", "SELFHOST_COMPOSE_MODEL_PATH",
         "SELFHOST_BAO_AUDIT_URL", "SELFHOST_BAO_AUDIT_TOKEN_FILE",
+        "SELFHOST_KMS_JWK_TOOL",
         "SELFHOST_CUSTODY_SIGNING_KEY_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH", "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH",
@@ -146,7 +147,9 @@ def test_managed_key_binding_is_scoped_to_org_service_and_reference() -> None:
     assert binding != managed_key_binding("org-a", "cred-issuer-key-b")
 
 
-def test_public_profile_and_nonexportable_transit_metadata_are_bounded() -> None:
+def test_public_profile_and_nonexportable_transit_metadata_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     jwk = {
         "kty": "EC",
         "crv": "P-256",
@@ -161,23 +164,40 @@ def test_public_profile_and_nonexportable_transit_metadata_are_bounded() -> None
     )
     metadata = {"type": "ecdsa-p256", "exportable": False, "latest_version": 2,
                 "keys": {"2": {"public_key": pem}}}
-    assert validate_transit_binding(metadata, jwk) == 2
+    other_pem = (
+        "-----BEGIN PUBLIC KEY-----\n"
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEfPJ7GI0DT36KUjgDBLUaw8CJaeJ3\n"
+        "8hs1pgtI/EdmmXgHd1UQ247QQCk9msafdDDbun2t5jzpgimeBLedInhz0Q==\n"
+        "-----END PUBLIC KEY-----\n"
+    )
+    other_jwk = {**jwk, "x": "fPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI_EdmmXg",
+                 "y": "B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E"}
+    tool = Path("/fixture/public-kms-jwk")
+
+    def convert(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert args == [str(tool)]
+        candidate = kwargs["input"]
+        if candidate == pem:
+            return subprocess.CompletedProcess(args, 0, json.dumps(jwk), "")
+        if candidate == other_pem:
+            return subprocess.CompletedProcess(args, 0, json.dumps(other_jwk), "")
+        return subprocess.CompletedProcess(args, 1, "", "invalid public key")
+
+    monkeypatch.setattr("setup_selfhost_synthetic_fixture.subprocess.run", convert)
+    assert validate_transit_binding(metadata, jwk, tool) == 2
     with pytest.raises(ValueError, match="not canonical P-256"):
-        validate_transit_binding(metadata, {**jwk, "x": "wrong"})
-    with pytest.raises(ValueError, match="not valid P-256"):
-        validate_transit_binding(metadata, {**jwk, "x": "A" * 43, "y": "A" * 43})
-    with pytest.raises(ValueError, match="non-exportable"):
-        validate_transit_binding({**metadata, "exportable": True}, jwk)
-    other_key = ec.derive_private_key(2, ec.SECP256R1()).public_key()
-    other_pem = other_key.public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode("ascii")
+        validate_transit_binding(metadata, {**jwk, "x": "wrong"}, tool)
     with pytest.raises(ValueError, match="differs from resolved profile"):
-        validate_transit_binding({**metadata, "keys": {"2": {"public_key": other_pem}}}, jwk)
+        validate_transit_binding(metadata, {**jwk, "x": "A" * 43, "y": "A" * 43}, tool)
+    with pytest.raises(ValueError, match="non-exportable"):
+        validate_transit_binding({**metadata, "exportable": True}, jwk, tool)
+    with pytest.raises(ValueError, match="differs from resolved profile"):
+        validate_transit_binding({**metadata, "keys": {"2": {"public_key": other_pem}}}, jwk,
+                                 tool)
     with pytest.raises(ValueError, match="invalid"):
         validate_transit_binding({**metadata, "keys": {"2": {
             "public_key": "-----BEGIN PUBLIC KEY-----\ninvalid\n-----END PUBLIC KEY-----\n"
-        }}}, jwk)
+        }}}, jwk, tool)
 
 
 def test_openbao_audit_token_rejects_root_or_long_lived_authority() -> None:
