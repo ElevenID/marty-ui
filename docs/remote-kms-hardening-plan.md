@@ -18585,3 +18585,34 @@ After publication, collect the automatic probes as partial installed
 evidence, then arrange/run the full journey and recovery on a provisioned
 acceptance host; do not promote the prepared ZIP to qualified from probes
 alone.
+
+2026-10-13 local release failure and unattended-publication repair:
+reviewer `burdettadam` approved qualified release run `38488866040`, but
+`publish-manifest` failed after promoting exact `v1.1.245` UI, services
+and migrations image tags. The fourth OpenBao DIDComm promotion guard
+invoked `check_stack_pre_promotion.py` without `GH_TOKEN`; the fourth tag
+remained absent. Direct digest inspection showed the three promoted tags
+still equal the qualified image digests; the Git tag and GitHub release
+remain absent. A durable services-promotion checkpoint has SHA-256
+`aae039bd4c823efd7418eb238f7dcb40b58136552db52c0271eed46ed01a9c23`.
+Tombstone workflow run `38504439796` completed successfully and recorded
+`publisher_missing_GH_TOKEN_after_partial_promotion` against the original
+claim `38488740808`. Preserve its artifact and the failed run; do not
+retry the old source or reuse `v1.1.245`.
+
+The manual approval delay came from GitHub's `stack-release` environment
+required-reviewer rule, not from the release qualification checks. The
+user requested unattended publication. The live environment was updated
+through GitHub's environment API: `reviewers=[]`, protected-branch policy
+retained, admin bypass disabled. The branch-local updated release
+environment preflight passed against this live configuration. UI PR
+[#1328](https://github.com/ElevenID/marty-ui/pull/1328) removes the now
+obsolete reviewer-notification job, declares no reviewer requirement for
+`stack-release`, passes `GH_TOKEN` to the fourth promotion guard, and adds
+a four-promotion token contract test. The protected-main claim, exact
+source/digest checks, all four image gates, signing and publication state
+machine remain. Focused local release/workflow tests passed 67/67; hosted
+PR checks are pending. Protected main `9a9d9f81a` already prepared the next
+unused `v1.1.246` stack lock in #1326. After #1328 merges, run exact-main
+CI and one fresh no-write claim and release on the new source. Do not
+infer publication or installed acceptance from the policy change.
