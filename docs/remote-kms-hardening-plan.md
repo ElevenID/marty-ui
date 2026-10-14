@@ -18749,3 +18749,17 @@ temporary *local-only* Notification key-read grant; it is diagnostic
 evidence, not final-artifact qualification. A source-built replacement
 migration image is in progress for the final-path rehearsal. The
 `v1.1.246` public tag and prior failure evidence remain immutable.
+
+Grouped follow-up commit `eeb726121378a5b2efc347f4f879c2082369f36d`
+was pushed and opened as UI PR
+[#1330](https://github.com/ElevenID/marty-ui/pull/1330). It carries the
+plugin handoff, migration-only custody, native Notification token
+routing, production/fixture manifests, and test/doc adjustments in one
+CI batch. The PR is mergeable but blocked on its newly started required
+checks; CI run `38524059728` began at 2026-10-14T06:45Z. Additional
+local validation: 8 deployment-catalog frozen CLI tests and 44
+Kubernetes token-boundary tests passed. The local source-built Docker
+migration image attempt was stopped after Docker Desktop became
+unresponsive and returned server errors; this is an open final-image
+qualification gap, not a passing result. Preserve the earlier exact
+released-image diagnostic result separately from qualification.
