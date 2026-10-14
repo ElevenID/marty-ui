@@ -19574,3 +19574,28 @@ Both profile library suites passed (6 + 7 tests), targeted formatting passed,
 and both packages passed a locked `cargo check`. This guard does not repair
 the Organization server or all callers; current production manifests still
 name its plaintext target and the grouped UI branch must remain unshipped.
+
+2026-10-14 Organization server-only TLS progress: the grouped UI branch
+stages a KMS-backed gRPC listener using a public certificate and HTTPS
+OpenBao CA, a scoped signer token, and a versioned non-exportable Transit
+key. It rejects the retired `GRPC_WORKLOAD_TLS_SERVER_KEY` file setting.
+The gRPC business RPCs retain their service-token authorization; the TLS
+acceptor does not require a client private key, preserving the existing
+authorization model. Beta and production configuration now fail at startup
+if the remote listener identity is absent. All 27 Organization library
+tests, targeted formatting, and a locked binary check passed locally.
+
+A source-built Organization binary was run against isolated PostgreSQL,
+Redis and OpenBao 2.7.1 dev-TLS containers. The database was initialized
+with the native migration command. A non-exportable/non-backupable P-256
+Transit key produced a CSR and public localhost listener certificate; the
+service received no private-key file. The scoped token could read key
+metadata (200), but export and signing with another key returned 403.
+An actual CA-validated gRPC health RPC to port 19002 returned SERVING;
+ordinary HTTP health returned 200. A wrong-host TLS connection failed.
+After stopping KMS, a fresh gRPC TLS handshake failed closed in 2.33
+seconds while HTTP health remained 200. The service and all disposable
+containers and files were removed. This proves the source-built listener,
+not an installed image or the full production graph. The remaining
+Organization callers and beta/self-host/Kubernetes targets still need
+conversion to explicit HTTPS and public-CA trust before this branch ships.
