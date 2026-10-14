@@ -19327,3 +19327,11 @@ in this worktree; the result is not a successful installed beta proof. The
 remaining beta services still use local workload keys and need the same
 cutover. A reusable KMS-backed TLS certificate provisioning path is required
 before local beta can run this listener.
+Beta identity setup now fails before generating any new files when the
+generated environment still names `PP_WORKLOAD_SERVER_KEY_FILE` or the old
+Presentation Policy private-key file is present in its output directory.
+That prevents silently reusing a stale locally generated certificate/key
+pair while the external KMS signer is being provisioned. The PowerShell
+script parses and the focused beta runner contract passes 38/38; the
+unavailable local TLS files still prevent the full physical-provider render
+from qualifying.
