@@ -20354,3 +20354,28 @@ timeout. The focused Kubernetes release-evidence suite passed 15 tests with
 one Windows-local `envsubst` executable test filtered because `envsubst` is
 not installed here. This is staged source/model evidence, not a Kubernetes
 cluster deployment or an exact release-artifact qualification.
+
+2026-10-14 local paired-image idempotence: reran the staged services image
+`sha256:be12f11040060653fdcc5d7c3950a8d533f4e682c1b4fa3bfd48e43ef1eff485`
+with migrations image
+`sha256:32963b3b18ad661a35c7536f61d9a81c0a9119572900d980027873a3fb01acc4`
+twice against one isolated PostgreSQL, Redis and OpenBao project. Both runs
+completed the migration stages and `verify-owned-schema`; the notification
+head stayed `20260808_0002`, the 811-column inventory SHA-256 stayed
+`ae3097e96a5148b67cc36025f33c4e99ec6e172ae96683f47ffe7dbf52cdf8a1`,
+and the canonical private-key schema/content checks stayed empty. The
+disposable project and volumes were removed. This closes the local
+fresh-database idempotence gap, not the published-digest release qualifier or
+previously persisted database qualification.
+
+Passport fixture conversion dependency: the protected producer's strict
+keyless gate is correctly rejecting its current model. The fixture starts
+OpenBao on HTTP, generates workload and HTTPS-edge private-key files before
+OpenBao starts, and uses an nginx edge that expects a PEM TLS key. Converting
+only the Rust service identities would still leave an edge private key and
+would not satisfy KMS-only acceptance. The grouped cutover must provision a
+remote-backed edge identity as well as the Rust workload identities, serve
+OpenBao over authenticated HTTPS with its server key confined to the OpenBao
+container, and update the bootstrap order and model/ownership checks together.
+Until that runs end to end, the protected producer remains deliberately
+blocked by the keyless gate.
