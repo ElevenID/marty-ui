@@ -20109,3 +20109,18 @@ Applicant, Compliance Profile, Presentation Policy, Deployment Profile,
 Verification and Device Registration. Those K11 edges require source and
 deployment cutover; the refreshed consumer-binding assertions record current
 targets but do not qualify them as KMS-only.
+
+2026-10-14 Device Registration-to-Organization TLS cutover staged in the
+grouped UI worktree: deployed startup now requires an explicit HTTPS
+`ORG_GRPC_TARGET` and `ORG_GRPC_CA_CERT`. The existing Rust client uses the
+shared CA-verified server-TLS channel and checks Organization health at
+connect; it retains the service-token RPC authorization and has no TLS client
+private key. Production/beta Compose and Kubernetes now supply the HTTPS
+target and mount the public Organization workload CA. The installed-runtime
+secret roster and deployment assertions were updated. `marty-device-registration`
+locked binary check and 10 library tests passed; 121 focused Python deployment
+tests and six self-host bundle executable tests passed. A separate older
+Kubernetes-native Issuance test module still fails on stale HTTPS/configuration
+expectations and needs reconciliation within the grouped PR. No connected
+Device Registration-to-Organization RPC or installed-image proof is claimed;
+the other listed K11 edges remain open.
