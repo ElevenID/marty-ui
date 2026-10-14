@@ -20076,3 +20076,19 @@ test now uses four worker threads, as the other connected keyless tests do.
 This is a real Issuance service health RPC over KMS-backed mTLS, but it does
 not exercise an issuance transaction, start the complete Flow executable, or
 prove the installed release graph.
+
+2026-10-14 current-source native database custody audit: built and ran the
+actual Organization, Credential Template, Device Registration, and Issuance
+`migrate` binaries in deployment order against a new disposable
+`postgres:16-alpine` `marty_test` database. The resulting four service schemas
+contained 54 tables and 721 columns. The checked-in
+`PRIVATE_KEY_SCHEMA_QUERY` and `PRIVATE_KEY_CONTENT_QUERY` from
+`scripts/qualify_selfhost_migrations.py` both passed: no private-key-shaped
+table or column and no matching content in the newly seeded text/JSON rows.
+On Windows, passing the content SQL as a native command argument initially
+stripped its quote characters and produced a false regex syntax error; piping
+the unchanged SQL to `psql -f -` passed. The disposable database was removed.
+This is stronger than the prior targeted three-schema fixture, but it covers
+the four native migrations rather than the full `db-migrate` image and does
+not inspect an older persisted database or prove all future writes. Keep the
+exact installed-image schema/content probe open for this grouped release.
