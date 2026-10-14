@@ -18763,3 +18763,23 @@ migration image attempt was stopped after Docker Desktop became
 unresponsive and returned server errors; this is an open final-image
 qualification gap, not a passing result. Preserve the earlier exact
 released-image diagnostic result separately from qualification.
+
+2026-10-14 PR #1330 review follow-up: the initial review found that
+development Compose, passport disposable Compose, and beta rehearsal/live
+migrations still supplied only the general OpenBao token. The Rust
+bootstrap's dedicated Notification requirement would reject those
+callers. This is fixed on rebased PR head `53a6cfc146e55c9544703ed189685d2da0a29498`
+without restoring token fallback: development init writes a scoped
+Notification token to a dedicated volume; passport disposable bootstrap
+mints, checks, and stages a distinct Notification token; beta rehearsal
+and live migration mint short-lived tokens from the Notification policy.
+The branch also repairs external helper file readability for distinct
+non-root container UIDs. Focused contract/model tests passed 294 with
+two skips and five deselections; PowerShell syntax, Ruff, Compose model,
+and whitespace checks passed. One Windows workflow test fails because
+the local `bash` executable receives UTF-16 input, unrelated to the
+change. Docker Desktop remains unresponsive, so exact-image installed
+qualification remains pending. Review the new Linux CI result and run
+the prepared installed bundle with final signed images before merging
+and publishing a successor release; `v1.1.246` remains unqualified and
+immutable.
