@@ -19241,6 +19241,11 @@ The self-host example secret directory now contains placeholders for the
 public OpenBao HTTPS CA and scoped TLS signer token instead of Applicant's
 unused certificate/key and Signing Keys' retired server-key file; its required
 secret inventory has no missing example files.
+`docker compose --env-file .env.selfhost.production.example -f
+docker-compose.selfhost.prod.yml config --quiet` passes syntactically, but the
+example still sets `BAO_ADDR` to HTTP and `GRPC_INSECURE_ALLOWED=true`; those
+remain supported-stack security cutover items and this parse check is not a
+running TLS/KMS proof.
 
 Further MMF security review found the OpenBao HTTP client could follow a
 redirect while carrying the scoped `X-Vault-Token` header. Commit
