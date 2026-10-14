@@ -4159,9 +4159,12 @@ the candidate now provisions a scoped Notification token for those paths,
 keeping the runtime's explicit-token requirement. The pinned KMS-only model
 stays unchanged, with the new production migration token expressed as an
 explicit expected delta before whole-model equality. Local model and mutation
-tests pass. Exact-head hosted and protected checks, replacement-image
-installed qualification, and a 32 GiB Linux clean install remain pending.
-The old v1.1.246 prepared ZIP is not a qualified external handoff artifact.
+tests pass. The corrected #1330 head passed all required PR checks and full protected
+combined-head CI, including the OpenBao plugin image and Canvas suites, then
+merged to main as `c763e88ea9e39053390020ba2aabc23e01b2c613`.
+Replacement-image installed qualification and a 32 GiB Linux clean install
+remain pending. The old v1.1.246 prepared ZIP is not a qualified external
+handoff artifact; no external self-host support claim follows from the merge.
 
 ## Design references
 
