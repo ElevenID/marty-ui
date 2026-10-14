@@ -19647,7 +19647,8 @@ MMF CA-verified channel, connects eagerly and performs its authenticated
 Organization health RPC before marking the control-plane dependency
 healthy. The existing `x-service-token` authorization is retained;
 the client holds no TLS private key. Development's lazy local channel
-remains available outside the deployed KMS-only boundary. Trust Profile
+remains during staged graph conversion; retire or replace it before
+claiming final code-level KMS-only enforcement. Trust Profile
 library tests passed (12), including the new deployed target/CA guard;
 targeted formatting and locked binary check passed. A control-plane
 unit failure caused by validating malformed metadata after calling
