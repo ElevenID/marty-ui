@@ -19563,3 +19563,14 @@ are converted and exercised as a connected graph. Removing only the profile
 client TLS configuration would preserve plaintext and is not an acceptable
 KMS-only completion. Repeat this actual-listener/consumer audit for the
 other gRPC servers before installed-image acceptance.
+
+The grouped UI branch now rejects the immediate silent-failure mode in
+Deployment and Compliance Profiles: a configured keyless client requires an
+explicit `https://` Organization target, and the provider no longer rewrites
+an HTTP target behind the configuration's back. The keyless path connects
+eagerly during startup, so a plaintext or unavailable Organization listener
+prevents readiness rather than surfacing only on a later membership RPC.
+Both profile library suites passed (6 + 7 tests), targeted formatting passed,
+and both packages passed a locked `cargo check`. This guard does not repair
+the Organization server or all callers; current production manifests still
+name its plaintext target and the grouped UI branch must remain unshipped.
