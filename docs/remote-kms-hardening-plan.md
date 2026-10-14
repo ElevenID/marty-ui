@@ -1254,7 +1254,62 @@ assembled Core matrix is still due.
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 pushed head `72de77de6` passed all 22 exact-head jobs, CodeQL, policy and organization checks. Two automated wallet-pairing findings were fixed and resolved. Local plugin, Raft restore/failover, assembled schema and native service probes passed. The #1294 mainline reconciliation retains public-only CSCA fixtures, adds a public-certificate acceptance test and live storage CI cases; focused Rust and workflow tests passed, while full local validation and new hosted checks remain. Published artifacts, real cloud and physical device acceptance remain. |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192, approval-free publisher #1328, clean-install follow-up #1330, and successor lock #1331 are merged. All five #1331 merge-group workflows passed at `667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI `38605156101` is running on that SHA. The first no-write `v1.1.247` claim safely refused the old lock and wrote no tag. `v1.1.246` remains immutable but its installed prepared-consumer check failed. The `stack-release` environment keeps protected-branch policy without manual approval. Signed successor publication, installed probes and full journey, real providers/device, and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
-| K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | Open; 2026-10-14 source audit found mounted client-key secrets in Auth, Applicant, Compliance Profile, Deployment Profile, Flow and Verification, mounted server-key secrets in Presentation Policy, Flow and Signing Keys, and a direct `Identity::from_pem` client path in Issuance. Auth, Flow and other Rust gRPC providers call `GrpcTlsMaterial::from_pem_files`; Signing Keys calls `RustlsConfig::from_pem_file`. Complete the inventory across remaining stack components and implement one shared Rust/provider boundary where possible. Hold KMS-only publication until resolved. |
+| K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | In progress; 2026-10-14 source/API inventory below identifies the shared framework, native service and deployment paths plus the Rustls/Tonic integration constraint. Implement and prove the remote handshake path before KMS-only publication. |
+
+### K11 TLS identity custody inventory and implementation boundary (2026-10-14)
+
+The pinned `marty-microservices-framework` revision
+`c55d323e6aa64cad4f49308792f1d21eaab0ebc8` stores
+`GrpcTlsMaterial.client_private_key_pem` and
+`GrpcServerTlsMaterial.server_private_key_pem` as bytes, loads them in
+`from_pem_files`, then passes both to Tonic `Identity::from_pem` in
+`crates/mmf-platform/src/grpc.rs`. This is the canonical gRPC custody boundary
+and must be changed before merely replacing compose secret names. Auth,
+Compliance Profile, Deployment Profile, Flow, Presentation Policy and
+Verification use the shared material; Issuance has a separate direct
+`Identity::from_pem` client path in `grpc_client_channel.rs`. Signing Keys uses
+`axum_server::RustlsConfig::from_pem_file` for its integration-secret listener.
+The Applicant client-key mount must be traced to its actual runtime consumer;
+do not infer Rust coverage from the mount alone.
+
+The production self-host Compose model mounts six workload client key files
+(Auth, Applicant, Compliance Profile, Deployment Profile, Flow, Verification)
+and three server key files (Presentation Policy, Flow, Signing Keys). Oracle
+Kubernetes has matching workload `tls.key` mounts and the Signing Keys
+integration-secret server key. `deploy-config/catalog/secrets.json` requires
+these private-key secrets for production. Dev/beta Compose, self-host bundle
+generation, Kubernetes checks and fixture contracts also encode this shape.
+The source audit found no checked-in private key values in these declarations;
+the issue is that the deployed product still reads private keys from files.
+
+[Rustls 0.23 custom-key guidance](https://docs.rs/rustls/0.23.42/src/rustls/manual/howto.rs.html)
+provides `SigningKey`/`Signer`, certificate resolvers and `CertifiedKey` for
+non-exportable keys, but `Signer::sign` is synchronous. Remote KMS latency,
+timeouts and bounded handshake concurrency therefore need an explicit design
+and live proof; calling an async KMS client directly from this trait will not
+work. Tonic 0.14's public `ClientTlsConfig`/`ServerTlsConfig` identity setters
+take PEM identity material, so the current Tonic TLS convenience path cannot
+carry a custom Rustls signer. Tonic does expose a custom client connector and
+server incoming-stream path; qualify direct Rustls handshake integration there
+without weakening CA, hostname or client-certificate validation. Axum-server
+0.8 accepts an `Arc<rustls::ServerConfig>` through `RustlsConfig::from_config`.
+These are implementation candidates, not yet acceptance evidence.
+
+Build a shared Rust remote TLS identity contract around a scoped KMS key
+reference, public certificate chain, signature scheme and bound public key.
+Prove remote-only key generation/CSR or certificate enrollment, exact
+certificate-to-KMS-key binding, handshake signatures, renewal, rotation and
+fail-closed backend outage. Keep server/client authorization and mTLS peer
+identity checks. Signing Keys' own listener must not depend on a signer route
+that recursively calls that listener; use a directly reachable, separately
+authorized KMS path for transport signing. Audit algorithm/padding and wire
+signature encoding against TLS, including what each configured KMS actually
+supports. First run an isolated live OpenBao client/server handshake and
+negative cases, then migrate the shared framework and native roots in one
+cohesive feature branch/PR per repository. Remove production key-file fields,
+mounts and provisioning contracts, update dev/CI fixtures, run full regression
+and installed artifact checks, and self-review security, feature behavior and
+quality before hosted CI. No local PEM fallback or server-only TLS downgrade.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
