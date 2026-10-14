@@ -1469,6 +1469,22 @@ source search leaves Verification's old MMF mTLS API and Issuance/Notification's
 direct `Identity::from_pem` as the next compile/custody routes, plus deployment
 manifests and artifact inspection.
 
+K11 Verification local cutover: the service now loads one OpenBao-backed TLS
+identity and one public trust bundle, then reuses them for its Organization,
+Credential Template, Presentation Policy and optional Inspection gRPC
+channels. The former `GrpcTransportSecurity::MutualTls`/`from_pem_files`
+route is gone, and configuration requires a complete versioned KMS reference
+while rejecting `GRPC_WORKLOAD_TLS_CLIENT_KEY`. The production library/binary
+check, all 68 library tests, and strict production-target Clippy passed on
+Rust 1.95. The channels remain lazy as before, so source compilation does
+not prove a real service handshake. Remaining direct Tonic PEM custody uses
+are Issuance's shared `grpc_client_channel::endpoint` and Notification's
+`grpc_tls()` listener. Issuance currently returns a synchronous Tonic
+`Endpoint` to multiple consumers, requiring caller adaptation for remote
+signer setup. Notification supports optional client-certificate enforcement,
+so its keyless replacement must preserve both authenticated and allowed
+server-only gRPC behavior with HTTP/2 ALPN.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
