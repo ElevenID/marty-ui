@@ -20033,3 +20033,7 @@ The next self-review caught a stale Flow provider contract that still
 constructed Issuance through the ordinary plaintext factory. It now asserts
 the deployed Issuance channel is `Keyless` at the explicit HTTPS target;
 the full `marty-flow --test provider_behavior` suite passed (8 tests).
+The broader locked `cargo +1.95 test -p marty-flow --tests --quiet` run then
+completed successfully across every enabled Flow test target, including the
+44 library tests and the updated provider/startup suites. Opt-in live KMS
+tests were not selected by that ordinary test command.
