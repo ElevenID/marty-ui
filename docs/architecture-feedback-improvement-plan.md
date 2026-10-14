@@ -4168,6 +4168,35 @@ handoff artifact; no external self-host support claim follows from the merge.
 
 ## Design references
 
+October 14 A0/A1 Gateway live-config ownership candidate: a previously
+ignored Gateway library test composes the real Signing Keys HTTP router and
+disposable Redis to prove that unauthenticated and cross-tenant configuration
+updates are denied, valid empty configuration is saved, and a private-key
+field is rejected without mutating the registry. The current CI workspace
+test invocation excludes ignored cases, and no exact invocation of this name
+appeared in the contracts lane. The existing service-acceptance live managed-
+key case exercises a different public route, so it does not replace this
+proof. Move the unchanged behavior matrix to the Gateway Signing acceptance
+target, reuse its guarded disposable-Redis and Gateway runtime fixtures, and
+invoke the case explicitly under the contracts lane with an exact discovery
+guard. This removes Gateway's Signing Keys dev-dependency; Device Registration's
+separate Signing Keys/OpenBao live test moves to acceptance in the same slice. Require
+focused Rust compilation, a live hosted execution, independent review, and
+protected CI before claiming the move or any compile-time benefit.
+
+October 14 A0/A1 holder-key acceptance candidate: Device Registration's
+`holder_remote_live_kms` target is an ignored, explicitly invoked combined
+Device Registration/Signing Keys/OpenBao/PostgreSQL lifecycle proof. Its 657-
+line test imports both service implementations; `marty-signing-keys` and
+`p256` are otherwise unused Device Registration dev-dependencies. Moving the
+same target to `marty-service-acceptance` preserves its guarded disposable
+OpenBao and fresh-PostgreSQL invocation in the contracts CI lane and the
+separate local Rust-adapter probe, while removing that service-to-service
+development edge. The new package owner must compile with a locked manifest
+and the live case must pass in hosted CI before treating the move as merged or
+claiming any package-scoped speed benefit. This does not replace Device
+Registration's service-owned behavior and persistence tests.
+
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
 - [Contract versus functional tests](https://docs.pact.io/consumer/contract_tests_not_functional_tests): message compatibility does not establish durable side effects.

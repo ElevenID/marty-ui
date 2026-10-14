@@ -670,14 +670,15 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
             result = subprocess.run(
                 [
-                    "cargo", "+1.95", "test", "-p", "marty-device-registration",
+                    "cargo", "+1.95", "test", "-p", "marty-service-acceptance",
                     "--test", "holder_remote_live_kms", "--locked", "--offline",
-                    "-j2", "--", "--ignored", "--nocapture",
+                    "-j2", "registration_provision_sign_and_deactivate_delete_remote_key",
+                    "--", "--ignored", "--exact", "--nocapture",
                 ],
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if result.returncode or "test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout:
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 detail = detail.replace(postgres_password, "[postgres]")

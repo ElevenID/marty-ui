@@ -370,11 +370,15 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         signing_routes.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 1
+        == 2
     )
     assert "authenticated_gateway_reaches_rust_managed_key_route_without_custody" in signing_routes
+    assert (
+        "byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"
+        in signing_routes
+    )
     assert "authenticated_gateway_rotates_only_a_dedicated_signing_service" not in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 1
+    assert signing_routes.count("-- --ignored --exact") == 2
     assert "--test public_config_resolve_live_contract" in managed_chain
     assert "signing-public_config_resolve_live_contract.log" in managed_chain
     assert "--test public_key_metadata_live_contract" in managed_chain
@@ -410,12 +414,15 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
     assert script.count('"$acceptance_executable" --list') == 1
     assert "cargo " not in script
     names_source = script.split("for test_name in", 1)[1].split("; do", 1)[0]
-    names = re.findall(r"authenticated_gateway_[a-z_]+", names_source)
+    names = re.findall(r"(?:authenticated_gateway_|byok_gateway_)[a-z_]+", names_source)
     rust_source = (
         ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
     ).read_text(encoding="utf-8")
-    actual = re.findall(r"(?m)^async fn (authenticated_gateway_[a-z_]+)\(", rust_source)
-    assert len(names) == len(set(names)) == 6
+    actual = re.findall(
+        r"(?m)^async fn ((?:authenticated_gateway_|byok_gateway_)[a-z_]+)\(",
+        rust_source,
+    )
+    assert len(names) == len(set(names)) == 7
     assert set(names) == set(actual)
 
     # Execute the workflow's real membership loop with synthetic discovery
@@ -447,6 +454,68 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
             assert (
                 f"Missing Gateway Signing acceptance case: {missing}" in result.stderr
             )
+
+
+def test_gateway_live_config_case_has_exact_contracts_lane_invocation() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    execution = next(
+        step
+        for step in steps
+        if step.get("name") == "Exercise authenticated Signing Keys Gateway to Rust routes"
+    )
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    script = execution["run"]
+    assert "MARTY_TEST_REDIS_DISPOSABLE_NONCE=\"$nonce\"" in script
+    assert "-p marty-service-acceptance --test gateway_signing_acceptance" in script
+    assert re.search(
+        r"byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"
+        r"\s+\\\s+-- --ignored --exact",
+        script,
+    )
+    acceptance = (
+        ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    ).read_text(encoding="utf-8")
+    assert "async fn byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material(" in acceptance
+    assert "byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material" not in (
+        ROOT / "rust/services/gateway/src/runtime.rs"
+    ).read_text(encoding="utf-8")
+
+
+def test_remote_holder_live_kms_has_one_acceptance_owner_and_exact_ci_call() -> None:
+    target = "holder_remote_live_kms"
+    case = "registration_provision_sign_and_deactivate_delete_remote_key"
+    acceptance = ROOT / "rust/crates/service-acceptance"
+    source = acceptance / "tests" / f"{target}.rs"
+    assert source.is_file()
+    assert f"async fn {case}()" in source.read_text(encoding="utf-8")
+    assert not (ROOT / "rust/services/device-registration/tests" / f"{target}.rs").exists()
+    acceptance_manifest = (acceptance / "Cargo.toml").read_text(encoding="utf-8")
+    assert f'name = "{target}"\npath = "tests/{target}.rs"' in acceptance_manifest
+    device_manifest = (
+        ROOT / "rust/services/device-registration/Cargo.toml"
+    ).read_text(encoding="utf-8")
+    assert "marty-signing-keys" not in device_manifest
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    execution = next(
+        step
+        for step in steps
+        if step.get("name")
+        == "Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL"
+    )
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    assert f"-p marty-service-acceptance --test {target}" in execution["run"]
+    assert f"holder_case={case}" in execution["run"]
+    assert '-- --list | grep -Fx "$holder_case: test"' in execution["run"]
+    assert '"$holder_case" -- --ignored --exact' in execution["run"]
+    assert "1 passed; 0 failed; 0 ignored;" in execution["run"]
+    probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"-p", "marty-service-acceptance",\n                    "--test", "holder_remote_live_kms"' in probe
+    assert '"registration_provision_sign_and_deactivate_delete_remote_key"' in probe
+    assert '"test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout' in probe
 
 
 def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:
@@ -829,12 +898,13 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 7
+    assert verified[-1] == b"" and len(verified) == 8
     contract_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert contract_tests == [
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
+        "rust/crates/service-acceptance/tests/holder_remote_live_kms.rs",
         "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
@@ -5347,6 +5417,7 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "passport_gateway_postgres",
         "gateway_signing_acceptance",
         "csca_capability_contract",
+        "holder_remote_live_kms",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
     assert "marty-signing-keys" not in worker["dev-dependencies"]
