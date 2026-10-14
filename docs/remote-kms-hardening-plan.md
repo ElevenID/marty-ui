@@ -19700,3 +19700,16 @@ locked Issuance executable check passed. This does not yet require the
 CA in every deployed configuration or make the other two dependency
 servers TLS-capable. The deployed `GRPC_INSECURE_ALLOWED` path and
 plaintext targets must be removed with the coordinated graph cutover.
+
+Revocation Profile's Organization authorization client is now staged on
+CA-verified server TLS. Beta and production configuration require
+`ORG_GRPC_CA_CERT` and an explicit HTTPS target; the MMF channel
+connects eagerly and passes Organization's authenticated `HealthCheck`
+before the service constructs its readiness provider. The existing
+service-token authorization and continuous readiness check remain.
+The Revocation Profile library suite passed (32 tests), targeted
+formatting and a locked executable check passed. A new unit test rejects
+an HTTP target before reading any CA file. The Revocation Profile's own
+gRPC listener still accepts plaintext; that server needs a separate
+non-exportable OpenBao TLS identity and connected client acceptance
+before this portion of the production graph is complete.
