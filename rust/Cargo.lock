@@ -4200,7 +4200,6 @@ dependencies = [
  "marty-oid4vci",
  "marty-passport-auth",
  "marty-signing-grant",
- "marty-signing-keys",
  "mmf-platform",
  "mmf-security",
  "percent-encoding",

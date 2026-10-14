@@ -1772,6 +1772,7 @@ jobs:
           [[ -x "$acceptance_executable" ]]
           listed_tests="$("$acceptance_executable" --list)"
           for test_name in \
+            byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material \
             authenticated_gateway_reaches_remaining_rust_signing_handlers \
             authenticated_gateway_reaches_rust_managed_key_route_without_custody \
             authenticated_gateway_rotates_only_a_dedicated_signing_service \
@@ -1795,6 +1796,10 @@ jobs:
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
               cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              -- --ignored --exact
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
+              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'

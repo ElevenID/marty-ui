@@ -370,11 +370,15 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         signing_routes.count(
             "-p marty-service-acceptance --test gateway_signing_acceptance"
         )
-        == 1
+        == 2
     )
     assert "authenticated_gateway_reaches_rust_managed_key_route_without_custody" in signing_routes
+    assert (
+        "byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"
+        in signing_routes
+    )
     assert "authenticated_gateway_rotates_only_a_dedicated_signing_service" not in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 1
+    assert signing_routes.count("-- --ignored --exact") == 2
     assert "--test public_config_resolve_live_contract" in managed_chain
     assert "signing-public_config_resolve_live_contract.log" in managed_chain
     assert "--test public_key_metadata_live_contract" in managed_chain
@@ -410,12 +414,15 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
     assert script.count('"$acceptance_executable" --list') == 1
     assert "cargo " not in script
     names_source = script.split("for test_name in", 1)[1].split("; do", 1)[0]
-    names = re.findall(r"authenticated_gateway_[a-z_]+", names_source)
+    names = re.findall(r"(?:authenticated_gateway_|byok_gateway_)[a-z_]+", names_source)
     rust_source = (
         ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
     ).read_text(encoding="utf-8")
-    actual = re.findall(r"(?m)^async fn (authenticated_gateway_[a-z_]+)\(", rust_source)
-    assert len(names) == len(set(names)) == 6
+    actual = re.findall(
+        r"(?m)^async fn ((?:authenticated_gateway_|byok_gateway_)[a-z_]+)\(",
+        rust_source,
+    )
+    assert len(names) == len(set(names)) == 7
     assert set(names) == set(actual)
 
     # Execute the workflow's real membership loop with synthetic discovery
@@ -447,6 +454,32 @@ def test_gateway_signing_acceptance_discovery_fails_on_any_missing_case() -> Non
             assert (
                 f"Missing Gateway Signing acceptance case: {missing}" in result.stderr
             )
+
+
+def test_gateway_live_config_case_has_exact_contracts_lane_invocation() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    execution = next(
+        step
+        for step in steps
+        if step.get("name") == "Exercise authenticated Signing Keys Gateway to Rust routes"
+    )
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    script = execution["run"]
+    assert "MARTY_TEST_REDIS_DISPOSABLE_NONCE=\"$nonce\"" in script
+    assert "-p marty-service-acceptance --test gateway_signing_acceptance" in script
+    assert re.search(
+        r"byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"
+        r"\s+\\\s+-- --ignored --exact",
+        script,
+    )
+    acceptance = (
+        ROOT / "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs"
+    ).read_text(encoding="utf-8")
+    assert "async fn byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material(" in acceptance
+    assert "byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material" not in (
+        ROOT / "rust/services/gateway/src/runtime.rs"
+    ).read_text(encoding="utf-8")
 
 
 def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:

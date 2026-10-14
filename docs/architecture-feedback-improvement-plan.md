@@ -4168,6 +4168,22 @@ handoff artifact; no external self-host support claim follows from the merge.
 
 ## Design references
 
+October 14 A0/A1 Gateway live-config ownership candidate: a previously
+ignored Gateway library test composes the real Signing Keys HTTP router and
+disposable Redis to prove that unauthenticated and cross-tenant configuration
+updates are denied, valid empty configuration is saved, and a private-key
+field is rejected without mutating the registry. The current CI workspace
+test invocation excludes ignored cases, and no exact invocation of this name
+appeared in the contracts lane. The existing service-acceptance live managed-
+key case exercises a different public route, so it does not replace this
+proof. Move the unchanged behavior matrix to the Gateway Signing acceptance
+target, reuse its guarded disposable-Redis and Gateway runtime fixtures, and
+invoke the case explicitly under the contracts lane with an exact discovery
+guard. This removes Gateway's Signing Keys dev-dependency; Device Registration
+still has its separate Signing Keys/OpenBao live test dependency. Require
+focused Rust compilation, a live hosted execution, independent review, and
+protected CI before claiming the move or any compile-time benefit.
+
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
 - [Contract versus functional tests](https://docs.pact.io/consumer/contract_tests_not_functional_tests): message compatibility does not establish durable side effects.
