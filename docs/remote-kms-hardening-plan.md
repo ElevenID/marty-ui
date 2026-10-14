@@ -19790,3 +19790,24 @@ worktree; no result is claimed for that suite. These are static deployment
 checks, not a real installed-image or connected OpenBao TLS proof. Other
 Organization/Credential Template callers and the self-host bundle's older
 TLS fixture still need audit and cutover before the graph is ready.
+
+The extracted self-host bundle acceptance fixture has now been updated
+to map HTTPS Organization/Revocation Profile/Credential Template targets
+without downgrading their schemes, use synthetic explicit versioned KMS
+signer settings, and reject Flow TLS private-key file expectations. The
+actual CLI packaged and rendered the extracted bundle with pinned
+standalone Compose 5.4.0; its raw runtime-model test passed. That test is
+Stage A packaging evidence and does not run TLS services.
+
+The test exposed Gateway's remaining plaintext Organization edge. Its
+Rust configuration now requires a dedicated `ORG_GRPC_CA_CERT` and
+explicit HTTPS Organization target outside development, independently of
+the transitional global gRPC insecure switch; its Organization channel
+uses that CA while the Auth and Event Stream channels retain their
+existing transport. Self-host and beta Compose and Kubernetes now mount
+the public workload CA for Gateway and target Organization over HTTPS.
+The Gateway configuration suite passed (15 tests), its locked binary
+check passed, the extracted bundle test passed again, and 65 targeted
+Python deployment tests plus YAML/env uniqueness checks passed. Gateway's
+other gRPC edges and other Organization clients still need TLS cutover,
+followed by an installed connected graph proof.
