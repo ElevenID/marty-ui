@@ -18661,3 +18661,13 @@ in the protected merge queue on combined head
 were started at 2026-10-14T05:03:19Z. The queue CI run is `38514592200`.
 Wait for the combined-tree result and the final main SHA before triggering
 the required exact-main full CI. The next `v1.1.246` claim remains unstarted.
+
+Protected queue result: #1328 merged into main at
+`9c9f5d12b09e562c73974609eca16f8ebd48c9d5` on
+2026-10-14T05:32:53Z. All five merge-group workflows on that combined
+head passed, including CI `38514592200`, both CodeQL workflows, policy,
+and organization quality. No exact-main manual full-CI run existed for
+this SHA, so `workflow_dispatch` CI run `38517257686` was started against
+`main` and verified to have the same `headSha`. Wait for all jobs in that
+run to pass before claiming `v1.1.246`; then verify main remains at the
+same SHA and the tag, release, and four registry version tags are unused.
