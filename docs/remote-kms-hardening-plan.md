@@ -1420,6 +1420,19 @@ UI feature branch before either branch is pushed. The first broad UI
 errors, so production-library and feature-complete test checks must be
 separated during cutover review rather than attributing every error to K11.
 
+The next local MMF commit `bc6e194` adds a shared `OpenBaoTlsIdentityFiles::grpc_channel`
+loader, deriving the verified server name from the HTTPS origin and loading
+only public CA material. Its 17 no-default-feature library tests, Rust 1.93
+format check and strict all-target Clippy passed. The UI worktree now has
+uncommitted Deployment Profile and Compliance Profile client cutovers using
+that loader: deployed config requires the versioned remote KMS identity and
+rejects the old `GRPC_WORKLOAD_TLS_CLIENT_KEY`, while the provider construction
+is asynchronous. Each has a config contract test for complete KMS settings and
+key-file rejection. A local combined production check is presently blocked
+by Flow's remaining imports of the removed MMF PEM API, which is the next
+native dependency to migrate; no UI pass or release claim follows from the
+individual edits yet.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
