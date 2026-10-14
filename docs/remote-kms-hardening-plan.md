@@ -19182,3 +19182,31 @@ same SHA. Full qualification CI `38605156101` was dispatched against
 claim `38602492601` is retained as evidence; it did not reserve or
 publish `v1.1.247`. Wait for `38605156101` to pass and recheck both
 main and public release coordinates before a new claim.
+
+2026-10-14 TLS custody follow-up (unmerged UI worktree
+`feat/kms-tls-custody-20261014`): Applicant's native Rust binary never read
+the `GRPC_WORKLOAD_TLS_*` variables that Compose and Kubernetes mounted for it;
+its Event Stream publisher still constructs a plaintext gRPC channel, and its
+Flow provider uses HTTP. Added an Applicant startup rejection for inherited
+workload TLS settings, removed the unused Applicant private-key and certificate
+provisioning from self-host/beta Compose, Kubernetes, deployment catalog,
+setup helpers and relevant operator examples, and updated focused contracts.
+Applicant startup tests (2), strict Clippy, and deployment-catalog frozen CLI
+tests (8) pass locally. The four focused Python suites initially had 87 pass
+and 3 failures from the expected Kubernetes secret count; the count was
+corrected and the narrow rerun passed (44/44). A strengthened workload mount
+contract also passed (4/4). This removes a misleading private
+key mount, not an actual TLS transport. Before KMS-only acceptance, secure
+Applicant's real Event Stream gRPC path (including the Event Stream listener)
+with remote-key TLS or prove a different supported authenticated transport,
+and review whether the Flow `ApplicationApproved` workload policy still needs
+an Applicant client. The other production TLS private-key mounts and KMS
+provisioning remain to be converted in this grouped feature PR.
+An additional local beta physical-provider suite had 96 pass and one
+`test_full_beta_compose_render_matches_physical_validator` failure: its
+mounted-file isolation validator could not read the three local
+`.dev-integration-secret-tls/{ca.crt,tls.crt,tls.key}` files named by
+`docker-compose.base.yml`; none exists in this worktree. This is a missing
+development fixture, not evidence that the Applicant mount removal broke
+the physical-provider path. Retire that development private-key fixture in the
+grouped keyless TLS deployment change and rerun before beta qualification.
