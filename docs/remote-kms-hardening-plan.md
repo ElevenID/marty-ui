@@ -19981,3 +19981,16 @@ material; it is not a private-key table. This source inspection cannot prove
 that a previously installed database has no obsolete tables. A fresh
 installed production-schema inventory and explicit private-key column/table
 query remain acceptance gates; no database cleanup claim is made yet.
+
+2026-10-14 disposable PostgreSQL custody check: started a fresh
+`postgres:16-alpine` container with a dedicated `marty_test` database and
+ran the enabled `marty-device-registration` `postgres_custody` test,
+`marty-credential-template` `postgres_integration` repository round trip,
+and `marty-issuance-service` `oid4vci_migration_postgres_contract` migration
+test. All three passed against real PostgreSQL. A direct `information_schema`
+query over those three resulting service schemas found 15 tables and zero
+table/column names matching private-key, signing-key, or secret-key storage
+patterns. This strengthens the source-schema claim for those tested paths;
+the Issuance test uses its targeted migration fixture, so this is not a
+complete fresh installed production schema. It also says nothing about an
+older persisted database. The disposable container was stopped and removed.
