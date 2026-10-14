@@ -19335,3 +19335,22 @@ pair while the external KMS signer is being provisioned. The PowerShell
 script parses and the focused beta runner contract passes 38/38; the
 unavailable local TLS files still prevent the full physical-provider render
 from qualifying.
+
+2026-10-14 Auth workload client TLS cutover staged in the grouped UI branch:
+self-host, Kubernetes, and beta now select a scoped versioned OpenBao signer
+with a public client certificate and HTTPS CA rather than an Auth private-key
+file. The self-host/Kubernetes secret catalog and installer no longer require
+or create `auth_workload_client_key`; Kubernetes mounts a separate CA/token
+secret. Beta identity setup no longer generates the Auth key/certificate and
+fails early if retired Auth key-file settings or the old generated key remain.
+Because the beta client certificate is externally supplied, its release
+runner now verifies the expected `spiffe://marty.internal/service/auth` URI
+SAN and client-auth extended key usage as well as CA chain and expiry. This
+preserves workload authorization semantics at the new custody boundary.
+The combined production deployment Python contracts passed 78/78, catalog
+frozen CLI 8/8, Compose parse and Kubernetes shell syntax passed. Beta
+contract tests passed 88/88 with the full physical Compose validator
+explicitly excluded; running that one test again reproduced its existing
+missing `.dev-integration-secret-tls` mounted-source failure, not a KMS TLS
+handshake result. The signer provisioning path and other workload TLS key
+files remain unfinished.
