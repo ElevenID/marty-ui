@@ -27,7 +27,7 @@ Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
 2. Check out the release tag in a clean `marty-ui` source tree and confirm that
    `git rev-parse HEAD` equals the source commit in the preparation receipt.
    Check out `ElevenID/marty-integration-tests` separately at
-   `71a34c96f4bff2911919ebd3a41644ec2631ee07`. The runner verifies that
+   `0b9aec1994378aba4ef4715f858de813b1a329ea`. The runner verifies that
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. In a private operator directory outside both repositories, create an empty
@@ -42,7 +42,7 @@ Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
    audit hook; its audit token must meet the policy and TTL contract in
    [the synthetic fixture guide](selfhost-synthetic-fixture.md).
 4. Supply the eight public journey `SELFHOST_*` values from the
-   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/71a34c96f4bff2911919ebd3a41644ec2631ee07/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
+   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/0b9aec1994378aba4ef4715f858de813b1a329ea/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
    through an operator secret runner. Supply `SELFHOST_BAO_AUDIT_URL`,
    `SELFHOST_BAO_AUDIT_TOKEN_FILE`, and
    `SELFHOST_CUSTODY_SIGNING_KEY_FILE` in the same process environment. The
@@ -100,7 +100,7 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --source-checkout "$source_root" --integration-checkout "$integration_root" \
   --compose-model "$private/compose-model.json" \
   --source-sha "$source_sha" --run-id "$run_id" \
-  --integration-sha 71a34c96f4bff2911919ebd3a41644ec2631ee07 \
+  --integration-sha 0b9aec1994378aba4ef4715f858de813b1a329ea \
   --project-name "$project" --fixture-setup "$fixture" \
   --fixture-setup-sha256 "$fixture_sha" \
   --kms-custody-evidence "$private/custody.json" \
