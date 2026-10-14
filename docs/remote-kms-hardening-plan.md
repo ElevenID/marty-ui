@@ -19237,6 +19237,10 @@ provisioning path. Keep the explicit HTTPS signer origin separate from the
 existing HTTP `BAO_ADDR` until that infrastructure path is implemented. The
 other service TLS key-file mounts and Kubernetes Signing Keys manifest remain
 unconverted.
+The self-host example secret directory now contains placeholders for the
+public OpenBao HTTPS CA and scoped TLS signer token instead of Applicant's
+unused certificate/key and Signing Keys' retired server-key file; its required
+secret inventory has no missing example files.
 
 Further MMF security review found the OpenBao HTTP client could follow a
 redirect while carrying the scoped `X-Vault-Token` header. Commit
