@@ -19543,3 +19543,23 @@ Adjusted deployment contracts passed: 118 selected pytest cases and the
 12-model native base Compose matrix with negative policy inputs. This is
 configuration evidence; an installed-image health transition is still
 required before release acceptance.
+
+2026-10-14 production gRPC graph self-review found a blocking mismatch:
+the staged self-host/Kubernetes Deployment Profile and Compliance Profile
+clients have keyless OpenBao TLS identities and their provider code upgrades
+`ORG_GRPC_TARGET` from HTTP to HTTPS. Yet `rust/services/organization/src/main.rs`
+still passes a raw `TcpListenerStream` to Tonic, with no TLS acceptor or
+remote server signer, and its configuration has no workload TLS identity.
+The self-host manifest still supplies `organization:9002`; that target is
+normalized to HTTP and rewritten to HTTPS in those two clients. Thus their
+first real Organization RPC would fail against the plaintext server despite
+green Compose and source contract tests. Organization is a high fan-out
+service: Gateway, Auth, Flow, Trust Profile, Presentation Policy,
+Credential Template, Issuance, Verification, Device Registration,
+Revocation Profile, and the two profile clients reference its gRPC port.
+Do not push or claim the grouped UI cutover until Organization's remote-key
+TLS server and **every** supported client target/trust/authentication path
+are converted and exercised as a connected graph. Removing only the profile
+client TLS configuration would preserve plaintext and is not an acceptable
+KMS-only completion. Repeat this actual-listener/consumer audit for the
+other gRPC servers before installed-image acceptance.
