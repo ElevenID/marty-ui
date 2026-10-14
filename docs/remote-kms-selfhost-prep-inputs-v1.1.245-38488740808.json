@@ -1,0 +1,5 @@
+{
+  "claim_run_id": "38488740808",
+  "prepare_selfhost_lock": "true",
+  "selfhost_external_images_json": "{\"edge\":\"docker.io/library/nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d\",\"tunnel-nginx-proxy\":\"docker.io/library/nginx@sha256:582c496ccf79d8aa6f8203a79d32aaf7ffd8b13362c60a701a2f9ac64886c93d\",\"postgres\":\"docker.io/library/postgres@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c\",\"redis\":\"docker.io/library/redis@sha256:8b81dd37ff027bec4e516d41acfbe9fe2460070dc6d4a4570a2ac5b9d59df065\",\"keycloak\":\"quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2\",\"keycloak-configurator\":\"quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2\"}"
+}

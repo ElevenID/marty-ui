@@ -18504,3 +18504,26 @@ exact source rather than spending another full CI cycle solely to include
 #1323. Keep #1323 for later protected merge and do not let it silently
 advance main during this transaction. This supersedes the preceding
 wait-for-preflight claim sequencing, not its final quality goal.
+
+2026-10-14 exact-main claim and release retry: full CI run `38483617850`
+completed `success` on protected main
+`79f398b0824bfc9662c2fe49c00ab45a16f5ffff`; all 22 jobs, including
+full Canvas qualification, OpenBao recovery and CI Gate, passed. The five
+required merge-group workflows also passed. A concurrent first no-write
+claim `38488740808` for `v1.1.245` and that same SHA completed successfully;
+my second claim `38488741685`, dispatched seconds later, was cancelled by
+the tag concurrency rule without replacing the first. The downloaded first
+claim artifact is `claimed` with transaction ID
+`a98e951338c6bb85437541e392f36d692142190c7494e369a5448c491f33f0d7`,
+stack-lock digest
+`sha256:eb0b92f9df2445f37bf2be6feb8bbc0ed821018674ac2be49462c54894cae924`,
+all four registry version tags absent, and six exact required workflow IDs
+including full CI `38483617850`. Git tag and GitHub release were still
+absent. The BOM-free dispatch file
+`docs/remote-kms-selfhost-prep-inputs-v1.1.245-38488740808.json`
+parses at both JSON layers, contains the six fully qualified external
+sha256 references and the successful claim ID. One stack release run
+`38488866040` was dispatched on main with this file via `gh workflow run
+cd.yml --json` on standard input. It is live; no image qualification,
+publication or installed acceptance is claimed yet. Follow this exact run
+and avoid duplicate dispatches.
