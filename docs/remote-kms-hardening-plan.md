@@ -1513,6 +1513,27 @@ disposable container and copied public CA were removed, with absence checked.
 This proves the shared transport modes, not Notification's installed service
 or its deployment configuration.
 
+K11 Issuance source cutover: the shared `grpc_client_channel` now returns a
+Tonic channel after asynchronous OpenBao signer setup rather than a PEM-capable
+Tonic `Endpoint`. Its initiation control plane, application-template catalog,
+and authenticated dependency probe await that setup while preserving their
+prior lazy request connections. A client certificate requires a public CA and
+complete versioned OpenBao reference; `GRPC_TLS_CLIENT_KEY` is rejected even
+if present with an empty value. Explicit public-CA server TLS and the existing
+development/plaintext policy remain separate. The native-coverage contract
+now lists KMS fields in place of a usable client-key setting. Issuance's
+production library/binary check, focused gRPC/catalog/initiation tests
+(1/5/4), embedded coverage test and strict production Clippy passed. MMF
+commit `abeb6ed` additionally rejects a public CA bundle containing private
+material; its 18 platform library tests and strict Clippy passed. A source
+search finds no remaining `Identity::from_pem`, `GrpcServerTlsMaterial`,
+`GrpcTlsMaterial::from_pem_files` or `GrpcTransportSecurity::MutualTls` in
+native service code. K11 is still open: UI changes are uncommitted, the local
+MMF dependency must be pinned to a remote commit, self-host/Compose/Kubernetes
+tests and manifests retain key-file settings, installed service handshakes and
+peer authorization are not yet proven, and exact release artifacts remain
+unqualified.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
