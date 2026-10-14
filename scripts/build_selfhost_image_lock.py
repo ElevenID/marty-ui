@@ -160,6 +160,39 @@ def _ownership(base_compose: Path, override_compose: Path) -> tuple[set[str], di
     return set(base), roles
 
 
+def _validate_external_services(
+    services: dict, roles: dict[str, str], external_services: dict[str, str]
+) -> None:
+    _require(isinstance(external_services, dict) and bool(external_services),
+             "external image map is invalid")
+    _require(set(external_services) == set(services) - set(roles),
+             "external image map has missing or extra Compose service roles")
+    for name, image in external_services.items():
+        source = services[name]
+        _require(isinstance(source, dict) and isinstance(source.get("image"), str),
+                 f"{name} has no Compose image")
+        source_image = source["image"]
+        _exact_image(image, name)
+        _require(_repository(source_image) == _repository(image),
+                 f"{name} independent image repository differs from Compose")
+        if "@sha256:" in source_image:
+            _require(source_image == image,
+                     f"{name} resolved image digest differs from explicit input")
+
+
+def preflight_external_images(
+    model: dict, external_services: dict[str, str],
+    base_compose: Path, override_compose: Path,
+) -> None:
+    _require(isinstance(model.get("services"), dict) and bool(model["services"]),
+             "Compose model has no services object")
+    services = model["services"]
+    base_names, roles = _ownership(base_compose, override_compose)
+    _require(set(services) == base_names,
+             "rendered Compose service set differs from source")
+    _validate_external_services(services, roles, external_services)
+
+
 def build_lock(
     *,
     model: dict,
@@ -209,9 +242,8 @@ def build_lock(
     _require(set(services) == base_names, "rendered Compose service set differs from source")
     _require(ISSUANCE_SERVICES.issubset(services),
              "issuance services are absent from Compose")
-    _require(isinstance(external_services, dict), "external image map is invalid")
+    _validate_external_services(services, roles, external_services)
     resolved: dict[str, str] = {}
-    used_external: set[str] = set()
     for name, service in services.items():
         _require(isinstance(service, dict) and "build" not in service,
                  f"{name} is not an image-only Compose service")
@@ -233,19 +265,8 @@ def build_lock(
         elif role in SELFHOST_URIS:
             image = selfhost_images[role]
         else:
-            _require(name in external_services,
-                     f"{name} needs an explicit independent image digest")
             image = external_services[name]
-            _exact_image(image, name)
-            _require(_repository(source_image) == _repository(image),
-                     f"{name} independent image repository differs from Compose")
-            if "@sha256:" in source_image:
-                _require(source_image == image,
-                         f"{name} resolved image digest differs from explicit input")
-            used_external.add(name)
         resolved[name] = _exact_image(image, name)
-    _require(set(external_services) == used_external,
-             "external image map has missing or extra Compose service roles")
     _require(resolved["issuance"] == resolved["issuance-migrations"],
              "issuance API and migration images differ")
     plugin = claim["images"]["openbao_didcomm"]

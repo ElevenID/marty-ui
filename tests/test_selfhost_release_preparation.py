@@ -60,6 +60,27 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     assert all("imagetools create" not in step.get("run", "") for step in steps)
 
 
+def test_selfhost_inputs_fail_before_expensive_release_builds() -> None:
+    jobs = workflow()["jobs"]
+    steps = jobs["validate-stack"]["steps"]
+    preflight = next(index for index, step in enumerate(steps)
+                     if step.get("name") == "Reject invalid self-host image inputs before release builds")
+    provenance = next(index for index, step in enumerate(steps)
+                      if step.get("name") == "Verify release artifact provenance")
+    assert preflight < provenance
+    assert steps[preflight]["if"] == "inputs.prepare_selfhost_lock == true"
+    assert "PyYAML==6.0.3" in steps[preflight]["run"]
+    assert "scripts/check_selfhost_external_images.py" in steps[preflight]["run"]
+    assert "docker compose --profile '*'" in steps[preflight]["run"]
+    assert "--base-compose docker-compose.selfhost.prod.yml" in steps[preflight]["run"]
+    assert "--override-compose docker-compose.selfhost.bundle.override.yml" in steps[preflight]["run"]
+    for job_name in ("build-ui", "build-services", "build-openbao-didcomm",
+                     "build-selfhost-lock-roles"):
+        assert "validate-stack" in jobs[job_name]["needs"] or (
+            job_name == "build-selfhost-lock-roles" and "qualify-release" in jobs[job_name]["needs"]
+        )
+
+
 def test_lock_staging_checks_exact_source_provenance_and_full_profile_closure() -> None:
     jobs = workflow()["jobs"]
     preparation = jobs["prepare-selfhost-image-lock"]

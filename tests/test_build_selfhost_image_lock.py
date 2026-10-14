@@ -119,6 +119,22 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result["services"]["cloudflared"] == result["services"]["cloudflared-beta"]
 
 
+def test_early_external_preflight_reuses_lock_identity_rules(tmp_path: Path) -> None:
+    model, _claim, _lock, _selfhost, external = inputs(tmp_path)
+    base, override = tmp_path / "base.yml", tmp_path / "override.yml"
+    builder.preflight_external_images(model, external, base, override)
+    for invalid in (
+        {"postgres": reference("nginx", "7")},
+        {"postgres": "docker.io/library/postgres/@sha256:" + "7" * 64},
+        {"postgres": "docker.io/library//postgres@sha256:" + "7" * 64},
+        {"postgres": "postgres@sha256:" + "7" * 64},
+        {"issuance": reference("services", "7"), **external},
+        {},
+    ):
+        with pytest.raises(builder.ImageLockError):
+            builder.preflight_external_images(model, invalid, base, override)
+
+
 def test_current_compose_source_ownership_is_closed() -> None:
     root = Path(__file__).parents[1]
     names, roles = builder._ownership(

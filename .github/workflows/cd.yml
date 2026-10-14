@@ -270,6 +270,27 @@ jobs:
             echo "integration_commit=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .commit' "$LOCK_FILE")"
             echo "integration_digest=$(jq -er '.components[] | select(.name == "marty-integration-tests") | .artifacts[] | select(.type == "release") | .digest' "$LOCK_FILE")"
           } >> "$GITHUB_OUTPUT"
+      - name: Reject invalid self-host image inputs before release builds
+        if: inputs.prepare_selfhost_lock == true
+        env:
+          EXTERNAL_IMAGES_JSON: ${{ inputs.selfhost_external_images_json }}
+          VERSION: ${{ steps.components.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
+          printf '%s' "$EXTERNAL_IMAGES_JSON" > external-services.json
+          export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
+          export SELFHOST_IMAGE_TAG="$VERSION"
+          docker compose --profile '*' --env-file .env.selfhost.production.example \
+            -f docker-compose.selfhost.prod.yml \
+            -f docker-compose.selfhost.bundle.override.yml \
+            config --format json > selfhost-preflight-compose.json
+          python scripts/check_selfhost_external_images.py \
+            --compose-model selfhost-preflight-compose.json \
+            --external-services external-services.json \
+            --base-compose docker-compose.selfhost.prod.yml \
+            --override-compose docker-compose.selfhost.bundle.override.yml
       - name: Verify release artifact provenance
         env:
           GH_TOKEN: ${{ github.token }}
