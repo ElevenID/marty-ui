@@ -20056,3 +20056,23 @@ after the harness refactor. Python bytecode compilation, direct Rust format,
 and `git diff --check` passed. This proves the connected transport components,
 not an Issuance business RPC, both production binaries running together, or
 an installed release. Keep those acceptance gates open.
+
+2026-10-14 real Issuance executable mTLS proof: an opt-in
+`executable_serves_issuance_rpc_with_remote_key_mutual_tls` smoke test now
+starts the actual `marty-issuance-service` binary on disposable PostgreSQL
+after the real Organization and Credential Template migration commands and
+Issuance's own schema-owner migration. It gives Issuance the separate
+non-exportable OpenBao server signer from the Flow/Issuance fixture. The
+compiled executable rejected a client without a certificate, returned
+`Unauthenticated` to a keyless client without `x-service-token`, and returned
+`serving` to the same client with the scoped service token. The final connected
+test passed, as did the existing `executable_serves_health_readiness_and_version`
+development smoke test against another disposable database. The initial
+attempt exposed a missing schema-owner migration step; once that was supplied,
+the Windows binary's combined server future overflowed the main stack. Boxing
+the gRPC server future resolved that failure. A later TLS failure was traced
+to the test's single-thread Tokio runtime starving the OpenBao signer; the
+test now uses four worker threads, as the other connected keyless tests do.
+This is a real Issuance service health RPC over KMS-backed mTLS, but it does
+not exercise an issuance transaction, start the complete Flow executable, or
+prove the installed release graph.
