@@ -1374,8 +1374,8 @@ OpenBao 2.7.1 `-dev-tls` instance. Its public CA was supplied to the signer;
 no OpenBao-generated transport key was copied into Marty. The production
 adapter loaded non-exportable Transit metadata, signed a verifiable TLS
 message, completed a real CA/hostname-validated HTTPS handshake, and then
-failed the next handshake when its token file was removed. The complete
-existing Rustls/mTLS/gRPC negative suite passed 1/1 in that HTTPS run. The
+failed handshakes with a denied token and with its token file removed. The
+existing Rustls/mTLS/gRPC suite passed 1/1 in that HTTPS run. The
 container and copied public CA were removed afterward. [OpenBao dev TLS](https://openbao.org/docs/commands/server/)
 generates its own key inside its disposable server boundary; the [production
 OpenBao listener](https://openbao.org/docs/configuration/listener/tcp/) accepts
@@ -1384,6 +1384,18 @@ separately from Marty's service-owned keys.
 Signing Keys installed-artifact startup, scoped policy, certificate renewal,
 other native callers, Compose/Kubernetes mounts and release evidence remain
 required before K11 is complete.
+
+The 2026-10-14 self-review deliberately held the MMF branch before a PR:
+`mmf-platform/src/grpc.rs` still exports `GrpcTlsMaterial` and
+`GrpcServerTlsMaterial`, retains `from_pem_files` and Tonic `Identity::from_pem`,
+and has private-key fixtures in framework tests. The new keyless API is
+additive until this older path is removed. Keep one cohesive MMF feature PR:
+remove the PEM/private-key gRPC API and tests, migrate UI's native callers
+against the local MMF worktree, and preserve existing connection timeouts,
+keepalive, TLS peer authentication and authorization behavior in the keyless
+replacement. The UI's current temporary local Cargo path makes this cross-repo
+cutover testable before pinning a qualified MMF commit. Do not merge or publish
+the additive framework branch as KMS-only.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
