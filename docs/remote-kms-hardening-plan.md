@@ -19912,3 +19912,24 @@ handshake or an installed multi-service event journey. Next: run a disposable
 OpenBao-backed Event Stream TLS acceptance path, review all remaining gRPC
 edges, and qualify an empty installed database. Provider credentials and
 physical device access remain unprovisioned.
+
+The actual Event Stream TLS path now has a passing local connected proof.
+`scripts/with_disposable_event_stream_kms.py` starts an isolated, loopback-
+published OpenBao v2.7.1 image pinned at digest
+`sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`.
+It provisions a non-exportable P-256 Transit signer, uses a Transit-signed CSR
+to obtain a public leaf certificate from OpenBao PKI, creates a read/sign-only
+token, and verifies that token is denied access to a foreign signer. OpenBao's
+own development TLS key exists only in the disposable container's tmpfs; only
+public certificates and the scoped token enter the host fixture directory.
+The opt-in `deployed_executable_uses_remote_tls_signer_and_authenticated_event_rpcs`
+test starts the real Rust Event Stream binary in beta mode and verifies a
+CA-checked TLS connection, rejection of an unauthenticated Publish, and
+delivery of a token-authenticated Publish to a Subscribe stream. It passed
+locally with `cargo +1.95 test --manifest-path rust/Cargo.toml -p
+marty-event-stream --test grpc_contract
+deployed_executable_uses_remote_tls_signer_and_authenticated_event_rpcs
+--locked -- --ignored --nocapture` under the disposable fixture; the fixture
+container was removed afterward. This proves the Event Stream listener and
+one direct client path, not the installed multi-service graph, all gRPC
+edges, or a fresh production-schema database inventory.
