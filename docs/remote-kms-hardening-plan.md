@@ -20174,3 +20174,17 @@ SPIFFE SAN and client EKU. The seven Rust library tests and locked binary
 check passed; 156 focused Python deployment tests, six self-host bundle tests,
 PowerShell parsing and diff checks passed. Connected Deployment Profile
 business RPC and installed-image qualification remain open.
+
+2026-10-14 Presentation Policy-to-Organization K11 cutover staged in the
+grouped UI worktree. Deployed Rust configuration now requires a public
+`ORG_GRPC_CA_CERT` and explicit HTTPS Organization target. The native control
+plane uses the shared MMF CA-verified server-TLS channel, connects eagerly,
+and preserves the service-token authorization and existing HTTP trust/status
+dependencies. Self-host, beta and Kubernetes supply the HTTPS target and
+already-mounted public workload CA. The new channel test rejects plaintext;
+the full locked `marty-presentation-policy --tests` suite passed after
+updating executable/configuration fixtures for the new fail-closed check.
+The four focused Python deployment modules passed 156 tests, and the six
+self-host bundle executable tests passed. A connected Organization membership
+RPC from the full Presentation Policy executable and installed release remain
+open; source and deployment checks alone do not prove those behaviors.
