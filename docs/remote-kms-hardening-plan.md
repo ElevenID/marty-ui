@@ -1254,7 +1254,7 @@ assembled Core matrix is still due.
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 pushed head `72de77de6` passed all 22 exact-head jobs, CodeQL, policy and organization checks. Two automated wallet-pairing findings were fixed and resolved. Local plugin, Raft restore/failover, assembled schema and native service probes passed. The #1294 mainline reconciliation retains public-only CSCA fixtures, adds a public-certificate acceptance test and live storage CI cases; focused Rust and workflow tests passed, while full local validation and new hosted checks remain. Published artifacts, real cloud and physical device acceptance remain. |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192, approval-free publisher #1328, clean-install follow-up #1330, and successor lock #1331 are merged. All five #1331 merge-group workflows passed at `667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI `38605156101` is running on that SHA. The first no-write `v1.1.247` claim safely refused the old lock and wrote no tag. `v1.1.246` remains immutable but its installed prepared-consumer check failed. The `stack-release` environment keeps protected-branch policy without manual approval. Signed successor publication, installed probes and full journey, real providers/device, and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
-| K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | In progress; 2026-10-14 source/API inventory below identifies the shared framework, native service and deployment paths plus the Rustls/Tonic integration constraint. Implement and prove the remote handshake path before KMS-only publication. |
+| K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | In progress; the shared Rust signer and gRPC/HTTPS keyless transport are implemented locally, and the Signing Keys HTTPS listener has a local KMS-only cutover. A live HTTPS OpenBao handshake and missing-token failure passed. The MMF dependency is not yet published or pinned in UI, the Signing Keys service has not been run as an installed artifact, and other native roots plus Compose/Kubernetes still use key files. |
 
 ### K11 TLS identity custody inventory and implementation boundary (2026-10-14)
 
@@ -1343,9 +1343,47 @@ connection failed. The opt-in test passed 1/1 and its targeted Clippy passed.
 This local cross-repository proof is not a published dependency or service
 cutover. The UI test revision and temporary path are uncommitted until MMF is
 qualified/pinned; remove the local path before a UI PR. The second disposable
-OpenBao container was stopped and removed. The synchronous signer still needs
-a bounded production KMS adapter, scoped auth and certificate renewal, and all
-native/Compose/Kubernetes callers still read their old mounted key files.
+OpenBao container was stopped and removed. This initial proof did not yet
+include a bounded production KMS adapter, scoped auth or certificate renewal;
+published native/Compose/Kubernetes callers still read mounted key files.
+
+Subsequent local MMF commits `e21c5c9`, `a201a5e` and `b11c18d` add the
+production `OpenBaoTlsSigner` and keyless HTTPS server configuration. The
+signer accepts only a credential-free HTTPS origin, an explicitly pinned CA,
+a versioned non-exportable/non-backupable P-256 Transit key and a token file;
+it disables ambient HTTP proxies, re-reads authorization for each signature,
+uses a three-second request bound in the Signing Keys caller, and caps
+concurrent signing. Startup fetches the public SPKI, which the shared TLS
+identity binds to the leaf certificate. It rejects Tokio single-threaded
+runtime signing rather than blocking it. The MMF no-default-feature platform
+suite passed 24/24 and strict Clippy passed after the CA-pinning review fix.
+The fixed PEM parser accepts OpenBao's trailing newline; the first live test
+exposed and corrected that parser defect.
+
+In the local UI `feat/kms-tls-custody-20261014` worktree, Signing Keys now
+rejects `SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE`, requires the public
+certificate plus dedicated HTTPS OpenBao CA/token/key/version configuration,
+and builds its separate integration-secret listener from the opaque signer.
+The binary check, 12 focused configuration tests and strict binary Clippy
+passed. This work remains uncommitted while the broad service/deployment
+cutover is assembled. The UI test still uses a temporary local MMF Cargo path
+that must be replaced by a qualified exact commit before review.
+
+The opt-in UI acceptance test was extended against a marked disposable
+OpenBao 2.7.1 `-dev-tls` instance. Its public CA was supplied to the signer;
+no OpenBao-generated transport key was copied into Marty. The production
+adapter loaded non-exportable Transit metadata, signed a verifiable TLS
+message, completed a real CA/hostname-validated HTTPS handshake, and then
+failed the next handshake when its token file was removed. The complete
+existing Rustls/mTLS/gRPC negative suite passed 1/1 in that HTTPS run. The
+container and copied public CA were removed afterward. [OpenBao dev TLS](https://openbao.org/docs/commands/server/)
+generates its own key inside its disposable server boundary; the [production
+OpenBao listener](https://openbao.org/docs/configuration/listener/tcp/) accepts
+a configured TLS key file, so that operator/KMS boundary must be documented
+separately from Marty's service-owned keys.
+Signing Keys installed-artifact startup, scoped policy, certificate renewal,
+other native callers, Compose/Kubernetes mounts and release evidence remain
+required before K11 is complete.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
