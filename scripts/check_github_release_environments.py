@@ -122,6 +122,8 @@ def validate_environment(
 
     if requirement.get("require_reviewers") and not reviewers:
         errors.append(f"{name}: at least one required reviewer must be configured")
+    if requirement.get("require_reviewers") is False and reviewer_rules:
+        errors.append(f"{name}: required reviewer rule must be absent")
     if requirement.get("prevent_self_review") and not any(
         rule.get("prevent_self_review") is True for rule in reviewer_rules
     ):
