@@ -20263,3 +20263,23 @@ locked self-host executable-bundle tests passed, and `git diff --check`
 passed. The Compose preservation gate passed default, empty and custom
 interpolation plus 55 required-input rejection checks. These are source and
 rendered configuration checks, not installed-image or live KMS acceptance.
+
+2026-10-14 acceptance-fixture custody audit: the protected passport disposable
+Compose path is not KMS-only yet. Its base model mounts a Signing Keys TLS
+private-key file; the self-host overlay mounts Flow client/server and
+Presentation Policy TLS private-key files, and both surfaces still allow
+plaintext gRPC selectors. `scripts/stage_passport_disposable_tls.py` creates
+these private keys with OpenSSL before OpenBao bootstrap, while the current
+Rust Signing Keys, Flow, and Presentation Policy deployed parsers reject the
+retired key-file selectors. The 218 passport model/ownership tests passed
+(one skip), demonstrating that the current static tests still approve this
+obsolete fixture; they do not prove it will boot or meet KMS custody. The
+protected producer workflow can exercise this path, so its receipt must not
+be used for final KMS acceptance until converted. The coordinated-restore
+probe separately starts Signing Keys with a local TLS key file and needs the
+same cutover. Next, issue disposable non-exportable OpenBao Transit TLS
+identities and public certificates during bootstrap, mint separate scoped
+sign-only tokens, carry only public certs/CA/token references into the
+services, replace plaintext gRPC targets with authenticated TLS, and update
+the producer/model tests and connected route proof together. Preserve the
+passport and restore behavior; do not accept key-file or plaintext fallback.
