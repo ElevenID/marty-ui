@@ -247,7 +247,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
     )
     assert rejected.returncode != 0
     assert "Scoped token output path is unsafe." in rejected.stderr
-    assert paths[1].read_text(encoding="ascii") == "notification-new"
+    assert paths[1].read_text(encoding="ascii") == "bootstrap-new"
 
 
 PLUGIN_IMAGE = bootstrap.PLUGIN_URI + "@sha256:" + "a" * 64

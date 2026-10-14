@@ -67,6 +67,7 @@ def test_selfhost_signing_grants_cannot_reuse_an_origin_or_provider_token(tmp_pa
     )
     provider_files = (
         "openbao_service_token",
+        "openbao_bootstrap_token",
         "signing_keys_openbao_token",
         "didcomm_issuance_openbao_token",
         "haip_kms_token",
