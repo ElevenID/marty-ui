@@ -18536,3 +18536,26 @@ and hosted runners. The source-bound check that failed the prior publisher
 is therefore locally preflighted on these new exact artifacts; the
 protected publication job has not yet executed. OpenBao image build and
 release stack validation passed. UI and services builds remain live.
+
+2026-10-14 release qualification and prepared self-host preflight: exact
+release run `38488866040` built and recorded the UI, services, migrations,
+and OpenBao DIDComm image digests. All four exact-image gates passed:
+native schema, verifier differential, DIDComm plugin, and public stack.
+The downloaded `stack-release-qualified-38488866040` transaction binds
+their evidence hashes to source `79f398b08`, claim `38488740808`, and
+transaction `a98e951338c6bb85437541e392f36d692142190c7494e369a5448c491f33f0d7`.
+The optional self-host roles built, signed and attested; image-lock
+preparation and `preflight-selfhost-prepared-consumer` both passed, including
+anonymous exact-digest pulls. The downloaded
+`selfhost-lock-preparation-unqualified-38488866040` artifact contains the
+lock, descriptor and ZIP; its manifest binds source `79f398b08`, run
+`38488866040`, and ZIP SHA-256
+`92c3ebc29e9d7446b4365de0d2f5e4ead17901a261c996e4772087540b9564d3`.
+Its `qualification` remains `unqualified` pending an installed journey.
+`publish-manifest` is waiting on protected `stack-release` environment
+review; GitHub's approval log is empty for this run. The prior approval of
+failed run `38473299581` does not authorize this distinct transaction.
+After the reviewer approves this exact run, verify publication and then
+follow the automatic installed self-host consumer. Do not treat preflight
+as installed-stack acceptance. Real cloud BYOK/device access remains
+unprovisioned.
