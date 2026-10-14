@@ -19413,3 +19413,25 @@ also retain key-file definitions. Do not treat the zero-match production
 search as end-to-end TLS custody acceptance: real key/certificate provisioning,
 HTTPS OpenBao transport, live handshakes, and the remaining dev/disposable
 call sites are required.
+
+2026-10-14 base development stack and beta physical validator cleanup:
+`docker-compose.base.yml` no longer passes a Signing Keys integration-secret
+TLS private-key file. It now requires a public listener certificate, OpenBao
+HTTPS CA, scoped signer token, explicit signer origin and versioned key
+reference; the old `dev_integration_secret_server_key` secret definition is
+removed. The base CA/certificate sources are explicit operator file inputs
+instead of undeclared `.dev-integration-secret-tls` paths. This does not
+provision a matching signer or make the HTTP development OpenBao suitable for
+runtime TLS signing; development startup intentionally needs those external
+inputs before claiming usability. The beta physical provider model now checks
+for public certificate/CA and scoped signer token mounts, and synthetic test
+fixtures contain no development TLS private-key file. The full beta Compose
+physical-provider validator, previously failing due missing local files, now
+passes 1/1; combined adjacent conformance, Kubernetes, beta selector and
+release-runner suites pass 296/296. The source-built native base Compose
+matrix passes all 12 selected models plus missing-policy negatives. These
+are config/model checks, not a running installed journey. Other disposable
+passport Compose overlays, historical snapshots, and coordinated-restore
+test helpers still name PEM key files; retire or justify them without
+reintroducing product private-key custody. Local runtime provisioning and
+real TLS handshakes remain required before pushing the grouped UI PR.
