@@ -20145,3 +20145,19 @@ they cannot silently reappear. The three focused deployment modules passed
 116 tests; the self-host executable bundle passed all six cases. This removes
 Applicant from the remaining gRPC TLS edge list without claiming its separate
 HTTP dependencies are KMS-transport-qualified.
+
+2026-10-14 Compliance Profile-to-Organization K11 cutover staged in the grouped
+UI worktree. The Rust parser now rejects `GRPC_INSECURE_ALLOWED=true` in both
+beta and production and requires the existing complete remote OpenBao client
+identity in either deployed environment. The provider already connects
+eagerly through the shared KMS-backed mTLS channel; its explicit HTTPS target
+requirement is retained. Self-host, beta and Kubernetes now set the HTTPS
+Organization target and disable plaintext; beta mounts the public client
+certificate, KMS token and CA files. The beta launcher and identity helper
+now require these files, validate the scoped KMS key selector and check the
+public client certificate trust, SPIFFE SAN and client EKU. Six Rust library
+tests and the locked binary check passed; 122 focused Python deployment tests,
+six self-host bundle executable tests, PowerShell parsing and diff checks
+passed. This is source/config/render evidence. A connected Compliance Profile
+business RPC and installed release remain acceptance work, as do the other
+open edges.
