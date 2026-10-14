@@ -278,6 +278,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --disable-pip-version-check PyYAML==6.0.3
           printf '%s' "$EXTERNAL_IMAGES_JSON" > external-services.json
           export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
           export SELFHOST_IMAGE_TAG="$VERSION"

@@ -69,6 +69,7 @@ def test_selfhost_inputs_fail_before_expensive_release_builds() -> None:
                       if step.get("name") == "Verify release artifact provenance")
     assert preflight < provenance
     assert steps[preflight]["if"] == "inputs.prepare_selfhost_lock == true"
+    assert "PyYAML==6.0.3" in steps[preflight]["run"]
     assert "scripts/check_selfhost_external_images.py" in steps[preflight]["run"]
     assert "docker compose --profile '*'" in steps[preflight]["run"]
     assert "--base-compose docker-compose.selfhost.prod.yml" in steps[preflight]["run"]
