@@ -18556,9 +18556,11 @@ Its `qualification` remains `unqualified` pending an installed journey.
 review; GitHub's approval log is empty for this run. The prior approval of
 failed run `38473299581` does not authorize this distinct transaction.
 After the reviewer approves this exact run, verify publication and then
-follow the automatic installed self-host consumer. Do not treat preflight
-as installed-stack acceptance. Real cloud BYOK/device access remains
-unprovisioned.
+follow the automatic installed self-host consumer. That workflow proves
+archive binding, Compose closure, OpenBao bootstrap, scoped migrations,
+Signing Keys and Organization runtime probes; it does not run the full
+public business journey. Do not treat its success as installed-stack
+acceptance. Real cloud BYOK/device access remains unprovisioned.
 
 PR #1323 final exact-head review: all reported required checks on
 `eae1115ecda1bf58f5645f5da26405bf586af78c` completed successfully,
@@ -18569,3 +18571,17 @@ Compose all-profile role closure and test coverage. It adds an early
 `validate-stack` guard for optional self-host image inputs; it does not
 change custody code or the running `v1.1.245` release source. Keep it
 outside the merge queue until run `38488866040` reaches a terminal state.
+
+Installed-journey gap confirmed from the protected-main workflow source:
+`.github/workflows/selfhost-prepared-consumer.yml` stops after the
+unqualified bootstrap, signing, migrations and Organization probes and
+uploads their evidence. It never invokes
+`scripts/run_selfhost_business_journey.py` or the pinned integration test
+`tests/oss_stack/selfhost_customer_journey.py`. The separate runner
+requires a Linux Docker host, an extracted exact ZIP and source checkout,
+external OpenBao, operator secrets, a signed KMS custody record and eight
+public fixture inputs. Those real inputs are not currently provisioned.
+After publication, collect the automatic probes as partial installed
+evidence, then arrange/run the full journey and recovery on a provisioned
+acceptance host; do not promote the prepared ZIP to qualified from probes
+alone.
