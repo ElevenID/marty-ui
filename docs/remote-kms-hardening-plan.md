@@ -1356,7 +1356,7 @@ uses a three-second request bound in the Signing Keys caller, and caps
 concurrent signing. Startup fetches the public SPKI, which the shared TLS
 identity binds to the leaf certificate. It rejects Tokio single-threaded
 runtime signing rather than blocking it. The MMF no-default-feature platform
-suite passed 24/24 and strict Clippy passed after the CA-pinning review fix.
+suite passed 25/25 and strict Clippy passed after the CA-pinning review fix.
 The fixed PEM parser accepts OpenBao's trailing newline; the first live test
 exposed and corrected that parser defect.
 
@@ -1396,6 +1396,17 @@ keepalive, TLS peer authentication and authorization behavior in the keyless
 replacement. The UI's current temporary local Cargo path makes this cross-repo
 cutover testable before pinning a qualified MMF commit. Do not merge or publish
 the additive framework branch as KMS-only.
+
+Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
+request and concurrency settings and preserve the former gRPC channel's TCP and
+HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
+Rust 1.93.0, the full-workspace Clippy and test suite and the
+crypto-generation/lean-platform dependency graph guards passed before the
+final keepalive-options edit. After that edit, formatting, the
+no-default-feature platform suite (25 tests) and strict platform Clippy passed.
+The new 25th platform test checks keepalive bounds. These results cover the
+additive branch only; removal of the old PEM API, native caller migration and
+installed artifact proof are still mandatory before opening the grouped PR.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
