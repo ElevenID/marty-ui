@@ -18831,3 +18831,12 @@ test that retains exact SHA-256 verification. Its focused local test
 passed; PR CI run `38582830023` is pending. Earlier run on `76a48d1c4`
 was canceled by this push after Rust Supply Chain passed; its release
 contract result must not be treated as qualification.
+
+PR run `38582830023` had one new CI setup failure: Puppeteer's
+install-time browser download exited before crawler execution; all
+other jobs passed. Concurrent review commit `be178d164` makes `bun
+install` skip that implicit download and runs the explicit browser
+installer with three bounded attempts and a per-attempt timeout. The
+focused local workflow contract passed. This push canceled the older
+run; require the full checks on `be178d164` before re-entering the
+merge queue.
