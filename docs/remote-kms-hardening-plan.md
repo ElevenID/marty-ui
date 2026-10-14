@@ -1304,12 +1304,31 @@ identity checks. Signing Keys' own listener must not depend on a signer route
 that recursively calls that listener; use a directly reachable, separately
 authorized KMS path for transport signing. Audit algorithm/padding and wire
 signature encoding against TLS, including what each configured KMS actually
-supports. First run an isolated live OpenBao client/server handshake and
-negative cases, then migrate the shared framework and native roots in one
+supports. Isolated live OpenBao server-TLS and mTLS handshakes and their first
+negative cases now pass; next prove the production async transport
+boundary, then migrate the shared framework and native roots in one
 cohesive feature branch/PR per repository. Remove production key-file fields,
 mounts and provisioning contracts, update dev/CI fixtures, run full regression
 and installed artifact checks, and self-review security, feature behavior and
 quality before hosted CI. No local PEM fallback or server-only TLS downgrade.
+
+The first K11 implementation proof is UI commit `0635d9be3` on branch
+`feat/kms-tls-custody-20261014`, based on protected main
+`667da4e758a64793ce3bf127175cf3be7edab9c7`. The opt-in Rust acceptance
+test `tls_openbao_keyless.rs` uses an independently marked disposable OpenBao
+2.7.1 container. It creates a non-exportable, non-backupable Transit P-256 key,
+has Transit sign its CSR, and has OpenBao PKI issue a public TLS certificate;
+neither the test nor Rustls receives the private key. The test passed real
+CA- and hostname-validated Rustls server-TLS and mTLS handshakes using two
+distinct non-exportable Transit keys, exact-key/certificate binding,
+wrong-key and wrong-hostname rejection, missing-client-certificate rejection,
+changed-message signature rejection, and fail-closed KMS outage both at the
+signer and handshake. The test was run locally with Rust 1.95.0 and passed
+1/1; targeted Clippy passed with warnings denied. This proves feasibility for
+synchronous Rustls server and client signing, not production mTLS integration,
+bounded async handshake execution,
+rotation, or complete K11 acceptance. The owned disposable OpenBao container
+was stopped and removed after the local validation batch.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
