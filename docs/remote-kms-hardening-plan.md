@@ -19742,3 +19742,15 @@ formatting and locked executable check passed. This is source and
 configuration evidence, not an installed Credential Template-to-
 Revocation Profile TLS exchange. Issuance and other Revocation Profile
 callers still need transport and manifest cutover.
+
+Credential Template's own gRPC listener is now staged with the shared
+OpenBao-backed keyless TLS acceptor. Beta and production configuration
+require the public listener certificate, HTTPS OpenBao endpoint and CA,
+scoped signer token file, and positive versioned Transit key reference.
+The retired `GRPC_WORKLOAD_TLS_SERVER_KEY` private-key file setting is
+rejected. Its existing service-token authorization remains in place.
+The 13 library tests, targeted formatting, locked executable check and
+diff whitespace check passed. This is source-level evidence only: the
+Credential Template listener needs a live keyless handshake and its
+Flow/Issuance clients and deployment manifests still need cutover before
+the grouped PR can claim end-to-end TLS custody.
