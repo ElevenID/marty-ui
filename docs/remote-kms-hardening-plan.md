@@ -19501,3 +19501,28 @@ disposable HTTPS OpenBao with the **pinned merged Git dependency** (1/1,
 the merged shared transport in the local UI build. The grouped UI changes
 remain uncommitted and unpushed pending remaining key-file retirement,
 provisioned runtime, and broad review.
+
+2026-10-14 isolated running-service proof for the grouped UI branch:
+built the pinned `marty-signing-keys` Rust binary with `--locked` and ran it
+on loopback ports 18017/18018 with isolated disposable Redis 7 and two
+OpenBao 2.7.1 dev instances. The ordinary service OpenBao instance was
+HTTP-only for this local proof; a separate HTTPS OpenBao instance held the
+TLS signing key. OpenBao Transit created a non-exportable, non-backupable
+P-256 signer and generated its CSR; OpenBao PKI issued a matching public
+`localhost` listener certificate without returning a private key. The
+service received only the public certificate, HTTPS KMS CA, versioned
+key reference, and a scoped signer token file. That token could read its
+key metadata (200) but could not export the key or sign with another key
+(403/403). The actual Rust service started and its HTTPS `/health` returned
+200 with the public CA; the regular HTTP `/health` also returned 200.
+A new TLS connection using the wrong hostname failed certificate validation.
+After stopping the HTTPS KMS, a fresh HTTPS handshake failed closed in
+4.08 seconds while the ordinary health endpoint remained available.
+The service process, isolated containers, generated infrastructure TLS
+files, public certificates, and token files were disposed. An initial
+startup attempt failed because the disposable configuration omitted the
+required `ISSUER_BASE_URL`; setting it produced the successful run.
+This is stronger evidence than a signer unit test, but still a local
+source-built service proof, not a deployed-image, base/beta Compose, or
+end-to-end installed journey. The separate HTTP OpenBao path also remains
+outside HTTPS transport acceptance.
