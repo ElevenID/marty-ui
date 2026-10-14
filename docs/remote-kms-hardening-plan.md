@@ -18713,3 +18713,39 @@ wire it through production self-host/other applicable stacks, then prove
 the complete local installed probes before one grouped fix PR and a new
 release version. Real cloud KMS/device and full public business journey
 remain unprovisioned.
+
+2026-10-14 approval-free release and clean-install follow-up: #1328 is
+merged at `9c9f5d12b09e562c73974609eca16f8ebd48c9d5`, and exact-main
+full CI `38517257686` completed successfully. The live GitHub
+`stack-release` environment has only its protected-branch rule: no
+required-reviewer rule remains. The failed prepared consumer
+`38517215831` is therefore unrelated to manual deployment approval.
+
+The grouped follow-up branch `fix/selfhost-prepared-plugin-probe-20261013`
+now mounts the exact released DIDComm OpenBao plugin for the disposable
+bootstrap handoff and adds a separate `kms-bootstrap` policy/token for
+one-shot Rust database migrations. Runtime `credential-service` is kept
+without managed signing-key creation. The new token is provisioned by
+both external and self-managed OpenBao helpers, mounted only in the
+production self-host/Kubernetes migration job, and checked by the
+disposable fixture for separate service/bootstrap custody. Rust
+bootstrap now selects the dedicated Notification token instead of
+reusing a broad service token. Scoped temp-file ownership/readability
+was repaired for the different non-root migration and runtime UIDs;
+the Signing Keys probe also supplies its required issuer base URL.
+
+Focused validation to date: 121 Python probe/model tests passed with
+four platform skips, another 69 deployment/reference tests passed,
+and 120 self-host preparation/runtime-plan tests passed. Rust Signing
+Keys library tests passed 197 with nine ignored, and all 18 frozen
+migration bootstrap cases matched the new Rust binary through a
+simulation-only token-role adapter. A disposable Linux rehearsal using
+the exact `v1.1.246` images, a copied install tree, and the new policy
+ran migrations twice, verified native schemas and absence of private-key
+storage, and read six public JWKs for the seeded tenant with zero for an
+unknown tenant. Because that immutable old migration image predates the
+Rust dedicated-Notification-token change, the rehearsal needed a
+temporary *local-only* Notification key-read grant; it is diagnostic
+evidence, not final-artifact qualification. A source-built replacement
+migration image is in progress for the final-path rehearsal. The
+`v1.1.246` public tag and prior failure evidence remain immutable.
