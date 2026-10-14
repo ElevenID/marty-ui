@@ -19872,3 +19872,27 @@ handshake. Organization, Applicant, and Gateway still have plaintext Event
 Stream client paths; the deployment is not yet an end-to-end KMS-only graph.
 The Event Stream business RPCs still have their pre-existing authorization
 model and need a security review alongside the transport cutover.
+
+The remaining direct Rust Event Stream clients have now been staged for
+CA-verified HTTPS: Organization's durable outbox transport uses the shared
+MMF gRPC channel factory and keeps its connect/probe/retry behavior;
+Applicant uses the same factory with a lazy channel so its outbox startup
+behavior remains intact; Gateway uses a dedicated public Event Stream CA
+without changing its other gRPC channels. Deployed Organization, Applicant,
+and Gateway configurations require `ES_GRPC_CA_CERT` and explicit HTTPS.
+Self-host, beta, and Kubernetes supply those targets and public CA mounts;
+the self-host runtime anchor and Kubernetes ConfigMap no longer advertise a
+plaintext Event Stream target. Organization library tests (27), locked
+binary check, Applicant library tests (5), locked binary check, Gateway
+configuration tests (15), locked binary check, 140 focused beta/self-host/
+Kubernetes Python tests, 122 additional deployment Python tests, the
+extracted self-host bundle test with standalone Compose 5.4.0, YAML parse,
+and `git diff --check` passed. These validate code and deployment structure,
+not a connected Event Stream TLS handshake or all service RPCs. The complete
+production graph still needs local OpenBao-backed end-to-end exercise;
+Gateway-to-Auth and other plaintext gRPC edges remain outstanding.
+Source review also closed an environment-label bypass: Applicant and Event
+Stream now treat beta/production aliases case-insensitively and reject
+unrecognized labels, so a spelling change cannot silently select the
+development transport path. Event Stream library tests and the locked
+Applicant binary check passed after that correction.
