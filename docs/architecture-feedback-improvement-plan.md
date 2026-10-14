@@ -4146,8 +4146,22 @@ historical snapshot stays unchanged; the full-model oracle admits only those
 two reviewed Issuance additions. The installed-runtime DAG inventory includes
 the required credential and rejects its removal. Local planner tests (56, one existing skip),
 self-host mutation tests (83), and all three whole-model renders pass. Rust
-check selection is unchanged: service inputs retain full validation. Hosted
-CI must pass before merge; no speedup or live KMS qualification is claimed.
+check selection is unchanged: service inputs retain full validation. The
+reviewed [#1329](https://github.com/ElevenID/marty-ui/pull/1329) passed exact-head
+and protected merge-group CI and merged as `3f3c72048`. It is not in the
+published v1.1.246 images. No speedup or live KMS qualification is claimed.
+
+October 14 self-host handoff follow-up: [#1330](https://github.com/ElevenID/marty-ui/pull/1330)
+repairs the prepared-consumer OpenBao DIDComm plugin probe and gives production
+migrations a separate, time-bounded KMS bootstrap token. Review found that
+requiring a dedicated Notification token also affects legacy migration paths;
+the candidate now provisions a scoped Notification token for those paths,
+keeping the runtime's explicit-token requirement. The pinned KMS-only model
+stays unchanged, with the new production migration token expressed as an
+explicit expected delta before whole-model equality. Local model and mutation
+tests pass. Exact-head hosted and protected checks, replacement-image
+installed qualification, and a 32 GiB Linux clean install remain pending.
+The old v1.1.246 prepared ZIP is not a qualified external handoff artifact.
 
 ## Design references
 

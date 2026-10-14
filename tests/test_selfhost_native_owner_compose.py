@@ -25,7 +25,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "eb1a4db4feca7235b382b0584e8ed70b2e48a8abeca43d4f97475eb7182db54f"
+        == "6057f8101f9abce234b0413111c7190267c8a1b74a1569ce4a9d3f2fd52d477f"
     )
     import json
 
@@ -119,16 +119,32 @@ def test_passport_consumer_additions_are_closed(models, owner, key):
         GATE["assert_models"](before, after)
 
 
-@pytest.mark.parametrize("fault", ["token-path", "secret-source", "missing-secret"])
-def test_production_migration_notification_identity_is_closed(models, fault):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "token-path",
+        "secret-source",
+        "missing-secret",
+        "bootstrap-token-path",
+        "bootstrap-secret-source",
+        "bootstrap-secret-missing",
+    ],
+)
+def test_production_migration_kms_identities_are_closed(models, fault):
     before, after = models
     migration = after["services"]["db-migrate"]
     if fault == "token-path":
         migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = "/other"
     elif fault == "secret-source":
         migration["secrets"][-1]["source"] = "openbao_service_token"
-    else:
+    elif fault == "missing-secret":
         migration["secrets"].pop()
+    elif fault == "bootstrap-token-path":
+        migration["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/openbao_service_token"
+    elif fault == "bootstrap-secret-source":
+        migration["secrets"][-2]["source"] = "openbao_service_token"
+    else:
+        migration["secrets"].pop(-2)
     with pytest.raises((AssertionError, KeyError, IndexError)):
         GATE["assert_models"](before, after)
 

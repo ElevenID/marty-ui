@@ -223,6 +223,25 @@ def assert_signing_binding(model):
 def assert_models(approved, actual):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
+    # Keep the frozen reference intact; review this migration-only credential
+    # alongside the already approved Issuance credential delta below.
+    migration = expected["services"]["db-migrate"]
+    assert migration["environment"]["BAO_TOKEN_FILE"] == "/run/secrets/openbao_service_token"
+    assert [item["source"] for item in migration["secrets"]].count("openbao_service_token") == 1
+    migration["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/openbao_bootstrap_token"
+    for item in migration["secrets"]:
+        if item["source"] == "openbao_service_token":
+            item["source"] = "openbao_bootstrap_token"
+            item["target"] = "/run/secrets/openbao_bootstrap_token"
+    service_secret = expected["secrets"]["openbao_service_token"]
+    assert service_secret["file"].endswith("/openbao_service_token")
+    assert service_secret["name"].endswith("_openbao_service_token")
+    expected["secrets"]["openbao_bootstrap_token"] = {
+        "file": service_secret["file"].removesuffix("openbao_service_token")
+        + "openbao_bootstrap_token",
+        "name": service_secret["name"].removesuffix("openbao_service_token")
+        + "openbao_bootstrap_token",
+    }
     # Preserve the pinned historical snapshot: the current Issuance alias
     # requires the same authenticated KMS startup proof as the native role.
     issuance = expected["services"]["issuance"]
@@ -243,7 +262,7 @@ def assert_models(approved, actual):
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
             json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
-            fromfile="approved KMS-only model plus Issuance KMS credential",
+            fromfile="approved KMS-only model plus reviewed credential deltas",
             tofile="current self-host model",
         )
     )
@@ -433,7 +452,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "eb1a4db4feca7235b382b0584e8ed70b2e48a8abeca43d4f97475eb7182db54f"
+        == "6057f8101f9abce234b0413111c7190267c8a1b74a1569ce4a9d3f2fd52d477f"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])
