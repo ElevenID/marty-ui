@@ -29,6 +29,7 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
         "SELFHOST_ISSUER_DID", "SELFHOST_VERIFIER_DID",
         "SELFHOST_SECRET_ROOT", "SELFHOST_COMPOSE_MODEL_PATH",
         "SELFHOST_BAO_AUDIT_URL", "SELFHOST_BAO_AUDIT_TOKEN_FILE",
+        "SELFHOST_KMS_JWK_TOOL",
         "SELFHOST_CUSTODY_SIGNING_KEY_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH",
@@ -105,7 +106,8 @@ def validate_installed_model(model: dict, fixture: dict[str, str]) -> None:
 
 
 def validate_public_p256_jwk(public_jwk: dict) -> None:
-    if public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256":
+    if (not isinstance(public_jwk, dict) or public_jwk.get("kty") != "EC"
+            or public_jwk.get("crv") != "P-256"):
         raise ValueError("resolved public issuer key is not P-256")
     for coordinate in ("x", "y"):
         value = public_jwk.get(coordinate)
@@ -120,7 +122,7 @@ def validate_public_p256_jwk(public_jwk: dict) -> None:
             raise ValueError("resolved public issuer key is not canonical P-256")
 
 
-def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
+def validate_transit_binding(metadata: dict, public_jwk: dict, jwk_tool: Path) -> int:
     if (metadata.get("type") != "ecdsa-p256" or metadata.get("exportable") is not False
             or type(metadata.get("latest_version")) is not int
             or metadata["latest_version"] <= 0):
@@ -132,12 +134,20 @@ def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
             or not pem.startswith("-----BEGIN PUBLIC KEY-----\n")
             or not pem.rstrip().endswith("-----END PUBLIC KEY-----")):
         raise ValueError("managed transit key has no public key")
-    # The installed Rust service resolves this active managed profile through
-    # its canonical KMS adapter and rejects a profile/key mismatch. This
-    # independent operator check confirms the same deterministic provider
-    # reference is present, non-exportable and P-256 without adding a second
-    # cryptographic implementation in Python.
+    # Reuse the Rust public-key converter already used by release qualification.
+    # Python only compares canonical public coordinates; it does not parse EC.
     validate_public_p256_jwk(public_jwk)
+    try:
+        result = subprocess.run([str(jwk_tool)], input=pem, capture_output=True,
+                                text=True, timeout=10, check=False)
+        if result.returncode != 0 or len(result.stdout) > 16 * 1024:
+            raise ValueError("managed transit public key is invalid")
+        audited = json.loads(result.stdout)
+        validate_public_p256_jwk(audited)
+    except (OSError, subprocess.SubprocessError, TypeError, ValueError) as error:
+        raise ValueError("managed transit public key is invalid") from error
+    if any(audited[name] != public_jwk[name] for name in ("kty", "crv", "x", "y")):
+        raise ValueError("managed transit public key differs from resolved profile")
     return version
 
 
@@ -235,6 +245,7 @@ async def provision(fixture: dict[str, str]) -> dict:
     from tests.integration.gateway.helpers.gateway_client import GatewayClient
 
     secret_root = Path(fixture["SELFHOST_SECRET_ROOT"])
+    jwk_tool = checked_file(fixture["SELFHOST_KMS_JWK_TOOL"], "Rust public-key converter")
     admin_file = checked_file(str(secret_root / "keycloak_admin_password"),
                               "Keycloak admin password")
     audit_file = checked_file(fixture["SELFHOST_BAO_AUDIT_TOKEN_FILE"], "OpenBao audit token")
@@ -283,7 +294,7 @@ async def provision(fixture: dict[str, str]) -> dict:
                     "X-Vault-Token": audit_token})
                 response.raise_for_status()
                 version = validate_transit_binding(response.json().get("data", {}),
-                                                   resolved.get("public_jwk", {}))
+                                                   resolved.get("public_jwk", {}), jwk_tool)
                 proofs.append(profile_proof(selector, reference, version))
     return {"schema": "marty.selfhost-kms-custody/v1",
             "source_sha": fixture["SELFHOST_SOURCE_SHA"],

@@ -29,6 +29,7 @@ Additional hook inputs:
 | --- | --- |
 | `SELFHOST_BAO_AUDIT_URL` | Loopback HTTP URL for the **same** disposable OpenBao instance used by `signing-keys`; port must match the installed `BAO_ADDR` |
 | `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit`, at most one-hour TTL, and only `read` on `transit/keys/cred-issuer-*` and `transit/keys/oid4vp-verifier-*` |
+| `SELFHOST_KMS_JWK_TOOL` | Set by the installed runner to a fresh `public-kms-jwk` build from the clean exact release source; the Rust converter parses the audited OpenBao PEM and its public coordinates must equal the resolved issuer JWK |
 | `SELFHOST_CUSTODY_SIGNING_KEY_FILE` | Outside-repo, short-lived Ed25519 private PEM approved for this exact qualification release |
 
 Before issuing the audit token, the operator must inspect the actual

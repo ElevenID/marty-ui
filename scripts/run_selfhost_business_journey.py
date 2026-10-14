@@ -55,6 +55,35 @@ def command(args: list[str], *, cwd: Path | None = None,
     return result.stdout
 
 
+def build_public_kms_jwk_tool(source_checkout: Path, target_root: Path) -> Path:
+    if (target_root.is_symlink() or not target_root.is_dir()
+            or any(target_root.iterdir())):
+        raise ValueError("Rust public-key build target is not fresh")
+    if command(["git", "status", "--porcelain", "--untracked-files=all"],
+               cwd=source_checkout).strip():
+        raise ValueError("release source checkout has local changes")
+    # The qualification binary must come from this source, not ambient Cargo
+    # configuration, compiler wrappers, flags, or a shared build cache.
+    inherited = {"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR",
+                 "TEMP", "TMP", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY",
+                 "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR"}
+    build_env = {name: value for name, value in os.environ.items()
+                 if name.upper() in inherited}
+    cargo_home = target_root / "cargo-home"
+    cargo_target = target_root / "target"
+    cargo_home.mkdir()
+    build_env["CARGO_HOME"] = str(cargo_home)
+    build_env["CARGO_TARGET_DIR"] = str(cargo_target)
+    command(["cargo", "build", "--locked", "--manifest-path",
+             str(source_checkout / "rust" / "Cargo.toml"), "-p", "marty-release-evidence",
+             "--bin", "public-kms-jwk"], cwd=source_checkout / "rust",
+            env=build_env, timeout=1200)
+    tool = cargo_target / "debug" / "public-kms-jwk"
+    if tool.is_symlink() or not tool.is_file():
+        raise ValueError("source-built Rust public-key converter is absent")
+    return tool
+
+
 def pinned_integration_checkout(root: Path, revision: str) -> None:
     if (revision != PINNED_INTEGRATION_SHA or root.is_symlink()
             or not root.is_dir()):
@@ -357,7 +386,10 @@ def run(args: argparse.Namespace) -> dict:
     if runtime_plan.get("qualification") != "unqualified":
         raise ValueError("installed runtime plan unexpectedly claims qualification")
     required_secrets(args.secret_root)
-    with tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config:
+    with (tempfile.TemporaryDirectory(prefix="marty-selfhost-jwk-build-") as build_root,
+          tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config):
+        jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
+        environment["SELFHOST_KMS_JWK_TOOL"] = str(jwk_tool)
         environment["DOCKER_CONFIG"] = config
         states, custody_sha256 = installed_journey(
             compose, args.install_root, args.state_root, args.compose_model,

@@ -9,7 +9,8 @@ credentials, a real CSCA/DSC, or a customer organization.
 
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration
-test dependencies, OpenSSL, and anonymous registry access. The host must have
+test dependencies, Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and
+anonymous registry access. The host must have
 no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
@@ -117,3 +118,7 @@ review. Do not publish a qualified descriptor or attach the ZIP to a public
 release based solely on this component report. Signature/provenance checks,
 public asset closure, independent consumer replay, and release publication
 remain separate gates.
+The runner builds `public-kms-jwk` from the clean, exact release checkout into
+a fresh temporary Cargo home and target before startup. The host needs access
+to the locked Rust dependencies; ambient Cargo/compiler overrides and existing
+converter binaries are not accepted as custody evidence.

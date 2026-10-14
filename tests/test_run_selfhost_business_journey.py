@@ -16,6 +16,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     COMPLETED,
     EXPECTED_SERVICES,
     NOT_LOCAL,
+    build_public_kms_jwk_tool,
     installed_journey,
     live_services,
     parse_status,
@@ -24,6 +25,57 @@ from run_selfhost_business_journey import (  # noqa: E402
     trusted_custody_keys,
     verify_kms_custody,
 )
+
+
+def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    calls: list[list[str]] = []
+
+    def run(args: list[str], **kwargs: object) -> str:
+        calls.append(args)
+        if args[:2] == ["git", "status"]:
+            return ""
+        assert args[:3] == ["cargo", "build", "--locked"]
+        assert kwargs["env"]["CARGO_TARGET_DIR"] == str(target / "target")
+        assert kwargs["env"]["CARGO_HOME"] == str(target / "cargo-home")
+        assert "SELFHOST_TEST_PASSWORD" not in kwargs["env"]
+        assert "RUSTFLAGS" not in kwargs["env"]
+        assert "RUSTC_WRAPPER" not in kwargs["env"]
+        assert "RUSTC" not in kwargs["env"]
+        output = target / "target" / "debug"
+        output.mkdir(parents=True)
+        (output / "public-kms-jwk").write_bytes(b"synthetic executable")
+        return ""
+
+    monkeypatch.setenv("SELFHOST_TEST_PASSWORD", "private")
+    monkeypatch.setenv("RUSTFLAGS", "--cfg altered")
+    monkeypatch.setenv("RUSTC_WRAPPER", "other-compiler")
+    monkeypatch.setenv("RUSTC", "other-rustc")
+    monkeypatch.setattr("run_selfhost_business_journey.command", run)
+    assert build_public_kms_jwk_tool(source, target) == target / "target" / "debug" / "public-kms-jwk"
+    assert len(calls) == 2
+    with pytest.raises(ValueError, match="not fresh"):
+        build_public_kms_jwk_tool(source, target)
+
+
+def test_rust_public_key_converter_rejects_dirty_source_or_missing_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    monkeypatch.setattr("run_selfhost_business_journey.command", lambda *_args, **_kwargs: " M rust/Cargo.lock")
+    with pytest.raises(ValueError, match="local changes"):
+        build_public_kms_jwk_tool(source, target)
+    monkeypatch.setattr("run_selfhost_business_journey.command", lambda *_args, **_kwargs: "")
+    with pytest.raises(ValueError, match="converter is absent"):
+        build_public_kms_jwk_tool(source, target)
 
 
 def status_fixture() -> tuple[str, dict]:
