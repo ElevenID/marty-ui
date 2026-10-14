@@ -1499,6 +1499,20 @@ Notification listener handshakes in both modes, its installed artifact and
 deployment settings are still unproved. Issuance's synchronous Tonic
 `Endpoint` path is the remaining direct source-level private-key TLS route.
 
+K11 disposable HTTPS OpenBao 2.7.1 transport proof: the expanded opt-in
+`tls_openbao_keyless` test completed 1/1 against a separately marked,
+in-memory OpenBao instance. A public-CA gRPC client without any client key
+could not complete an RPC through the mTLS acceptor; the same client completed
+a Tonic health RPC through the new keyless server-only acceptor. Existing
+OpenBao remote-signing, wrong-host, denied-token, missing-token and mTLS
+checks in that test also passed. The first local test attempt incorrectly
+asserted that Tonic `connect()` itself must fail for a missing client
+certificate; it returned a channel before the request failed. The assertion
+was corrected to check the RPC, then the full opt-in test passed. The owned
+disposable container and copied public CA were removed, with absence checked.
+This proves the shared transport modes, not Notification's installed service
+or its deployment configuration.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
