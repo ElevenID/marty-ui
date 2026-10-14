@@ -20037,3 +20037,22 @@ The broader locked `cargo +1.95 test -p marty-flow --tests --quiet` run then
 completed successfully across every enabled Flow test target, including the
 44 library tests and the updated provider/startup suites. Opt-in live KMS
 tests were not selected by that ordinary test command.
+
+2026-10-14 connected Flow/Issuance transport proof: the grouped UI worktree
+extends the pinned disposable OpenBao harness with a `flow-issuance` profile.
+It provisions distinct non-exportable P-256 Transit signers, public PKI
+certificates, and scoped sign-only tokens for Flow client and Issuance server;
+the harness verifies cross-key signing is denied. The opt-in
+`flow_issuance_channel_requires_remote_key_mutual_tls` test passed against
+that live KMS: Flow's actual `FlowWorkloadChannelFactory::Keyless` completed a
+gRPC health RPC through the MMF keyless client-verifying acceptor used by the
+Issuance listener, while a public-CA-only client without a certificate could
+not complete an RPC. Command: `python ../scripts/with_disposable_event_stream_kms.py
+--image quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf
+--profile flow-issuance -- cargo +1.95 test -p marty-flow --lib
+flow_issuance_channel_requires_remote_key_mutual_tls --locked -- --ignored
+--nocapture` from `rust/`. The existing Auth/Gateway profile also passed
+after the harness refactor. Python bytecode compilation, direct Rust format,
+and `git diff --check` passed. This proves the connected transport components,
+not an Issuance business RPC, both production binaries running together, or
+an installed release. Keep those acceptance gates open.
