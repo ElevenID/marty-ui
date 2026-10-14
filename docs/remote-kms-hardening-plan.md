@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-13 (America/Denver).
+Status: active. Updated: 2026-10-14 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,29 +8,21 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current gate (2026-10-13): Core #355, Credentials #313, the grouped UI feature
-#1192 and subsequent UI hardening PRs through #1321 are merged. The corrected
-protected UI main commit is `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`.
-Replacement exact-main full CI `38454924907` passed on attempt 2. Fresh
-no-write `v1.1.245` claim `38467010823` passed and its artifact binds the tag
-to protected main `4d1dfb87cfb1df90bfabee8320bae8cd48e1733c`. New stack
-transaction `38467181336` passed all four image-level release gates, then was
-cancelled before publication after its opt-in self-host image-lock preparation
-failed on short Docker Hub names. A separate replacement release run
-`38470482002` qualified all four gates and was cancelled before publication; its
-opt-in self-host preparation failed because the supplied nested JSON lost its
-quotes at dispatch. Preserve both qualified candidates and correct the input
-transport before another self-host attempt. Third run `38473299581` has now
-qualified all four release gates and passed opt-in self-host ZIP/lock
-preparation and its preflight. It is waiting for protected environment
-approval; the prepared bundle remains unqualified until its downstream
-installed consumer runs after a successful publication. The prior failed
-claims and release transactions are immutable evidence, not promotion
-candidates. After signed-image qualification, prove clean installed
-KMS-only database/runtime writes, DIDComm and integration-secret recovery,
-feature journeys, cutover and rollback. Real AWS/Azure/GCP and physical-device
+Current gate (2026-10-14): Core #355, Credentials #313, grouped UI #1192,
+approval-free publisher #1328, clean-install follow-up #1330 and stack-lock
+successor #1331 are merged. UI `main` is
+`667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI
+`38605156101` is still running on that commit. `v1.1.246` is immutable but its
+installed prepared-consumer check failed. The first no-write `v1.1.247` claim
+refused the old lock and created no tag. A fresh claim could now be run from the
+corrected lock, but K11 exposed production file-backed TLS/mTLS identity keys.
+Do not publish or describe this candidate as fully KMS-only until K11 is fixed
+and qualified. The `stack-release` environment no longer requires manual
+reviewer approval. After signed-image qualification, prove clean installed
+database/runtime writes, DIDComm and integration-secret recovery, feature
+journeys, cutover and rollback. Real AWS/Azure/GCP and physical-device
 acceptance remain open because access is not provisioned. Do not mark K6,
-K8/K9 or the overall goal complete from local OpenBao tests.
+K8/K9/K11 or the overall goal complete from local OpenBao tests.
 
 ## Objective and working agreement
 
@@ -80,6 +72,14 @@ handling across services. Do not weaken security gates to preserve old APIs.
 TLS identities, ephemeral protocol/session keys, and intentional wallet/device
 keys are separate capabilities. Inventory and isolate them explicitly; removing
 issuer private-key support must not break these supported product features.
+The 2026-10-14 review clarified that service-owned TLS and mTLS identity private
+keys are also in the KMS-only custody scope. Mounted PEM/key files are an
+unfinished gap, even when supplied as Docker or Kubernetes secrets. Keep TLS
+and mTLS behavior, but move the long-lived private-key operation behind a
+non-exportable remote signer; do not retain file-backed identity keys as a
+production fallback. Ephemeral session secrets and wallet/device-owned keys
+remain separately scoped. Do not publish the current candidate as fully
+KMS-only while the TLS identity-key gap remains.
 Ordinary application secrets may need to be read by their consumer; distinguish
 that requirement from non-exportable custody of their encryption master key.
 
@@ -1254,6 +1254,7 @@ assembled Core matrix is still due.
 | K8 | Add production-root feature, forbidden-API, binding and artifact checks; exercise real remote operations and negative paths; complete all three self-review passes. | In progress; UI #1192 pushed head `72de77de6` passed all 22 exact-head jobs, CodeQL, policy and organization checks. Two automated wallet-pairing findings were fixed and resolved. Local plugin, Raft restore/failover, assembled schema and native service probes passed. The #1294 mainline reconciliation retains public-only CSCA fixtures, adds a public-certificate acceptance test and live storage CI cases; focused Rust and workflow tests passed, while full local validation and new hosted checks remain. Published artifacts, real cloud and physical device acceptance remain. |
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192, approval-free publisher #1328, clean-install follow-up #1330, and successor lock #1331 are merged. All five #1331 merge-group workflows passed at `667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI `38605156101` is running on that SHA. The first no-write `v1.1.247` claim safely refused the old lock and wrote no tag. `v1.1.246` remains immutable but its installed prepared-consumer check failed. The `stack-release` environment keeps protected-branch policy without manual approval. Signed successor publication, installed probes and full journey, real providers/device, and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests. Add no migration scripts; prove the fresh database schema and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. A source-built Rust verify-only probe also passed reachable, unreachable and unchanged-catalog cases. Exact signed-image execution, final representative writes and supported cutover remain. |
+| K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | Open; 2026-10-14 source audit found mounted client-key secrets in Auth, Applicant, Compliance Profile, Deployment Profile, Flow and Verification, mounted server-key secrets in Presentation Policy, Flow and Signing Keys, and a direct `Identity::from_pem` client path in Issuance. Auth, Flow and other Rust gRPC providers call `GrpcTlsMaterial::from_pem_files`; Signing Keys calls `RustlsConfig::from_pem_file`. Complete the inventory across remaining stack components and implement one shared Rust/provider boundary where possible. Hold KMS-only publication until resolved. |
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
@@ -1323,6 +1324,10 @@ capability where feasible and record any unresolved acceptance limitation.
   secret-bearing key columns; no legacy ORM path recreates them. No migration
   script is required or shipped for this retirement. Public-only device and
   remote-reference records remain only after column/data-flow review.
+- Service-owned TLS/mTLS private keys stay non-exportable in remote KMS custody;
+  production clients and listeners retain certificate authentication without
+  reading mounted key files or falling back to local signing. Verify renewal,
+  outage and key/certificate mismatch paths in the installed deployment.
 - BYOK interfaces accept public certificates and authorized remote references,
   reject private material server-side, and preserve supported onboarding.
 - TLS, ephemeral session and intentional wallet/device behavior remain supported
