@@ -19626,3 +19626,16 @@ production configuration: `GRPC_INSECURE_ALLOWED` and plaintext graph
 entries remain and must be removed with the coordinated listener/client
 deployment cutover. No installed Gateway-to-Organization TLS RPC is
 claimed from this config check.
+
+Flow's Organization dependency is now staged on the same keyless-custody
+boundary. Its deployed configuration already requires the remote
+workload identity; with that identity present, an Organization HTTP
+target now fails configuration. The shared Flow channel abstraction
+opens Organization over server-only TLS using the public workload CA
+and preserves the existing service-token RPC authorization. No Flow
+private-key file or unnecessary Organization client certificate is
+introduced. The focused provider suite (8 tests), startup suite
+(10 tests), targeted formatting and locked Flow executable check passed.
+The tests cover configuration and transport selection; a live Flow-to-
+Organization TLS RPC and all other Organization consumers remain to be
+qualified before the grouped PR can ship.
