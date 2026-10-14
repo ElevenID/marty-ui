@@ -20188,3 +20188,17 @@ The four focused Python deployment modules passed 156 tests, and the six
 self-host bundle executable tests passed. A connected Organization membership
 RPC from the full Presentation Policy executable and installed release remain
 open; source and deployment checks alone do not prove those behaviors.
+
+2026-10-14 Verification's Organization, Credential Template and Presentation
+Policy K11 targets staged as explicit HTTPS in self-host and beta Compose;
+Kubernetes already supplied HTTPS for all three. Deployed Rust configuration
+now rejects bare/HTTP targets for each required peer and for any configured
+inspection target. The keyless channel factory no longer silently rewrites
+`http://` to HTTPS, so a plaintext selector cannot appear compliant while
+changing transport behind the operator's back. The existing remote OpenBao
+client identity and public workload CA are shared across the three channels;
+the inbound Verification gRPC listener remains disabled in deployment. The
+locked `marty-verification-service --tests` suite passed (its isolated
+PostgreSQL contract remains opt-in), 157 focused Python deployment tests
+passed, and all six self-host bundle executable tests passed. Connected
+Verification business RPCs and exact installed-release acceptance remain open.
