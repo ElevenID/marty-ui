@@ -20245,3 +20245,21 @@ selectors. The three focused Python modules passed 178 tests and
 against the previously frozen model because the grouped TLS custody changes
 have not yet been reconciled into its independent expected model; that is a
 release qualification item, not evidence of runtime acceptance.
+
+2026-10-14 self-host model reconciliation staged in the grouped UI worktree:
+reviewed the structural delta against the frozen historical snapshot across
+all 21 changed service definitions. The changes remove workload TLS
+private-key mounts and use public certificates, CA certificates, scoped
+OpenBao tokens, KMS signer references, and explicit HTTPS peers; the old
+snapshot remains intact as historical evidence. A new
+`selfhost-kms-only-model.keyless-tls.snapshot.yml` freezes the current
+complete model with a pinned normalized SHA-256. The preservation gate now
+compares against that model directly and independently rejects a workload TLS
+private-key environment setting, mount, or declared secret even if both
+compared models contain it. A mutation test proves that negative policy.
+The source inventory also classifies the retired Issuance TLS key-file
+selector. The four focused deployment modules passed 256 tests, the six
+locked self-host executable-bundle tests passed, and `git diff --check`
+passed. The Compose preservation gate passed default, empty and custom
+interpolation plus 55 required-input rejection checks. These are source and
+rendered configuration checks, not installed-image or live KMS acceptance.
