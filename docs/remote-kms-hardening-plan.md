@@ -20397,3 +20397,16 @@ temporary token were removed after the probe. The binary is not wired into
 the passport Compose fixture yet; that still requires coordinated remote
 identity provisioning, HTTPS OpenBao bootstrap, replacement of nginx and
 the remaining workload private-key fixtures before protected acceptance.
+
+2026-10-14 disposable OpenBao HTTPS launcher, staged in the grouped UI
+worktree: `passport_supported_openbao_start.sh` now has an explicit
+`PASSPORT_BAO_TLS_MODE=required` path. In that mode OpenBao's dev TLS key
+remains in `/tmp/bao-tls` (a required tmpfs), and only a validated public CA
+certificate is copied to a separate public-CA mount. A real disposable
+Docker run of the pinned OpenBao image completed an HTTPS health request
+using that CA and found no private-key material in the exported file. The
+new local probe destroys its container; shell syntax and Python compilation
+passed. The existing database-only mode and 17 migration-qualifier tests
+still pass. The passport Compose model and its protected bootstrap do not
+yet select the required HTTPS mode, so this is launcher feasibility evidence,
+not an end-to-end protected passport acceptance claim.
