@@ -1304,10 +1304,10 @@ identity checks. Signing Keys' own listener must not depend on a signer route
 that recursively calls that listener; use a directly reachable, separately
 authorized KMS path for transport signing. Audit algorithm/padding and wire
 signature encoding against TLS, including what each configured KMS actually
-supports. Isolated live OpenBao server-TLS and mTLS handshakes and their first
-negative cases now pass; next prove the production async transport
-boundary, then migrate the shared framework and native roots in one
-cohesive feature branch/PR per repository. Remove production key-file fields,
+supports. Isolated live OpenBao server-TLS, mTLS and gRPC handshakes and their
+first negative cases now pass; next complete the production KMS signer and
+migrate the native roots in one cohesive feature branch/PR per repository.
+Remove production key-file fields,
 mounts and provisioning contracts, update dev/CI fixtures, run full regression
 and installed artifact checks, and self-review security, feature behavior and
 quality before hosted CI. No local PEM fallback or server-only TLS downgrade.
@@ -1326,9 +1326,26 @@ changed-message signature rejection, and fail-closed KMS outage both at the
 signer and handshake. The test was run locally with Rust 1.95.0 and passed
 1/1; targeted Clippy passed with warnings denied. This proves feasibility for
 synchronous Rustls server and client signing, not production mTLS integration,
-bounded async handshake execution,
 rotation, or complete K11 acceptance. The owned disposable OpenBao container
 was stopped and removed after the local validation batch.
+
+The shared-framework implementation is local MMF commit `f522b1aad` on
+`feat/keyless-grpc-tls-20261014`. `mmf-platform` now binds a public certificate
+chain to an opaque Rustls signer by SPKI, builds CA-validated client and
+client-certificate-required server TLS with HTTP/2 ALPN, routes Tonic clients
+through a custom keyless connector with an HTTPS gRPC origin, and bounds active
+server handshake concurrency with a semaphore. No private-key PEM is accepted
+by this new API. Its no-default-feature platform suite passed 21/21 and Clippy
+passed with warnings denied. The UI acceptance test was extended locally
+against this MMF worktree through a temporary local Cargo path: an actual
+Tonic health request passed over OpenBao-backed mTLS and a wrong-hostname
+connection failed. The opt-in test passed 1/1 and its targeted Clippy passed.
+This local cross-repository proof is not a published dependency or service
+cutover. The UI test revision and temporary path are uncommitted until MMF is
+qualified/pinned; remove the local path before a UI PR. The second disposable
+OpenBao container was stopped and removed. The synchronous signer still needs
+a bounded production KMS adapter, scoped auth and certificate renewal, and all
+native/Compose/Kubernetes callers still read their old mounted key files.
 
 `6d3e1a7f2` [CodeQL Rust](https://github.com/ElevenID/marty-ui/actions/runs/38058292471)
 completed successfully. Its [exact-head UI CI run](https://github.com/ElevenID/marty-ui/actions/runs/38058292517)
