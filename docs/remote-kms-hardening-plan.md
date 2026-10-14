@@ -19435,3 +19435,23 @@ passport Compose overlays, historical snapshots, and coordinated-restore
 test helpers still name PEM key files; retire or justify them without
 reintroducing product private-key custody. Local runtime provisioning and
 real TLS handshakes remain required before pushing the grouped UI PR.
+
+2026-10-14 live keyless TLS acceptance on current grouped UI/MMF worktrees:
+started a separate disposable OpenBao 2.7.1 `server -dev -dev-tls` instance
+on `127.0.0.1:18443`, verified its HTTPS CA and disposable marker, mounted
+Transit, then ran `cargo +1.95 test -p marty-service-acceptance --test
+tls_openbao_keyless -- --ignored` with the guarded disposable nonce. The
+one opt-in test passed in 4.26 seconds after compilation. It creates a
+non-exportable P-256 Transit key, checks remote signing and public-key
+verification, issues a matching public certificate without returning a
+private key, exercises Rustls TLS/mTLS and the production MMF
+`OpenBaoTlsSigner`, and checks fail-closed behavior when signing is
+unavailable. OpenBao's own dev HTTPS server uses a temporary infrastructure
+TLS key file; the application test does not mount or load that private key.
+This proves the local primitive and handshake path, not provisioned
+production identities or an installed-image journey. MMF PR #127 remains
+open with all five required head checks green and `mergeStateStatus=BLOCKED`;
+the grouped UI worktree still uses a temporary local MMF path dependency.
+Do not push or claim the UI cutover until MMF is merged and the dependency
+is pinned, remaining app/disposable key-file paths are retired, and the
+local provisioned runtime passes.
