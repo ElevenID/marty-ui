@@ -123,8 +123,10 @@ provider_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" ba
 callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_create_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities auth/token/create)
 service_create_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities auth/token/create)
-notification_encrypt_caps=$(BAO_TOKEN="$notification_token" VAULT_TOKEN="$notification_token" bao token capabilities transit/encrypt/notification-webhook-envelope-marty-aes256)
-notification_sign_caps=$(BAO_TOKEN="$notification_token" VAULT_TOKEN="$notification_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
+# A no-default-policy token cannot call sys/capabilities-self. Inspect its
+# effective ACL with the bootstrap root token instead.
+notification_encrypt_caps=$(bao token capabilities "$notification_token" transit/encrypt/notification-webhook-envelope-marty-aes256)
+notification_sign_caps=$(bao token capabilities "$notification_token" transit/sign/cred-issuer-tenant-scope-probe)
 bootstrap_stage=capability-assertions
 case "$service_caps" in
     *create*update* | *update*create*) ;;
