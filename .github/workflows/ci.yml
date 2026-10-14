@@ -757,9 +757,9 @@ jobs:
           iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
-          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
-          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
-          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$iso18013_uri" --output "$iso18013_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
@@ -2875,9 +2875,9 @@ jobs:
           iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
-          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
-          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
-          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error --retry 5 --retry-delay 2 --retry-max-time 120 "$iso18013_uri" --output "$iso18013_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
