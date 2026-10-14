@@ -19687,3 +19687,16 @@ mistake a wrong service or unimplemented method for a healthy
 Organization API. All three affected library suites passed again
 (12 + 12 + 10 tests). The installed-image and connected runtime graph
 still need qualification.
+
+Issuance's shared gRPC client helper no longer upgrades an HTTP target
+to HTTPS behind deployment configuration when a public gRPC CA is set.
+Both CA-verified server TLS and KMS-backed client identity now require
+an explicit HTTPS target, so the Organization, Credential Template and
+Revocation Profile dependency probes will expose a mismatched manifest
+before an owner cutover. The helper already checks an authenticated
+missing-resource RPC and accepts only success or `NotFound`; other
+statuses fail. Its focused unit test passed, targeted formatting and a
+locked Issuance executable check passed. This does not yet require the
+CA in every deployed configuration or make the other two dependency
+servers TLS-capable. The deployed `GRPC_INSECURE_ALLOWED` path and
+plaintext targets must be removed with the coordinated graph cutover.
