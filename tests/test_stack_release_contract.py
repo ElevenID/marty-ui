@@ -12,6 +12,7 @@ import yaml
 import pytest
 
 from scripts import stack_tag_gate
+from scripts.selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from scripts.kms_core_release import (
     CORE_RELEASE_URI,
     CORE_REVISION,
@@ -675,6 +676,7 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
     )
     assert integration["version"] == "1.2.87"
     assert integration["commit"] == "0b9aec1994378aba4ef4715f858de813b1a329ea"
+    assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
         "sha256:b592db99c34ef11bee8bcba36cdd514d427d1f8f59a7a6aec8cc0150e53e44ee"
     )
