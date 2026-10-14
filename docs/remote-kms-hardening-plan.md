@@ -20410,3 +20410,25 @@ passed. The existing database-only mode and 17 migration-qualifier tests
 still pass. The passport Compose model and its protected bootstrap do not
 yet select the required HTTPS mode, so this is launcher feasibility evidence,
 not an end-to-end protected passport acceptance claim.
+
+2026-10-14 remote passport TLS provisioning, staged in the grouped UI
+worktree: added a Rust one-shot `marty-passport-tls-bootstrap` binary to the
+same public services image build. Against a CA-verified HTTPS OpenBao origin,
+it creates a non-exportable/non-backupable P-256 Transit key per current
+passport TLS role (edge, Signing Keys server, Flow client and server,
+Presentation Policy server), issues public PKI certificates from Transit
+CSRs, writes only public certificates and distinct scoped signer tokens, and
+requires a foreign-key sign attempt to be denied. It bounds API responses,
+rejects non-origin or non-HTTPS OpenBao URLs, and requires an empty private
+output directory. A connected local OpenBao probe ran the bootstrap and used
+its edge certificate/token/key reference in the Rust edge: the remote-signed
+HTTPS handshake and synthetic callback checks passed. Separately, the
+isolated Compose-network probe proved OpenBao dev TLS validates for
+`https://openbao:8200` only when the container hostname is explicitly
+`openbao`; the default generated hostname failed certificate verification.
+The HTTPS launcher and public-CA-only export were reverified over that
+peer-to-peer name. Local Rust, Python, packaging and migration focused tests
+passed (1 Rust edge test; 28 combined Python tests). This provisions five
+current identities, not yet the whole protected Compose graph, and no new
+services image was built after adding the bootstrap binary. Wiring,
+additional workload identities and installed-image acceptance remain open.
