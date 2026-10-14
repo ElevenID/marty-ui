@@ -19754,3 +19754,18 @@ diff whitespace check passed. This is source-level evidence only: the
 Credential Template listener needs a live keyless handshake and its
 Flow/Issuance clients and deployment manifests still need cutover before
 the grouped PR can claim end-to-end TLS custody.
+
+Flow's Credential Template client now selects server-only TLS with the
+same public workload CA already used for Organization and Presentation
+Policy; deployed configuration rejects an implicit HTTP target even if
+the transitional insecure gRPC switch remains set. Issuance's three
+Credential Template consumers (startup dependency probe, initiation
+control plane, and application-template catalog) now use one named
+channel guard requiring explicit HTTPS and a public CA in beta and
+production, then delegate to the existing shared gRPC channel builder.
+The Flow startup/provider suites passed (19 tests), the Issuance
+channel/catalog/initiation suites passed (11 tests), and both packages'
+locked binary checks and whitespace checks passed. These are source
+and configuration checks, not a connected TLS acceptance. The installed
+Compose/Kubernetes targets and Credential Template signer provisioning
+still need cutover before deployment.
