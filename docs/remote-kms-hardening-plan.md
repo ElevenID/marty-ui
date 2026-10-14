@@ -19271,3 +19271,27 @@ focused platform tests, formatting, and strict Clippy passed. The previous
 `4220406` exact-head CI passed, but that result is now superseded by the
 `579983f` push. The obsolete `a47e554` CI run was canceled to avoid duplicate
 cost; preserve its status as historical, not qualification.
+
+2026-10-14 Kubernetes Signing Keys TLS cutover and current merge gate:
+The grouped UI worktree now stages a keyless Signing Keys Integration Secret
+listener for Kubernetes as well as self-host. Kubernetes mounts only the
+public listener certificate and a separate OpenBao HTTPS CA plus scoped
+signer token; it supplies versioned KMS origin/key settings via ConfigMap.
+`deploy-kubernetes.sh` no longer asks for or creates Signing Keys' `tls.key`
+secret. The catalog and production example require the CA and token, and
+its synthetic installer contract asserts the Signing Keys certificate secret
+has no `tls.key` and the KMS secret has CA/token. Focused Python deployment
+suites passed 49/49, deployment catalog frozen CLI passed 8/8, and shell
+syntax/diff checks passed. This is configuration-level evidence only; no
+Kubernetes runtime or real signer provisioning has been qualified yet.
+Other workload key-file mounts remain in both deployment modes. Applicant's
+actual Event Stream channel remains plaintext and needs an authenticated
+transport. Local UI MMF dependency is still a path and must not be committed.
+
+MMF PR #127 exact head `579983fb6a5263656f9b5f5542a8ad9dde239ab4`
+passed all five required hosted checks plus local focused tests. The merge
+queue is required on `main`; `gh pr merge --auto --squash` enabled auto-merge
+and a subsequent normal merge request returned successfully, but GitHub still
+reports PR OPEN / `mergeStateStatus=BLOCKED` with no review decision. Do not
+infer it landed. Recheck queue/review state, resolve the remaining protection
+gate through the normal path, then pin the actual merged revision in UI.
