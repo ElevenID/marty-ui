@@ -169,7 +169,7 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
       - name: Stage the authenticated transaction for this run
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: release-transaction.json
@@ -342,7 +342,7 @@ jobs:
           gh attestation verify integration-source.tar.gz \
             --repo "$repository" --source-digest "$commit" \
             --source-ref "$source_ref" --deny-self-hosted-runners
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: integration-source.tar.gz
@@ -643,7 +643,7 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-resolved-${{ github.run_id }}
           path: transaction
@@ -663,7 +663,7 @@ jobs:
           --digest "openbao_didcomm=$OPENBAO_DIDCOMM_DIGEST"
           --build-run-id "$GITHUB_RUN_ID"
           --output release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: release-transaction.json
@@ -686,7 +686,7 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
@@ -704,7 +704,7 @@ jobs:
           --destination integration-tests
           --expected-root "marty-integration-tests-$INTEGRATION_VERSION"
           --expected-sha256 "$INTEGRATION_DIGEST"
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"
           registry-url: https://registry.npmjs.org
@@ -871,7 +871,7 @@ jobs:
               images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
                       openbao_didcomm:$openbao_didcomm_digest}}' \
             > work/release-evidence/public-stack.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: integration-tests/work/release-evidence/public-stack.json
@@ -890,14 +890,14 @@ jobs:
         with:
           path: marty-ui
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.95.0
       - name: Build the Rust public-key fixture converter
         working-directory: marty-ui/rust
         shell: bash
         run: cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-integration-source-${{ github.run_id }}
           path: harness-input
@@ -984,7 +984,7 @@ jobs:
             --bin marty-test-signer-agent
       - name: Prepare bounded verifier evidence workspace
         run: mkdir -p integration-tests/work
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json@1.6
@@ -1042,7 +1042,7 @@ jobs:
             and .release_clearance == "eligible"
             and (.blockers | length) == 0
           ' work/evidence/verifier-differential.json >/dev/null
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: |
@@ -1106,7 +1106,7 @@ jobs:
             .verify_only_database == "reachable-unreachable-malformed-read-only" and
             .profile == "selfhost-production" and .runs == "2"
           ' native-schema.json >/dev/null
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: native-schema.json
@@ -1156,7 +1156,7 @@ jobs:
             '{schema:"marty.stack-didcomm-plugin-qualification/v1",image:$image,
               source_sha:$source,scoped_token:"passed",raft_failover:"passed",
               raft_snapshot_recovery:"passed"}' > didcomm-plugin.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: didcomm-plugin.json
@@ -1175,23 +1175,23 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-digests-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-public-gate-${{ github.run_id }}
           path: gates/public
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}
           path: gates/verifier
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-native-schema-gate-${{ github.run_id }}
           path: gates/native
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-didcomm-plugin-gate-${{ github.run_id }}
           path: gates/didcomm
@@ -1214,7 +1214,7 @@ jobs:
               --gate "didcomm_plugin=$GITHUB_RUN_ID:$didcomm_digest" \
               --output release-transaction.json
           fi
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: release-transaction.json
@@ -1369,7 +1369,7 @@ jobs:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -1459,7 +1459,7 @@ jobs:
           while IFS= read -r image; do
             docker pull "$image" >/dev/null
           done
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.95.0
       - name: Package and record the unqualified exact-lock ZIP
@@ -1498,7 +1498,7 @@ jobs:
           jq -e '.services | type == "object" and length > 0' \
             "$RUNNER_TEMP/selfhost-extracted-compose.json" >/dev/null
           cp "$RUNNER_TEMP/selfhost-prepared.zip" prepared-selfhost-bundle.zip
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: |
@@ -1526,11 +1526,11 @@ jobs:
           python-version: "3.12"
       - name: Install the exact offline source parsers
         run: python -m pip install PyYAML==6.0.3 jsonschema==4.25.1
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: selfhost-lock-preparation-unqualified-${{ github.run_id }}
           path: prepared
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
@@ -1630,7 +1630,7 @@ jobs:
           test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
           git merge-base --is-ancestor "$SOURCE_SHA" refs/remotes/origin/main
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+      - uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f
         with:
           toolchain: 1.95.0
           targets: ${{ matrix.target }}
@@ -1662,7 +1662,7 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: marty-deploy-linux-${{ matrix.arch }}
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: operator-catalog-${{ matrix.arch }}-${{ github.run_id }}
           path: marty-deploy-linux-${{ matrix.arch }}
@@ -1691,15 +1691,15 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: stack-release-qualified-${{ github.run_id }}
           path: transaction
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-amd64-${{ github.run_id }}
           path: .
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: operator-catalog-arm64-${{ github.run_id }}
           path: .
@@ -1756,7 +1756,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role ui --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-ui-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -1786,7 +1786,7 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role services --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-services-${{ github.run_id }}
           path: transaction/release-transaction.json
@@ -1840,28 +1840,28 @@ jobs:
           python scripts/release_transaction.py record-promotion \
             --input transaction/release-transaction.json --role openbao_didcomm --digest "$DIGEST" \
             --output transaction/release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-promotion-complete-${{ github.run_id }}
           path: transaction/release-transaction.json
           if-no-files-found: error
           retention-days: 90
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.IMAGE }}@${{ needs.build-ui.outputs.digest }}
           format: cyclonedx-json
           output-file: marty-ui-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.SERVICES_IMAGE }}@${{ needs.build-services.outputs.services_digest }}
           format: cyclonedx-json
           output-file: marty-ui-services-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.MIGRATIONS_IMAGE }}@${{ needs.build-services.outputs.migrations_digest }}
           format: cyclonedx-json
           output-file: marty-ui-migrations-sbom.cdx.json
-      - uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26
+      - uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c
         with:
           image: ${{ env.OPENBAO_DIDCOMM_IMAGE }}@${{ needs.build-openbao-didcomm.outputs.digest }}
           format: cyclonedx-json
@@ -2056,7 +2056,7 @@ jobs:
             --manifest-sha256 "$manifest_digest" \
             --publication-run-id "$GITHUB_RUN_ID" \
             --output published-release-transaction.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: stack-release-published-${{ github.run_id }}
           path: published-release-transaction.json
