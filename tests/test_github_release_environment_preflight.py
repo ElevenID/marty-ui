@@ -65,6 +65,37 @@ def test_environment_accepts_declared_solo_maintainer_review() -> None:
     )
 
 
+def test_environment_accepts_protected_branch_without_required_review() -> None:
+    unattended_requirement = requirement()
+    unattended_requirement["require_reviewers"] = False
+    unattended_requirement["prevent_self_review"] = False
+    unattended_environment = protected_environment()
+    unattended_environment["protection_rules"] = [
+        {"type": "branch_policy"}
+    ]
+
+    assert validate_environment(
+        "stack-release", unattended_requirement, unattended_environment,
+        {"SECRET_A"}, {"VARIABLE_A"},
+    ) == []
+
+
+def test_unattended_environment_rejects_required_reviewer_rule() -> None:
+    unattended_requirement = requirement()
+    unattended_requirement["require_reviewers"] = False
+    unattended_requirement["prevent_self_review"] = False
+    for reviewers in (
+        [{"type": "User", "reviewer": {"id": 7076785}}],
+        [],
+    ):
+        unattended_environment = protected_environment()
+        unattended_environment["protection_rules"][0]["reviewers"] = reviewers
+        assert validate_environment(
+            "stack-release", unattended_requirement, unattended_environment,
+            {"SECRET_A"}, {"VARIABLE_A"},
+        ) == ["stack-release: required reviewer rule must be absent"]
+
+
 def test_environment_reports_every_missing_protection_and_input() -> None:
     errors = validate_environment("beta", requirement(), {}, set(), set())
 

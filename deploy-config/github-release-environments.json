@@ -11,7 +11,7 @@
     "stack-release": {
       "prevent_admin_bypass": true,
       "prevent_self_review": false,
-      "require_reviewers": true,
+      "require_reviewers": false,
       "require_branch_policy": true,
       "required_secrets": [],
       "required_variables": []

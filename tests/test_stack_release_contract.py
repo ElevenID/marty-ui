@@ -996,30 +996,19 @@ def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> No
     assert "marty-ui-openbao-didcomm-sbom.cdx.json" in workflow
 
 
-def test_release_approval_notice_cannot_replace_the_protected_gate() -> None:
+def test_release_publication_needs_qualified_artifacts_without_manual_review() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
-    notice = jobs["notify-release-approval"]
     publication = jobs["publish-manifest"]
-    script = notice["steps"][0]["run"]
+    requirement = json.loads(_text("deploy-config/github-release-environments.json"))[
+        "environments"
+    ]["stack-release"]
 
-    assert notice["needs"] == publication["needs"]
-    assert "notify-release-approval" not in publication["needs"]
-    assert notice["if"] == "github.ref == 'refs/heads/main'"
-    assert notice["continue-on-error"] is True
-    assert notice["permissions"] == {"actions": "read", "issues": "write"}
-    assert "environment" not in notice
+    assert "notify-release-approval" not in jobs
     assert publication["environment"] == "stack-release"
-    assert "pending_deployments" in script
-    assert '.environment.name == "stack-release"' in script
-    assert '.reviewers[]?' in script
-    assert '.type == "User"' in script
-    assert '.type == "Team"' in script
-    assert '"@" + $owner + "/" + .reviewer.slug' in script
-    assert "stack-release-approval:$GITHUB_RUN_ID:$GITHUB_RUN_ATTEMPT" in script
-    assert '.user.login == "github-actions[bot]"' in script
-    assert "publish_status" in script
-    assert 'gh issue comment "$issue" --repo "$GITHUB_REPOSITORY"' in script
-    assert "gh api --method POST" not in script
+    assert "qualify-release" in publication["needs"]
+    assert requirement["require_reviewers"] is False
+    assert requirement["require_branch_policy"] is True
+    assert requirement["prevent_admin_bypass"] is True
 
 
 def test_public_builds_do_not_checkout_sibling_sources() -> None:
