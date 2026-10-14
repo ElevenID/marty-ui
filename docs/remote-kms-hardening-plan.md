@@ -19223,3 +19223,17 @@ at that exact head; CI, license, policy, and organization-quality checks are
 queued. Keep the marty-ui workspace dependency local until this PR is reviewed
 and landed, then pin the merged immutable MMF revision and run the grouped UI
 qualification before its own PR.
+
+Self-host Signing Keys TLS deployment cutover is also staged locally in the
+grouped UI worktree: its Compose service now supplies a public certificate,
+dedicated OpenBao TLS CA and scoped signer token, explicit HTTPS signer origin,
+and versioned signer reference; the PEM private-key mount and required secret
+catalog entry are removed. The deployment catalog and frozen CLI contract were
+updated, and the focused deployment contract passed 5/5. This is not yet a
+runnable installed claim: the default standalone OpenBao in the current
+self-host scaffold exposes HTTP only, and the matching non-exportable P-256 key,
+scoped sign/metadata token, and public certificate still need a supported
+provisioning path. Keep the explicit HTTPS signer origin separate from the
+existing HTTP `BAO_ADDR` until that infrastructure path is implemented. The
+other service TLS key-file mounts and Kubernetes Signing Keys manifest remain
+unconverted.
