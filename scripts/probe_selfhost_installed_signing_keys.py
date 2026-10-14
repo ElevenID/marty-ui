@@ -111,6 +111,7 @@ def validate_model(model: dict, images: dict[str, str], image: str,
             "BAO_ADDR": "http://openbao:8200",
             "BAO_TOKEN_FILE": "/run/secrets/signing_keys_openbao_token",
             "PUBLIC_DOMAIN": "migration.invalid",
+            "ISSUER_BASE_URL": "https://migration.invalid",
         },
         "secrets": [
             {"source": "issuance_api_key", "target": "/run/secrets/issuance_api_key"},
@@ -162,11 +163,14 @@ def run_signing_runtime(
     values = [(secret_dir / name).read_text(encoding="ascii")
               for name in ("bao_service_token", "signing_keys_openbao_token",
                            "sign_grant_verify_token")]
+    if os.name == "posix":
+        for name in ("signing_keys_openbao_token", "sign_grant_verify_token"):
+            (secret_dir / name).chmod(0o444)
     for name in ("issuance_api_key", "signing_service_key", "signing_issuer_key"):
         path = secret_dir / name
         path.write_text(secrets.token_hex(32), encoding="ascii")
         if os.name == "posix":
-            path.chmod(0o600)
+            path.chmod(0o444)
         values.append(path.read_text(encoding="ascii"))
     require(len(set(values)) == len(values), "Signing credentials must be distinct")
     runtime_env = {**environment, "PROBE_SERVICES_IMAGE": image}

@@ -295,6 +295,7 @@ def validate_signing_grant_credentials(secret_dir: Path) -> str:
     )
     provider_files = (
         "openbao_service_token",
+        "openbao_bootstrap_token",
         "signing_keys_openbao_token",
         "didcomm_issuance_openbao_token",
         "haip_kms_token",
@@ -1236,6 +1237,7 @@ def validate_protocol_routes_do_not_spa_fallback(env_values: dict[str, str]) -> 
 
 def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Path, compose_file: Path) -> str:
     read_required_secret(secret_dir / "openbao_service_token", "OpenBao service token")
+    read_required_secret(secret_dir / "openbao_bootstrap_token", "migration-only OpenBao bootstrap token")
     read_required_secret(secret_dir / "signing_keys_openbao_token", "signing-keys OpenBao token")
     read_required_secret(secret_dir / "didcomm_issuance_openbao_token", "DIDComm Issuance OpenBao token")
     read_required_secret(secret_dir / "haip_kms_token", "HAIP OpenBao workload token")

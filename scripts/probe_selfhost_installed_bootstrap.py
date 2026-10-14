@@ -25,10 +25,12 @@ HELPER_IMAGE = (
     "quay.io/openbao/openbao@sha256:"
     "6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf"
 )
+PLUGIN_URI = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"
 OWNED = "marty.selfhost.bootstrap-handoff"
 CONTAINER_ID = re.compile(r"[0-9a-f]{64}\Z")
 TOKEN_NAMES = (
     "openbao_service_token",
+    "openbao_bootstrap_token",
     "notification_openbao_token",
     "passport_callback_signer_bao_token",
 )
@@ -66,7 +68,9 @@ def inspect_owned(
     *,
     require_address: bool = True,
     expected_mounts: dict[str, tuple[str, bool]] | None = None,
+    expected_tmpfs: set[str] | None = None,
     expected_user: str | None = None,
+    expected_image: str = HELPER_IMAGE,
 ) -> str:
     raw = checked(
         ["docker", "inspect", "--format", "{{json .}}", container_id],
@@ -82,6 +86,7 @@ def inspect_owned(
         image = item["Config"]["Image"]
         user = item["Config"]["User"]
         ports = item["HostConfig"]["PortBindings"]
+        tmpfs = item["HostConfig"].get("Tmpfs") or {}
         assert item["Id"] == container_id
         assert item["Name"] == "/" + name
         assert isinstance(labels, dict)
@@ -90,10 +95,11 @@ def inspect_owned(
             in ({"bridge"} if expected_mounts is None else {"bridge", "default"})
             and labels.get(OWNED) == name
         )
-        assert image == HELPER_IMAGE
+        assert image == expected_image
         if expected_user is not None:
             assert user == expected_user
         assert not ports
+        assert tmpfs == {path: "" for path in (expected_tmpfs or set())}
         mounts = item["Mounts"]
         assert isinstance(mounts, list)
         actual_mounts = {
@@ -113,6 +119,38 @@ def inspect_owned(
     return address
 
 
+def verify_reviewed_image(env: dict[str, str], image: str) -> None:
+    checked(
+        ["docker", "pull", "--platform", "linux/amd64", image],
+        env,
+        "Reviewed OpenBao image cannot be pulled",
+        240,
+    )
+    raw = checked(
+        ["docker", "image", "inspect", image, "--format", "{{json .}}"],
+        env,
+        "Reviewed OpenBao image cannot be inspected",
+    )
+    try:
+        metadata = json.loads(raw)
+    except ValueError as exc:
+        raise migrations.QualificationError(
+            "Reviewed OpenBao image is invalid"
+        ) from exc
+    digests = metadata.get("RepoDigests") if isinstance(metadata, dict) else None
+    require(
+        isinstance(metadata, dict)
+        and metadata.get("Os") == "linux"
+        and metadata.get("Architecture") == "amd64"
+        and isinstance(digests, list)
+        and any(
+            isinstance(item, str) and item in accepted_repo_digests(image)
+            for item in digests
+        ),
+        "Reviewed OpenBao image is not the exact linux/amd64 digest",
+    )
+
+
 def verify_helper_image(env: dict[str, str], helper: Path) -> None:
     source = helper.read_text(encoding="utf-8")
     require(
@@ -120,38 +158,54 @@ def verify_helper_image(env: dict[str, str], helper: Path) -> None:
         and re.findall(r"quay\.io/openbao/openbao\S*", source) == [HELPER_IMAGE],
         "Extracted bootstrap helper image differs from reviewed digest",
     )
-    checked(
-        ["docker", "pull", "--platform", "linux/amd64", HELPER_IMAGE],
-        env,
-        "Reviewed OpenBao image cannot be pulled",
-        240,
-    )
-    raw = checked(
-        ["docker", "image", "inspect", HELPER_IMAGE, "--format", "{{json .}}"],
-        env,
-        "Reviewed OpenBao image cannot be inspected",
-    )
-    try:
-        image = json.loads(raw)
-    except ValueError as exc:
-        raise migrations.QualificationError(
-            "Reviewed OpenBao image is invalid"
-        ) from exc
-    digests = image.get("RepoDigests") if isinstance(image, dict) else None
+    verify_reviewed_image(env, HELPER_IMAGE)
+
+
+def qualified_plugin_image(transaction_path: Path) -> str:
+    transaction = json.loads(transaction_path.read_text(encoding="utf-8"))
+    role = transaction.get("images", {}).get("openbao_didcomm", {})
     require(
-        isinstance(image, dict)
-        and image.get("Os") == "linux"
-        and image.get("Architecture") == "amd64"
-        and isinstance(digests, list)
-        and any(
-            isinstance(item, str) and item in accepted_repo_digests(HELPER_IMAGE)
-            for item in digests
-        ),
-        "Reviewed OpenBao image is not the exact linux/amd64 digest",
+        transaction.get("schema") == "elevenid.stack-release-transaction/v1"
+        and transaction.get("state") == "qualified"
+        and isinstance(role, dict)
+        and role.get("uri") == PLUGIN_URI
+        and isinstance(role.get("digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", role["digest"]) is not None,
+        "Qualified transaction lacks an exact DIDComm plugin image",
+    )
+    return f"{PLUGIN_URI}@{role['digest']}"
+
+
+def mount_disposable_plugin(
+    container_id: str, env: dict[str, str], root_token: str
+) -> None:
+    plugin_sha = checked(
+        ["docker", "exec", container_id, "sha256sum", "/plugins/openbao-didcomm-authcrypt"],
+        env,
+        "Qualified DIDComm plugin binary is missing",
+    ).split()[0]
+    require(
+        re.fullmatch(r"[0-9a-f]{64}", plugin_sha) is not None,
+        "Qualified DIDComm plugin binary hash is invalid",
+    )
+    client_env = {**env, "BAO_TOKEN": root_token}
+    cli = [
+        "docker", "exec", "--env", "BAO_TOKEN",
+        "--env", "BAO_ADDR=http://127.0.0.1:8200", container_id, "bao",
+    ]
+    checked(
+        cli + ["plugin", "register", f"-sha256={plugin_sha}", "secret", "openbao-didcomm-authcrypt"],
+        client_env,
+        "Qualified DIDComm plugin cannot be registered",
+    )
+    checked(
+        cli + ["secrets", "enable", "-path=didcomm", "openbao-didcomm-authcrypt"],
+        client_env,
+        "Qualified DIDComm plugin cannot be mounted",
     )
 
 
-def probe(install_root: Path, receipt: dict) -> dict:
+def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
     require(
         not install_root.resolve().is_relative_to(migrations.ROOT.resolve()),
         "Extracted install root must be outside the source checkout",
@@ -167,6 +221,7 @@ def probe(install_root: Path, receipt: dict) -> dict:
     env = os.environ.copy()
     env["BAO_DEV_ROOT_TOKEN_ID"] = root_token
     verify_helper_image(env, helper)
+    verify_reviewed_image(env, plugin_image)
     require(
         not named_container(name, env), "Disposable OpenBao name was already occupied"
     )
@@ -175,13 +230,21 @@ def probe(install_root: Path, receipt: dict) -> dict:
         "Disposable bootstrap helper name was already occupied",
     )
     with tempfile.TemporaryDirectory(prefix="marty-selfhost-bootstrap-") as temporary:
-        secret_dir = Path(temporary)
+        secret_dir = Path(temporary) / "secrets"
+        secret_dir.mkdir(mode=0o700)
+        plugin_config = Path(temporary) / "plugin.hcl"
+        plugin_config.write_text('plugin_directory = "/plugins"\n', encoding="ascii")
+        plugin_config.chmod(0o644)
         if os.name == "posix":
             secret_dir.chmod(0o700)
         token_file = secret_dir / "root.token"
         token_file.write_text(root_token, encoding="ascii")
         if os.name == "posix":
             token_file.chmod(0o600)
+        server_mount = {
+            "/openbao/config/plugin.hcl": (str(plugin_config.resolve()), False),
+        }
+        server_tmpfs = {"/openbao/file", "/openbao/logs"}
         container_id = ""
         try:
             container_id = checked(
@@ -194,12 +257,19 @@ def probe(install_root: Path, receipt: dict) -> dict:
                     "bridge",
                     "--label",
                     f"{OWNED}={name}",
+                    "-v",
+                    f"{plugin_config}:/openbao/config/plugin.hcl:ro",
+                    "--tmpfs",
+                    "/openbao/file",
+                    "--tmpfs",
+                    "/openbao/logs",
                     "-e",
                     "BAO_DEV_ROOT_TOKEN_ID",
-                    HELPER_IMAGE,
+                    plugin_image,
                     "server",
                     "-dev",
                     "-dev-listen-address=0.0.0.0:8200",
+                    "-config=/openbao/config/plugin.hcl",
                 ],
                 env,
                 "Disposable OpenBao container cannot be created",
@@ -212,13 +282,20 @@ def probe(install_root: Path, receipt: dict) -> dict:
                 named_container(name, env) == container_id,
                 "Disposable OpenBao ID differs from owned name",
             )
-            inspect_owned(container_id, env, name, require_address=False)
+            inspect_owned(
+                container_id, env, name, require_address=False,
+                expected_mounts=server_mount, expected_tmpfs=server_tmpfs,
+                expected_image=plugin_image,
+            )
             checked(
                 ["docker", "start", container_id],
                 env,
                 "Disposable OpenBao cannot start",
             )
-            address = inspect_owned(container_id, env, name)
+            address = inspect_owned(
+                container_id, env, name, expected_mounts=server_mount,
+                expected_tmpfs=server_tmpfs, expected_image=plugin_image,
+            )
             for _ in range(30):
                 result = migrations.command(
                     [
@@ -239,6 +316,7 @@ def probe(install_root: Path, receipt: dict) -> dict:
                 raise migrations.QualificationError(
                     "Disposable OpenBao did not become ready"
                 )
+            mount_disposable_plugin(container_id, env, root_token)
             helper_env = {
                 **{
                     key: value
@@ -301,6 +379,7 @@ def probe(install_root: Path, receipt: dict) -> dict:
                         expected_mounts={
                             "/scripts/openbao-init.sh": (source, False),
                             "/work-service": (directory, True),
+                            "/work-bootstrap": (directory, True),
                             "/work-notification": (directory, True),
                             "/work-callback": (directory, True),
                         },
@@ -327,7 +406,11 @@ def probe(install_root: Path, receipt: dict) -> dict:
                         or container_id == owned_id,
                         "Disposable OpenBao identity changed before cleanup",
                     )
-                    inspect_owned(owned_id, env, name, require_address=False)
+                    inspect_owned(
+                        owned_id, env, name, require_address=False,
+                        expected_mounts=server_mount, expected_tmpfs=server_tmpfs,
+                        expected_image=plugin_image,
+                    )
                     checked(
                         ["docker", "rm", "--force", "--volumes", owned_id],
                         env,
@@ -364,7 +447,8 @@ def main() -> None:
         args.source_sha,
         args.run_id,
     )
-    print(json.dumps(probe(Path(args.install_root), receipt), sort_keys=True))
+    plugin_image = qualified_plugin_image(Path(args.transaction))
+    print(json.dumps(probe(Path(args.install_root), receipt, plugin_image), sort_keys=True))
 
 
 if __name__ == "__main__":

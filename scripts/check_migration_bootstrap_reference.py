@@ -92,6 +92,13 @@ def check(candidate: list[str], contract_path: Path = OUTPUT) -> list[str]:
             "MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001"
         )
         invocation = {"name": case["name"], "input": case["input"]}
+        # The frozen Python corpus had one OpenBao credential. Replay its
+        # behavior with the same value assigned to the new dedicated
+        # notification role; production requires separately minted tokens.
+        invocation = json.loads(json.dumps(invocation))
+        old_token = invocation["input"]["environment"].get("OPENBAO_SERVICE_TOKEN")
+        if old_token:
+            invocation["input"]["environment"]["NOTIFICATION_OPENBAO_TOKEN"] = old_token
         if case["name"] == "conflicting_managed_purpose":
             # Keep the conflict probe current without changing the frozen corpus.
             invocation = _scoped_expected(invocation, organization_id)

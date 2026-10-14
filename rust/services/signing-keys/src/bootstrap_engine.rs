@@ -265,11 +265,7 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
     let address = config.get("BAO_ADDR").trim();
     let service_token = config.secret("OPENBAO_SERVICE_TOKEN");
     let dedicated_token = config.secret("BAO_TOKEN");
-    let notification_token = if service_token.is_empty() {
-        dedicated_token
-    } else {
-        service_token
-    };
+    let notification_token = config.secret("NOTIFICATION_OPENBAO_TOKEN");
     if address.is_empty() || notification_token.is_empty() {
         return Err(RunError::MissingNotificationKms);
     }

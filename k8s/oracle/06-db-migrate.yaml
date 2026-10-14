@@ -45,7 +45,7 @@ spec:
                   name: marty-secrets
                   key: MARTY_DB_PASSWORD
             - name: OPENBAO_SERVICE_TOKEN_FILE
-              value: /run/secrets/openbao_service_token
+              value: /run/secrets/openbao_bootstrap_token
             - name: NOTIFICATION_OPENBAO_TOKEN_FILE
               value: /run/secrets/notification_openbao_token
           volumeMounts:
@@ -64,7 +64,7 @@ spec:
           secret:
             secretName: marty-secrets
             items:
-              - key: OPENBAO_SERVICE_TOKEN
-                path: openbao_service_token
+              - key: OPENBAO_BOOTSTRAP_TOKEN
+                path: openbao_bootstrap_token
               - key: NOTIFICATION_OPENBAO_TOKEN
                 path: notification_openbao_token

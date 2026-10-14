@@ -22,6 +22,7 @@ BAO_TOKEN="${BAO_TOKEN:-}"
 BAO_TOKEN_FILE="${BAO_TOKEN_FILE:-}"
 SELFHOST_SECRET_DIR="${SELFHOST_SECRET_DIR:-${REPO_ROOT}/docker/secrets/selfhost.example}"
 SERVICE_TOKEN_OUTPUT_FILE="${SERVICE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/openbao_service_token}"
+BOOTSTRAP_TOKEN_OUTPUT_FILE="${BOOTSTRAP_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/openbao_bootstrap_token}"
 SIGNING_KEYS_TOKEN_OUTPUT_FILE="${SIGNING_KEYS_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/signing_keys_openbao_token}"
 DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/didcomm_issuance_openbao_token}"
 NOTIFICATION_TOKEN_OUTPUT_FILE="${NOTIFICATION_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/notification_openbao_token}"
@@ -52,6 +53,8 @@ fi
 
 SERVICE_TOKEN_OUTPUT_DIR=$(dirname "${SERVICE_TOKEN_OUTPUT_FILE}")
 SERVICE_TOKEN_OUTPUT_BASENAME=$(basename "${SERVICE_TOKEN_OUTPUT_FILE}")
+BOOTSTRAP_TOKEN_OUTPUT_DIR=$(dirname "${BOOTSTRAP_TOKEN_OUTPUT_FILE}")
+BOOTSTRAP_TOKEN_OUTPUT_BASENAME=$(basename "${BOOTSTRAP_TOKEN_OUTPUT_FILE}")
 SIGNING_KEYS_TOKEN_OUTPUT_DIR=$(dirname "${SIGNING_KEYS_TOKEN_OUTPUT_FILE}")
 SIGNING_KEYS_TOKEN_OUTPUT_BASENAME=$(basename "${SIGNING_KEYS_TOKEN_OUTPUT_FILE}")
 DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR=$(dirname "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}")
@@ -61,8 +64,8 @@ NOTIFICATION_TOKEN_OUTPUT_BASENAME=$(basename "${NOTIFICATION_TOKEN_OUTPUT_FILE}
 PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR=$(dirname "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 
-mkdir -p "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
-for output_dir in "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"; do
+mkdir -p "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
+for output_dir in "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"; do
     if [ -L "${output_dir}" ] || [ ! -d "${output_dir}" ]; then
         echo "Scoped token output directory must be a real directory." >&2
         exit 1
@@ -99,6 +102,7 @@ docker run --rm "$@" \
     -e BAO_TOKEN \
     -e DIDCOMM_KMS_POLICY_ONLY=true \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
+    -e BOOTSTRAP_TOKEN_OUTPUT_FILE="/work-bootstrap/${BOOTSTRAP_TOKEN_OUTPUT_BASENAME}" \
     -e SIGNING_KEYS_TOKEN_OUTPUT_FILE="/work-signing/${SIGNING_KEYS_TOKEN_OUTPUT_BASENAME}" \
     -e DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="/work-didcomm/${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
@@ -106,6 +110,7 @@ docker run --rm "$@" \
     -e GRANT_TOKEN_OUTPUT_DIR=/work-grants \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
+    -v "${BOOTSTRAP_TOKEN_OUTPUT_DIR}:/work-bootstrap" \
     -v "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}:/work-signing" \
     -v "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}:/work-didcomm" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
@@ -167,6 +172,14 @@ fi
 
 write_private_token "$SERVICE_TOKEN_OUTPUT_FILE" "$service_token"
 
+bootstrap_token_json="$(bao token create -address="$BAO_ADDR" -policy=kms-bootstrap -no-default-policy -orphan -ttl=2h -renewable=false -format=json)"
+bootstrap_token="$(json_field "$bootstrap_token_json" client_token)"
+if [ -z "$bootstrap_token" ]; then
+    echo "Failed to mint migration-only KMS bootstrap token." >&2
+    exit 1
+fi
+write_private_token "$BOOTSTRAP_TOKEN_OUTPUT_FILE" "$bootstrap_token"
+
 signing_token_json="$(bao token create -address="$BAO_ADDR" -policy=credential-service -policy=signing-keys-managed -no-default-policy -orphan -format=json)"
 signing_token="$(json_field "$signing_token_json" client_token)"
 if [ -z "$signing_token" ]; then
@@ -204,6 +217,7 @@ write_private_token "$PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE" "$callback_token"
 
 echo "Wrote scoped credential-service token to ${SERVICE_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the openbao_service_token secret in the self-host stack."
+echo "Wrote migration-only KMS bootstrap token to ${BOOTSTRAP_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped signing-keys token to ${SIGNING_KEYS_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped DIDComm Issuance token to ${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"

@@ -52,11 +52,11 @@ def test_guarded_shell_runs_notification_after_successful_rust_bootstrap():
 
 def test_candidate_receives_only_explicit_simulated_inputs(monkeypatch):
     cases = _cases()
-    for name in ("DATABASE_URL", "REDIS_URL", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN"):
+    for name in ("DATABASE_URL", "REDIS_URL", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "NOTIFICATION_OPENBAO_TOKEN"):
         monkeypatch.setenv(name, "live-value-that-must-not-pass")
 
     def fake_run(_command, *, input, env, **_kwargs):
-        assert not {"DATABASE_URL", "REDIS_URL", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN"} & set(env)
+        assert not {"DATABASE_URL", "REDIS_URL", "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "NOTIFICATION_OPENBAO_TOKEN"} & set(env)
         invocation = json.loads(input)
         assert invocation["input"]["environment"]["BAO_ADDR"] == "http://openbao.test:8200"
         case = cases[invocation["name"]]

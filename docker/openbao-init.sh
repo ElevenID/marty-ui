@@ -389,6 +389,34 @@ path "transit/verify/oid4vp-verifier-*" {
 }
 EOF
 
+# Database migrations alone may provision the fixed, tenant-bound standard
+# signing keys. Runtime services must not receive this policy. Parameter
+# allowlists prevent the wildcard paths from accepting imported material or
+# changing export/backup settings through Transit subpaths.
+echo "Writing migration-only KMS bootstrap policy..."
+bao policy write -address="${BAO_ADDR}" kms-bootstrap - <<'EOF'
+path "transit/keys/cred-issuer-*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = { "type" = ["ecdsa-p256", "ecdsa-p384", "rsa-2048", "ed25519"] }
+}
+path "transit/keys/cred-dsc-*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = { "type" = ["ecdsa-p256"] }
+}
+path "transit/keys/lti-tool-*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = { "type" = ["rsa-2048"] }
+}
+path "transit/keys/oid4vp-verifier-*" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = { "type" = ["ecdsa-p256"] }
+}
+path "transit/keys/flow-response-envelope-marty-aes256" {
+  capabilities = ["create", "update", "read"]
+  allowed_parameters = { "type" = ["aes256-gcm96"], "exportable" = [false, "false"] }
+}
+EOF
+
 echo "Writing Notification webhook envelope policy..."
 bao policy write -address="${BAO_ADDR}" notification-webhook-service - <<'EOF'
 # Notification alone can encrypt/decrypt registered webhook HMAC secrets.

@@ -309,7 +309,7 @@ cmd_setup_secrets() {
   local google_client_id google_client_secret smtp_username smtp_password
   local issuance_api_key token_hmac_key grpc_service_token device_registration_gateway_key device_registration_signing_keys_key service_sign_gateway_key flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
-  local canvas_credentials_shared_secret openbao_service_token signing_keys_openbao_token didcomm_issuance_openbao_token
+  local canvas_credentials_shared_secret openbao_service_token openbao_bootstrap_token signing_keys_openbao_token didcomm_issuance_openbao_token
   local flow_sign_grant_mint_token gateway_issuer_csr_grant_mint_token signing_keys_grant_verify_token
   local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
   local flow_workload_client_cert flow_workload_client_key
@@ -400,6 +400,11 @@ cmd_setup_secrets() {
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
   openbao_service_token="$(resolve_secret_input OPENBAO_SERVICE_TOKEN)"
+  openbao_bootstrap_token="$(resolve_secret_input OPENBAO_BOOTSTRAP_TOKEN)"
+  require_resolved_secret OPENBAO_BOOTSTRAP_TOKEN "$openbao_bootstrap_token"
+  if [[ "$openbao_bootstrap_token" == "$openbao_service_token" ]]; then
+    error "Migration-only KMS bootstrap token must differ from the runtime OpenBao token."
+  fi
   signing_keys_openbao_token="$(resolve_secret_input SIGNING_KEYS_OPENBAO_TOKEN)"
   didcomm_issuance_openbao_token="$(resolve_secret_input DIDCOMM_ISSUANCE_OPENBAO_TOKEN)"
   require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"
@@ -435,7 +440,7 @@ cmd_setup_secrets() {
         error "Signing grant mint and verify tokens must be distinct for each role."
       fi
     done
-    for broad_token in "$openbao_service_token" "$signing_keys_openbao_token" "$didcomm_issuance_openbao_token"; do
+    for broad_token in "$openbao_service_token" "$openbao_bootstrap_token" "$signing_keys_openbao_token" "$didcomm_issuance_openbao_token"; do
       if [[ -n "$broad_token" && "${grant_tokens[i]}" == "$broad_token" ]]; then
         error "Signing grant tokens must differ from general OpenBao credentials."
       fi
@@ -486,6 +491,7 @@ cmd_setup_secrets() {
     --from-literal=FLOW_APPLICATION_EVENT_HMAC_KEY="$flow_application_event_hmac_key" \
     --from-literal=CANVAS_CREDENTIALS_SHARED_SECRET="$canvas_credentials_shared_secret" \
     --from-literal=OPENBAO_SERVICE_TOKEN="$openbao_service_token" \
+    --from-literal=OPENBAO_BOOTSTRAP_TOKEN="$openbao_bootstrap_token" \
     --from-literal=SIGNING_KEYS_OPENBAO_TOKEN="$signing_keys_openbao_token" \
     --from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token" \
     --from-literal=FLOW_SIGN_GRANT_MINT_TOKEN="$flow_sign_grant_mint_token" \

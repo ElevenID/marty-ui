@@ -59,6 +59,7 @@ def fixture(tmp_path: Path) -> tuple[Path, dict[str, str], list[str]]:
         "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_RUN_USER": probe.migrations.host_user(),
         "PROBE_SERVICES_IMAGE": IMAGE,
         "PROBE_SECRET_DIR": str(tmp_path),
         "PROBE_OPENBAO_START": str(probe.migrations.START.resolve()),
@@ -208,6 +209,7 @@ def test_runtime_hook_after_two_migrations_remains_unqualified(tmp_path, monkeyp
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")
+            (secret_dir / "bao_bootstrap_token").write_text("scoped-bootstrap")
             (secret_dir / "notification_openbao_token").write_text(
                 "scoped-notification"
             )

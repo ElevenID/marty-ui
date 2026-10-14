@@ -30,6 +30,7 @@ services:
       BAO_ROOT_TOKEN_FILE: /bao/data/root.token
       BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
       BAO_SERVICE_TOKEN_FILE: /bao/runtime/openbao_service_token
+      BAO_BOOTSTRAP_TOKEN_FILE: /bao/runtime/openbao_bootstrap_token
       BAO_SIGNING_KEYS_TOKEN_FILE: /bao/runtime/signing_keys_openbao_token
       BAO_DIDCOMM_ISSUANCE_TOKEN_FILE: /bao/runtime/didcomm_issuance_openbao_token
       BAO_NOTIFICATION_TOKEN_FILE: /bao/runtime/notification_openbao_token

@@ -17,6 +17,7 @@ services:
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
       PUBLIC_DOMAIN: migration.invalid
+      ISSUER_BASE_URL: https://migration.invalid
     secrets: [issuance_api_key, signing_service_key, signing_issuer_key, sign_grant_verify_token, signing_keys_openbao_token]
     depends_on:
       redis: {condition: service_healthy}

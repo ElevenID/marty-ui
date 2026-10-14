@@ -127,6 +127,9 @@ def harness(tmp_path):
     env["SIGNING_KEYS_ISSUER_SIGN_KEY"] = (
         "synthetic-distinct-issuer-sign-key-at-least-thirty-two-bytes"
     )
+    env["OPENBAO_BOOTSTRAP_TOKEN"] = (
+        "synthetic-distinct-migration-bootstrap-token-at-least-thirty-two-bytes"
+    )
     for role in (
         "FLOW_SIGN_GRANT_MINT_TOKEN",
         "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN",
@@ -239,6 +242,7 @@ def applications(calls):
         ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN", "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN"),
         ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "OPENBAO_BOOTSTRAP_TOKEN"),
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_GRANT_VERIFY_TOKEN"),
         ("FLOW_SIGN_GRANT_MINT_TOKEN", "OPENBAO_SERVICE_TOKEN"),
         ("GATEWAY_SIGN_GRANT_MINT_TOKEN", "SIGNING_KEYS_OPENBAO_TOKEN"),
@@ -250,6 +254,18 @@ def test_signing_grant_roles_reject_shared_openbao_credentials(harness, first, s
     result, calls = harness({"TOKEN_HMAC_KEY": TOKEN, first: shared, second: shared})
     assert result.returncode != 0
     assert "must be distinct" in result.stderr or "must differ" in result.stderr
+    assert not applications(calls)
+
+
+def test_migration_bootstrap_token_cannot_reuse_runtime_openbao_token(harness):
+    shared = "synthetic-shared-runtime-and-migration-openbao-token"
+    result, calls = harness({
+        "TOKEN_HMAC_KEY": TOKEN,
+        "OPENBAO_SERVICE_TOKEN": shared,
+        "OPENBAO_BOOTSTRAP_TOKEN": shared,
+    })
+    assert result.returncode != 0
+    assert "must differ from the runtime OpenBao token" in result.stderr
     assert not applications(calls)
 
 
