@@ -19896,3 +19896,19 @@ Stream now treat beta/production aliases case-insensitively and reject
 unrecognized labels, so a spelling change cannot silently select the
 development transport path. Event Stream library tests and the locked
 Applicant binary check passed after that correction.
+
+Event Stream RPC authorization review (staged on grouped UI branch, not yet
+landed): the server previously ignored its configured `GRPC_SERVICE_TOKEN` on
+Publish, Subscribe, and HealthCheck. The listener now loads a direct or
+file-backed token, requires a valid minimum-32-character token in deployed
+mode, and authenticates those three RPCs through the shared MMF service-token
+authenticator. Auth, Organization, and Applicant attach their existing scoped
+service token on Event Stream requests; Gateway already attached it for
+Subscribe. Self-host, beta, and Kubernetes already provide the token to the
+listener and affected clients. Event Stream library tests (7), executable
+gRPC contract (1), Auth/Organization/Applicant library suites (3/27/5),
+and locked binary checks passed; these do not prove a connected keyless TLS
+handshake or an installed multi-service event journey. Next: run a disposable
+OpenBao-backed Event Stream TLS acceptance path, review all remaining gRPC
+edges, and qualify an empty installed database. Provider credentials and
+physical device access remain unprovisioned.
