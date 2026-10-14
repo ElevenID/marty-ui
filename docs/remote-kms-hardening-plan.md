@@ -19311,3 +19311,19 @@ OpenBao TLS handshake. Beta and disposable passport Compose still contain
 Presentation Policy key-file paths, and other production workloads still
 mount private TLS keys. Complete the remaining keyless deployment cutover
 and real signer provisioning before UI PR/release qualification.
+
+2026-10-14 beta Presentation Policy follow-through: `docker-compose.beta.yml`
+now uses the keyless Rust listener's OpenBao HTTPS signer settings, public CA,
+scoped token, explicit key name/version, and public listener certificate;
+it no longer mounts `pp_workload_server_key`. The beta workload identity helper
+no longer generates or writes a Presentation Policy private key/certificate;
+the beta release runner requires externally provisioned `PP_WORKLOAD_SERVER_CERT_FILE`,
+`OPENBAO_TLS_CA_CERT_FILE`, and `PP_TLS_KMS_TOKEN_FILE`, and still checks the
+public leaf against the beta workload CA. This deliberately fails closed until
+the signer key and matching public certificate are provisioned. The focused
+beta suites report 88 passing and one existing full-compose physical-validator
+failure because `.dev-integration-secret-tls` local mounted files are absent
+in this worktree; the result is not a successful installed beta proof. The
+remaining beta services still use local workload keys and need the same
+cutover. A reusable KMS-backed TLS certificate provisioning path is required
+before local beta can run this listener.
