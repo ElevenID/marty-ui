@@ -20134,3 +20134,14 @@ mutation checks. The standalone module passed 34 tests; combined with the
 consumer-binding, workload-identity and beta-runner suites, 155 tests passed.
 This removes the stale test blocker recorded above but does not substitute
 for an installed-image or complete connected-graph acceptance.
+
+2026-10-14 Applicant graph correction: source inventory found no Organization
+or Flow gRPC client in native Applicant; it uses HTTP providers for Issuance
+and Flow and the previously qualified CA-verified Event Stream gRPC channel.
+The bare `ORG_GRPC_TARGET` and `FLOW_GRPC_TARGET` in base/self-host Compose
+were inert inherited settings, not live plaintext edges. They were removed
+from both manifests and the exact consumer-binding test was tightened so
+they cannot silently reappear. The three focused deployment modules passed
+116 tests; the self-host executable bundle passed all six cases. This removes
+Applicant from the remaining gRPC TLS edge list without claiming its separate
+HTTP dependencies are KMS-transport-qualified.
