@@ -19668,3 +19668,21 @@ This is source-level and config evidence; installed-image and live
 Credential Template-to-Organization acceptance remain. The clean
 KMS-only release cannot ship until all supported clients and targets
 are converted together.
+
+Device Registration's Organization membership client now has a deployed
+public-CA path. The runtime requires `ORG_GRPC_CA_CERT` outside local/test,
+rejects HTTP or zero-timeout use of the CA-backed path, connects through
+the shared MMF server-TLS factory, and performs an authenticated
+Organization probe before constructing the membership authorizer. Its
+service token and remote holder-key behavior are unchanged; no TLS
+private-key file is used. The Device Registration library suite passed
+(10 tests), targeted formatting and locked binary check passed.
+
+Self-review tightened the new Organization dependency probes in Trust
+Profile, Credential Template and Device Registration: only the expected
+`NotFound` response to an authenticated lookup of a valid, nonexistent
+member now marks the dependency healthy. Accepting gRPC `Unknown` could
+mistake a wrong service or unimplemented method for a healthy
+Organization API. All three affected library suites passed again
+(12 + 12 + 10 tests). The installed-image and connected runtime graph
+still need qualification.
