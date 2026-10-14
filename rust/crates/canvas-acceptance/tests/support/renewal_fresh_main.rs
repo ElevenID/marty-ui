@@ -469,7 +469,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         // OpenBao and wallet cases. Keep the health requirement, but allow the
         // already-bounded probe to cover a slow startup before failing.
         let health_result = tokio::time::timeout(Duration::from_secs(20), async {
-            for _ in 0..3 {
+            loop {
                 if let Some(value) = wait_for_health_with_client(http_port, &client).await {
                     return Some(value);
                 }
@@ -477,7 +477,6 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                     return None;
                 }
             }
-            None
         })
         .await;
         let timed_out = health_result.is_err();

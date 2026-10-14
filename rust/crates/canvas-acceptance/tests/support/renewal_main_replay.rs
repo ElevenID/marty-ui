@@ -117,7 +117,7 @@ pub(super) async fn run(database_url: &str) {
     // fresh packaged-main case does instead of treating one five-second probe
     // as a service regression.
     let health_result = tokio::time::timeout(Duration::from_secs(20), async {
-        for _ in 0..3 {
+        loop {
             if let Some(value) = wait_for_health_with_client(http_port, &client).await {
                 return Some(value);
             }
@@ -125,7 +125,6 @@ pub(super) async fn run(database_url: &str) {
                 return None;
             }
         }
-        None
     })
     .await;
     let timed_out = health_result.is_err();
