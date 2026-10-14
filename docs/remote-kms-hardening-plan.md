@@ -18812,3 +18812,15 @@ dedicated Notification token; no fallback was restored. The PR entered
 GitHub's protected merge queue as entry position 1, with merge-group
 CI run `38581676983` started. Preserve the branch and wait for the
 merge-group result and exact-main release qualification.
+
+First merge-group CI `38581676983` failed two independent gates:
+Rust Supply Chain discovered four new RustSec advisories against
+`rustls 0.23.45` (RUSTSEC-2026-0346 through -0349, each fixed in
+0.23.46), and Release Contract Tests received HTTP 500 when fetching a
+digest-pinned integration wheel. PR #1330 was dequeued, and grouped
+head `76a48d1c4` upgrades only the affected Rust lockfile package to
+0.23.46 and retries transient wheel-download responses in both CI
+install paths while retaining SHA-256 verification. Local `cargo deny`
+passed advisories/bans/licenses/sources, locked Cargo metadata and
+workflow YAML parsed, and focused CI-planner tests passed. Require the
+new head's complete PR checks and merge-group checks before landing.
