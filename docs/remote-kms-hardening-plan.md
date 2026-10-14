@@ -19354,3 +19354,20 @@ explicitly excluded; running that one test again reproduced its existing
 missing `.dev-integration-secret-tls` mounted-source failure, not a KMS TLS
 handshake result. The signer provisioning path and other workload TLS key
 files remain unfinished.
+
+2026-10-14 Verification workload client TLS deployment cutover: the grouped UI
+worktree now selects a scoped, versioned OpenBao signer and mounts only its
+public client certificate, HTTPS CA, and role token in self-host, Kubernetes,
+and beta. The production catalog/installer no longer requires or creates a
+Verification `tls.key`; beta identity setup rejects old Verification key
+settings/files and no longer generates this key pair. Its externally supplied
+certificate is checked for the required Verification SPIFFE URI SAN and
+client-auth EKU using the same beta release-runner loop as Auth, preserving
+mTLS authorization while avoiding duplicate validation code. Production
+Python deployment contracts passed 78/78, beta contracts 88/88 with the
+known full physical validator excluded, deployment catalog frozen CLI 8/8,
+and Compose parse, PowerShell parse, shell syntax and diff checks passed.
+Running the full beta validator separately still failed at its previously
+missing local `.dev-integration-secret-tls` mounted files. No real
+Verification KMS TLS handshake is claimed yet; matching remote signer and
+public certificate provisioning is still required.
