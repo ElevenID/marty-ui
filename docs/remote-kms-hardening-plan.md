@@ -19933,3 +19933,23 @@ deployed_executable_uses_remote_tls_signer_and_authenticated_event_rpcs
 container was removed afterward. This proves the Event Stream listener and
 one direct client path, not the installed multi-service graph, all gRPC
 edges, or a fresh production-schema database inventory.
+
+Production graph audit found the next blocking K11 edge. Auth's
+`workload_tls` parser rejects production startup unless both its outbound
+client and inbound server identities are present; the current self-host and
+Kubernetes Auth manifests provide only the outbound client signer. Beta
+allows an explicit plaintext gRPC listener instead. Gateway is the direct
+Auth gRPC caller and currently targets `auth:9001` without TLS in self-host
+and Kubernetes; its beta/base route also has no dedicated Auth TLS trust.
+Enabling Auth's already implemented keyless inbound listener alone would
+break Gateway. The next cohesive correction must provision a distinct
+non-exportable Auth server signer/certificate and Gateway client signer/
+certificate, retain Auth's mTLS peer verification, require CA-verified HTTPS
+for Gateway-to-Auth, remove the insecure override, and update the secret
+catalog, Compose, Kubernetes, local fixtures and installed-runtime checks
+together. Prove the real Auth/Gateway handshake before calling that edge
+qualified. The historical `selfhost-kms-only-model*.snapshot.yml` files are
+immutable prior evidence, not current production manifests; do not rewrite
+them to make zero-match scans pass. The still-active passport disposable
+Compose and related assertions retain private-key fixtures and also need
+cutover before full test-surface KMS-only acceptance.
