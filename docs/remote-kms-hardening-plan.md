@@ -19953,3 +19953,31 @@ immutable prior evidence, not current production manifests; do not rewrite
 them to make zero-match scans pass. The still-active passport disposable
 Compose and related assertions retain private-key fixtures and also need
 cutover before full test-surface KMS-only acceptance.
+
+2026-10-14 Auth/Gateway TLS cutover staged in the grouped UI worktree:
+Auth now requires remote OpenBao identities for both outbound client TLS and
+inbound mTLS in beta and production, and rejects plaintext gRPC and retired
+TLS private-key file settings. Gateway requires its own remote OpenBao client
+identity for Auth, explicit HTTPS targets and public CAs for Auth,
+Organization, and Event Stream, and rejects `GRPC_INSECURE_ALLOWED=true` in
+deployed environments. Active Auth gRPC RPCs require the existing service
+token. The self-host and beta Compose definitions, Oracle Kubernetes
+manifests, secret catalog, beta preflight, and bundle fixture have coordinated
+Auth-server and Gateway-client public certificate/token mounts. Local checks
+passed: Auth startup (7) and gRPC behavior (5), Gateway config (16), locked
+Gateway binary check, 139 focused Python deployment tests, extracted
+self-host bundle render, manifest parsing, and `git diff --check`. These
+prove configuration and packaging consistency, not an actual connected
+Gateway-to-Auth mTLS handshake or an installed deployment. That connected
+proof remains required before this K11 edge can be qualified or pushed.
+
+Database custody audit at the source-schema level: the current Rust SQL
+migrations contain no dedicated private-key table or private-key column.
+`device_registration_service.device_holder_keys` stores only a remote
+provider reference, version and public coordinates. The
+`issuance_service.organization_integration_secrets` table persists encrypted
+API-token material and its application write path rejects private-key
+material; it is not a private-key table. This source inspection cannot prove
+that a previously installed database has no obsolete tables. A fresh
+installed production-schema inventory and explicit private-key column/table
+query remain acceptance gates; no database cleanup claim is made yet.
