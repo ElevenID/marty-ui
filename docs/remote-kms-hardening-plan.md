@@ -19391,3 +19391,25 @@ syntax and diff checks passed. The full physical validator still reproduces
 its missing local `.dev-integration-secret-tls` mounted-source failure.
 Provisioning real non-exportable signer keys and matching public certificates
 and proving live handshakes remain open.
+
+2026-10-14 Flow workload TLS client/server deployment cutover is staged in the
+grouped UI branch. Both identities now have distinct scoped, versioned
+OpenBao signers and public certificates in self-host, Kubernetes, and beta.
+Production catalog and installer no longer require or create either Flow
+`tls.key`, and the beta identity helper no longer generates their private
+keys. The beta release runner verifies the Flow client SPIFFE URI SAN/client
+EKU and server DNS SAN/server EKU on the externally supplied certificates.
+The physical-provider validator's Flow secret allowlist was updated to the
+new CA and two signer tokens. A source search over the staged production
+Compose/Kubernetes installer/manifests and beta Compose found no remaining
+`GRPC_WORKLOAD_TLS_{CLIENT,SERVER}_KEY` or `tls.key` installer arguments.
+Deployment Python contracts passed 78/78, beta contracts 88/88 with the
+full physical validator excluded, frozen catalog CLI 8/8, and self-host
+Compose parse, shell/PowerShell syntax and diff checks passed. The full beta
+validator still fails to read `.dev-integration-secret-tls` local files from
+the base development stack; its Signing Keys listener still has a retired
+private-key file path. Disposable passport Compose and historical snapshots
+also retain key-file definitions. Do not treat the zero-match production
+search as end-to-end TLS custody acceptance: real key/certificate provisioning,
+HTTPS OpenBao transport, live handshakes, and the remaining dev/disposable
+call sites are required.
