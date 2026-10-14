@@ -19994,3 +19994,21 @@ patterns. This strengthens the source-schema claim for those tested paths;
 the Issuance test uses its targeted migration fixture, so this is not a
 complete fresh installed production schema. It also says nothing about an
 older persisted database. The disposable container was stopped and removed.
+
+2026-10-14 connected Auth/Gateway transport proof: the grouped UI worktree now
+has opt-in `marty-auth` test `grpc_kms_tls.rs`, run through
+`scripts/with_disposable_event_stream_kms.py --profile auth-gateway` against
+the pinned disposable OpenBao 2.7.1 image. The fixture creates distinct
+non-exportable, non-backupable P-256 Transit signers and PKI-signed public
+server/client certificates, with separate sign-only tokens. It verifies each
+token is denied access to the other signer. The test serves the real
+`AuthGrpcService` through the same MMF keyless acceptor used by the Auth
+binary, then calls it through the same MMF keyless client channel selected
+for Gateway-to-Auth. A client without a workload certificate cannot call the
+RPC; a connected client without the service token receives Unauthenticated;
+the authenticated `HealthCheck` returns serving. The locked opt-in test
+passed locally and the disposable container was removed. This qualifies the
+keyless Auth service/client transport path, but not startup of the full
+Auth/Gateway binaries with their Postgres, Redis, OIDC and routing
+dependencies or the installed multi-service artifact. That remains K11
+acceptance work before claiming the deployed edge is complete.
