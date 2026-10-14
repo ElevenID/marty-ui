@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -90,22 +91,31 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         # consumers. Its host output directory remains private to this run.
         host_user = (["--user", f"{os.getuid()}:{os.getgid()}"]
                      if hasattr(os, "getuid") else [])
-        result = docker(
-            "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
-            "--env", "BAO_ADDR=http://openbao:8200",
-            "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
-            + managed_key_reference(29876, "csca"),
-            "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
-            + managed_key_reference(29876, "x509_doc_signer"),
-            "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
-            + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
-            "--mount", "type=bind,src=" + str(ROOT / "docker/openbao-init.sh")
-            + ",dst=/scripts/openbao-init.sh,readonly",
-            "--mount", "type=bind,src=" + str(token_file)
-            + ",dst=/run/secrets/bao_root_token,readonly",
-            "--mount", "type=bind,src=" + str(output_dir) + ",dst=/work/secrets",
-            image, "/scripts/passport_supported_openbao_bootstrap.sh", timeout=180,
-        )
+        try:
+            result = docker(
+                "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
+                "--env", "BAO_ADDR=http://openbao:8200",
+                "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
+                + managed_key_reference(29876, "csca"),
+                "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
+                + managed_key_reference(29876, "x509_doc_signer"),
+                "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
+                + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
+                "--mount", "type=bind,src=" + str(ROOT / "docker/openbao-init.sh")
+                + ",dst=/scripts/openbao-init.sh,readonly",
+                "--mount", "type=bind,src=" + str(token_file)
+                + ",dst=/run/secrets/bao_root_token,readonly",
+                "--mount", "type=bind,src=" + str(output_dir) + ",dst=/work/secrets",
+                image, "/scripts/passport_supported_openbao_bootstrap.sh", timeout=180,
+            )
+        except subprocess.CalledProcessError as error:
+            # Never surface OpenBao CLI output: it may contain issued tokens.
+            match = re.search(
+                r"Disposable OpenBao bootstrap failed at ([a-z-]+) \(status ([0-9]+)\)",
+                error.stderr or "",
+            )
+            phase = match.group(1) if match else "unknown"
+            pytest.fail(f"Disposable OpenBao bootstrap failed at {phase}")
         assert "scoped tokens initialized" in result.stdout
         service = (output_dir / "bao_token").read_text(encoding="ascii")
         callback = (output_dir / "callback_signer_bao_token").read_text(encoding="ascii")
