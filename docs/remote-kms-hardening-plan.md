@@ -20202,3 +20202,20 @@ locked `marty-verification-service --tests` suite passed (its isolated
 PostgreSQL contract remains opt-in), 157 focused Python deployment tests
 passed, and all six self-host bundle executable tests passed. Connected
 Verification business RPCs and exact installed-release acceptance remain open.
+
+2026-10-14 deployed gRPC graph sweep found one remaining beta alias gap:
+`issuance` runs the Rust binary but inherited bare Organization, Credential
+Template and Revocation Profile targets, lacked the public workload CA, and
+had its gRPC listener enabled without a remote server TLS identity. The beta
+alias now uses explicit HTTPS outbound targets and the mounted public CA, and
+its unused inbound gRPC listener is disabled. The self-host production HTTP
+alias also disables its unused gRPC listener; `issuance-native` remains the
+KMS-backed gRPC owner. The stale beta comment describing a Python Issuance
+owner was corrected. A new graph-wide deployment test covers all effective
+self-host/beta gRPC target selectors and Kubernetes explicit overrides. The
+static inventory finds 46 self-host and 29 beta target selectors, all HTTPS;
+the consumer-binding module passed 79 tests, its four-module deployment set
+passed 159 tests including the graph guard, and six self-host bundle tests
+passed. This proves rendered selectors and removes the alias plaintext/TLS
+startup contradiction, not a connected alias-to-peer transaction or installed
+release.
