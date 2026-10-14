@@ -1879,6 +1879,7 @@ jobs:
       - name: Promote the OpenBao DIDComm version tag from its exact qualified digest
         env:
           DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         shell: bash
         run: |
