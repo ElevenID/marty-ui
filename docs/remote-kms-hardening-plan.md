@@ -19455,3 +19455,20 @@ the grouped UI worktree still uses a temporary local MMF path dependency.
 Do not push or claim the UI cutover until MMF is merged and the dependency
 is pinned, remaining app/disposable key-file paths are retired, and the
 local provisioned runtime passes.
+
+2026-10-14 MMF PR #127 review-gate correction: GitHub's direct
+`enqueuePullRequest` mutation identified the actual block as an unresolved
+Codex review thread about synchronous KMS signing overrunning the gRPC TLS
+handshake deadline. Commit `0cf490d` carries the remaining handshake deadline
+in a Tokio task-local through the synchronous Rustls signer and caps each
+OpenBao signing request at the lesser of the remaining deadline and the
+configured KMS request timeout. A multi-threaded focused test confirms the
+deadline is visible inside `block_in_place`. Local MMF workspace tests,
+platform tests (20 unit cases), formatting and workspace Clippy passed.
+The guarded live `tls_openbao_keyless` test passed again against fresh
+disposable HTTPS OpenBao 2.7.1 after the correction. The disposable instance
+was removed. The review thread is resolved. GitHub now rejects queue entry
+only because the five required exact-head checks for `0cf490d` are pending
+(runs `38629647805`, `38629647764`, `38629648382`, `38629647769`). Recheck
+them, enqueue through the protected queue, and then pin the merged MMF ref
+in the grouped UI branch. No protected-rule bypass is authorized or needed.
