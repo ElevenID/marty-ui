@@ -19246,6 +19246,15 @@ docker-compose.selfhost.prod.yml config --quiet` passes syntactically, but the
 example still sets `BAO_ADDR` to HTTP and `GRPC_INSECURE_ALLOWED=true`; those
 remain supported-stack security cutover items and this parse check is not a
 running TLS/KMS proof.
+The unmerged UI worktree also passed `cargo +1.95 check --workspace
+--all-targets` and strict workspace Clippy against the local MMF branch.
+Self-host bundle tests initially failed because the sandbox-cleared Docker CLI
+could not find its Compose plugin; invoking the installed Compose executable
+directly exposed one real synthetic-fixture omission. Added the required
+Signing Keys TLS KMS origin/name/version to that fixture, then all
+`marty-selfhost-bundle` tests passed with
+`MARTY_SELFHOST_BUNDLE_TEST_COMPOSE` pointing at the installed executable.
+This validates packaging and rendering, not an installed KMS handshake.
 
 Further MMF security review found the OpenBao HTTP client could follow a
 redirect while carrying the scoped `X-Vault-Token` header. Commit
