@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
@@ -162,8 +164,20 @@ def test_public_profile_and_nonexportable_transit_metadata_are_bounded() -> None
     assert validate_transit_binding(metadata, jwk) == 2
     with pytest.raises(ValueError, match="not canonical P-256"):
         validate_transit_binding(metadata, {**jwk, "x": "wrong"})
+    with pytest.raises(ValueError, match="not valid P-256"):
+        validate_transit_binding(metadata, {**jwk, "x": "A" * 43, "y": "A" * 43})
     with pytest.raises(ValueError, match="non-exportable"):
         validate_transit_binding({**metadata, "exportable": True}, jwk)
+    other_key = ec.derive_private_key(2, ec.SECP256R1()).public_key()
+    other_pem = other_key.public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode("ascii")
+    with pytest.raises(ValueError, match="differs from resolved profile"):
+        validate_transit_binding({**metadata, "keys": {"2": {"public_key": other_pem}}}, jwk)
+    with pytest.raises(ValueError, match="invalid"):
+        validate_transit_binding({**metadata, "keys": {"2": {
+            "public_key": "-----BEGIN PUBLIC KEY-----\ninvalid\n-----END PUBLIC KEY-----\n"
+        }}}, jwk)
 
 
 def test_openbao_audit_token_rejects_root_or_long_lived_authority() -> None:

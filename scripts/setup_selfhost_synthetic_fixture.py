@@ -20,6 +20,8 @@ from pathlib import Path
 from urllib.parse import quote, urlsplit
 
 import httpx
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 
 def required_environment(values: dict[str, str]) -> dict[str, str]:
@@ -104,9 +106,10 @@ def validate_installed_model(model: dict, fixture: dict[str, str]) -> None:
         raise ValueError("synthetic operator differs from migration-seeded organization")
 
 
-def validate_public_p256_jwk(public_jwk: dict) -> None:
+def validate_public_p256_jwk(public_jwk: dict) -> ec.EllipticCurvePublicKey:
     if public_jwk.get("kty") != "EC" or public_jwk.get("crv") != "P-256":
         raise ValueError("resolved public issuer key is not P-256")
+    coordinates = []
     for coordinate in ("x", "y"):
         value = public_jwk.get(coordinate)
         if not isinstance(value, str) or "=" in value:
@@ -118,6 +121,11 @@ def validate_public_p256_jwk(public_jwk: dict) -> None:
         canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
         if len(decoded) != 32 or canonical != value:
             raise ValueError("resolved public issuer key is not canonical P-256")
+        coordinates.append(int.from_bytes(decoded, "big"))
+    try:
+        return ec.EllipticCurvePublicNumbers(*coordinates, ec.SECP256R1()).public_key()
+    except ValueError as error:
+        raise ValueError("resolved public issuer key is not valid P-256") from error
 
 
 def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
@@ -132,12 +140,18 @@ def validate_transit_binding(metadata: dict, public_jwk: dict) -> int:
             or not pem.startswith("-----BEGIN PUBLIC KEY-----\n")
             or not pem.rstrip().endswith("-----END PUBLIC KEY-----")):
         raise ValueError("managed transit key has no public key")
-    # The installed Rust service resolves this active managed profile through
-    # its canonical KMS adapter and rejects a profile/key mismatch. This
-    # independent operator check confirms the same deterministic provider
-    # reference is present, non-exportable and P-256 without adding a second
-    # cryptographic implementation in Python.
-    validate_public_p256_jwk(public_jwk)
+    # Compare parsed public keys, not just their shapes: the audit endpoint
+    # could otherwise describe a different non-exportable key than the
+    # installed service resolved through its canonical KMS adapter.
+    resolved = validate_public_p256_jwk(public_jwk)
+    try:
+        audited = serialization.load_pem_public_key(pem.encode("ascii"))
+    except (UnicodeError, ValueError) as error:
+        raise ValueError("managed transit public key is invalid") from error
+    if (not isinstance(audited, ec.EllipticCurvePublicKey)
+            or not isinstance(audited.curve, ec.SECP256R1)
+            or audited.public_numbers() != resolved.public_numbers()):
+        raise ValueError("managed transit public key differs from resolved profile")
     return version
 
 
