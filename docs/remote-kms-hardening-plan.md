@@ -19831,3 +19831,22 @@ does not prove the provisioned certificate matches the non-exportable KMS
 signer or that the beta graph handshakes successfully. The old passport
 disposable fixture and coordinated-restore probe still contain TLS key-file
 paths and need retirement or replacement before KMS-only acceptance.
+
+The Organization-client deployment audit found two concrete startup gaps:
+Auth's self-host target was plaintext and Kubernetes Auth lacked the explicit
+HTTPS Organization target; Trust Profile's deployed Rust config requires a
+public Organization CA but self-host, beta, and Kubernetes omitted it. The
+grouped UI branch now gives Auth explicit HTTPS Organization and Flow targets
+in self-host/beta/Kubernetes where applicable, and gives Trust Profile an
+HTTPS Organization target plus public CA mount in all three deployments.
+The self-host installed-runtime expected secret closure and beta physical
+provider mount allowlist were updated for these public CA mounts. A full
+beta Compose render caught missing synthetic Org/RP/CT signer settings in
+its test fixture; those are now included. The focused beta, self-host, and
+Kubernetes deployment suites pass together (179 tests); Kubernetes YAML
+parses and shows the intended Auth/Trust Profile targets and mounts, and
+`git diff --check` passes. These are deployment/configuration checks, not
+connected RPC acceptance. Auth's production Event Stream gRPC target still
+uses plaintext, while Auth disables plaintext by default in production, so
+the production Auth graph cannot yet be claimed runnable or KMS-only. That
+edge needs a keyless Event Stream server listener and HTTPS client cutover.
