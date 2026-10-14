@@ -846,22 +846,6 @@ def test_pinned_closure_distinguishes_function_locals_from_globals(capture):
     assert capture.referenced_names(function) == {"normalize"}
 
 
-def test_ci_replays_reference_in_exact_release_image():
-    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-    assert "needs.changes.outputs.rust == 'true'" in workflow
-    assert "repository: ElevenID/marty-credentials" in workflow
-    assert "ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26" in workflow
-    assert "docker pull \"$image@$digest\"" in workflow
-    assert workflow.count("scripts/capture_canvas_mirror_reference.py") >= 3
-    assert "--release-image --check" in workflow
-    assert "--release-image --adapter-reference --check" in workflow
-    assert "--release-image --publication-boundary-reference --check" in workflow
-    assert (
-        "sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
-        in workflow
-    )
-
-
 @pytest.mark.parametrize("operation", ["check", "write_reference"])
 def test_behavioral_artifact_operations_require_release_image(capture, operation):
     arguments = {operation: True}

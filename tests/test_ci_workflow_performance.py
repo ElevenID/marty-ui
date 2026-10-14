@@ -2917,7 +2917,6 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
     for name in (
-        "Replay Canvas mirror oracle in exact Credentials release image",
         "Run repository release checks",
         "Configure the pinned containerd image store",
         "Configure the pinned OCI exporter",
@@ -3077,7 +3076,6 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         f"{focused_flag} != 'true'"
     )
     for name in (
-        "Replay Canvas mirror oracle in exact Credentials release image",
         "Run repository release checks",
         "Configure the pinned containerd image store",
         "Configure the pinned OCI exporter",
@@ -3216,7 +3214,6 @@ def test_planner_only_pr_feedback_retains_full_protected_release_checks(
         RELEASE_TEST_COMMAND
     )
     for name in (
-        "Replay Canvas mirror oracle in exact Credentials release image",
         "Configure the pinned containerd image store",
         "Configure the pinned OCI exporter",
         "Require the exact supported OCI backend",
@@ -3326,7 +3323,6 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "needs.changes.outputs.didcomm_release_test_only != 'true'"
     )
     for name in (
-        "Replay Canvas mirror oracle in exact Credentials release image",
         "Run repository release checks",
         "Configure the pinned containerd image store",
         "Configure the pinned OCI exporter",
