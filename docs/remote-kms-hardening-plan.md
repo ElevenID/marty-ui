@@ -1433,6 +1433,24 @@ by Flow's remaining imports of the removed MMF PEM API, which is the next
 native dependency to migrate; no UI pass or release claim follows from the
 individual edits yet.
 
+K11 local Flow cutover follow-up: MMF commit `58133aa` adds an eager
+`grpc_channel_connected` path so Flow preserves its prior dependency-connection
+health check; the lazy helper remains for callers that previously used lazy
+channels. The UI worktree now compiles Flow's production library and binary
+with a keyless Presentation Policy client and keyless mTLS listener. The
+listener yields `tokio-rustls` streams, for which Tonic implements peer
+certificate connection metadata used by Flow's SPIFFE URI authorization;
+that authorization still needs a live service-level proof. Both Flow TLS roles require public
+certificate/CA files plus complete, versioned OpenBao identity settings and
+reject the retired client/server private-key environment names. Flow's
+44 library, 9 startup and 8 provider tests passed, as did the 4 Deployment
+Profile and 4 Compliance Profile config tests; strict Clippy passed for all
+three production libraries/binaries. These are local source-level checks:
+installed Flow/OpenBao runtime authorization, deployment manifests, Auth and
+Presentation Policy cutovers, the UI remote MMF pin and the exact release
+artifact remain open. The UI branch still holds a temporary local MMF path
+and has not been pushed.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
