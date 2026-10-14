@@ -1451,6 +1451,24 @@ Presentation Policy cutovers, the UI remote MMF pin and the exact release
 artifact remain open. The UI branch still holds a temporary local MMF path
 and has not been pushed.
 
+K11 Auth/Presentation Policy local cutover: MMF commit `a9cb85c` shares
+`grpc_acceptor` construction for services. Auth now establishes its production
+Flow mTLS channel eagerly through the remote signer and uses a keyless inbound
+gRPC acceptor; its ordinary public factory remains for explicit plaintext or
+server-TLS channels. Presentation Policy also uses the shared keyless inbound
+acceptor. Both configs require scoped versioned remote identity settings with
+only public certificate/CA files and reject retired TLS private-key env names.
+Flow's startup contract now lists remote KMS settings. Auth production
+library/binary check and 7 startup tests, Presentation Policy production
+library/binary check and 6 startup tests, and the follow-up Flow 9 startup,
+Auth 3 library/5 transport, Presentation Policy 11 library tests passed.
+Strict Clippy for Auth, Flow and Presentation Policy production targets passed.
+These are local source checks only; service-level peer authorization and
+installed runtime behavior still require real OpenBao proof. A post-cutover
+source search leaves Verification's old MMF mTLS API and Issuance/Notification's
+direct `Identity::from_pem` as the next compile/custody routes, plus deployment
+manifests and artifact inspection.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
