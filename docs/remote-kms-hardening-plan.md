@@ -18527,3 +18527,12 @@ sha256 references and the successful claim ID. One stack release run
 cd.yml --json` on standard input. It is live; no image qualification,
 publication or installed acceptance is claimed yet. Follow this exact run
 and avoid duplicate dispatches.
+
+Release-run early artifact check: in run `38488866040`, exact amd64 and
+arm64 operator-catalog builds passed. Both downloaded ELF artifacts contain
+`79f398b0824bfc9662c2fe49c00ab45a16f5ffff:v1.1.245` and independently
+passed `gh attestation verify` bound to that source SHA, `refs/heads/main`
+and hosted runners. The source-bound check that failed the prior publisher
+is therefore locally preflighted on these new exact artifacts; the
+protected publication job has not yet executed. OpenBao image build and
+release stack validation passed. UI and services builds remain live.
