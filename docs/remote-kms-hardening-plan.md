@@ -19639,3 +19639,17 @@ introduced. The focused provider suite (8 tests), startup suite
 The tests cover configuration and transport selection; a live Flow-to-
 Organization TLS RPC and all other Organization consumers remain to be
 qualified before the grouped PR can ship.
+
+Trust Profile's Organization control plane is now staged for public-CA
+server TLS. Beta and production configuration require `ORG_GRPC_CA_CERT`
+and an explicit HTTPS Organization target. The binary creates a shared
+MMF CA-verified channel, connects eagerly and performs its authenticated
+Organization health RPC before marking the control-plane dependency
+healthy. The existing `x-service-token` authorization is retained;
+the client holds no TLS private key. Development's lazy local channel
+remains available outside the deployed KMS-only boundary. Trust Profile
+library tests passed (12), including the new deployed target/CA guard;
+targeted formatting and locked binary check passed. A control-plane
+unit failure caused by validating malformed metadata after calling
+`connect_lazy` outside Tokio was corrected by validating metadata first.
+Installed-image and live Trust Profile-to-Organization acceptance remain.
