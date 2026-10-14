@@ -19612,3 +19612,17 @@ formatting and locked binary check passed. This is code-level client
 coverage, not live Auth-to-Organization graph acceptance. The beta and
 self-host manifests still name plaintext targets, and other callers
 still need the same connected-graph conversion.
+
+Gateway's existing `GRPC_TLS_CA_CERT` channel path also had a hidden
+target rewrite: it converted `http://` to `https://` only when building
+the channel, then connected lazily. The grouped UI branch now rejects
+any of its Auth, Organization or Event Stream targets that are not
+explicit HTTPS when that public CA is configured; the channel builder
+uses the validated target verbatim. This prevents a CA setting from
+concealing a plaintext server/manifest mismatch. The Gateway library
+suite passed (164 tests, 1 ignored), targeted formatting and a locked
+binary check passed. This does not yet require the CA in every beta or
+production configuration: `GRPC_INSECURE_ALLOWED` and plaintext graph
+entries remain and must be removed with the coordinated listener/client
+deployment cutover. No installed Gateway-to-Organization TLS RPC is
+claimed from this config check.
