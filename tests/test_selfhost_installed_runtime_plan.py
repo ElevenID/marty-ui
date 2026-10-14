@@ -63,6 +63,7 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     assert {"sign_grant_verify_token", "signing_keys_openbao_token"} <= (
         EXPECTED_ROLE_SECRETS["signing-keys"]
     )
+    assert "signing_keys_integration_secret_key" in EXPECTED_ROLE_SECRETS["issuance"]
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
@@ -115,6 +116,17 @@ def test_plan_rejects_unbound_preflight() -> None:
     changed["service_count"] = 29
     with pytest.raises(ValueError, match="preflight"):
         plan(model(), changed, SECRET_ROOT)
+
+
+def test_plan_rejects_missing_issuance_integration_secret_key() -> None:
+    changed = model()
+    changed["services"]["issuance"]["secrets"] = [
+        secret
+        for secret in changed["services"]["issuance"]["secrets"]
+        if secret["source"] != "signing_keys_integration_secret_key"
+    ]
+    with pytest.raises(ValueError, match="issuance changed required secrets"):
+        plan(changed, PREFLIGHT, SECRET_ROOT)
 
 
 def test_source_compose_has_reviewed_full_dag() -> None:

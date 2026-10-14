@@ -975,6 +975,49 @@ OBSERVED_NON_CARGO_CONSUMERS = {
         PASSPORT_PROVIDER_CALLBACK_SIGNER_WITNESS,
         PASSPORT_BETA_CALLBACK_SIGNER_WITNESS,
         {
+            # Issuance requires Signing Keys' separate authenticated TLS
+            # listener even with an empty integration-secret table: startup
+            # encrypts and decrypts a proof before serving requests. This
+            # direct HTTPS dependency is not represented by Cargo or the
+            # Gateway signing-compatibility route below.
+            "package": "marty-issuance-service",
+            "evidence": "rust/services/issuance/src/integration_secret_kms.rs",
+            "binding": 'env::var("INTEGRATION_SECRET_KMS_URL")',
+            "ca_marker": 'env::var("INTEGRATION_SECRET_KMS_CA_FILE")',
+            "runtime_evidence": "rust/services/issuance/src/main.rs",
+            "runtime_marker": "KmsIntegrationSecretCipher::from_environment(",
+            "startup_marker": ".verify_storage(&mut integration_secret_connection)",
+            "worker_evidence": "rust/services/issuance/src/bin/canvas_sync_worker.rs",
+            "worker_runtime_marker": "KmsIntegrationSecretCipher::from_environment(&integration_secret_key)?",
+            "worker_startup_marker": "cipher.verify_storage(&mut audit_connection).await?",
+            "worker_vault_marker": "PostgresIntegrationSecretVault::new_remote(",
+            "request_evidence": "rust/services/issuance/src/integration_secret_kms.rs",
+            "startup_encrypt_marker": '.encrypt("marty-system", &proof, "system", "startup_proof", &proof)',
+            "startup_decrypt_marker": 'self.decrypt("marty-system", &proof, "system", "startup_proof", &envelope)',
+            "request_marker": '"{}/integration-secrets/{operation}"',
+            "request_auth_marker": '.header("X-API-Key", &self.api_key)',
+            "request_tls_marker": ".https_only(true)",
+            "provider_evidence": "rust/services/signing-keys/src/http.rs",
+            "provider_encrypt_marker": '"/internal/integration-secrets/encrypt"',
+            "provider_decrypt_marker": '"/internal/integration-secrets/decrypt"',
+            "provider_handler_marker": "async fn encrypt_integration_secret(",
+            "provider_decrypt_handler_marker": "async fn decrypt_integration_secret(",
+            "provider_auth_marker": "if !authorize_integration_secret(&state, &headers)",
+            "listener_evidence": "rust/services/signing-keys/src/main.rs",
+            "listener_marker": "if let Some(tls) = integration_secret_tls {",
+            "listener_tls_marker": "axum_server::bind_rustls(tls.addr, tls_config)",
+            "provider_config_evidence": "rust/services/signing-keys/src/config.rs",
+            "provider_port_marker": "const DEFAULT_INTEGRATION_SECRET_TLS_PORT: u16 = 8018;",
+            "provider_cert_marker": 'value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE")',
+            "deployment_evidence": "docker-compose.selfhost.prod.yml",
+            "deployment_marker": "INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal",
+            "deployment_ca_marker": "INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert",
+            "deployment_key_marker": "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key",
+            "deployment_key_secret_marker": "- signing_keys_integration_secret_key",
+            "deployment_ca_secret_marker": "- workload_identity_ca_cert",
+            "provider_deployment_marker": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert",
+        },
+        {
             # Issuance resolves its issuer identity through the configured
             # signing-keys URL, normally Gateway's authenticated compat route.
             "package": "marty-issuance-service",

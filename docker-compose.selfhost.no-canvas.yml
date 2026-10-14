@@ -15,6 +15,7 @@ services:
       - openbao_service_token
       - issuance_api_key
       - signing_keys_issuer_sign_key
+      - signing_keys_integration_secret_key
       - token_hmac_key
       - grpc_service_token
       - didcomm_issuance_openbao_token

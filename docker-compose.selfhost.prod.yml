@@ -592,11 +592,13 @@ services:
       DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
     secrets:
       - marty_db_password
       - openbao_service_token
       - issuance_api_key
       - signing_keys_issuer_sign_key
+      - signing_keys_integration_secret_key
       - token_hmac_key
       - canvas_credentials_shared_secret
       - grpc_service_token
