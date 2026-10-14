@@ -19599,3 +19599,16 @@ containers and files were removed. This proves the source-built listener,
 not an installed image or the full production graph. The remaining
 Organization callers and beta/self-host/Kubernetes targets still need
 conversion to explicit HTTPS and public-CA trust before this branch ships.
+
+Auth is the first additional Organization client staged for that cutover.
+When its remote workload TLS identity is configured, Auth now requires
+an explicit HTTPS `ORG_GRPC_TARGET` and connects to Organization with
+CA-verified server TLS using the existing public workload CA. The
+Organization RPC still carries the existing service token; no client
+private key file is introduced. An HTTP target fails configuration
+instead of being silently upgraded or used as plaintext. The focused
+Auth startup suite (7 tests), library suite (3 tests), targeted Rust
+formatting and locked binary check passed. This is code-level client
+coverage, not live Auth-to-Organization graph acceptance. The beta and
+self-host manifests still name plaintext targets, and other callers
+still need the same connected-graph conversion.
