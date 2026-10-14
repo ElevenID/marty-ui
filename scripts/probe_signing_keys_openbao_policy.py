@@ -56,6 +56,22 @@ def require_docker(*args: str, timeout: int = 120) -> str:
     return result.stdout.strip()
 
 
+def pull_pinned_openbao() -> None:
+    """Retry only the public, immutable image fetch; never replay a policy operation."""
+    if docker("image", "inspect", IMAGE).returncode == 0:
+        return
+    for attempt in range(3):
+        try:
+            fetched = docker("pull", IMAGE).returncode == 0
+        except subprocess.TimeoutExpired:
+            fetched = False
+        if fetched:
+            return
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+    raise RuntimeError("Pinned disposable OpenBao image is unavailable")
+
+
 def ensure(condition: bool, operation: str) -> None:
     if not condition:
         raise RuntimeError(f"Scoped signing-keys policy failed: {operation}")
@@ -84,6 +100,7 @@ def assert_holder_runtime_custody(postgres_name: str) -> tuple[int, int, int]:
 
 def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None:
     ensure(not (rust_adapter and grant_verifier), "select one Rust adapter mode")
+    pull_pinned_openbao()
     version = require_docker("run", "--rm", IMAGE, "version")
     ensure(
         f"OpenBao v{OPENBAO['version']}" in version

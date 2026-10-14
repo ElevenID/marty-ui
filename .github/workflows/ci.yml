@@ -968,7 +968,8 @@ jobs:
           MARTY_RUST_CI_REDIS_IMAGE=$(bash scripts/ci/pull-pinned-dockerhub-image.sh \
             redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99)
           export MARTY_RUST_CI_POSTGRES_IMAGE MARTY_RUST_CI_REDIS_IMAGE
-          docker pull quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
+          bash scripts/ci/pull-pinned-quay-openbao.sh \
+            quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878
           docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
             up -d --wait --wait-timeout 90
           postgres_id=$(docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml ps -q postgres)
