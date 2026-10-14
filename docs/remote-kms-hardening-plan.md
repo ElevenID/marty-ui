@@ -18627,3 +18627,14 @@ on queue head `7853a728772a7850859f0b7811195fe618c5a48d`. Both
 PRs remain unmerged at this checkpoint; `v1.1.246` claim and release
 have not been dispatched. Keep the source-bound claim after the final
 main SHA, and let the queue prove the combined tree.
+
+Protected publisher repair landed: #1327 passed all five merge-group
+workflows on `7853a728772a7850859f0b7811195fe618c5a48d` and merged
+into main at that SHA. Its guarded-public-write contract now asserts
+`GH_TOKEN` for each pre-promotion check, including OpenBao DIDComm. #1328
+was rebased onto this main, dropping the duplicate token code and test.
+Its new head `0b8f757b4` changes only the manual-review policy and
+obsolete notification, with protected-branch and no-admin-bypass rules
+preserved. The combined focused local release/workflow suite passed
+85/85 after the rebase; fresh protected PR and merge-group checks are
+pending. Do not claim `v1.1.246` until #1328 and exact-main full CI pass.
