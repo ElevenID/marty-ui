@@ -20283,3 +20283,17 @@ sign-only tokens, carry only public certs/CA/token references into the
 services, replace plaintext gRPC targets with authenticated TLS, and update
 the producer/model tests and connected route proof together. Preserve the
 passport and restore behavior; do not accept key-file or plaintext fallback.
+
+2026-10-14 protected-producer fail-closed gate staged in the grouped UI
+worktree: `require_keyless_tls_custody` inspects the rendered Compose model
+for workload/edge TLS private-key file selectors and mounted key secrets,
+plaintext gRPC permission, and bare gRPC targets. The protected passport
+producer invokes this check after attested model preflight but before Docker
+resource mutation; the infra/certificate rehearsals keep their separate
+read-only isolation checks. Both current passport surfaces are intentionally
+rejected until their TLS fixtures are converted. A protected-path unit test
+proves the producer rejects the local key before mutation, while the existing
+model tests still distinguish current isolation from KMS custody. Focused
+passport tests passed 56 with one existing skip, and `git diff --check`
+passed. This gate prevents a false KMS acceptance receipt; it is not a
+substitute for implementing and proving the keyless passport journey.
