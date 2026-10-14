@@ -20315,3 +20315,11 @@ handshake. The existing Event Stream connected executable TLS proof also
 passed against the refactored shared helper. Python compilation and
 `git diff --check` passed. This removes the restore probe's local TLS key;
 the separate passport disposable fixture still requires conversion.
+
+2026-10-14 grouped Rust workspace build check: on the current staged UI
+worktree, `cargo +1.95 check --workspace --locked -j 4` passed and
+`cargo +1.95 test --workspace --locked --no-run -j 4` compiled every
+workspace test target successfully in 6m35s. This catches cross-crate
+integration and test compilation across the broad TLS custody changes. It
+does not execute the full test suite, prove the installed image, or close the
+passport fixture and external-provider acceptance gaps.
