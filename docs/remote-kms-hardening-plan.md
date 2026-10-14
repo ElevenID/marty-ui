@@ -18840,3 +18840,15 @@ installer with three bounded attempts and a per-attempt timeout. The
 focused local workflow contract passed. This push canceled the older
 run; require the full checks on `be178d164` before re-entering the
 merge queue.
+
+PR #1330 exact head `be178d164dc3c882383254643012d609b6a0d266`
+passed all checks, including CI run `38583806768`, CodeQL, policy,
+organization quality, release contracts, OpenBao plugin recovery, and
+the Canvas suite. A locally built source migrations image matched all
+18 frozen Rust bootstrap reference cases. The PR re-entered GitHub's
+protected merge queue at position 1; merge-group SHA
+`c763e88ea9e39053390020ba2aabc23e01b2c613` is running CI
+`38589805914`. Wait for merge-group success before exact-main checks
+and a new release claim. The `stack-release` environment was queried
+again on 2026-10-14: its sole protection rule is protected-branch
+policy, with no required reviewers or manual approval.
