@@ -43,6 +43,22 @@ def rendered_models():
     return before, after
 
 
+@pytest.mark.parametrize("missing", ["environment", "mount"])
+def test_issuance_alias_requires_authenticated_kms_binding(rendered_models, missing):
+    approved, current = deepcopy(rendered_models)
+    issuance = current["services"]["issuance"]
+    if missing == "environment":
+        del issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"]
+    else:
+        issuance["secrets"] = [
+            secret
+            for secret in issuance["secrets"]
+            if secret["source"] != "signing_keys_integration_secret_key"
+        ]
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
+
 @pytest.fixture
 def models(rendered_models):
     return deepcopy(rendered_models)

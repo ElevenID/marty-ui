@@ -1,5 +1,6 @@
 """Reviewed current self-host model and synthetic binding gate; no startup."""
 
+from copy import deepcopy
 import difflib
 import hashlib
 import json
@@ -221,25 +222,47 @@ def assert_signing_binding(model):
 
 def assert_models(approved, actual):
     """Check the complete current KMS-only model against its reviewed snapshot."""
-    assert approved == actual, "Unreviewed self-host model change:\n" + "".join(
+    expected = deepcopy(approved)
+    # Preserve the pinned historical snapshot: the current Issuance alias
+    # requires the same authenticated KMS startup proof as the native role.
+    issuance = expected["services"]["issuance"]
+    envelope = "signing_keys_integration_secret_key"
+    envelope_path = f"/run/secrets/{envelope}"
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in issuance["environment"]
+    assert all(item["source"] != envelope for item in issuance["secrets"])
+    issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] = envelope_path
+    after_issuer_key = next(
+        index
+        for index, item in enumerate(issuance["secrets"])
+        if item["source"] == "signing_keys_issuer_sign_key"
+    )
+    issuance["secrets"].insert(
+        after_issuer_key + 1, {"source": envelope, "target": envelope_path}
+    )
+    assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
-            json.dumps(approved, sort_keys=True, indent=2).splitlines(keepends=True),
+            json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
             json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
-            fromfile="approved KMS-only model",
+            fromfile="approved KMS-only model plus Issuance KMS credential",
             tofile="current self-host model",
         )
     )
     assert "INTEGRATION_SECRET_MASTER_KEY" not in json.dumps(actual)
     assert "integration_secret_master_key" not in actual.get("secrets", {})
-    envelope = "signing_keys_integration_secret_key"
-    envelope_path = f"/run/secrets/{envelope}"
     assert actual["secrets"][envelope]["file"].endswith(f"/{envelope}")
-    envelope_owners = {"signing-keys", "issuance-native", "canvas-sync-worker"}
+    envelope_owners = {
+        "signing-keys",
+        "issuance",
+        "issuance-native",
+        "canvas-sync-worker",
+    }
     for name, service in actual["services"].items():
         environment = service.get("environment", {})
         mounts = [item["source"] for item in service.get("secrets", [])]
         if name in envelope_owners:
-            assert environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
+            assert (
+                environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
+            )
             assert mounts.count(envelope) == 1
         else:
             assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in environment
@@ -255,12 +278,36 @@ def assert_models(approved, actual):
             "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
             "sign_grant_mint_gateway_issuer_did_token",
         ),
-        ({"flow"}, "FLOW_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_flow_wallet_token"),
-        ({"signing-keys"}, "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "sign_grant_verify_token"),
-        ({"issuance", "issuance-native"}, "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_credential_token"),
-        ({"issuance", "issuance-native", "canvas-sync-worker"}, "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_canvas_token"),
-        ({"issuance", "issuance-native"}, "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_readiness_token"),
-        ({"issuance", "issuance-native"}, "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "sign_grant_mint_issuance_passport_token"),
+        (
+            {"flow"},
+            "FLOW_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_flow_wallet_token",
+        ),
+        (
+            {"signing-keys"},
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "sign_grant_verify_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_credential_token",
+        ),
+        (
+            {"issuance", "issuance-native", "canvas-sync-worker"},
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_canvas_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_readiness_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_passport_token",
+        ),
     ]
     for owner, setting, secret in grant_roles:
         assert actual["secrets"][secret]["file"].endswith(f"/{secret}")
@@ -289,6 +336,7 @@ def assert_models(approved, actual):
     GATE["native_dispatcher_model"](actual["services"]["issuance-native"])
     assert_signing_binding(actual)
 
+
 def interpolated_models():
     approved = (ROOT / APPROVED).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
@@ -298,15 +346,19 @@ def interpolated_models():
     assert "BAO_ADDR" in required
     environment = yaml.safe_load(approved)["services"]["issuance"]["environment"]
     variables = (
-        set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
-        | set(SHARED_ADDITIONS)
-        | set(NATIVE_ADDITIVE)
-        | {
-            key
-            for additions in PASSPORT_CONSUMER_ADDITIVE.values()
-            for key in additions
-        }
-    ) - required - {"BAO_ADDR"}
+        (
+            set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
+            | set(SHARED_ADDITIONS)
+            | set(NATIVE_ADDITIVE)
+            | {
+                key
+                for additions in PASSPORT_CONSUMER_ADDITIVE.values()
+                for key in additions
+            }
+        )
+        - required
+        - {"BAO_ADDR"}
+    )
 
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
@@ -367,7 +419,9 @@ def interpolated_models():
                     except subprocess.CalledProcessError as error:
                         assert f"required variable {name}" in error.stderr
                     else:
-                        raise AssertionError(f"Required self-host input accepted: {name}")
+                        raise AssertionError(
+                            f"Required self-host input accepted: {name}"
+                        )
         print(
             f"PASS: {len(required)} current required inputs reject missing/empty; "
             "retired Python image input is absent"

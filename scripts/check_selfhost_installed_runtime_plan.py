@@ -102,6 +102,7 @@ EXPECTED_ROLE_SECRETS = {
                  "didcomm_issuance_openbao_token", "sign_grant_mint_issuance_canvas_token",
                  "sign_grant_mint_issuance_credential_token", "sign_grant_mint_issuance_passport_token",
                  "sign_grant_mint_issuance_readiness_token", "signing_keys_issuer_sign_key",
+                 "signing_keys_integration_secret_key",
                  "workload_identity_ca_cert"},
     "issuance-migrations": {"marty_db_password"},
     "issuance-native": {"marty_db_password", "issuance_api_key",

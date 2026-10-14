@@ -4125,6 +4125,30 @@ document change is the first pilot of #1308's PR-only selector. Service changes
 and protected merge groups still select full Rust checks. No hosted timing or
 speedup is claimed yet.
 
+The Trust Profile witness subsequently merged in [#1309](https://github.com/ElevenID/marty-ui/pull/1309)
+as `de4149d580b695672b3d65048c41f79079fd3284`.
+
+October 14 A0/A3 local candidate: Issuance has a separate, previously
+unrecorded non-Cargo dependency on Signing Keys' authenticated integration-
+secret TLS listener. The two self-host Issuance web roles and the Canvas sync
+worker configure `INTEGRATION_SECRET_KMS_URL` at `signing-keys:8018`; each
+constructs the HTTPS client and must encrypt/decrypt a startup proof even when
+its integration-secret table is empty. This is distinct from the
+already-inventoried Gateway signing-compatibility route. The candidate adds a
+source-witnessed shadow edge
+through the client configuration, startup call, authenticated TLS request,
+provider routes/authorization, TLS listener, and self-host bindings. Hosted
+review found that the primary Issuance role was missing its API-key file and
+secret mount despite the URL and CA binding; the candidate now wires both in
+the default and opt-in no-Canvas stacks and asserts the authenticated bindings
+for all three roles. The pinned KMS-only
+historical snapshot stays unchanged; the full-model oracle admits only those
+two reviewed Issuance additions. The installed-runtime DAG inventory includes
+the required credential and rejects its removal. Local planner tests (56, one existing skip),
+self-host mutation tests (83), and all three whole-model renders pass. Rust
+check selection is unchanged: service inputs retain full validation. Hosted
+CI must pass before merge; no speedup or live KMS qualification is claimed.
+
 ## Design references
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.

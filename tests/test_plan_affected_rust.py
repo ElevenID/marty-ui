@@ -2891,6 +2891,82 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             (ROOT / edge[source]).read_text(encoding="utf-8"),
                         )
 
+    def test_signing_keys_integration_secret_tls_startup_edge_is_observed_only(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/signing-keys/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        edges = [
+            edge
+            for edge in result["observed_non_cargo_consumers"]
+            if edge["producer"] == "marty-signing-keys"
+            and edge["package"] == "marty-issuance-service"
+            and edge.get("binding") == 'env::var("INTEGRATION_SECRET_KMS_URL")'
+        ]
+        self.assertEqual(len(edges), 1)
+        edge = edges[0]
+        self.assertNotIn(
+            "marty-signing-keys",
+            {dep["name"] for dep in packages["marty-issuance-service"]["dependencies"]},
+        )
+        for marker, source in (
+            ("binding", "evidence"),
+            ("ca_marker", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("startup_marker", "runtime_evidence"),
+            ("worker_runtime_marker", "worker_evidence"),
+            ("worker_startup_marker", "worker_evidence"),
+            ("worker_vault_marker", "worker_evidence"),
+            ("startup_encrypt_marker", "request_evidence"),
+            ("startup_decrypt_marker", "request_evidence"),
+            ("request_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("request_tls_marker", "request_evidence"),
+            ("provider_encrypt_marker", "provider_evidence"),
+            ("provider_decrypt_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_decrypt_handler_marker", "provider_evidence"),
+            ("provider_auth_marker", "provider_evidence"),
+            ("listener_marker", "listener_evidence"),
+            ("listener_tls_marker", "listener_evidence"),
+            ("provider_port_marker", "provider_config_evidence"),
+            ("provider_cert_marker", "provider_config_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                )
+        provider = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        self.assertGreaterEqual(provider.count(edge["provider_auth_marker"]), 2)
+        deployment = (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8")
+
+        def service_section(name: str) -> str:
+            tail = deployment.split(f"\n  {name}:\n", 1)[1]
+            next_service = re.search(r"\n  [a-z][a-z-]+:\n", tail)
+            return tail[: next_service.start()] if next_service else tail
+
+        for service in ("issuance", "issuance-native", "canvas-sync-worker"):
+            with self.subTest(service=service):
+                section = service_section(service)
+                for marker in (
+                    "deployment_marker",
+                    "deployment_ca_marker",
+                    "deployment_key_marker",
+                    "deployment_key_secret_marker",
+                    "deployment_ca_secret_marker",
+                ):
+                    self.assertIn(edge[marker], section)
+        self.assertIn(
+            edge["provider_deployment_marker"], service_section("signing-keys")
+        )
+
     def test_signing_keys_flow_signer_and_envelope_edges_are_observed_only(
         self,
     ) -> None:
