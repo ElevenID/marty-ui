@@ -32,6 +32,22 @@ def test_stack_lock_bytes_are_platform_stable() -> None:
     assert "release/stack-lock*.json text eol=lf" in _text(".gitattributes")
 
 
+def test_ci_retries_transient_public_wheel_errors_without_skipping_digests() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/ci.yml"))["jobs"]
+    for job_id in ("test-services", "test-release-contracts"):
+        install = next(
+            step["run"] for step in jobs[job_id]["steps"]
+            if step.get("name") in {"Install dependencies", "Install released test dependencies"}
+        )
+        for name in ("marty_rs", "verification", "iso18013"):
+            assert (
+                "curl --fail --location --silent --show-error --connect-timeout 15 "
+                "--max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "
+                f'"${name}_uri" --output "${name}_wheel"'
+            ) in install
+            assert f'echo "${{{name}_digest#sha256:}}  ${name}_wheel" | sha256sum --check --strict' in install
+
+
 def test_every_workflow_run_download_binds_the_repository_explicitly() -> None:
     commands: list[tuple[Path, str]] = []
     for workflow_path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):

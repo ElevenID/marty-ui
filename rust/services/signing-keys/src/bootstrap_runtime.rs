@@ -49,7 +49,11 @@ pub async fn run(verify_only: bool) -> Result<(), RunError> {
         .iter()
         .filter_map(|name| env::var(name).ok().map(|value| ((*name).into(), value)))
         .collect();
-    for name in ["OPENBAO_SERVICE_TOKEN", "BAO_TOKEN"] {
+    for name in [
+        "OPENBAO_SERVICE_TOKEN",
+        "BAO_TOKEN",
+        "NOTIFICATION_OPENBAO_TOKEN",
+    ] {
         environment.insert(name.into(), secret(name));
     }
     let config = Config {

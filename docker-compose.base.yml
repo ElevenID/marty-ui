@@ -221,6 +221,7 @@ services:
       BAO_ISSUANCE_CANVAS_GRANT_TOKEN_FILE: /bao/issuance-canvas-grant/token
       BAO_ISSUANCE_READINESS_GRANT_TOKEN_FILE: /bao/issuance-readiness-grant/token
       BAO_ISSUANCE_PASSPORT_GRANT_TOKEN_FILE: /bao/issuance-passport-grant/token
+      BAO_NOTIFICATION_TOKEN_FILE: /bao/notification/token
     depends_on:
       openbao:
         condition: service_healthy
@@ -233,6 +234,7 @@ services:
       - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant
       - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant
       - openbao_issuance_passport_grant:/bao/issuance-passport-grant
+      - openbao_notification:/bao/notification
     restart: "no"
     networks:
       - marty-network
@@ -288,6 +290,9 @@ services:
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      NOTIFICATION_OPENBAO_TOKEN_FILE: /bao/notification/token
+    volumes:
+      - openbao_notification:/bao/notification:ro
     depends_on:
       revocation-profile-migrate:
         condition: service_completed_successfully
@@ -1342,6 +1347,7 @@ volumes:
   openbao_issuance_canvas_grant:
   openbao_issuance_readiness_grant:
   openbao_issuance_passport_grant:
+  openbao_notification:
 
 networks:
   marty-network:

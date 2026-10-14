@@ -161,7 +161,7 @@ def run_organization_runtime(
     token = secrets.token_hex(32)
     token_path.write_text(token, encoding="ascii")
     if os.name == "posix":
-        token_path.chmod(0o600)
+        token_path.chmod(0o444)
     require(
         token
         not in {

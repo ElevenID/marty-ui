@@ -25,6 +25,8 @@ def owned_model(
     address: str = "172.17.0.2",
     *,
     mounts: list[dict] | None = None,
+    image: str = bootstrap.HELPER_IMAGE,
+    tmpfs: set[str] | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -32,7 +34,7 @@ def owned_model(
             "Name": "/" + name,
             "Config": {
                 "Labels": {bootstrap.OWNED: name},
-                "Image": bootstrap.HELPER_IMAGE,
+                "Image": image,
                 "User": (
                     f"{os.getuid()}:{os.getgid()}"
                     if os.name == "posix"
@@ -44,6 +46,7 @@ def owned_model(
             "HostConfig": {
                 "NetworkMode": "default" if mounts else "bridge",
                 "PortBindings": {},
+                "Tmpfs": {path: "" for path in (tmpfs or set())},
             },
             "NetworkSettings": {"Networks": {"bridge": {"IPAddress": address}}},
             "Mounts": mounts or [],
@@ -149,8 +152,10 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
     assert "/bin/sh -ec '\numask 077\n" in source
     assert 'private_tmp="$(mktemp "$output_dir/.openbao-token.XXXXXX")"' in source
     assert 'mv -f "$private_tmp" "$output_file"' in source
+    assert 'chmod 0444 "$output_file"' in source
     for output in (
         "SERVICE_TOKEN_OUTPUT_FILE",
+        "BOOTSTRAP_TOKEN_OUTPUT_FILE",
         "SIGNING_KEYS_TOKEN_OUTPUT_FILE",
         "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE",
         "NOTIFICATION_TOKEN_OUTPUT_FILE",
@@ -178,6 +183,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         '  *sign-grant-mint-*) command printf \'{"auth":{"client_token":"grant-new"}}\\n\' ;;\n'
         '  *sign-grant-verify*) command printf \'{"auth":{"client_token":"verify-new"}}\\n\' ;;\n'
         '  *credential-service*) command printf \'{"auth":{"client_token":"service-new"}}\\n\' ;;\n'
+        '  *kms-bootstrap*) command printf \'{"auth":{"client_token":"bootstrap-new"}}\\n\' ;;\n'
         '  *notification-webhook-service*) command printf \'{"auth":{"client_token":"notification-new"}}\\n\' ;;\n'
         '  *passport-provider-callback-service*) command printf \'{"auth":{"client_token":"callback-new"}}\\n\' ;;\n'
         "esac; }\n"
@@ -196,9 +202,10 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         **os.environ,
         "BAO_ADDR": "http://127.0.0.1:8200",
         "BAO_TOKEN": "synthetic-bootstrap-token",
-        "SERVICE_TOKEN_OUTPUT_FILE": str(paths[0]),
-        "NOTIFICATION_TOKEN_OUTPUT_FILE": str(paths[1]),
-        "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE": str(paths[2]),
+        "SERVICE_TOKEN_OUTPUT_FILE": str(tmp_path / "openbao_service_token"),
+        "BOOTSTRAP_TOKEN_OUTPUT_FILE": str(tmp_path / "openbao_bootstrap_token"),
+        "NOTIFICATION_TOKEN_OUTPUT_FILE": str(tmp_path / "notification_openbao_token"),
+        "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE": str(tmp_path / "passport_callback_signer_bao_token"),
         "SIGNING_KEYS_TOKEN_OUTPUT_FILE": str(signing_path),
         "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE": str(didcomm_path),
         "GRANT_TOKEN_OUTPUT_DIR": str(tmp_path),
@@ -216,15 +223,16 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         assert old_handle.read() == b"shipped-public-placeholder"
     assert [path.read_text(encoding="ascii") for path in paths] == [
         "service-new",
+        "bootstrap-new",
         "notification-new",
         "callback-new",
         "signing-new",
         "didcomm-new",
     ]
-    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in paths)
     grant_paths = list(tmp_path.glob("sign_grant_*_token"))
     assert len(grant_paths) == 8
-    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in grant_paths)
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in grant_paths)
     assert not list(tmp_path.glob(".openbao-token.*"))
 
     paths[0].unlink()
@@ -239,14 +247,37 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
     )
     assert rejected.returncode != 0
     assert "Scoped token output path is unsafe." in rejected.stderr
-    assert paths[1].read_text(encoding="ascii") == "notification-new"
+    assert paths[1].read_text(encoding="ascii") == "bootstrap-new"
+
+
+PLUGIN_IMAGE = bootstrap.PLUGIN_URI + "@sha256:" + "a" * 64
+
+
+def test_qualified_transaction_selects_exact_plugin_image(tmp_path: Path) -> None:
+    transaction = tmp_path / "release-transaction.json"
+    record = {
+        "schema": "elevenid.stack-release-transaction/v1",
+        "state": "qualified",
+        "images": {
+            "openbao_didcomm": {
+                "uri": bootstrap.PLUGIN_URI,
+                "digest": "sha256:" + "a" * 64,
+            }
+        },
+    }
+    transaction.write_text(json.dumps(record), encoding="utf-8")
+    assert bootstrap.qualified_plugin_image(transaction) == PLUGIN_IMAGE
+    record["images"]["openbao_didcomm"]["digest"] = "latest"
+    transaction.write_text(json.dumps(record), encoding="utf-8")
+    with pytest.raises(bootstrap.migrations.QualificationError):
+        bootstrap.qualified_plugin_image(transaction)
 
 
 def test_source_checkout_cannot_be_used_as_install_root() -> None:
     with pytest.raises(
         bootstrap.migrations.QualificationError, match="outside the source checkout"
     ):
-        bootstrap.probe(bootstrap.migrations.ROOT, {})
+        bootstrap.probe(bootstrap.migrations.ROOT, {}, PLUGIN_IMAGE)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX helper execution")
@@ -263,7 +294,7 @@ def test_shipped_helper_inherits_token_without_argv_value(
         "#!/bin/sh\n"
         'printf "%s\\n" "$@" > "$FAKE_DOCKER_ARGV"\n'
         'printf "%s" "$BAO_TOKEN" > "$FAKE_DOCKER_ENV"\n'
-        "for name in openbao_service_token notification_openbao_token passport_callback_signer_bao_token; do\n"
+        "for name in openbao_service_token openbao_bootstrap_token notification_openbao_token passport_callback_signer_bao_token; do\n"
         '  printf "%s" synthetic-scoped-token > "$SELFHOST_SECRET_DIR/$name"\n'
         "done\n",
         encoding="ascii",
@@ -321,6 +352,7 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
     helper.parent.mkdir()
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setattr(bootstrap, "verify_helper_image", lambda *_args: None)
+    monkeypatch.setattr(bootstrap, "verify_reviewed_image", lambda *_args: None)
     container_id = "b" * 64
     helper_id = "c" * 64
     calls: list[list[str]] = []
@@ -367,6 +399,7 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
                         }
                         for destination in (
                             "/work-service",
+                            "/work-bootstrap",
                             "/work-notification",
                             "/work-callback",
                         )
@@ -375,8 +408,33 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
                 return result(
                     args, owned_model(helper_id, name[0] + "-helper", mounts=mounts)
                 )
-            return result(args, owned_model(container_id, name[0]))
+            create = next(call for call in calls if call[:2] == ["docker", "create"])
+            plugin_config = create[create.index("-v") + 1].split(
+                ":/openbao/config/plugin.hcl:ro", 1
+            )[0]
+            return result(
+                args,
+                owned_model(
+                    container_id,
+                    name[0],
+                    mounts=[
+                        {
+                            "Type": "bind",
+                            "Source": plugin_config,
+                            "Destination": "/openbao/config/plugin.hcl",
+                            "RW": False,
+                        }
+                    ],
+                    image=PLUGIN_IMAGE,
+                    tmpfs={"/openbao/file", "/openbao/logs"},
+                ),
+            )
         if args[:3] == ["docker", "exec", container_id]:
+            if args[3] == "sha256sum":
+                return result(args, "a" * 64 + "  /plugins/openbao-didcomm-authcrypt\n")
+            return result(args)
+        if args[:3] == ["docker", "exec", "--env"]:
+            assert env["BAO_TOKEN"] not in args
             return result(args)
         if args[:2] == ["/bin/sh", str(helper)]:
             helper_env.update(env)
@@ -411,12 +469,25 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
     monkeypatch.setattr(bootstrap.migrations, "command", fake_command)
     receipt = {"archive_sha256": "1" * 64, "image_lock_sha256": "2" * 64}
     if failure is None:
-        report = bootstrap.probe(tmp_path, receipt)
+        report = bootstrap.probe(tmp_path, receipt, PLUGIN_IMAGE)
         assert report["qualification"] == "unqualified"
         assert report["scoped_tokens"] == list(bootstrap.TOKEN_NAMES)
     else:
         with pytest.raises(bootstrap.migrations.QualificationError):
-            bootstrap.probe(tmp_path, receipt)
+            bootstrap.probe(tmp_path, receipt, PLUGIN_IMAGE)
+    if failure != "bad_create":
+        helper_call = next(
+            i for i, call in enumerate(calls)
+            if call[:2] == ["/bin/sh", str(helper)]
+        )
+        assert any(
+            call[-5:] == [
+                "plugin", "register", "-sha256=" + "a" * 64,
+                "secret", "openbao-didcomm-authcrypt",
+            ]
+            for call in calls[:helper_call]
+        )
+        assert any("-path=didcomm" in call for call in calls[:helper_call])
     assert ["docker", "rm", "--force", "--volumes", container_id] in calls
     if failure == "timeout":
         assert ["docker", "rm", "--force", "--volumes", helper_id] in calls

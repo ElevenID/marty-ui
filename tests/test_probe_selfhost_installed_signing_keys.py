@@ -67,6 +67,7 @@ def test_exact_runtime_render_has_no_host_ports_or_root_secret(tmp_path):
         "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_RUN_USER": probe.migrations.host_user(),
         "PROBE_SERVICES_IMAGE": IMAGE,
         "PROBE_SECRET_DIR": str(tmp_path),
         "PROBE_OPENBAO_START": str(probe.migrations.START.resolve()),
@@ -141,6 +142,7 @@ def test_runtime_uses_private_service_and_tears_down_after_business_read(tmp_pat
         "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_RUN_USER": probe.migrations.host_user(),
         "PROBE_SECRET_DIR": str(tmp_path),
         "PROBE_OPENBAO_START": str(probe.migrations.START.resolve()),
         "PROBE_OPENBAO_BOOTSTRAP": str(probe.migrations.BOOTSTRAP.resolve()),
@@ -190,6 +192,7 @@ def test_failed_runtime_read_still_tears_down(tmp_path, monkeypatch):
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_SECRET_DIR": str(tmp_path),
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_RUN_USER": probe.migrations.host_user(),
         "PROBE_OPENBAO_START": str(probe.migrations.START.resolve()),
         "PROBE_OPENBAO_BOOTSTRAP": str(probe.migrations.BOOTSTRAP.resolve()),
         "PROBE_OPENBAO_INIT": str((install / "docker/openbao-init.sh").resolve()),
@@ -229,6 +232,7 @@ def test_runtime_hook_runs_after_two_migrations_and_retains_unqualified(tmp_path
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")
+            (secret_dir / "bao_bootstrap_token").write_text("scoped-bootstrap")
             (secret_dir / "notification_openbao_token").write_text("scoped-notification")
             (secret_dir / "sign_grant_verify_token").write_text("scoped-verifier")
             (secret_dir / "signing_keys_openbao_token").write_text("scoped-signing-keys")

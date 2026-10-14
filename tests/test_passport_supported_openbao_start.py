@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 import json
 import os
+import re
 import secrets
 import shutil
 import stat
@@ -90,30 +91,40 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         # consumers. Its host output directory remains private to this run.
         host_user = (["--user", f"{os.getuid()}:{os.getgid()}"]
                      if hasattr(os, "getuid") else [])
-        result = docker(
-            "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
-            "--env", "BAO_ADDR=http://openbao:8200",
-            "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
-            + managed_key_reference(29876, "csca"),
-            "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
-            + managed_key_reference(29876, "x509_doc_signer"),
-            "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
-            + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
-            "--mount", "type=bind,src=" + str(ROOT / "docker/openbao-init.sh")
-            + ",dst=/scripts/openbao-init.sh,readonly",
-            "--mount", "type=bind,src=" + str(token_file)
-            + ",dst=/run/secrets/bao_root_token,readonly",
-            "--mount", "type=bind,src=" + str(output_dir) + ",dst=/work/secrets",
-            image, "/scripts/passport_supported_openbao_bootstrap.sh", timeout=180,
-        )
+        try:
+            result = docker(
+                "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
+                "--env", "BAO_ADDR=http://openbao:8200",
+                "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
+                + managed_key_reference(29876, "csca"),
+                "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
+                + managed_key_reference(29876, "x509_doc_signer"),
+                "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_bootstrap.sh")
+                + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly",
+                "--mount", "type=bind,src=" + str(ROOT / "docker/openbao-init.sh")
+                + ",dst=/scripts/openbao-init.sh,readonly",
+                "--mount", "type=bind,src=" + str(token_file)
+                + ",dst=/run/secrets/bao_root_token,readonly",
+                "--mount", "type=bind,src=" + str(output_dir) + ",dst=/work/secrets",
+                image, "/scripts/passport_supported_openbao_bootstrap.sh", timeout=180,
+            )
+        except subprocess.CalledProcessError as error:
+            # Never surface OpenBao CLI output: it may contain issued tokens.
+            match = re.search(
+                r"Disposable OpenBao bootstrap failed at ([a-z-]+) \(status ([0-9]+)\)",
+                error.stderr or "",
+            )
+            phase = match.group(1) if match else "unknown"
+            pytest.fail(f"Disposable OpenBao bootstrap failed at {phase}")
         assert "scoped tokens initialized" in result.stdout
         service = (output_dir / "bao_token").read_text(encoding="ascii")
         callback = (output_dir / "callback_signer_bao_token").read_text(encoding="ascii")
-        assert service and callback and service != callback
+        notification = (output_dir / "notification_openbao_token").read_text(encoding="ascii")
+        assert service and callback and notification and len({service, callback, notification}) == 3
         if os.name == "posix":
             assert stat.S_IMODE((output_dir / "bao_token").stat().st_mode) == 0o644
             assert stat.S_IMODE((output_dir / "callback_signer_bao_token").stat().st_mode) == 0o644
-            for filename in ("bao_token", "callback_signer_bao_token"):
+            for filename in ("bao_token", "callback_signer_bao_token", "notification_openbao_token"):
                 docker(
                     "run", "--rm", "--user", "10001:10001",
                     "--entrypoint", "/bin/sh",
@@ -121,7 +132,7 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
                     + ",dst=/tmp/" + filename + ",readonly",
                     image, "-c", "test -r /tmp/" + filename,
                 )
-        assert root_token not in (service, callback, result.stdout, result.stderr)
+        assert root_token not in (service, callback, notification, result.stdout, result.stderr)
         for purpose in ("csca", "x509_doc_signer"):
             expected = managed_key_reference(29876, purpose)
             source = "|".join(("00000000-0000-0000-0000-000000000001",

@@ -2,6 +2,9 @@
 # Run only in a disposable, project-scoped OpenBao CLI container on the
 # acceptance private network. The root token never enters Docker configuration.
 set -eu
+bootstrap_stage=validate
+# Report only a fixed stage name on failure; CLI output can contain tokens.
+trap 'status=$?; if [ "$status" -ne 0 ]; then printf "Disposable OpenBao bootstrap failed at %s (status %s)\n" "$bootstrap_stage" "$status" >&2; fi' EXIT
 
 if [ "${BAO_ADDR:-}" != "http://openbao:8200" ]; then
     echo "Disposable OpenBao endpoint is invalid" >&2
@@ -11,7 +14,8 @@ if [ ! -r /run/secrets/bao_root_token ] || [ ! -d /work/secrets ]; then
     echo "Disposable OpenBao bootstrap mounts are missing" >&2
     exit 1
 fi
-if [ -e /work/secrets/bao_token ] || [ -e /work/secrets/callback_signer_bao_token ]; then
+if [ -e /work/secrets/bao_token ] || [ -e /work/secrets/callback_signer_bao_token ] ||
+   [ -e /work/secrets/notification_openbao_token ]; then
     echo "Disposable OpenBao service tokens already exist" >&2
     exit 1
 fi
@@ -33,6 +37,7 @@ export VAULT_TOKEN="$BAO_TOKEN"
 
 # Reuse the ordinary Marty transit/key/policy initializer. Its development
 # PKI root is not the passport CSCA; that certificate needs a managed profile.
+bootstrap_stage=initialize
 /bin/sh /scripts/openbao-init.sh >&2
 
 # The protected producer derives these UUIDv5 names from its port-qualified
@@ -40,6 +45,7 @@ export VAULT_TOKEN="$BAO_TOKEN"
 # root-token phase may create them; the service token remains read/sign scoped.
 csca_key=${PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE:-}
 dsc_key=${PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE:-}
+bootstrap_stage=passport-keys
 if [ "$csca_key" = "$dsc_key" ]; then
     echo "Disposable passport key references are not distinct" >&2
     exit 1
@@ -85,18 +91,28 @@ fi
 umask 077
 service_tmp=$(mktemp /work/secrets/.bao_token.XXXXXX)
 callback_tmp=$(mktemp /work/secrets/.callback_signer_bao_token.XXXXXX)
-trap 'rm -f "$service_tmp" "$callback_tmp"' EXIT HUP INT TERM
+notification_tmp=$(mktemp /work/secrets/.notification_openbao_token.XXXXXX)
+trap 'status=$?; rm -f "$service_tmp" "$callback_tmp" "$notification_tmp"; if [ "$status" -ne 0 ]; then printf "Disposable OpenBao bootstrap failed at %s (status %s)\n" "$bootstrap_stage" "$status" >&2; fi' EXIT
+trap 'exit 1' HUP INT TERM
+bootstrap_stage=token-create
 service_token=$(bao token create -policy=credential-service -orphan -ttl=2h -renewable=false -field=token)
 callback_token=$(bao token create -policy=passport-provider-callback-service -orphan -ttl=2h -renewable=false -field=token)
+notification_token=$(bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token)
 if [ -z "$service_token" ] || [ -z "$callback_token" ] ||
+   [ -z "$notification_token" ] ||
    [ "$service_token" = "$callback_token" ] ||
-   [ "$service_token" = "$BAO_TOKEN" ] || [ "$callback_token" = "$BAO_TOKEN" ]; then
+   [ "$notification_token" = "$service_token" ] ||
+   [ "$notification_token" = "$callback_token" ] ||
+   [ "$service_token" = "$BAO_TOKEN" ] || [ "$callback_token" = "$BAO_TOKEN" ] ||
+   [ "$notification_token" = "$BAO_TOKEN" ]; then
     echo "Disposable OpenBao token creation failed" >&2
     exit 1
 fi
 printf '%s' "$service_token" > "$service_tmp"
 printf '%s' "$callback_token" > "$callback_tmp"
+printf '%s' "$notification_token" > "$notification_tmp"
 
+bootstrap_stage=token-capabilities
 service_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-bureau-callback-marty-hmac)
 callback_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/keys/passport-bureau-callback-marty-hmac)
@@ -107,6 +123,11 @@ provider_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" ba
 callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_create_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities auth/token/create)
 service_create_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities auth/token/create)
+# A no-default-policy token cannot call sys/capabilities-self. Inspect its
+# effective ACL with the bootstrap root token instead.
+notification_encrypt_caps=$(bao token capabilities "$notification_token" transit/encrypt/notification-webhook-envelope-marty-aes256)
+notification_sign_caps=$(bao token capabilities "$notification_token" transit/sign/cred-issuer-tenant-scope-probe)
+bootstrap_stage=capability-assertions
 case "$service_caps" in
     *create*update* | *update*create*) ;;
     *) echo "Disposable credential token cannot sign" >&2; exit 1 ;;
@@ -125,12 +146,19 @@ if [ "$callback_key_caps" != "deny" ] ||
    [ "$provider_key_caps" != "deny" ] ||
    [ "$callback_sign_caps" != "deny" ] ||
    [ "$callback_create_caps" != "deny" ] ||
-   [ "$service_create_caps" != "deny" ]; then
+   [ "$service_create_caps" != "deny" ] ||
+   [ "$notification_sign_caps" != "deny" ]; then
     echo "Disposable OpenBao service token has excess capabilities" >&2
     exit 1
 fi
+case "$notification_encrypt_caps" in
+    "create, update" | "update, create") ;;
+    *) echo "Disposable notification token cannot encrypt" >&2; exit 1 ;;
+esac
 
+bootstrap_stage=publish
 mv "$service_tmp" /work/secrets/bao_token
 mv "$callback_tmp" /work/secrets/callback_signer_bao_token
-chmod 0644 /work/secrets/bao_token /work/secrets/callback_signer_bao_token
+mv "$notification_tmp" /work/secrets/notification_openbao_token
+chmod 0644 /work/secrets/bao_token /work/secrets/callback_signer_bao_token /work/secrets/notification_openbao_token
 echo "Disposable OpenBao transit and scoped tokens initialized"

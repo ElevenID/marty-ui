@@ -39,6 +39,7 @@
     "compliance_profile_workload_client_key",
     "flow_application_event_hmac_key",
     "openbao_service_token",
+    "openbao_bootstrap_token",
     "signing_keys_openbao_token"
   ],
   "artifact_profile": "oss-release",

@@ -25,7 +25,7 @@ def inputs(root: Path) -> Path:
     secrets = root / "secrets"
     secrets.mkdir()
     for name in (
-        "marty_db_password", "bao_root_token", "bao_token", "signing_keys_internal_api_key",
+        "marty_db_password", "bao_root_token", "bao_token", "notification_openbao_token", "signing_keys_internal_api_key",
         "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
@@ -178,6 +178,8 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
     assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
     migration = model["services"]["db-migrate"]
+    assert migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] == "/run/secrets/notification_openbao_token"
+    assert "notification_openbao_token" in {secret["source"] for secret in migration["secrets"]}
     issuance_migration = model["services"]["issuance-migrations"]
     assert issuance_migration["image"] == SERVICES
     assert issuance_migration["depends_on"]["db-migrate"]["condition"] == (

@@ -18,6 +18,7 @@ BAO_INIT_FILE="${BAO_INIT_FILE:-/bao/data/selfhost-init.json}"
 BAO_ROOT_TOKEN_FILE="${BAO_ROOT_TOKEN_FILE:-/bao/data/root.token}"
 BAO_UNSEAL_KEY_FILE="${BAO_UNSEAL_KEY_FILE:-/bao/data/unseal.key}"
 BAO_SERVICE_TOKEN_FILE="${BAO_SERVICE_TOKEN_FILE:-/bao/runtime/credential-service.token}"
+BAO_BOOTSTRAP_TOKEN_FILE="${BAO_BOOTSTRAP_TOKEN_FILE:-/bao/runtime/openbao_bootstrap_token}"
 BAO_SIGNING_KEYS_TOKEN_FILE="${BAO_SIGNING_KEYS_TOKEN_FILE:-/bao/runtime/signing_keys_openbao_token}"
 BAO_DIDCOMM_ISSUANCE_TOKEN_FILE="${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE:-/bao/runtime/didcomm_issuance_openbao_token}"
 BAO_NOTIFICATION_TOKEN_FILE="${BAO_NOTIFICATION_TOKEN_FILE:-/bao/runtime/notification-webhook-service.token}"
@@ -25,7 +26,7 @@ BAO_HAIP_TOKEN_FILE="${BAO_HAIP_TOKEN_FILE:-/bao/runtime/haip-kms.token}"
 BAO_HAIP_POLICY_FILE="${BAO_HAIP_POLICY_FILE:-/scripts/openbao-haip-workload-policy.hcl}"
 BAO_GRANT_TOKEN_DIR="${BAO_GRANT_TOKEN_DIR:-/bao/runtime}"
 
-mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
+mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
 
 status_json() {
     bao status -address="${BAO_ADDR}" -format=json 2>/dev/null || true
@@ -189,6 +190,16 @@ if [ "${service_token_missing}" = "1" ]; then
 else
     echo "Reusing credential-service token at ${BAO_SERVICE_TOKEN_FILE}"
 fi
+
+# This one-shot token is mounted into db-migrate only. Reissue on each stack
+# initialization so an expired token cannot prevent a later schema upgrade.
+bootstrap_token_json="$(bao token create -address="${BAO_ADDR}" -policy=kms-bootstrap -no-default-policy -orphan -ttl=2h -renewable=false -format=json)"
+bootstrap_token="$(json_field "${bootstrap_token_json}" client_token)"
+if [ -z "${bootstrap_token}" ]; then
+    echo "Failed to mint migration-only KMS bootstrap token." >&2
+    exit 1
+fi
+write_secret_file "${BAO_BOOTSTRAP_TOKEN_FILE}" "${bootstrap_token}" 0444
 
 signing_token_missing=0
 if [ ! -s "${BAO_SIGNING_KEYS_TOKEN_FILE}" ]; then

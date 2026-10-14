@@ -611,8 +611,17 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-          bun install
-          bun x --no-install puppeteer browsers install
+          PUPPETEER_SKIP_DOWNLOAD=true bun install
+          for attempt in 1 2 3; do
+            if timeout 180s bun x --no-install puppeteer browsers install; then
+              break
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "Puppeteer browser installation failed after three attempts" >&2
+              exit 1
+            fi
+            sleep 2
+          done
       - name: Verify crawler configuration and artifact validator
         run: |
           node --test scripts/crawler-config.test.mjs
@@ -757,9 +766,9 @@ jobs:
           iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
-          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
-          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
-          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$iso18013_uri" --output "$iso18013_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict
@@ -2875,9 +2884,9 @@ jobs:
           iso18013_uri="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .uri' release/stack-lock.json)"
           iso18013_digest="$(jq -er '.components[] | select(.name == "marty-iso18013-python") | .artifacts[] | select(.type == "python") | .digest' release/stack-lock.json)"
           iso18013_wheel="$RUNNER_TEMP/${iso18013_uri##*/}"
-          curl --fail --location --silent --show-error "$marty_rs_uri" --output "$marty_rs_wheel"
-          curl --fail --location --silent --show-error "$verification_uri" --output "$verification_wheel"
-          curl --fail --location --silent --show-error "$iso18013_uri" --output "$iso18013_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$marty_rs_uri" --output "$marty_rs_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$verification_uri" --output "$verification_wheel"
+          curl --fail --location --silent --show-error --connect-timeout 15 --max-time 60 --retry 5 --retry-delay 2 --retry-max-time 120 "$iso18013_uri" --output "$iso18013_wheel"
           echo "${marty_rs_digest#sha256:}  $marty_rs_wheel" | sha256sum --check --strict
           echo "${verification_digest#sha256:}  $verification_wheel" | sha256sum --check --strict
           echo "${iso18013_digest#sha256:}  $iso18013_wheel" | sha256sum --check --strict

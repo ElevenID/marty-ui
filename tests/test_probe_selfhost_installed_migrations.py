@@ -158,6 +158,7 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
         "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
         "PROBE_REDIS_IMAGE": IMAGES["redis"],
         "PROBE_OPENBAO_IMAGE": IMAGES["openbao"],
+        "PROBE_RUN_USER": probe.host_user(),
         "PROBE_SECRET_DIR": str(tmp_path),
         "PROBE_OPENBAO_START": str(probe.START.resolve()),
         "PROBE_OPENBAO_BOOTSTRAP": str(probe.BOOTSTRAP.resolve()),
@@ -182,6 +183,7 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
         lambda item: item["services"]["openbao"].pop("platform"),
         lambda item: item["services"]["native-schema-migrate"].update(
             image=IMAGES["migrations"]),
+        lambda item: item["services"]["openbao-bootstrap"].update(user="0:0"),
         lambda item: item["networks"]["private"].update(internal=False),
     ):
         changed = deepcopy(model)
@@ -217,6 +219,7 @@ def test_probe_uses_scoped_bootstrap_then_reruns_and_cleans(
         if args[-1] == "openbao-bootstrap":
             secret_dir = Path(environment["PROBE_SECRET_DIR"])
             (secret_dir / "bao_service_token").write_text("scoped-service")
+            (secret_dir / "bao_bootstrap_token").write_text("scoped-bootstrap")
             (secret_dir / "notification_openbao_token").write_text(
                 "scoped-service" if failure == "reused_token" else "scoped-notification"
             )
@@ -285,6 +288,7 @@ def test_actual_scoped_openbao_bootstrap():
             "PROBE_POSTGRES_IMAGE": IMAGES["postgres"],
             "PROBE_REDIS_IMAGE": IMAGES["redis"],
             "PROBE_OPENBAO_IMAGE": image,
+            "PROBE_RUN_USER": probe.host_user(),
             "PROBE_SECRET_DIR": str(secret_dir),
             "PROBE_OPENBAO_START": str(probe.START.resolve()),
             "PROBE_OPENBAO_BOOTSTRAP": str(probe.BOOTSTRAP.resolve()),

@@ -258,11 +258,11 @@ services:
       REDIS_DB_GATEWAY: "2"
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
       BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_service_token
+      BAO_TOKEN_FILE: /run/secrets/openbao_bootstrap_token
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
     secrets:
       - marty_db_password
-      - openbao_service_token
+      - openbao_bootstrap_token
       - notification_openbao_token
     depends_on:
       revocation-profile-migrate:
@@ -1395,6 +1395,8 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/canvas_credentials_shared_secret
   openbao_service_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_service_token
+  openbao_bootstrap_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_bootstrap_token
   signing_keys_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_openbao_token
   didcomm_issuance_openbao_token:

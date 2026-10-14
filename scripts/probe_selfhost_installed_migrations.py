@@ -72,6 +72,10 @@ HEAD = "SELECT version_num FROM notification_service.alembic_version LIMIT 1"
 REGISTRY = "org:00000000-0000-0000-0000-000000000001:signing-key-services"
 
 
+def host_user() -> str:
+    return f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"
+
+
 def require(ok: bool, reason: str) -> None:
     if not ok:
         raise QualificationError(reason)
@@ -175,10 +179,11 @@ def validate_scoped_model(model: dict, images: dict[str, str],
             "Disposable service platform changed")
     bootstrap = services["openbao-bootstrap"]
     require(isinstance(bootstrap, dict) and set(bootstrap) ==
-            {"image", "platform", "networks", "command", "entrypoint", "environment", "configs", "secrets",
+            {"image", "platform", "user", "networks", "command", "entrypoint", "environment", "configs", "secrets",
              "volumes", "depends_on", "restart"}
             and bootstrap["command"] is None
             and bootstrap["image"] == images["openbao"]
+            and bootstrap["user"] == host_user()
             and bootstrap["networks"] == {"private": None}
             and bootstrap["entrypoint"] ==
             ["/bin/sh", "/usr/local/bin/selfhost-migration-openbao-bootstrap"]
@@ -196,16 +201,16 @@ def validate_scoped_model(model: dict, images: dict[str, str],
             and bootstrap["restart"] == "no", "Disposable bootstrap topology changed")
     migration = services["db-migrate"]
     require(migration["environment"].get("BAO_TOKEN_FILE") ==
-            "/run/secrets/bao_service_token"
+            "/run/secrets/bao_bootstrap_token"
             and migration["environment"].get("NOTIFICATION_OPENBAO_TOKEN_FILE") ==
             "/run/secrets/notification_openbao_token"
             and migration.get("secrets") == [
                 {"source": name, "target": f"/run/secrets/{name}"}
-                for name in ("marty_db_password", "bao_service_token",
+                for name in ("marty_db_password", "bao_bootstrap_token",
                              "notification_openbao_token")],
             "Migration does not use distinct scoped tokens")
     secret_paths = {name: secret_dir / name for name in
-                    ("marty_db_password", "bao_root_token", "bao_service_token",
+                    ("marty_db_password", "bao_root_token", "bao_bootstrap_token",
                      "notification_openbao_token")}
     require(isinstance(model.get("secrets"), dict)
             and set(model["secrets"]) == set(secret_paths)
@@ -233,9 +238,9 @@ def validate_scoped_model(model: dict, images: dict[str, str],
     baseline["services"]["db-migrate"]["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/bao_root_token"
     baseline["services"]["db-migrate"]["secrets"][1] = {
         "source": "bao_root_token", "target": "/run/secrets/bao_root_token"}
-    del baseline["secrets"]["bao_service_token"]
+    del baseline["secrets"]["bao_bootstrap_token"]
     for name, path in secret_paths.items():
-        if name != "bao_service_token":
+        if name != "bao_bootstrap_token":
             baseline["secrets"][name]["file"] = str(path)
     del baseline["configs"]["openbao_bootstrap"]
     del baseline["configs"]["openbao_init"]
@@ -257,7 +262,9 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
             path = secret_dir / name
             path.write_text(secrets.token_hex(32), encoding="ascii")
             if os.name == "posix":
-                path.chmod(0o600)
+                # Compose mounts this disposable file into containers with
+                # different non-root UIDs. The parent directory remains 0700.
+                path.chmod(0o444 if name == "marty_db_password" else 0o600)
         environment = os.environ.copy()
         environment.update({
             "PROBE_MIGRATIONS_IMAGE": images["migrations"],
@@ -265,6 +272,7 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
             "PROBE_POSTGRES_IMAGE": images["postgres"],
             "PROBE_REDIS_IMAGE": images["redis"],
             "PROBE_OPENBAO_IMAGE": images["openbao"],
+            "PROBE_RUN_USER": host_user(),
             "PROBE_SECRET_DIR": str(secret_dir),
             "PROBE_OPENBAO_START": str(START.resolve()),
             "PROBE_OPENBAO_BOOTSTRAP": str(BOOTSTRAP.resolve()),
@@ -289,13 +297,13 @@ def probe(images: dict[str, str], receipt: dict, install_root: Path, *,
                      "Disposable dependencies did not become ready")
             _checked(run([*compose, "run", "--no-deps", "--rm", "openbao-bootstrap"],
                          environment, 180), "Disposable scoped OpenBao bootstrap failed")
-            for name in ("bao_service_token", "notification_openbao_token",
+            for name in ("bao_service_token", "bao_bootstrap_token", "notification_openbao_token",
                          "sign_grant_verify_token", "signing_keys_openbao_token"):
                 path = secret_dir / name
                 require(path.is_file() and not path.is_symlink()
                         and path.stat().st_size > 0, "Disposable scoped token is missing")
             token_values = [(secret_dir / name).read_bytes().strip()
-                            for name in ("bao_root_token", "bao_service_token",
+                            for name in ("bao_root_token", "bao_service_token", "bao_bootstrap_token",
                                          "notification_openbao_token",
                                          "sign_grant_verify_token",
                                          "signing_keys_openbao_token")]

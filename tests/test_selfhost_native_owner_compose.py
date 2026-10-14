@@ -119,16 +119,32 @@ def test_passport_consumer_additions_are_closed(models, owner, key):
         GATE["assert_models"](before, after)
 
 
-@pytest.mark.parametrize("fault", ["token-path", "secret-source", "missing-secret"])
-def test_production_migration_notification_identity_is_closed(models, fault):
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "token-path",
+        "secret-source",
+        "missing-secret",
+        "bootstrap-token-path",
+        "bootstrap-secret-source",
+        "bootstrap-secret-missing",
+    ],
+)
+def test_production_migration_kms_identities_are_closed(models, fault):
     before, after = models
     migration = after["services"]["db-migrate"]
     if fault == "token-path":
         migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] = "/other"
     elif fault == "secret-source":
         migration["secrets"][-1]["source"] = "openbao_service_token"
-    else:
+    elif fault == "missing-secret":
         migration["secrets"].pop()
+    elif fault == "bootstrap-token-path":
+        migration["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/openbao_service_token"
+    elif fault == "bootstrap-secret-source":
+        migration["secrets"][-2]["source"] = "openbao_service_token"
+    else:
+        migration["secrets"].pop(-2)
     with pytest.raises((AssertionError, KeyError, IndexError)):
         GATE["assert_models"](before, after)
 

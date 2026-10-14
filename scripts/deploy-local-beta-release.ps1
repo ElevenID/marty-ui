@@ -1311,6 +1311,17 @@ try {
     }
     if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
     if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
+    Invoke-Checked -FilePath docker -Arguments @(
+        "run", "--rm", "--network", $script:BetaNetwork,
+        "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
+        "--env", "BAO_TOKEN=$copyBaoToken",
+        "--mount", "type=bind,src=$((Resolve-Path (Join-Path $script:RepoRoot 'docker/openbao-init.sh')).Path),dst=/scripts/openbao-init.sh,readonly",
+        "--entrypoint", "/bin/sh", "quay.io/openbao/openbao:2", "/scripts/openbao-init.sh"
+    )
+    $copyNotificationToken = & docker run --rm --network $script:BetaNetwork `
+        --env "BAO_ADDR=http://${copyOpenBaoContainer}:8200" --env "BAO_TOKEN=$copyBaoToken" `
+        quay.io/openbao/openbao:2 bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
+    if ($LASTEXITCODE -ne 0 -or -not $copyNotificationToken) { throw "Rehearsal Notification token creation failed" }
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN PASSWORD '$copyPassword';")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "createdb", "-U", "postgres", "-O", "marty", "marty")
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
@@ -1324,6 +1335,7 @@ try {
         "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
         "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
         "--env", "BAO_TOKEN=$copyBaoToken",
+        "--env", "NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken",
         "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
         "--env", "MARTY_ORG_ID=$PilotOrganizationId"
     )
@@ -1478,6 +1490,11 @@ try {
         -LogPath (Join-Path $logsDir "openbao-init-live.log") `
         -FailureMessage "Beta OpenBao reconciliation failed"
 
+    $liveNotificationToken = & docker run --rm --network $script:BetaNetwork `
+        --env "BAO_ADDR=http://openbao:8200" --env "BAO_TOKEN=$baoDevRootToken" `
+        quay.io/openbao/openbao:2 bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
+    if ($LASTEXITCODE -ne 0 -or -not $liveNotificationToken) { throw "Live Notification token creation failed" }
+
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
     $previousBaoToken = $env:BAO_TOKEN
@@ -1491,6 +1508,7 @@ try {
             "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
             "--env", "BAO_ADDR=http://openbao:8200",
             "--env", "BAO_TOKEN",
+            "--env", "NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken",
             "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
             "--env", "MARTY_ORG_ID=$PilotOrganizationId"
         )

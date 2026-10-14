@@ -93,6 +93,7 @@ services:
       REDIS_URL: redis://redis:6379/2
       BAO_ADDR: http://openbao:8200
       BAO_TOKEN_FILE: /run/secrets/bao_token
+      NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
       MARTY_KMS_BOOTSTRAP_ENABLED: "true"
       PASSPORT_DISPOSABLE_ICAO_BOOTSTRAP: "true"
       PASSPORT_ACCEPTANCE_PROJECT: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}
@@ -100,7 +101,7 @@ services:
       PUBLIC_DOMAIN: localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ISSUER_BASE_URL: https://localhost:${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}
       MARTY_ISSUER_DID: did:web:localhost%3A${PASSPORT_ACCEPTANCE_GATEWAY_PORT:?reserve disposable loopback port}:orgs:marty
-    secrets: [marty_db_password, bao_token]
+    secrets: [marty_db_password, bao_token, notification_openbao_token]
     depends_on:
       revocation-profile-migrate:
         condition: service_completed_successfully
@@ -587,6 +588,8 @@ secrets:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/marty_db_password
   bao_token:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/bao_token
+  notification_openbao_token:
+    file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/notification_openbao_token
   signing_keys_internal_api_key:
     file: ${PASSPORT_ACCEPTANCE_SECRET_DIR:?use disposable secret root}/signing_keys_internal_api_key
   signing_keys_service_sign_gateway_key:

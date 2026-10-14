@@ -11,6 +11,17 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_dev_migration_uses_a_separate_notification_token_volume() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text(
+        encoding="utf-8"))
+    initializer = compose["services"]["openbao-init"]
+    migration = compose["services"]["db-migrate"]
+    assert initializer["environment"]["BAO_NOTIFICATION_TOKEN_FILE"] == "/bao/notification/token"
+    assert "openbao_notification:/bao/notification" in initializer["volumes"]
+    assert migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] == "/bao/notification/token"
+    assert "openbao_notification:/bao/notification:ro" in migration["volumes"]
+
+
 def test_webhook_secret_is_a_required_production_catalog_secret() -> None:
     catalog = json.loads(
         (ROOT / "deploy-config/catalog/secrets.json").read_text(encoding="utf-8")

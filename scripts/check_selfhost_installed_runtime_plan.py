@@ -82,7 +82,7 @@ EXPECTED_ROLE_SECRETS = {
                            "compliance_profile_workload_client_cert",
                            "compliance_profile_workload_client_key", "workload_identity_ca_cert"},
     "credential-template": {"marty_db_password", "issuance_api_key", "grpc_service_token"},
-    "db-migrate": {"marty_db_password", "openbao_service_token", "notification_openbao_token"},
+    "db-migrate": {"marty_db_password", "openbao_bootstrap_token", "notification_openbao_token"},
     "deployment-profile": {"marty_db_password", "grpc_service_token",
                            "deployment_profile_workload_client_cert",
                            "deployment_profile_workload_client_key", "workload_identity_ca_cert"},
