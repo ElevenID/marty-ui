@@ -19713,3 +19713,18 @@ an HTTP target before reading any CA file. The Revocation Profile's own
 gRPC listener still accepts plaintext; that server needs a separate
 non-exportable OpenBao TLS identity and connected client acceptance
 before this portion of the production graph is complete.
+
+Revocation Profile's own gRPC listener is now staged with a keyless
+OpenBao TLS acceptor. Beta and production configuration require a public
+listener certificate, HTTPS OpenBao CA, scoped signer token and positive
+versioned non-exportable Transit key reference; the retired server
+private-key file setting is rejected. The listener keeps its existing
+`x-service-token` interceptor on business RPCs and uses server-only TLS,
+so callers need only the public CA to validate it. Deployed
+configuration also refuses `RP_GRPC_ENABLED=false`, preserving the
+published gRPC capability. The 33 library tests, targeted formatting
+and locked executable check passed. This supersedes the preceding
+source-level plaintext-listener gap, but is not a live TLS handshake or
+installed-image claim. Credential Template, Issuance and any other
+Revocation Profile clients must target the HTTPS listener with correct
+public-CA trust before this server can be shipped in the grouped PR.
