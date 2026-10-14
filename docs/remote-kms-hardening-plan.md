@@ -19253,3 +19253,12 @@ redirect while carrying the scoped `X-Vault-Token` header. Commit
 strict Clippy locally, and advanced [MMF PR #127](https://github.com/ElevenID/marty-microservices-framework/pull/127)
 from `a47e554` to `4220406`. Earlier CI results are historical; require the
 new exact-head checks before merge.
+
+MMF PR review then identified a handshake deadline weakness: synchronous
+Rustls signing could wait on a 30-second OpenBao request even when a gRPC
+handshake allowed only one second. Commit `579983f` caps each gRPC identity's
+remote request timeout by its client connection or server handshake timeout;
+focused platform tests, formatting, and strict Clippy passed. The previous
+`4220406` exact-head CI passed, but that result is now superseded by the
+`579983f` push. The obsolete `a47e554` CI run was canceled to avoid duplicate
+cost; preserve its status as historical, not qualification.
