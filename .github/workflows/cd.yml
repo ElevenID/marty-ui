@@ -1754,8 +1754,10 @@ jobs:
             asset="marty-deploy-linux-$arch"
             test -f "$asset"
             chmod 755 "$asset"
+            # Rust may place adjacent string constants in one ELF string, so
+            # search the binary bytes rather than requiring an exact strings line.
             # The publisher is amd64; inspect the arm64 ELF without executing it.
-            strings -a "$asset" | grep -Fx -- "$SOURCE_SHA:$RELEASE_TAG" >/dev/null
+            grep -aFq -- "$SOURCE_SHA:$RELEASE_TAG" "$asset"
             if [ "$arch" = amd64 ]; then
               test "$(./"$asset" --build-identity)" = "$SOURCE_SHA:$RELEASE_TAG"
             fi

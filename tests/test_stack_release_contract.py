@@ -331,7 +331,7 @@ def test_operator_release_builds_native_arches_and_verifies_provenance() -> None
     assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in build_steps
     assert 'if readelf -l "$asset" | grep -q INTERP' in build_steps
     assert 'test "$(./"$asset" --build-identity)" = "$MARTY_DEPLOY_SOURCE_SHA:$MARTY_DEPLOY_RELEASE_TAG"' in build_steps
-    assert 'strings -a "$asset" | grep -Fx -- "$SOURCE_SHA:$RELEASE_TAG"' in publish_steps
+    assert 'grep -aFq -- "$SOURCE_SHA:$RELEASE_TAG" "$asset"' in publish_steps
     assert '--source-digest "$SOURCE_SHA" --source-ref refs/heads/main' in publish_steps
     assert "operator_release_require_remote_allowlist" in publish_steps
 
