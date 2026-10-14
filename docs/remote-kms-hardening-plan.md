@@ -20340,3 +20340,17 @@ projects were removed. This is stronger local installed-image evidence than
 source SQL inspection, but the images are unsigned local tags, so it does
 not satisfy the exact published-digest release qualifier, idempotent rerun,
 or previously persisted database inspection. `git diff --check` passed.
+
+2026-10-14 Kubernetes release-evidence alignment: review found the Rust
+`marty-release-evidence` preflight still expected a Signing Keys TLS private
+key file and a plaintext Issuance gRPC target, so it rejected the staged
+keyless production manifests. The grouped UI worktree now requires the
+Signing Keys remote TLS signer address, key name/version, scoped token and
+public CA/certificate mounts; it validates the HTTPS readiness probe and
+rejects an added TLS private-key file or a missing remote signer. The same
+validator requires Issuance's remote server TLS signer and HTTPS gRPC targets,
+and its observed-pod comparison preserves the explicit 8-second TLS readiness
+timeout. The focused Kubernetes release-evidence suite passed 15 tests with
+one Windows-local `envsubst` executable test filtered because `envsubst` is
+not installed here. This is staged source/model evidence, not a Kubernetes
+cluster deployment or an exact release-artifact qualification.
