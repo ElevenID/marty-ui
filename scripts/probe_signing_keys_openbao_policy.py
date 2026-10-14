@@ -61,7 +61,11 @@ def pull_pinned_openbao() -> None:
     if docker("image", "inspect", IMAGE).returncode == 0:
         return
     for attempt in range(3):
-        if docker("pull", IMAGE).returncode == 0:
+        try:
+            fetched = docker("pull", IMAGE).returncode == 0
+        except subprocess.TimeoutExpired:
+            fetched = False
+        if fetched:
             return
         if attempt < 2:
             time.sleep(2 ** attempt)

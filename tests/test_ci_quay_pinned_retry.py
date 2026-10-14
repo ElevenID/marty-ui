@@ -34,10 +34,36 @@ def test_policy_probe_retries_only_pinned_pull() -> None:
     pause.assert_called_once_with(1)
 
 
+def test_policy_probe_retries_a_timed_out_pinned_pull() -> None:
+    with mock.patch.object(policy, "docker", side_effect=[
+        subprocess.CompletedProcess([], 1),
+        subprocess.TimeoutExpired(["docker", "pull", policy.IMAGE], 120),
+        subprocess.CompletedProcess([], 0),
+    ]) as docker, mock.patch.object(policy.time, "sleep") as pause:
+        policy.pull_pinned_openbao()
+    assert docker.call_args_list == [
+        mock.call("image", "inspect", policy.IMAGE),
+        mock.call("pull", policy.IMAGE),
+        mock.call("pull", policy.IMAGE),
+    ]
+    pause.assert_called_once_with(1)
+
+
 def test_policy_probe_fails_closed_after_three_attempts() -> None:
     with mock.patch.object(
         policy, "docker", return_value=subprocess.CompletedProcess([], 1)
     ) as docker, mock.patch.object(policy.time, "sleep") as pause:
+        with pytest.raises(RuntimeError, match="image is unavailable"):
+            policy.pull_pinned_openbao()
+    assert docker.call_count == 4
+    assert [call.args[0] for call in pause.call_args_list] == [1, 2]
+
+
+def test_policy_probe_fails_closed_after_three_pull_timeouts() -> None:
+    timeout = subprocess.TimeoutExpired(["docker", "pull", policy.IMAGE], 120)
+    with mock.patch.object(policy, "docker", side_effect=[
+        subprocess.CompletedProcess([], 1), timeout, timeout, timeout,
+    ]) as docker, mock.patch.object(policy.time, "sleep") as pause:
         with pytest.raises(RuntimeError, match="image is unavailable"):
             policy.pull_pinned_openbao()
     assert docker.call_count == 4
