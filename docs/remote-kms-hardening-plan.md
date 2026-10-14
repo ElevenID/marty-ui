@@ -18652,3 +18652,12 @@ both populated and empty reviewer rules. Focused local tests passed 86/86,
 passed. The addressed review thread was resolved. Fresh protected PR checks
 on this amended head and merge-group qualification are pending; do not reuse
 the superseded head's checks for a release claim.
+
+Amended #1328 head `faf136b92075ce11afd35af16b98f92ec053dad3` passed
+every reported exact-head PR check, including the OpenBao coordinated
+recovery and Canvas database suites. GitHub then placed it at position 1
+in the protected merge queue on combined head
+`9c9f5d12b09e562c73974609eca16f8ebd48c9d5`; all five queue workflows
+were started at 2026-10-14T05:03:19Z. The queue CI run is `38514592200`.
+Wait for the combined-tree result and the final main SHA before triggering
+the required exact-main full CI. The next `v1.1.246` claim remains unstarted.
