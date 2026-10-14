@@ -18616,3 +18616,14 @@ PR checks are pending. Protected main `9a9d9f81a` already prepared the next
 unused `v1.1.246` stack lock in #1326. After #1328 merges, run exact-main
 CI and one fresh no-write claim and release on the new source. Do not
 infer publication or installed acceptance from the policy change.
+
+Unattended-release PR qualification follow-up: UI PR #1328 head
+`0b00c1de6d5385b9a41cdf39dbfe745ce478d5ac` passed every reported
+exact-head check, including CI Gate, CodeQL Actions/Rust, workflow quality,
+release contracts, OpenBao plugin image and live Rust/Canvas contracts.
+Auto-merge is enabled, but it remains outside the queue while concurrent
+UI PR #1327's narrower OpenBao token fix runs protected merge-group CI
+on queue head `7853a728772a7850859f0b7811195fe618c5a48d`. Both
+PRs remain unmerged at this checkpoint; `v1.1.246` claim and release
+have not been dispatched. Keep the source-bound claim after the final
+main SHA, and let the queue prove the combined tree.
