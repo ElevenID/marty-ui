@@ -55,7 +55,7 @@ unqualified descriptor also passed a local archive-only check and 31-service
 Docker Compose render. After protected environment approval, publication
 failed before creating a tag or release because its operator identity check
 required an exact `strings` output line while Go coalesced the correct
-`SHA:tag` token with adjacent static data. PR #1323 changes that publisher
+`SHA:tag` token with adjacent static data. PR #1324 changes that publisher
 check to require the exact token as a substring; native binary execution and
 provenance checks remain. The prepared artifact remains explicitly unqualified:
 installed customer journey, KMS custody, final signatures, public asset
