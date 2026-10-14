@@ -19371,3 +19371,23 @@ Running the full beta validator separately still failed at its previously
 missing local `.dev-integration-secret-tls` mounted files. No real
 Verification KMS TLS handshake is claimed yet; matching remote signer and
 public certificate provisioning is still required.
+
+2026-10-14 Deployment Profile and Compliance Profile workload TLS production
+cutover is staged in the grouped UI worktree. Both services' self-host and
+Kubernetes clients now consume public certificates, the OpenBao HTTPS CA,
+role-scoped signer tokens, and explicit versioned signer references. Their
+production private-key Compose mounts, secret catalog requirements, and
+Kubernetes `tls.key` creation paths were removed. The production installer
+now creates a separate CA/token Secret per role. Beta never mounted these
+profile identities despite generating private keys for them; the unused beta
+secret declarations and key/certificate generation were retired, and beta
+identity preflight rejects stale profile key-file settings/files. Beta
+profile channels still use plaintext under `GRPC_INSECURE_ALLOWED=true` and
+must be secured in the supported beta transport cutover; do not count the
+unused-key removal as TLS acceptance. Production deployment Python contracts
+passed 78/78, beta contracts 88/88 with the known full physical validator
+excluded, frozen catalog CLI 8/8, self-host Compose parse, PowerShell/shell
+syntax and diff checks passed. The full physical validator still reproduces
+its missing local `.dev-integration-secret-tls` mounted-source failure.
+Provisioning real non-exportable signer keys and matching public certificates
+and proving live handshakes remain open.
