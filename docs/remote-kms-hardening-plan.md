@@ -19728,3 +19728,17 @@ source-level plaintext-listener gap, but is not a live TLS handshake or
 installed-image claim. Credential Template, Issuance and any other
 Revocation Profile clients must target the HTTPS listener with correct
 public-CA trust before this server can be shipped in the grouped PR.
+
+Credential Template is the first Revocation Profile client staged for
+that listener. Deployed configuration now requires `RP_GRPC_CA_CERT`
+and an explicit HTTPS `RP_GRPC_TARGET` alongside the Organization CA and
+target. The binary builds both channels through one shared MMF
+server-TLS helper, connects them eagerly, and requires an authenticated
+missing-resource RPC returning `NotFound` from each service before
+marking its control plane healthy. The previous service token and
+Revocation Profile capability remain; no private client key is needed.
+The Credential Template library suite passed (12 tests), targeted
+formatting and locked executable check passed. This is source and
+configuration evidence, not an installed Credential Template-to-
+Revocation Profile TLS exchange. Issuance and other Revocation Profile
+callers still need transport and manifest cutover.
