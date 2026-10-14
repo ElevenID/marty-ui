@@ -44,8 +44,6 @@ protoc-bin-vendored.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
-p256.workspace = true
-marty-signing-keys = { path = "../signing-keys" }
 tower.workspace = true
 
 [lints.rust]

@@ -4179,10 +4179,23 @@ key case exercises a different public route, so it does not replace this
 proof. Move the unchanged behavior matrix to the Gateway Signing acceptance
 target, reuse its guarded disposable-Redis and Gateway runtime fixtures, and
 invoke the case explicitly under the contracts lane with an exact discovery
-guard. This removes Gateway's Signing Keys dev-dependency; Device Registration
-still has its separate Signing Keys/OpenBao live test dependency. Require
+guard. This removes Gateway's Signing Keys dev-dependency; Device Registration's
+separate Signing Keys/OpenBao live test moves to acceptance in the same slice. Require
 focused Rust compilation, a live hosted execution, independent review, and
 protected CI before claiming the move or any compile-time benefit.
+
+October 14 A0/A1 holder-key acceptance candidate: Device Registration's
+`holder_remote_live_kms` target is an ignored, explicitly invoked combined
+Device Registration/Signing Keys/OpenBao/PostgreSQL lifecycle proof. Its 657-
+line test imports both service implementations; `marty-signing-keys` and
+`p256` are otherwise unused Device Registration dev-dependencies. Moving the
+same target to `marty-service-acceptance` preserves its guarded disposable
+OpenBao and fresh-PostgreSQL invocation in the contracts CI lane and the
+separate local Rust-adapter probe, while removing that service-to-service
+development edge. The new package owner must compile with a locked manifest
+and the live case must pass in hosted CI before treating the move as merged or
+claiming any package-scoped speed benefit. This does not replace Device
+Registration's service-owned behavior and persistence tests.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.

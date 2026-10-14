@@ -150,6 +150,7 @@ rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
 rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs
 rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
 rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs
+rust/crates/service-acceptance/tests/holder_remote_live_kms.rs
 rust/crates/service-acceptance/tests/csca_capability_contract.rs
 # CSCA test targets run from the checkout, not images.
 rust/services/signing-keys/tests/csca_lifecycle_behavior.rs

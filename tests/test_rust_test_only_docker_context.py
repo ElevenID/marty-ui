@@ -105,6 +105,7 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "passport_managed_kms_chain",
     "passport_gateway_postgres",
     "gateway_signing_acceptance",
+    "holder_remote_live_kms",
     "csca_capability_contract",
 )
 SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"

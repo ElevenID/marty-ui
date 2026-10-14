@@ -1985,6 +1985,9 @@ jobs:
             http://127.0.0.1:8200/v1/auth/token/create \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
           [[ -n "$scoped_token" && "$scoped_token" != test-only ]]
+          holder_case=registration_provision_sign_and_deactivate_delete_remote_key
+          cargo test --locked -p marty-service-acceptance --test holder_remote_live_kms \
+            -- --list | grep -Fx "$holder_case: test"
           MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200 \
             MARTY_TEST_OPENBAO_TOKEN="$scoped_token" \
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only \
@@ -1992,8 +1995,11 @@ jobs:
             DEVICE_REGISTRATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_holder_kms_test \
             BAO_ADDR=http://127.0.0.1:8200 \
             BAO_TOKEN="$scoped_token" \
-            cargo test --locked -p marty-device-registration --test holder_remote_live_kms \
-              registration_provision_sign_and_deactivate_delete_remote_key -- --ignored --exact
+            cargo test --locked -p marty-service-acceptance --test holder_remote_live_kms \
+              "$holder_case" -- --ignored --exact \
+            | tee "$RUNNER_TEMP/holder-remote-live-kms.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' \
+            "$RUNNER_TEMP/holder-remote-live-kms.log"
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite

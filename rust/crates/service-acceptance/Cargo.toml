@@ -15,10 +15,13 @@ axum.workspace = true
 base64.workspace = true
 chrono.workspace = true
 der.workspace = true
+ed25519-dalek.workspace = true
 hex.workspace = true
 hmac.workspace = true
 marty-gateway = { path = "../../services/gateway" }
 marty-crypto.workspace = true
+marty-device-registration = { path = "../../services/device-registration" }
+marty-holder-key-reference = { path = "../holder-key-reference" }
 marty-issuance-service = { path = "../../services/issuance" }
 marty-passport-auth = { path = "../passport-auth" }
 marty-signing-grant = { path = "../signing-grant" }
@@ -27,6 +30,7 @@ marty-verification.workspace = true
 mmf-platform.workspace = true
 mmf-security.workspace = true
 num-bigint.workspace = true
+p256.workspace = true
 redis.workspace = true
 reqwest.workspace = true
 serde_json.workspace = true
@@ -50,6 +54,10 @@ path = "tests/passport_gateway_postgres.rs"
 [[test]]
 name = "gateway_signing_acceptance"
 path = "tests/gateway_signing_acceptance.rs"
+
+[[test]]
+name = "holder_remote_live_kms"
+path = "tests/holder_remote_live_kms.rs"
 
 [[test]]
 name = "csca_capability_contract"
