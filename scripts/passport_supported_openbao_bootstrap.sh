@@ -11,7 +11,8 @@ if [ ! -r /run/secrets/bao_root_token ] || [ ! -d /work/secrets ]; then
     echo "Disposable OpenBao bootstrap mounts are missing" >&2
     exit 1
 fi
-if [ -e /work/secrets/bao_token ] || [ -e /work/secrets/callback_signer_bao_token ]; then
+if [ -e /work/secrets/bao_token ] || [ -e /work/secrets/callback_signer_bao_token ] ||
+   [ -e /work/secrets/notification_openbao_token ]; then
     echo "Disposable OpenBao service tokens already exist" >&2
     exit 1
 fi
@@ -85,17 +86,24 @@ fi
 umask 077
 service_tmp=$(mktemp /work/secrets/.bao_token.XXXXXX)
 callback_tmp=$(mktemp /work/secrets/.callback_signer_bao_token.XXXXXX)
-trap 'rm -f "$service_tmp" "$callback_tmp"' EXIT HUP INT TERM
+notification_tmp=$(mktemp /work/secrets/.notification_openbao_token.XXXXXX)
+trap 'rm -f "$service_tmp" "$callback_tmp" "$notification_tmp"' EXIT HUP INT TERM
 service_token=$(bao token create -policy=credential-service -orphan -ttl=2h -renewable=false -field=token)
 callback_token=$(bao token create -policy=passport-provider-callback-service -orphan -ttl=2h -renewable=false -field=token)
+notification_token=$(bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token)
 if [ -z "$service_token" ] || [ -z "$callback_token" ] ||
+   [ -z "$notification_token" ] ||
    [ "$service_token" = "$callback_token" ] ||
-   [ "$service_token" = "$BAO_TOKEN" ] || [ "$callback_token" = "$BAO_TOKEN" ]; then
+   [ "$notification_token" = "$service_token" ] ||
+   [ "$notification_token" = "$callback_token" ] ||
+   [ "$service_token" = "$BAO_TOKEN" ] || [ "$callback_token" = "$BAO_TOKEN" ] ||
+   [ "$notification_token" = "$BAO_TOKEN" ]; then
     echo "Disposable OpenBao token creation failed" >&2
     exit 1
 fi
 printf '%s' "$service_token" > "$service_tmp"
 printf '%s' "$callback_token" > "$callback_tmp"
+printf '%s' "$notification_token" > "$notification_tmp"
 
 service_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/hmac/passport-bureau-callback-marty-hmac)
@@ -107,6 +115,8 @@ provider_key_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" ba
 callback_sign_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 callback_create_caps=$(BAO_TOKEN="$callback_token" VAULT_TOKEN="$callback_token" bao token capabilities auth/token/create)
 service_create_caps=$(BAO_TOKEN="$service_token" VAULT_TOKEN="$service_token" bao token capabilities auth/token/create)
+notification_encrypt_caps=$(BAO_TOKEN="$notification_token" VAULT_TOKEN="$notification_token" bao token capabilities transit/encrypt/notification-webhook-envelope-marty-aes256)
+notification_sign_caps=$(BAO_TOKEN="$notification_token" VAULT_TOKEN="$notification_token" bao token capabilities transit/sign/cred-issuer-tenant-scope-probe)
 case "$service_caps" in
     *create*update* | *update*create*) ;;
     *) echo "Disposable credential token cannot sign" >&2; exit 1 ;;
@@ -125,12 +135,18 @@ if [ "$callback_key_caps" != "deny" ] ||
    [ "$provider_key_caps" != "deny" ] ||
    [ "$callback_sign_caps" != "deny" ] ||
    [ "$callback_create_caps" != "deny" ] ||
-   [ "$service_create_caps" != "deny" ]; then
+   [ "$service_create_caps" != "deny" ] ||
+   [ "$notification_sign_caps" != "deny" ]; then
     echo "Disposable OpenBao service token has excess capabilities" >&2
     exit 1
 fi
+case "$notification_encrypt_caps" in
+    "create, update" | "update, create") ;;
+    *) echo "Disposable notification token cannot encrypt" >&2; exit 1 ;;
+esac
 
 mv "$service_tmp" /work/secrets/bao_token
 mv "$callback_tmp" /work/secrets/callback_signer_bao_token
-chmod 0644 /work/secrets/bao_token /work/secrets/callback_signer_bao_token
+mv "$notification_tmp" /work/secrets/notification_openbao_token
+chmod 0644 /work/secrets/bao_token /work/secrets/callback_signer_bao_token /work/secrets/notification_openbao_token
 echo "Disposable OpenBao transit and scoped tokens initialized"

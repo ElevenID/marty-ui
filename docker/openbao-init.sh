@@ -431,6 +431,13 @@ path "transit/keys/notification-webhook-envelope-marty-aes256" {
 }
 EOF
 
+if [ -n "${BAO_NOTIFICATION_TOKEN_FILE:-}" ]; then
+    notification_token="$(bao token create -address="${BAO_ADDR}" -policy=notification-webhook-service -no-default-policy -orphan -field=token)"
+    mkdir -p "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")"
+    printf '%s\n' "${notification_token}" > "${BAO_NOTIFICATION_TOKEN_FILE}"
+    chmod 0444 "${BAO_NOTIFICATION_TOKEN_FILE}"
+fi
+
 # The supported-consumer callback signer only needs to MAC canonical callback
 # bytes. It cannot verify, read/export a transit key, or use generic signing.
 echo "Writing isolated passport callback HMAC policy..."

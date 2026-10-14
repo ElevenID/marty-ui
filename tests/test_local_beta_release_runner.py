@@ -867,6 +867,9 @@ def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
     assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
     assert '"BAO_TOKEN=$copyBaoToken"' in script
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken"' in script
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' in script
+    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 2
     assert "$env:BAO_TOKEN = $baoDevRootToken" in script
     assert '"BAO_ADDR=http://openbao:8200"' in script
     assert script.count('"--env", "BAO_TOKEN"') == 1

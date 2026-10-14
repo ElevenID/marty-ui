@@ -89,7 +89,7 @@ TEXT_SECRETS = frozenset({
     "flow_webhook_secret", "flow_application_event_hmac_key",
 })
 STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
-BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
+BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token", "notification_openbao_token"})
 EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
     "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
     "passport_acceptance_tenant_probe_api_key",
@@ -351,7 +351,7 @@ def _remove_staged_inputs(root: Path) -> None:
             (secret_dir / name).unlink(missing_ok=True)
         for path in secret_dir.iterdir():
             require(re.fullmatch(
-                r"\.(?:bao_token|callback_signer_bao_token)\.[A-Za-z0-9]{6}",
+                r"\.(?:bao_token|callback_signer_bao_token|notification_openbao_token)\.[A-Za-z0-9]{6}",
                 path.name,
             ) is not None,
                 "Disposable secret directory has an unexpected file")

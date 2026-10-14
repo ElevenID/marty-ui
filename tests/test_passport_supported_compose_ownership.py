@@ -42,7 +42,7 @@ SECRETS = {
     "postgres": ("marty_db_password",),
     "redis": (),
     "openbao": ("bao_root_token",),
-    "db-migrate": ("marty_db_password", "bao_token"),
+    "db-migrate": ("marty_db_password", "bao_token", "notification_openbao_token"),
     "issuance-migrations": ("marty_db_password",),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                      "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key", "signing_keys_integration_secret_key",
