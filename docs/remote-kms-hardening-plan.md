@@ -18791,3 +18791,14 @@ integrated from the concurrent PR branch update. Latest PR head is
 bootstrap, and Notification contracts passed 104 tests with three
 platform skips. CI run `38525813271` is in progress. Do not merge on
 the canceled or failed earlier runs; require this head's complete gates.
+
+CI run `38525813271` finished with all Rust/plugin/image jobs passing,
+but Release Contract Tests had one failing Docker-backed passport
+bootstrap test (6713 passed, 25 skipped). The new no-default-policy
+Notification token could not call `sys/capabilities-self`; the code now
+queries that token's effective ACL through the bootstrap root token
+using OpenBao's explicit-token `bao token capabilities TOKEN PATH`
+interface. PR head `46bec377d` contains this fix plus a token-safe
+failure-stage diagnostic from concurrent review. Local POSIX shell
+syntax and whitespace checks passed; the actual Linux Docker fixture
+must pass on the new head before merge.
