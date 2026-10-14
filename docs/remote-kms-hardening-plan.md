@@ -20323,3 +20323,20 @@ workspace test target successfully in 6m35s. This catches cross-crate
 integration and test compilation across the broad TLS custody changes. It
 does not execute the full test suite, prove the installed image, or close the
 passport fixture and external-provider acceptance gaps.
+
+2026-10-14 paired local-image schema qualification: built the staged UI
+worktree's public services Dockerfile successfully as local image ID
+`sha256:be12f11040060653fdcc5d7c3950a8d533f4e682c1b4fa3bfd48e43ef1eff485`
+and its migrations Dockerfile as
+`sha256:32963b3b18ad661a35c7536f61d9a81c0a9119572900d980027873a3fb01acc4`.
+An initial services-image-only disposable PostgreSQL run executed the four
+native migration binaries and found 54 tables with no private-key-shaped
+schema or content. A second isolated Compose project ran the paired
+migrations image and the services image against fresh PostgreSQL, Redis and
+OpenBao; both migration stages completed. The resulting full local schema
+had 61 tables and 811 columns. The canonical private-key schema and
+text/JSON content queries found no private-key storage. The disposable
+projects were removed. This is stronger local installed-image evidence than
+source SQL inspection, but the images are unsigned local tags, so it does
+not satisfy the exact published-digest release qualifier, idempotent rerun,
+or previously persisted database inspection. `git diff --check` passed.
