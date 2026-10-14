@@ -18802,3 +18802,13 @@ interface. PR head `46bec377d` contains this fix plus a token-safe
 failure-stage diagnostic from concurrent review. Local POSIX shell
 syntax and whitespace checks passed; the actual Linux Docker fixture
 must pass on the new head before merge.
+
+PR #1330 head `46bec377dd811a7d0db4ff32527bcb0e4a091442` passed
+the full PR CI run `38528132522`, including the Docker-backed passport
+bootstrap, Rust contracts, OpenBao DIDComm plugin/recovery, images,
+release contracts, CodeQL, and all required branch checks. The P1
+review thread was resolved after fixing every migration caller with a
+dedicated Notification token; no fallback was restored. The PR entered
+GitHub's protected merge queue as entry position 1, with merge-group
+CI run `38581676983` started. Preserve the branch and wait for the
+merge-group result and exact-main release qualification.
