@@ -19653,3 +19653,18 @@ targeted formatting and locked binary check passed. A control-plane
 unit failure caused by validating malformed metadata after calling
 `connect_lazy` outside Tokio was corrected by validating metadata first.
 Installed-image and live Trust Profile-to-Organization acceptance remain.
+
+Credential Template's Organization control-plane channel is staged for
+the same public-CA transport. Beta and production now require
+`ORG_GRPC_CA_CERT` and an explicit HTTPS Organization target. The binary
+connects the Organization channel eagerly through the MMF server-TLS
+factory and checks an authenticated Organization RPC before marking its
+control plane healthy. The existing Revocation Profile channel and
+service-token semantics are preserved while that server's transport is
+audited separately. Refactoring the control-plane constructor retained
+the prior zero-timeout failure. Credential Template library tests
+passed (12), targeted formatting and a locked binary check passed.
+This is source-level and config evidence; installed-image and live
+Credential Template-to-Organization acceptance remain. The clean
+KMS-only release cannot ship until all supported clients and targets
+are converted together.
