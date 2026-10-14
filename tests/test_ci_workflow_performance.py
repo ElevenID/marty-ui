@@ -29,9 +29,12 @@ def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
         for step in job["steps"]
         if step.get("name") == "Bootstrap released UI dependencies"
     )
-    assert bootstrap.index("bun install") < bootstrap.index(
+    assert bootstrap.index("PUPPETEER_SKIP_DOWNLOAD=true bun install") < bootstrap.index(
         "bun x --no-install puppeteer browsers install"
     )
+    assert "timeout 180s bun x --no-install puppeteer browsers install" in bootstrap
+    assert 'if [ "$attempt" -eq 3 ]; then' in bootstrap
+    assert "exit 1" in bootstrap
 
 
 def test_selfhost_operator_guide_is_a_packaged_input() -> None:
