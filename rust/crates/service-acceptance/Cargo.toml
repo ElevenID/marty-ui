@@ -28,7 +28,8 @@ mmf-platform.workspace = true
 mmf-security.workspace = true
 num-bigint.workspace = true
 redis.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+rustls.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
@@ -54,6 +55,10 @@ path = "tests/gateway_signing_acceptance.rs"
 [[test]]
 name = "csca_capability_contract"
 path = "tests/csca_capability_contract.rs"
+
+[[test]]
+name = "tls_openbao_keyless"
+path = "tests/tls_openbao_keyless.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
