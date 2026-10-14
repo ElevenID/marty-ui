@@ -90,7 +90,7 @@ denies "$signing_keys_token" auth/token/create
 rejects_write() {
     token=$1
     shift
-    if result=$(BAO_TOKEN="$token" bao write "$@" 2>&1); then
+    if result=$(BAO_TOKEN="$token" VAULT_TOKEN="$token" bao write "$@" 2>&1); then
         echo "Disposable token unexpectedly changed OpenBao key custody" >&2
         exit 1
     fi

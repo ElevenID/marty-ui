@@ -134,6 +134,9 @@ write_private_token() {
     chmod 0600 "$private_tmp"
     printf "%s" "$token_value" > "$private_tmp"
     mv -f "$private_tmp" "$output_file"
+    # Compose file-backed secrets retain host file modes. Workload images use
+    # different non-root UIDs; the host parent directory remains private 0700.
+    chmod 0444 "$output_file"
     private_tmp=""
 }
 json_field() {

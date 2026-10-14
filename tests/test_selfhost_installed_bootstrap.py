@@ -152,6 +152,7 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
     assert "/bin/sh -ec '\numask 077\n" in source
     assert 'private_tmp="$(mktemp "$output_dir/.openbao-token.XXXXXX")"' in source
     assert 'mv -f "$private_tmp" "$output_file"' in source
+    assert 'chmod 0444 "$output_file"' in source
     for output in (
         "SERVICE_TOKEN_OUTPUT_FILE",
         "BOOTSTRAP_TOKEN_OUTPUT_FILE",
@@ -228,10 +229,10 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         "signing-new",
         "didcomm-new",
     ]
-    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in paths)
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in paths)
     grant_paths = list(tmp_path.glob("sign_grant_*_token"))
     assert len(grant_paths) == 8
-    assert all(stat.S_IMODE(path.stat().st_mode) == 0o600 for path in grant_paths)
+    assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in grant_paths)
     assert not list(tmp_path.glob(".openbao-token.*"))
 
     paths[0].unlink()
