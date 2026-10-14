@@ -1485,6 +1485,20 @@ signer setup. Notification supports optional client-certificate enforcement,
 so its keyless replacement must preserve both authenticated and allowed
 server-only gRPC behavior with HTTP/2 ALPN.
 
+K11 Notification local cutover: MMF commit `27420c5` adds a keyless gRPC
+server configuration with HTTP/2 ALPN and no client-certificate requirement,
+alongside the existing keyless mTLS acceptor. Notification now requires a
+public server certificate plus complete versioned OpenBao signer settings,
+rejects `GRPC_TLS_KEY`, and retains its service-token interceptor in both
+transport modes. `GRPC_TLS_REQUIRE_CLIENT_AUTH` selects mTLS with the public
+client CA; the former server-only TLS mode remains available without a
+Marty-owned key file. The production library/binary check, focused config
+test, all available library tests (one), Rust 1.95 strict production Clippy,
+and MMF's 17 no-default-feature library tests/strict Clippy passed. Real
+Notification listener handshakes in both modes, its installed artifact and
+deployment settings are still unproved. Issuance's synchronous Tonic
+`Endpoint` path is the remaining direct source-level private-key TLS route.
+
 Additional local MMF commits `412bd8f`, `c473338` and `6752983` bound signer
 request and concurrency settings and preserve the former gRPC channel's TCP and
 HTTP/2 keepalive defaults with a validated override API. On the CI toolchain
