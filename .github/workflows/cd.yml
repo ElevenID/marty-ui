@@ -278,24 +278,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          printf '%s' "$EXTERNAL_IMAGES_JSON" | jq -e '
-            if type == "object" and length > 0
-               and (has("issuance") | not)
-               and (has("issuance-migrations") | not)
-               and all(.[]; type == "string" and
-                 test("^[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$")) then .
-            else error("exact registry-qualified independent image digests are required") end
-          ' > external-services.json
+          printf '%s' "$EXTERNAL_IMAGES_JSON" > external-services.json
           export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
           export SELFHOST_IMAGE_TAG="$VERSION"
           docker compose --profile '*' --env-file .env.selfhost.production.example \
             -f docker-compose.selfhost.prod.yml \
             -f docker-compose.selfhost.bundle.override.yml \
-            config --format json | jq -e --slurpfile external external-services.json '
-              (.services | to_entries | map(select(
-                (.value.image | startswith("ghcr.io/elevenid/marty-ui/")) | not
-              ) | .key) | sort) == ($external[0] | keys | sort)
-            ' >/dev/null
+            config --format json > selfhost-preflight-compose.json
+          python scripts/check_selfhost_external_images.py \
+            --compose-model selfhost-preflight-compose.json \
+            --external-services external-services.json \
+            --base-compose docker-compose.selfhost.prod.yml \
+            --override-compose docker-compose.selfhost.bundle.override.yml
       - name: Verify release artifact provenance
         env:
           GH_TOKEN: ${{ github.token }}
