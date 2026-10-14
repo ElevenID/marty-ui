@@ -19472,3 +19472,32 @@ only because the five required exact-head checks for `0cf490d` are pending
 (runs `38629647805`, `38629647764`, `38629648382`, `38629647769`). Recheck
 them, enqueue through the protected queue, and then pin the merged MMF ref
 in the grouped UI branch. No protected-rule bypass is authorized or needed.
+
+After all five exact-head checks passed, MMF PR #127 entered the protected
+merge queue at position 1. Its merge-group SHA is
+`aa1f208335df6aa955b669511180dee6555d1896`; License Compliance,
+Open-source policy, and Organization Quality passed, while merge-group CI
+`38630357594` is still running. Do not pin the UI dependency until the
+queue produces the actual merged `main` commit.
+
+Remaining test/deployment key-file inventory also includes the disposable
+passport overlays (`docker-compose.passport-supported-disposable*.yml`) and
+the OIDF conformance-only Nginx TLS proxy
+(`docker-compose.profile.oidf.yml`, `services/oidf-tls-proxy/nginx.conf.template`).
+Those still mount private TLS PEM files. Their KMS-only replacement must
+preserve the official HTTPS conformance URLs and the passport selfhost
+surface; a green production Compose search does not cover these profiles.
+
+MMF PR #127 merged through the protected queue at
+`aa1f208335df6aa955b669511180dee6555d1896` after all required
+merge-group checks passed, including CI `38630357594`. The grouped UI
+worktree now pins every MMF workspace dependency to that same merged SHA;
+the temporary local `mmf-platform` path and old `c55d323e` lock entries
+are gone. `cargo +1.95 check -p marty-service-acceptance` updated and
+validated the lockfile; a locked build of `tls_openbao_keyless` passed.
+The same ignored live acceptance test then passed against a newly started
+disposable HTTPS OpenBao with the **pinned merged Git dependency** (1/1,
+4.20 seconds), and the disposable container was removed. This validates
+the merged shared transport in the local UI build. The grouped UI changes
+remain uncommitted and unpushed pending remaining key-file retirement,
+provisioned runtime, and broad review.
