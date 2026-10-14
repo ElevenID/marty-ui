@@ -19850,3 +19850,25 @@ connected RPC acceptance. Auth's production Event Stream gRPC target still
 uses plaintext, while Auth disables plaintext by default in production, so
 the production Auth graph cannot yet be claimed runnable or KMS-only. That
 edge needs a keyless Event Stream server listener and HTTPS client cutover.
+
+Event Stream keyless TLS implementation is now staged on the grouped UI
+branch. The Rust listener accepts only a public certificate, trusted OpenBao
+CA, scoped token file, and explicit versioned P-256 signer; it rejects the
+retired TLS private-key file and requires the remote identity when deployed
+with gRPC enabled. Auth now requires an HTTPS Event Stream target when its
+remote workload identity is configured and opens that channel with the
+public workload CA. The self-host, beta, and Kubernetes deployments have
+explicit Event Stream signer settings and secret mounts; Auth targets Event
+Stream over HTTPS in each. The secret catalog, stack requirements, self-host
+example inputs, Kubernetes secret installer/config map, beta certificate
+preflight, and packaged bundle synthetic inputs were updated together.
+Event Stream Rust library tests (6), executable gRPC contract (1), locked
+binary check, Auth startup tests (7), locked Auth binary check, 158 focused
+beta/Kubernetes/self-host Python tests, 65 additional self-host/Kubernetes
+tests, Rust deployment-catalog frozen CLI suite (8), YAML/JSON parses,
+`bash -n`, and the extracted self-host bundle test with standalone Compose
+5.4.0 passed. These checks do not include a connected Event Stream TLS
+handshake. Organization, Applicant, and Gateway still have plaintext Event
+Stream client paths; the deployment is not yet an end-to-end KMS-only graph.
+The Event Stream business RPCs still have their pre-existing authorization
+model and need a security review alongside the transport cutover.
