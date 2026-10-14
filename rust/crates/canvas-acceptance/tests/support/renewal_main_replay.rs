@@ -112,14 +112,27 @@ pub(super) async fn run(database_url: &str) {
     drop((http_listener, grpc_listener));
     let mut child = ChildGuard(command.spawn().unwrap());
     let client = bounded_http_client(Duration::from_secs(10));
+    // The packaged process starts alongside other database acceptance cases.
+    // Keep the exact health assertion, but allow a bounded slow startup as the
+    // fresh packaged-main case does instead of treating one five-second probe
+    // as a service regression.
+    let health_result = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if let Some(value) = wait_for_health_with_client(http_port, &client).await {
+                return Some(value);
+            }
+            if child.0.try_wait().unwrap().is_some() {
+                return None;
+            }
+        }
+    })
+    .await;
+    let timed_out = health_result.is_err();
     assert_eq!(
-        tokio::time::timeout(
-            Duration::from_secs(10),
-            wait_for_health_with_client(http_port, &client)
-        )
-        .await
-        .unwrap(),
-        Some(json!({"status":"healthy","service":"issuance-service"}))
+        health_result.unwrap_or(None),
+        Some(json!({"status":"healthy","service":"issuance-service"})),
+        "packaged issuance did not become healthy (deadline exceeded: {timed_out}); process status: {:?}",
+        child.0.try_wait().unwrap()
     );
     let url = format!("http://127.0.0.1:{http_port}/v1/issued-credentials/{SOURCE}/renew");
     let initial = snapshot(&pool).await;
