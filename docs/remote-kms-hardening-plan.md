@@ -19769,3 +19769,24 @@ locked binary checks and whitespace checks passed. These are source
 and configuration checks, not a connected TLS acceptance. The installed
 Compose/Kubernetes targets and Credential Template signer provisioning
 still need cutover before deployment.
+
+The grouped UI worktree now stages self-host and beta Compose plus Oracle
+Kubernetes wiring for the Organization, Revocation Profile, and Credential
+Template keyless gRPC server identities. Each listener receives only a public
+certificate, OpenBao CA, and a distinct scoped Transit signer token; all
+three versioned key references are explicit operator inputs. Flow and both
+native Issuance workloads target Credential Template over HTTPS with public
+CA trust; Credential Template and Revocation Profile target their Organization
+dependency over HTTPS. The deployment secret catalog, stack-required lists,
+self-host example files, Kubernetes secret installer/config map, installed
+runtime-plan assertions, and operator examples were updated together.
+Rendered self-host and beta Compose graph checks, YAML/env/mount checks,
+`bash -n`, the self-host secret-closure check, 54 targeted Python deployment
+tests, 107 Flow/beta Compose tests, 24 installed-runtime-plan tests, 170
+Kubernetes deployment tests, and the Rust deployment-catalog suite passed.
+The direct Kubernetes-native Issuance Python suite could not collect because
+its `scripts.prepare_official_beta_release` import is absent in this
+worktree; no result is claimed for that suite. These are static deployment
+checks, not a real installed-image or connected OpenBao TLS proof. Other
+Organization/Credential Template callers and the self-host bundle's older
+TLS fixture still need audit and cutover before the graph is ready.
