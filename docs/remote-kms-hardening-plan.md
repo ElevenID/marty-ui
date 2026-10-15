@@ -22236,3 +22236,18 @@ Keycloak installations still have four `privateKey` and four generated
 `secret` rows each. Fresh remote-provider schema and runtime-write proofs do
 not clean those installed rows. K10/K12 remain open until the installed
 cutover removes them and the read-only database gate passes there.
+
+2026-10-15 Canvas diagnosis and grouped-branch assembly: downloaded the
+failure-diagnostics artifact from exact-head run `38780095995`. Three
+composition child failures share a startup boundary: Gateway health is absent
+in base/Envoy cases, while the Kubernetes child and direct case explicitly
+report `gRPC CA requires an explicit HTTPS target`. Their test-only overlay
+replaces deployed HTTPS gRPC destinations with an HTTP synthetic peer while
+retaining deployed public-CA settings. The next correction must give the
+synthetic gRPC peers an HTTPS transport backed by non-exportable remote TLS
+signing, or otherwise prove the same transport boundary without enabling a
+product plaintext fallback. Do not suppress the deployment CA settings just
+to make these tests pass. The Ed25519 scoped fixture correction and the locally
+qualified base HTTPS/Raft graph were assembled on the grouped UI PR branch as
+`c1ae70f9c` and `4ce8fbe15`; the branch remains unpushed pending the Canvas
+correction and review. No exact-head hosted result exists for this new head.
