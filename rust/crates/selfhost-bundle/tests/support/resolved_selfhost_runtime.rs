@@ -424,6 +424,7 @@ fn secret_field(owner: &str, key: &str) -> Result<&'static str> {
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
         "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
+        "DIDCOMM_KMS_CA_CERT_FILE" | "BAO_CACERT" => Ok("openbao_tls_ca_cert"),
         "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
@@ -554,7 +555,8 @@ impl ClosedSelfhostModel {
                 if key == "PASSPORT_TENANT_API_KEYS_FILE" {
                     continue;
                 }
-                if key.ends_with("_FILE")
+                if key == "BAO_CACERT"
+                    || key.ends_with("_FILE")
                     || key.ends_with("_CERT")
                         && (key.starts_with("GRPC_WORKLOAD_TLS_")
                             || key == "GRPC_TLS_CA_CERT"
@@ -576,14 +578,19 @@ impl ClosedSelfhostModel {
                 && native["command"] == json!([]),
         )?;
         require(native["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "false")?;
-        require(native["environment"]["DIDCOMM_KMS_ADDR"] == "http://openbao.invalid:8200")?;
-        require(native["environment"]["BAO_ADDR"] == "http://openbao.invalid:8200")?;
+        require(native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_ADDR"] == "https://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_CACERT"] == "/run/secrets/openbao_tls_ca_cert")?;
+        require(
+            native["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/openbao_tls_ca_cert",
+        )?;
         require(
             native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
                 == "/run/secrets/didcomm_issuance_openbao_token",
         )?;
         require(!object(&native["environment"])?.keys().any(|key| {
-            (key.starts_with("BAO_") && key != "BAO_ADDR") || key.starts_with("OPENBAO_")
+            (key.starts_with("BAO_") && key != "BAO_ADDR" && key != "BAO_CACERT")
+                || key.starts_with("OPENBAO_")
         }))?;
         require(services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] == READY)?;
         require(services["gateway"]["environment"]["REDIS_DB_GATEWAY"] == "2")?;
@@ -799,7 +806,9 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     let env_file = owned.path().join("synthetic.env");
     let mut inputs: BTreeMap<String, String> = [
         ("SELFHOST_IMAGE_TAG", "synthetic-immutable-v1"),
-        ("BAO_ADDR", "http://openbao.invalid:8200"),
+        ("BAO_ADDR", "https://openbao.invalid:8200"),
+        ("KEYCLOAK_KMS_ADDR", "https://openbao.invalid:8200"),
+        ("KEYCLOAK_KMS_KEY_VERSION", "1"),
         ("KEYCLOAK_SOCIAL_LOGIN_ENABLED", "false"),
         ("CORS_ORIGINS", "https://issuer.example"),
         (
@@ -854,6 +863,10 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     inputs.insert(
         "MARTY_ISSUANCE_IMAGE".into(),
         format!("synthetic.invalid/issuance@sha256:{}", "a".repeat(64)),
+    );
+    inputs.insert(
+        "MARTY_KEYCLOAK_KMS_IMAGE".into(),
+        format!("synthetic.invalid/keycloak@sha256:{}", "b".repeat(64)),
     );
     inputs.insert(
         "SELFHOST_SECRET_DIR".into(),
