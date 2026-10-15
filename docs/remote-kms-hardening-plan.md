@@ -22699,3 +22699,19 @@ Keycloak databases still contained four `privateKey` and four generated
 `secret` rows each at last inspection, and no cutover/SQL gate has passed on
 those installed databases. Hold the grouped UI push until remaining local
 review/provisioning work is batched, then use exact-head hosted runtime gates.
+
+Grouped UI PR [#1344](https://github.com/ElevenID/marty-ui/pull/1344) was
+pushed once at `f0683f3e0`; [exact-head CI run
+38809485877](https://github.com/ElevenID/marty-ui/actions/runs/38809485877)
+is still live. Its Rust Service Images gate failed on a stale plaintext Flow
+target assertion in the native conformance script; local `1e4bd5d62` updates
+that assertion and gives the base/Envoy Compose fixtures the required inherited
+native Issuance TLS variables. The conformance, base-native and Envoy render
+scripts pass locally. Its Release Contract Tests gate reported three stale
+expectations: plaintext Flow target, direct Envoy-to-Issuance address, and the
+old 28-binary allowlist. Local `e5234e76d` now asserts HTTPS Flow, Envoy's
+loopback keyless bridge and the packaged bridge binary; all 18 affected tests
+and Ruff pass. These two corrective commits are local and intentionally held
+for one batched push after the remaining CI lanes finish. CI source already
+contains a fifth pinned Keycloak image role and a Keycloak image qualification
+job; earlier plan statements that this source role was absent are superseded.
