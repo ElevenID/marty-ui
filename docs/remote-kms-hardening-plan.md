@@ -21837,3 +21837,7 @@ HTTP OpenBao `server -dev` listener. Its initializers and several workloads
 point to `http://openbao:8200`. The production KMS-only claim must exclude
 that graph until it uses the remote Keycloak image and verified HTTPS CA
 distribution throughout; do not weaken HTTPS clients to keep it running.
+Run `38756048027` later completed Rust Service Images successfully. Its
+Rust Service Tests (selfhost) lane was still building the public image; the
+local correction commit is `02d617248` and remains unpushed pending that
+lane's result so one grouped CI cycle can cover every known failure.
