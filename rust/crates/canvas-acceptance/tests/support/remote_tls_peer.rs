@@ -54,6 +54,11 @@ async fn post(client: &reqwest::Client, url: String, token: &str, body: Value) -
 
 impl RemoteTlsPeer {
     pub(super) async fn start(state: PeerState, directory: &Path) -> Self {
+        assert_eq!(
+            tokio::runtime::Handle::current().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::MultiThread,
+            "disposable OpenBao TLS signer requires a multi-thread Tokio runtime"
+        );
         let endpoint = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
         let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
         let bao_ca = PathBuf::from(std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap());
