@@ -21188,9 +21188,22 @@ request with HTTP 400. Keycloak 25.0.6 logs show `Error encoding cookie`,
 `Failed to find key: realm=11id algorithm=AES use=ENC`, and failure to
 create an AES fallback key. This confirms AES is required by a real login
 path, not merely present as an unused default provider. Implement remote
-cookie encryption/decryption through an appropriate Keycloak SPI and an
+cookie encryption/decryption through a proved Keycloak integration and an
 OpenBao-contained operation before claiming OIDC feature preservation;
 do not restore a local `SecretKey` to make the login test pass. Re-run the
 same mode for browser token/ID-token signature, session reuse and database
 custody once AES is available. This failed proof is deliberate evidence
 of a blocker within the active goal, not a shipped acceptance pass.
+
+Pinned Keycloak 25.0.6 bytecode narrows that blocker further:
+`RestartLoginCookie.encodeAndEncrypt` directly obtains ENC and SIG
+`SecretKey` objects from `KeyManager.getActiveKey`, then calls
+`TokenUtil.jweDirectEncode`; its decode path calls
+`jweDirectVerifyAndDecode`. `DefaultKeycloakSession.keys()` directly
+constructs `DefaultKeyManager`. Therefore merely overriding a
+`ContentEncryptionProvider` SPI does **not** reach this cookie path; the
+previous suggestion to solve it through that SPI alone was too broad.
+Investigate a pinned Keycloak source patch or an opaque remote JCE bridge
+that handles the exact cookie JWE AES/HMAC operations without exposing key
+bytes, backed by the planned Go OpenBao operation. Keep the browser gate
+failing until the complete path passes with no local secret material.
