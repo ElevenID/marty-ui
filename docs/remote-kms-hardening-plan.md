@@ -22331,3 +22331,10 @@ OpenBao root-token environment and HTTP. Their focused legacy tests pass but
 do not qualify the new Raft/scoped-token cutover. Repair or retire these
 old assumptions with an explicit installed-beta path and executable proof
 before merging #1344; no fallback to dev/root-token custody is acceptable.
+
+The grouped correction was pushed as `ce4cc6e53` after the local checks;
+[new exact-head CI run 38788256643](https://github.com/ElevenID/marty-ui/actions/runs/38788256643)
+is queued. PR #1344 now states the beta cutover gap as a merge/publication
+condition. The prior run `38785167966` is terminal failed evidence, not a
+qualification of the new head. The tracker was pushed through `7c7436337`
+before this CI-run annotation.
