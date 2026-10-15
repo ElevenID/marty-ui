@@ -22622,3 +22622,16 @@ and diff hygiene pass. Three root YAML files named
 but no production script or test references them; retain them as historical
 snapshots rather than treating them as deployable graphs. The candidate is
 still local, with Keycloak reference provisioning and runtime acceptance open.
+
+The local base/conformance candidate adds a hosted render check in
+`4f8321f67`: it renders base plus the immutable conformance image profile,
+then applies the existing Keycloak KMS graph/file validator to synthetic
+public certificates and distinct scoped tokens. The check passed locally.
+The same commit preserves Windows Docker Compose plugin discovery in the
+existing base OpenBao graph test's isolated environment; all ten focused
+render checks passed locally and Ruff passed. This is source/render evidence
+only; Docker Desktop's daemon is still unavailable. At this checkpoint, PR
+#1344 run `38802947432` remains live with Canvas, Rust Contracts and the
+OpenBao plugin lane active; self-host, Rust images, security, packaging and
+release contracts have passed. Do not count a partially completed run as a
+green exact-head gate.
