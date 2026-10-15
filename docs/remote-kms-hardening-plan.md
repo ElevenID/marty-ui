@@ -22279,3 +22279,11 @@ The grouped PR description was rewritten for head `5fcb8b450` and the
 base HTTPS/Raft scope. [Exact-head run 38785167966](https://github.com/ElevenID/marty-ui/actions/runs/38785167966)
 is currently live; Canvas, contracts, self-host, image, and plugin jobs have
 started. Treat the outcome as pending until every required lane is terminal.
+
+2026-10-15 exact-head run `38785167966` intermediate finding: Rust Lint and
+Packaging failed solely on the Canvas acceptance module declaration order
+required by `rustfmt`. Local grouped-branch commit `3a5087b64` applies that
+ordering; it is deliberately unpushed while Canvas, contracts, self-host,
+plugin and image lanes of the same run remain live, so any additional
+corrections can share one CI retry. The Core #355 and Credentials #313
+hardening PRs remain merged; this UI integration PR is still open.
