@@ -22898,3 +22898,18 @@ thread was resolved after 319 affected release/fixture tests passed (19
 skipped), and the broader issuance/CI workflow suites passed (165). The old
 head's costly CI runs were cancelled once superseded; all five required
 checks must be evaluated again on exact head `e663c37b6` before merge.
+
+Installed-beta cutover dependency audit: `scripts/deploy-local-beta-release.ps1`
+calls `Assert-BetaKeycloakDatabaseNoLocalKeys` before its coordinated
+PostgreSQL/OpenBao preflight backup. Both installed beta and self-host
+Keycloak databases currently have eight local key-provider rows, so the
+ordinary beta release command fails before it can produce rollback material.
+After #1356 and the exact `v1.1.248` images qualify, prepare a separate
+recoverable clean-install cutover that first captures coordinated Keycloak
+PostgreSQL plus OpenBao Raft state, stops the stock Keycloak writer, replaces
+the disposable/non-public Keycloak database with a fresh realm import under
+the matched remote-key image, then runs browser/CIBA/token refresh and the
+read-only KMS-only custody SQL before opening traffic. Retain the original
+backup for complete rollback; do not add private-key row/table migration
+scripts or delete rows in place. The post-cutover beta deployment preflight
+must then pass against the clean database.
