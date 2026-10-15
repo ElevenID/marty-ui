@@ -21203,7 +21203,13 @@ Pinned Keycloak 25.0.6 bytecode narrows that blocker further:
 constructs `DefaultKeyManager`. Therefore merely overriding a
 `ContentEncryptionProvider` SPI does **not** reach this cookie path; the
 previous suggestion to solve it through that SPI alone was too broad.
-Investigate a pinned Keycloak source patch or an opaque remote JCE bridge
-that handles the exact cookie JWE AES/HMAC operations without exposing key
-bytes, backed by the planned Go OpenBao operation. Keep the browser gate
+Further inspection of the pinned `keycloak-core-25.0.6.jar` shows
+`TokenUtil.jweDirectEncode(Key, Key, byte[])` immediately invokes
+`Key.getEncoded().length` to select A128/192/256CBC-HS*. An opaque
+`SecretKey` returning no encoded bytes cannot pass that path. A fake encoded
+value would reopen a local-key/algorithm confusion risk and is not accepted
+as KMS-only proof. For this pinned version, pursue a source-built Keycloak
+patch that routes the complete cookie JWE AES/HMAC encode/decode operation
+to the planned Go OpenBao extension, preserving the existing cookie format,
+validation, rotation and outage behavior. Keep the browser gate
 failing until the complete path passes with no local secret material.
