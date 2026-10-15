@@ -690,6 +690,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             for suite, expected in (
                 ("vdsnc_registration_live_contract", 2),
                 ("public_key_metadata_live_contract", 2),
+                ("issuer_profile_storage_contract", 2),
             ):
                 result = subprocess.run(
                     ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
