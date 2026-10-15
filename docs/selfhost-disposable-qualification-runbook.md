@@ -15,6 +15,15 @@ no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
 
+The 32 GiB figure is the current qualification target, not a memory check in
+the installer. A smaller disposable host may be used for an exploratory run
+of this same ZIP and journey, but record its physical/VM RAM, CPU, free disk,
+peak container and host memory, swap activity, OOM kills, and any failed
+health or business step. Keep the result **unqualified** until the complete
+journey and custody checks pass, the lower-memory operating envelope is
+reviewed, and this qualification target is updated. A Compose render or image
+pull alone does not establish a smaller supported minimum.
+
 ## Stage exact inputs
 
 1. From the successful Stack release run, download the unique
