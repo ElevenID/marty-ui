@@ -204,14 +204,14 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "true &&",
         ),
         (
-            '\'["canvas","contracts","worker"]\' ||',
+            '\'["canvas","contracts","worker","selfhost"]\' ||',
             "'[\"worker\"]' ||",
         ),
         (
             '\'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}',
             "'[\"selfhost\"]' || needs.changes.outputs.rust_matrix) }}",
         ),
-        ('rust_matrix=\'["canvas","contracts"]\'', "rust_matrix='[\"canvas\"]'"),
+        ('rust_matrix=\'["canvas","contracts","selfhost"]\'', "rust_matrix='[\"canvas\"]'"),
         ("rust_matrix='[\"contracts\"]'", "rust_matrix='[\"canvas\"]'"),
         (
             "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance",
@@ -227,9 +227,9 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "      - name: Require public protocol vector test execution\n"
             "        if: matrix.lane == 'canvas'",
         ),
-        ('\'true:true:["canvas","contracts"]\'', "'true:true:[\"contracts\"]'"),
+        ('\'true:true:["canvas","contracts","selfhost"]\'', "'true:true:[\"contracts\"]'"),
         (
-            '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]',
+            '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]',
             '"$RUST_MATRIX" == \'["contracts"]\' ]]',
         ),
     ],

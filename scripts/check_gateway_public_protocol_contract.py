@@ -547,14 +547,14 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         "          github.event_name == 'pull_request' &&\n"
         "          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&\n"
         "          needs.changes.outputs.rust_runtime == 'true' &&\n"
-        '          \'["canvas","contracts","worker"]\' ||\n'
+        '          \'["canvas","contracts","worker","selfhost"]\' ||\n'
         "          github.event_name == 'pull_request' &&\n"
         "          contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&\n"
         "          needs.changes.outputs.rust_runtime == 'true' &&\n"
         '          \'["canvas","contracts","selfhost"]\' || needs.changes.outputs.rust_matrix) }}'
     )
     required = (
-        'rust_matrix=\'["canvas","contracts"]\'' in changes
+        'rust_matrix=\'["canvas","contracts","selfhost"]\'' in changes
         and "rust_matrix='[\"contracts\"]'" in changes
         and 'if [[ "${{ github.event_name }}" == merge_group ]]' in changes
         and "needs: changes" in service
@@ -568,10 +568,10 @@ def _assert_full_workspace_ci_owner(workflow: str) -> None:
         and service.index(workspace_step) < service.index(vector_step)
         and "RUST_MATRIX: ${{ needs.changes.outputs.rust_matrix }}" in gate
         and 'case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in' in gate
-        and '\'true:true:["canvas","contracts"]\'' in gate
+        and '\'true:true:["canvas","contracts","selfhost"]\'' in gate
         and "'true:false:[\"contracts\"]'" in gate
         and '[[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&' in gate
-        and '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate
+        and '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]' in gate
         and 'require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"'
         in gate
     )
