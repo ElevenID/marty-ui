@@ -8,6 +8,8 @@ use std::{
 
 use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD, Engine};
+use marty_keyless_grpc_bridge::Bridge;
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use rustls::{
     pki_types::CertificateDer,
     sign::{CertifiedKey, SigningKey, SingleCertAndKey},
@@ -53,6 +55,32 @@ async fn post(client: &reqwest::Client, url: String, token: &str, body: Value) -
 }
 
 impl RemoteTlsPeer {
+    pub(super) async fn start_envoy_bridge(&self) -> tokio::task::JoinHandle<()> {
+        let bridge = Bridge::connect(
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: self.certificate_file.clone(),
+                kms_ca_cert_file: PathBuf::from(
+                    std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap(),
+                ),
+                kms_endpoint: std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap(),
+                kms_token_file: self.token_file.clone(),
+                kms_key_name: self.key_name.clone(),
+                kms_key_version: 1,
+                request_timeout: Duration::from_secs(10),
+                max_concurrent_signs: 32,
+            },
+            self.ca_file.clone(),
+            "127.0.0.1".to_owned(),
+            9005,
+        )
+        .await
+        .unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:19006")
+            .await
+            .unwrap();
+        tokio::spawn(async move { bridge.serve(listener).await.unwrap() })
+    }
+
     pub(super) async fn start(state: PeerState, directory: &Path) -> Self {
         assert_eq!(
             tokio::runtime::Handle::current().runtime_flavor(),

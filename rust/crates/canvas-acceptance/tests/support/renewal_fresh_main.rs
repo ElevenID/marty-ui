@@ -810,6 +810,11 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             );
         }
         if let Some(gateway_fixture) = gateway_fixture {
+            let envoy_bridge = if envoy {
+                Some(tls_peers.as_ref().unwrap().start_envoy_bridge().await)
+            } else {
+                None
+            };
             let envoy_fixture = if envoy {
                 Some(super::envoy_runtime::EnvoyFixture::start().await)
             } else {
@@ -844,6 +849,10 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             if let Some(fixture) = envoy_fixture {
                 fixture.native_unavailable(&pool, &state).await;
                 fixture.close().await;
+            }
+            if let Some(bridge) = envoy_bridge {
+                bridge.abort();
+                let _ = bridge.await;
             }
             gateway_fixture
                 .native_owner_unavailable(&source_id, legacy.as_ref().unwrap())

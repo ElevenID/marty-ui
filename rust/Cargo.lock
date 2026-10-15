@@ -3732,6 +3732,7 @@ dependencies = [
  "marty-didcomm",
  "marty-gateway",
  "marty-issuance-service",
+ "marty-keyless-grpc-bridge",
  "marty-oid4vci",
  "marty-release-evidence",
  "marty-signing-grant",
@@ -4350,6 +4351,16 @@ version = "0.1.0"
 dependencies = [
  "marty-response-compat",
  "serde_json",
+]
+
+[[package]]
+name = "marty-keyless-grpc-bridge"
+version = "0.1.0"
+dependencies = [
+ "mmf-platform",
+ "rustls",
+ "tokio",
+ "tokio-rustls",
 ]
 
 [[package]]
