@@ -20605,3 +20605,28 @@ diff checks passed. Full migration-image execution is still unproven:
 other Rust OpenBao clients in that image do not yet consume the private CA,
 and the exact published image predates this source cutover. Keep the strict
 HTTPS fixture and update those clients before claiming the release gate.
+
+2026-10-15 Signing Keys Transit HTTPS source cutover, staged in the grouped UI
+worktree: all nine direct production Transit request paths in `kms.rs` now use
+the shared `marty-openbao-http` transport. It enforces an HTTPS origin, peer
+verification, no proxy or redirects, and optional explicit public CA trust;
+the managed service-token path reads `BAO_CACERT`, while external Transit may
+name a CA in its provider configuration. Service-token endpoint validation
+now checks the HTTPS origin before a request. The managed holder provider
+rejects HTTP at construction. Self-host, beta and Kubernetes Signing Keys and
+migration roles now mount the public CA and set `BAO_CACERT`. A `cfg(test)`
+loopback-only HTTP branch retains in-process Axum unit mocks; it is absent
+from production and integration-test builds. The focused deployment/config
+suite passed 163 tests, and Signing Keys library tests passed 197 with nine
+ignored. A new disposable OpenBao HTTPS profile, with its TLS key confined to
+the OpenBao container tmpfs and only its public CA exported, ran the actual
+ignored Rust `managed_policy_live_kms` integration test successfully. It
+proved scoped non-exportable managed key creation, rotation, pinned-version
+signing, holder signing/revocation, and foreign-key denial against a real
+CA-verified OpenBao endpoint. This profile is a focused transport/custody
+proof, not a substitute for the full shipped ACL policy probe. The older
+`probe_signing_keys_openbao_policy.py` still starts OpenBao over HTTP and
+other direct Rust OpenBao callers, including the flow-envelope and grant
+paths, still need the shared HTTPS transport and a coordinated live probe.
+The grouped UI worktree is uncommitted/unlanded; no exact published-artifact
+claim follows from this local proof.
