@@ -20666,3 +20666,24 @@ staged correction now calls the same `kms::transit_http_client` as actual
 operations, so its health/auth/capability probe receives the same HTTPS,
 CA, proxy and redirect policy; cloud validator bridges keep their separate
 provider client. The 197 Signing Keys library tests passed after this edit.
+
+2026-10-15 broad Signing Keys policy probe HTTPS conversion, staged in the
+grouped UI worktree: `probe_signing_keys_openbao_policy.py` now runs its pinned
+disposable OpenBao with dev TLS and a TLS-key tmpfs, exports only the public
+CA to the host, rejects redirects/proxies, bootstraps the shipped policy in
+the same container over CA-verified HTTPS, and supplies `BAO_CACERT` to
+Rust live tests. The policy-only run passed all six managed key prefixes,
+isolated provider callback verification and seven origin-bound grant keys.
+The broader `--rust-adapter` run advanced through the actual provider HMAC
+test, real holder/PostgreSQL lifecycle and managed RS256 profile after their
+tests' HTTPS guards and CA trust were updated. It then failed in the five
+`managed_key_create_live_contract` tests: these are in-process HTTP mock
+Transit servers compiled as integration tests, so the production
+HTTPS-only transport correctly refuses them. Do not reintroduce an HTTP
+allowance or suppress those checks. Re-express their profile creation,
+outage, denied read, missing mount and read-only behaviors against the
+disposable real OpenBao with scoped policies and failure controls, preserving
+the regression assertions without generating test TLS private keys. The
+`--rust-adapter` gate remains failing until that replacement runs. Current
+Rust formatting, production checks for Signing Keys, Signing Grant and
+Device Registration, Python compilation and diff checks passed.
