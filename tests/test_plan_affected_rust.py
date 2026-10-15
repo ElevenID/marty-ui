@@ -1215,7 +1215,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     )
                 if marker == "provider_serving_marker":
                     content = method_body(
-                        content, "let grpc = grpc_builder", "    runtime.activate()?"
+                        content, "let router = Server::builder()", "    runtime.activate()?"
                     )
                 if marker == "deployment_marker":
                     content = method_body(content, "\n  auth:\n", "\n  organization:\n")
@@ -1978,7 +1978,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "let event_stream_grpc_target",
             ),
             "connection": (
-                "let organization = workload_channel_factory(",
+                "let organization_channel = if let Some(tls)",
                 "let grpc_clients =",
             ),
             "clients": (
