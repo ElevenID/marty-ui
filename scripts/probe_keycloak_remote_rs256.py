@@ -248,10 +248,11 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("Keycloak bootstrap stored private key material")
             try:
-                token = http_json(base + "/realms/master/protocol/openid-connect/token", {
+                master_tokens = http_json(base + "/realms/master/protocol/openid-connect/token", {
                     "client_id": "admin-cli", "grant_type": "password",
                     "username": "probe", "password": "synthetic-probe-only",
-                })["access_token"]
+                })
+                token = master_tokens["access_token"]
             except HTTPError as error:
                 observed = subprocess.run(["docker", "logs", "--tail", "100", kc_name],
                                           capture_output=True, text=True, timeout=10)
@@ -281,10 +282,11 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("11id realm creation stored private key material")
             try:
-                token_11id = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                realm_tokens = http_json(base + "/realms/11id/protocol/openid-connect/token", {
                     "client_id": "admin-cli", "grant_type": "password",
                     "username": "probe11", "password": "synthetic-probe-only",
-                })["access_token"]
+                })
+                token_11id = realm_tokens["access_token"]
             except HTTPError as error:
                 response = json.loads(error.read())
                 raise RuntimeError(f"11id token request failed: {error.code} "
@@ -295,23 +297,61 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                                        base + "/realms/11id")
             if realm_modulus == master_modulus:
                 raise RuntimeError("master and 11id reused one remote RSA key")
+            refreshed_tokens = {}
+            for realm, issued, jwks_for_realm in (
+                ("master", master_tokens, jwks),
+                ("11id", realm_tokens, jwks_11id),
+            ):
+                refresh = issued.get("refresh_token")
+                if not refresh:
+                    raise RuntimeError(f"{realm} did not issue a refresh token")
+                refreshed = http_json(base + f"/realms/{realm}/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "refresh_token",
+                    "refresh_token": refresh,
+                })
+                verify_jwt(refreshed["access_token"], jwks_for_realm,
+                           f"{prefix}-{realm}-rs256-v1", base + f"/realms/{realm}")
+                repeated = http_json(base + f"/realms/{realm}/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "refresh_token",
+                    "refresh_token": refreshed["refresh_token"],
+                })
+                verify_jwt(repeated["access_token"], jwks_for_realm,
+                           f"{prefix}-{realm}-rs256-v1", base + f"/realms/{realm}")
+                refreshed_tokens[realm] = repeated
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("Keycloak token issuance stored private key material")
             scoped_token.write_text("invalid-disposable-token", encoding="ascii")
-            for realm, username in (("master", "probe"), ("11id", "probe11")):
-                try:
-                    http_json(base + f"/realms/{realm}/protocol/openid-connect/token", {
-                        "client_id": "admin-cli", "grant_type": "password",
-                        "username": username, "password": "synthetic-probe-only",
-                    })
-                except HTTPError as error:
-                    if error.code != 500:
-                        raise RuntimeError("OpenBao loss returned an unexpected status") from error
-                else:
-                    raise RuntimeError(f"{realm} issued a token without its remote signer")
+            for realm, username in (
+                ("master", "probe"),
+                ("11id", "probe11"),
+            ):
+                for request in (
+                    {"client_id": "admin-cli", "grant_type": "refresh_token",
+                     "refresh_token": refreshed_tokens[realm]["refresh_token"]},
+                    {"client_id": "admin-cli", "grant_type": "password",
+                     "username": username, "password": "synthetic-probe-only"},
+                ):
+                    try:
+                        http_json(base + f"/realms/{realm}/protocol/openid-connect/token",
+                                  request)
+                    except HTTPError as error:
+                        details = json.loads(error.read())
+                        denied = error.code == 500 or (
+                            request["grant_type"] == "refresh_token"
+                            and error.code == 400
+                            and details.get("error") == "invalid_grant"
+                        )
+                        if not denied:
+                            raise RuntimeError(
+                                f"OpenBao loss returned {error.code} for "
+                                f"{realm} {request['grant_type']}: "
+                                f"{details.get('error')} {details.get('error_description')}"
+                            ) from error
+                    else:
+                        raise RuntimeError(f"{realm} issued a token without its remote signer")
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
-            print("Remote RS256 master/11id token/JWKS, KMS-loss denial, and zero-private-row probe passed")
+            print("Remote RS256 master/11id token/refresh/JWKS, KMS-loss denial, and zero-private-row probe passed")
         finally:
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)
