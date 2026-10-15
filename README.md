@@ -78,14 +78,12 @@ Auth  Organization  Trust/Profile/Policy services  Flow/Applicant/etc.
 ```
 
 Locally, the stack is orchestrated with `docker-compose.base.yml` plus profile overlays.
-Before starting it, run `python scripts/ensure-dev-integration-secret-tls.py`.
-This creates an ignored, short-lived CA and a separate `signing-keys` server
-certificate under `.dev-integration-secret-tls/`; the CA signing key is
-discarded. Signing Keys receives only its TLS leaf and key, while Issuance and
-the Canvas worker receive only the CA. Run the command again before the
-certificate expires, then recreate those three services so the new trust root
-and server certificate take effect together. Application encryption keys remain
-in OpenBao.
+Provision public workload certificates, the trusted OpenBao CA, scoped token
+files, and versioned non-exportable Transit key references before starting the
+stack. Signing Keys serves its integration-secret HTTPS endpoint with a remote
+TLS signer; Issuance and the Canvas worker consume its public CA. Workload TLS
+private-key files are unsupported. The beta deployment validates these inputs
+with `scripts/ensure-beta-workload-identity.ps1`.
 
 ## Runtime inputs
 
