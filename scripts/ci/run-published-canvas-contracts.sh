@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"
 timed() {
   local phase="$1" name="$2"
   shift 2
+  if [[ "$phase" == canvas_serial ]]; then
+    run_timed_rust_test "$phase" "$name" "$@"
+    return
+  fi
   local started ended status=0
   started=$(python3 -c 'import time; print(time.monotonic_ns())')
   "$@" || status=$?

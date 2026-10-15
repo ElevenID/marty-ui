@@ -672,6 +672,13 @@ else
       fi
     fi
   fi
+  if [[ "$*" == *--exact* ]]; then
+    if [[ "$TEST_FAILURE" == zero-serial && "$1" == worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings ]]; then
+      printf '%s\n' 'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s'
+    else
+      printf '%s\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'
+    fi
+  fi
 fi
 """,
         encoding="utf-8",
@@ -1540,6 +1547,14 @@ def test_failed_serial_json_probe_stops_before_parallel_targets(shell_case):
         for call in calls
         if call[0] == "child"
     )
+    assert not any("--test-threads=4" in call for call in calls)
+
+
+def test_zero_selected_serial_test_stops_before_parallel_targets(shell_case):
+    result, calls = shell_case(failure="zero-serial")
+    assert result.returncode != 0
+    assert "Rust canvas_serial test sql_logging exited successfully" in result.stderr
+    assert "test result: ok. 0 passed" in result.stdout
     assert not any("--test-threads=4" in call for call in calls)
 
 

@@ -4131,6 +4131,13 @@ speedup is claimed yet.
 
 The Trust Profile witness subsequently merged in [#1309](https://github.com/ElevenID/marty-ui/pull/1309)
 as `de4149d580b695672b3d65048c41f79079fd3284`.
+Its first eligible [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38344819332)
+completed in 3m06s (04:05:59–04:09:05 UTC), selecting the release and public
+protocol owners while skipping unrelated PR lanes. The corresponding full
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38345109010)
+passed in 30m50s (04:09:45–04:40:35 UTC), including Canvas and OpenBao. These
+different scopes demonstrate faster early feedback for that exact input, not
+a faster protected gate or a general repository-wide saving.
 
 October 14 A0/A3 local candidate: Issuance has a separate, previously
 unrecorded non-Cargo dependency on Signing Keys' authenticated integration-
@@ -4236,13 +4243,34 @@ not a before/after attribution.
 
 October 15 A0 effective-execution audit: the disposable OpenBao policy probe
 invokes the Device Registration pairing Redis test and nineteen other focused
-Cargo test commands, but most previously checked only process exit status.
-Cargo can exit successfully when an ignored or filtered invocation selects
-zero tests. A focused candidate requires a Rust harness summary with at least
-one passed test for every one of those commands, preserving their current
-cases, disposable fixtures, and CI lanes. It changes no production behavior
-and claims no speedup; exact-head hosted execution and independent review are
-required before treating this audit gap as closed.
+Cargo test commands. Cargo can exit successfully when an ignored or filtered
+invocation selects zero tests. [#1342](https://github.com/ElevenID/marty-ui/pull/1342)
+merged as `9f827d30e` after adding a positive Rust harness-summary guard to
+all 20 calls; 164 focused local policy tests, independent review, exact-head
+CI, and full [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38734102251)
+passed. Existing cases, fixtures, and CI lanes remain unchanged. This closes
+that probe's false-green gap, not the wider A0 inventory, and claims no
+speedup. A subsequent audit of the same protected run found that the separate
+database-contract runner also trusted exit status for 29 direct libtest
+invocations. All 29 ran at least one passing test in that run. Reviewed
+[#1343](https://github.com/ElevenID/marty-ui/pull/1343) added the positive-
+summary guard without changing the invocation roster; 227 focused local
+checks passed. Its [exact-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38737846977)
+recorded 29 successful contract timing rows and no failed row, and full
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38741370850)
+passed. #1343 merged as `e2629fc6`. This closes the direct database runner's
+false-green gap, not the wider A0 inventory, and claims no speedup. The same
+exact-head Canvas log recorded six serial Rust invocations, each with one
+passing test, but its `timed canvas_serial` path still checked only exit
+status. Reviewed [#1345](https://github.com/ElevenID/marty-ui/pull/1345)
+reused the database guard for those serial invocations while leaving non-test
+timing, selection, and gates unchanged. Its 244 Canvas/guard local tests passed
+(one skipped), as did 152 workflow-policy tests. [Exact-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38746496272) recorded six
+successful serial rows, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38750340570) passed.
+#1345 merged as `c2966d2a0`. This closes another false-green path; no speedup
+is claimed.
 
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
@@ -4272,6 +4300,36 @@ development edge. The new package owner must compile with a locked manifest
 and the live case must pass in hosted CI before treating the move as merged or
 claiming any package-scoped speed benefit. This does not replace Device
 Registration's service-owned behavior and persistence tests.
+
+October 15 A0 parallel-contract execution candidate: the contracts lane also
+runs two direct libtest executables concurrently for Verification/PostgreSQL
+and Gateway/Redis. The [#1345 exact-head
+run](https://github.com/ElevenID/marty-ui/actions/runs/38746496272) logged one
+passing selected test in each group, but their current aggregate checks only
+exit status. A focused follow-up reuses the existing direct-libtest positive-
+summary guard for both calls, retaining their exact names, ignored filters,
+isolated backing services, parallel group structure, logs, and failure
+aggregation. This closes a potential future zero-selection false green;
+independent review and local checks passed. The first exact-head run had an
+unrelated transient Go proxy failure while fetching a pinned OpenBao plugin;
+the unchanged-head failed-job rerun and all 23 protected combined-head jobs
+passed. [#1346](https://github.com/ElevenID/marty-ui/pull/1346) merged as
+`5559aea1` on October 15. This is not a speedup claim.
+
+October 15 A0 follow-up candidate: several other focused Rust commands in the
+contracts/Canvas lanes use `--exact` but accept libtest's zero-selected exit
+status. Reuse the #1343 shared positive-summary guard for the feature-observer,
+Canvas HTTPS, passport Gateway, and Signing Keys/Gateway exact cases without
+changing filters, service fixtures, gates, or test implementations. Retain
+case-level timing and require local policy tests, independent review, and
+exact-head/protected CI before merging. In #1346's protected Canvas run,
+Bookworm-isolated reusable compilation took 476 seconds; the host `sccache`
+snapshot captured only three non-cacheable calls because the compile runs
+inside a network-isolated container. Therefore host zero-hit counters do not
+prove a failing compiler cache or justify relaxing the runtime-compatible
+compile boundary. The published-worker group took about 501 seconds within
+the concurrent database phase; changing its real-time lifecycle intervals
+without separate evidence would risk test guarantees.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.

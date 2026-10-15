@@ -1286,12 +1286,14 @@ jobs:
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts'
         shell: bash
-        run: >-
-          cargo test --frozen --offline --manifest-path rust/Cargo.toml
-          --package marty-issuance-service --lib
-          --features feature-regression-observer
-          internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up
-          -- --exact
+        run: |
+          set -euo pipefail
+          source scripts/ci/rust_contract_execution.sh
+          run_timed feature_observer cargo test --frozen --offline --manifest-path rust/Cargo.toml \
+            --package marty-issuance-service --lib \
+            --features feature-regression-observer \
+            internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up \
+            -- --exact
       - name: Compile Bookworm-compatible base runtime acceptance
         if: matrix.lane == 'canvas'
         shell: bash
@@ -1343,7 +1345,8 @@ jobs:
           https_test='canvas_authoritative_https::actual_ags_nrps_https_uses_child_scoped_trust'
           test_list="$("$https_executable" --list)"
           [[ "$test_list" == *"$https_test: test"* ]]
-          "$https_executable" "$https_test" --exact --nocapture --test-threads=1
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed canvas_native_https "$https_executable" "$https_test" --exact --nocapture --test-threads=1
       - name: Test Canvas publication adapter over real HTTPS
         if: matrix.lane == 'canvas'
         working-directory: rust
@@ -1713,13 +1716,16 @@ jobs:
           set -euo pipefail
           test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
           cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed passport_gateway cargo test --locked -p marty-service-acceptance \
+            --test passport_gateway_postgres "$test_name" -- --exact
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           names=(workspace verification gateway)
           pids=()
 
@@ -1738,7 +1744,7 @@ jobs:
           (
             set +e
             VERIFICATION_SESSION_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/marty_verification_contract \
-              target/debug/verification-postgres-contract \
+              run_timed verification target/debug/verification-postgres-contract \
               --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres \
               >"$RUNNER_TEMP/rust-verification.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-verification.status"
@@ -1747,7 +1753,7 @@ jobs:
           (
             set +e
             MARTY_GATEWAY_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
-              target/debug/gateway-redis-contract \
+              run_timed gateway target/debug/gateway-redis-contract \
               --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe \
               >"$RUNNER_TEMP/rust-gateway.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-gateway.status"
@@ -1807,10 +1813,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           nonce="$(openssl rand -hex 16)"
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
+              run_timed managed_key_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+                authenticated_gateway_reaches_rust_managed_key_route_without_custody \
+              -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed byok_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
