@@ -20585,3 +20585,23 @@ webhook storage and outbox behavior. Both unique Docker containers were
 removed, and Python compilation/diff checks passed. This proves the
 Notification source path with real OpenBao/PostgreSQL, but not the published
 service image or the HTTP-based disposable migration and beta fixtures.
+
+2026-10-15 disposable migration OpenBao HTTPS cutover, staged in the grouped
+UI worktree: both base and scoped self-host migration Compose models now run
+the existing TLS-required OpenBao launcher, pin its container hostname to
+`openbao` for SAN validation, keep its listener key in tmpfs, and share only
+the public CA through a project-owned volume. The migration role mounts that
+CA read-only and sets `BAO_CACERT` plus Notification's explicit CA path;
+the scoped bootstrap role uses the same authenticated HTTPS endpoint. Both
+strict model validators and their mutation checks were updated. A local
+probe started the pinned OpenBao 2.5.5 image in each layout, verified the
+public CA contains no private key, completed peer-verified HTTPS to the
+`openbao` DNS name, and in the scoped layout completed token-policy
+bootstrap; each disposable Compose project and volume was removed. The
+initial live probe exposed a real certificate hostname mismatch before
+the Compose hostname was pinned. The two focused Python suites passed
+31 tests with one pre-existing skip; Python compilation, shell syntax and
+diff checks passed. Full migration-image execution is still unproven:
+other Rust OpenBao clients in that image do not yet consume the private CA,
+and the exact published image predates this source cutover. Keep the strict
+HTTPS fixture and update those clients before claiming the release gate.
