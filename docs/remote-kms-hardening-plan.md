@@ -21767,3 +21767,26 @@ for the exact head. Initial Classify Changes, Lint Python, Fast Feedback,
 Service Tests, Public Protocol Contract, and dependency review checks had
 completed successfully while Rust, image, and release contract jobs were
 still running. Do not treat this partial result as a green gate.
+
+2026-10-15 exact-head CI correction batch (local UI commit `7951863a4`,
+not yet pushed): run `38752357622` exposed six failing jobs while its
+Rust self-host job was still building. The plugin-image browser probe's
+`host-gateway` alias failed on the hosted Docker daemon; the probe now
+inspects its own private bridge and binds `host.docker.internal` to that
+bridge's unique private IPv4 gateway. Release Contracts had four Linux
+Kubernetes shell-harness failures because the newly required Keycloak
+secret-directory lifecycle was not modeled, plus a Passport OpenBao probe
+that still used HTTP after the bootstrap began requiring verified HTTPS.
+The harness now exercises bounded test-owned temporary files; the Passport
+probe uses the disposable TLS listener, its public CA and peer verification.
+Rust Canvas renewal assertions were stale for HTTPS gRPC targets. Rust
+Issuance and gateway image smoke fixtures still supplied HTTP `BAO_ADDR`
+values rejected by the hardened grant minter. Rust packaging Compose render
+still supplied retired TLS private-key-file names and omitted the required
+public certificate, scoped token and KMS reference variables. These are
+reconciled in the one local correction commit. The exact packaging step
+rendered and passed locally; the related 214 Python tests passed, and the
+affected Rust packages passed formatting. The Docker daemon still did not
+answer `docker info`, so live Passport/Keycloak/image acceptance must be
+retested in the next hosted run. No green CI or merge is claimed for this
+unpublished correction.
