@@ -17,9 +17,10 @@ This bundle is the image-based distribution for the open-source self-host stack.
 The bundle is an image-only packaging format. Its image roles must be published
 and qualified together before a customer installation; the packager does not
 produce them. The v1.1.247 Stack release prepared an exact image-locked bundle
-in an opt-in job, but that ZIP is an unqualified Actions artifact, not a public
-release asset. Do not treat the Stack release as a ready-to-install self-host
-bundle.
+in an opt-in job. The same unqualified bytes are available only as an
+[experimental tester prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.1),
+with a separate [tester guide](docs/selfhost-preview-tester-guide.md). Do not
+treat the stable Stack release or this preview as a qualified self-host product.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`

@@ -5,11 +5,14 @@ The current public Stack release is not an installable self-host product. The
 contains the signed Stack transaction and image evidence, but no self-host ZIP.
 Its opt-in job prepared an image-locked ZIP, lock, receipt, and product descriptor;
 the separate consumer checked the exact archive, Compose model, and anonymous
-image pulls. That preparation remains **unqualified** and is retained as a
-short-lived Actions artifact, not a public customer download. Do not send it
-as a supported installer or present its preflight as an installed journey.
+image pulls. The exact prepared bytes are now separately available in the
+[experimental tester prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.1),
+with an explicit [preview guide](selfhost-preview-tester-guide.md). That preview
+remains **unqualified and unsupported**: it has not passed an installed journey
+or KMS custody proof. It must not be presented as a supported installer or its
+preflight as an installed journey.
 
-An outside-party handoff needs one public release containing these exact assets:
+A supported outside-party handoff needs one public release containing these exact assets:
 
 | Asset | Purpose |
 | --- | --- |
