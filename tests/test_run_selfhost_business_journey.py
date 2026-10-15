@@ -16,6 +16,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     COMPLETED,
     LOCAL_SECRET_NAMES,
     LOCAL_SERVICES,
+    OPTIONAL_LOCAL_SECRET_NAMES,
     EXPECTED_SERVICES,
     NOT_LOCAL,
     build_public_kms_jwk_tool,
@@ -112,6 +113,29 @@ def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) ->
     required_secrets(tmp_path)
     (tmp_path / "marty_db_password").unlink()
     with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path)
+
+
+def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
+    tmp_path: Path,
+) -> None:
+    assert OPTIONAL_LOCAL_SECRET_NAMES == {
+        "canvas_credentials_shared_secret", "google_analytics_measurement_id",
+        "google_client_id", "google_client_secret", "google_site_verification",
+        "smtp_password",
+    }
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    required_secrets(tmp_path)
+    (tmp_path / "marty_db_password").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path)
+    (tmp_path / "marty_db_password").write_text("disposable-test-material", encoding="utf-8")
+    (tmp_path / "google_client_id").write_text("change-me-oauth", encoding="utf-8")
+    with pytest.raises(ValueError, match="placeholder: google_client_id"):
         required_secrets(tmp_path)
 
 

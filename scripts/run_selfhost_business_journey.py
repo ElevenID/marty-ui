@@ -44,6 +44,24 @@ LOCAL_SECRET_NAMES = frozenset(
     secret for service in LOCAL_SERVICES
     for secret in EXPECTED_ROLE_SECRETS.get(service, ())
 )
+SECRET_CATALOG = Path(__file__).resolve().parents[1] / "deploy-config/catalog/secrets.json"
+
+
+def optional_local_secrets(catalog_path: Path = SECRET_CATALOG) -> frozenset[str]:
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if catalog.get("schema_version") != 1 or not isinstance(catalog.get("secrets"), dict):
+        raise ValueError("self-host secret catalog is invalid")
+    optional = set()
+    for entry in catalog["secrets"].values():
+        if not isinstance(entry, dict):
+            raise ValueError("self-host secret catalog entry is invalid")
+        name = entry.get("compose_secret")
+        if entry.get("allow_empty") is True and name in LOCAL_SECRET_NAMES:
+            optional.add(name)
+    return frozenset(optional)
+
+
+OPTIONAL_LOCAL_SECRET_NAMES = optional_local_secrets()
 
 
 def command(args: list[str], *, cwd: Path | None = None,
@@ -166,8 +184,11 @@ def required_secrets(secret_root: Path) -> None:
         raise ValueError("qualification secret root is absent or linked")
     for name in sorted(LOCAL_SECRET_NAMES):
         path = secret_root / name
-        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        if (path.is_symlink() or not path.is_file()
+                or (path.stat().st_size == 0 and name not in OPTIONAL_LOCAL_SECRET_NAMES)):
             raise ValueError(f"qualification secret material is missing: {name}")
+        if path.stat().st_size == 0:
+            continue
         # Bundled examples use these literal sentinels. Never read secret
         # contents into a report or command line.
         with path.open("rb") as stream:
