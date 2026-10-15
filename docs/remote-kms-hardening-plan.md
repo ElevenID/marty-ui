@@ -20630,3 +20630,12 @@ other direct Rust OpenBao callers, including the flow-envelope and grant
 paths, still need the shared HTTPS transport and a coordinated live probe.
 The grouped UI worktree is uncommitted/unlanded; no exact published-artifact
 claim follows from this local proof.
+
+The same grouped worktree subsequently switched the Signing Keys HAIP/flow
+envelope provider to the shared HTTPS OpenBao client and public `BAO_CACERT`.
+Its HTTP allowance is limited to exact loopback in `cfg(test)` unit mocks;
+production and integration-test builds require HTTPS. Signing Keys production
+`cargo check` and its 197 library tests passed after this change. The HAIP
+plugin/flow-envelope live path has not yet been rerun over HTTPS; the older
+all-in-one Signing Keys policy runner and other OpenBao callers remain HTTP
+and must be converted before the combined release gate can pass.
