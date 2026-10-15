@@ -22783,3 +22783,13 @@ startup coverage; then remove the old certificate/key generator and its
 private-key mounts. The three old `selfhost-kms-only-model*.snapshot.yml`
 files also still show retired `SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE`
 inputs and must be regenerated or retired after checking their consumers.
+At the 2026-10-15 22:37 UTC checkpoint, exact-head CI `38815681551` has
+passed Rust contracts (including the named real Flow-to-Issuance remote-key
+mTLS step), Canvas, self-host, Rust images, release contracts, Keycloak
+browser/CIBA/KMS-loss/database custody, and the external CodeQL/policy gates.
+The OpenBao plugin lane is still running its coordinated PostgreSQL/Raft
+integration-secret recovery probe, so the whole run is not yet green.
+[PR #1344](https://github.com/ElevenID/marty-ui/pull/1344) has auto-merge
+enabled under the repository merge queue; verify the queued merge and exact
+merged head before treating it as landed. No installed beta/self-host database
+cleanup or release artifact cutover is implied by these disposable CI passes.
