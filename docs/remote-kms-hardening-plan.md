@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-14 (America/Denver).
+Status: active. Updated: 2026-10-15 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -21811,3 +21811,22 @@ Both correction commits were pushed together to PR #1344 at exact head
 it was queued at registration. The older failed run `38752357622` remains
 immutable evidence for its prior head and must not be counted as a current
 gate result.
+
+2026-10-15 PR #1344 second hosted run `38756048027` was still running
+when inspected. Its completed failures exposed a Puppeteer postinstall
+download hang in one UI shard, a stale Canvas startup HTTPS assertion,
+release-evidence Kubernetes allowlists missing the newly mounted public KMS
+CA paths, a Canvas Kubernetes renewal fixture that still demanded an HTTP
+OpenBao URL, and a Keycloak browser login HTTP 400 after remote cookie-key
+rotation with a nested OpenBao 403. The grouped UI branch has unpushed
+corrections for the first four failures. Local validation: 164 focused
+Python workflow/startup tests passed; the exact Canvas Kubernetes renewal
+test passed under Rust 1.95; 14 of 16 Kubernetes-native evidence tests
+passed locally, with the two remaining failures caused by unavailable
+Windows `envsubst` and an outdated shell fixture. The shell fixture was
+updated and its exact test then passed. The Keycloak probe now refreshes
+its scoped token after policy expansion, checks current, old and new remote
+JWE operations with that token, and retains relevant Java call frames on
+failure. This requires hosted Docker confirmation; do not infer that the
+403 or K12 is resolved. Rust Service Images and selfhost tests were still
+running, so wait for their outcomes before pushing the next grouped batch.
