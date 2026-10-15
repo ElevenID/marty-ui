@@ -997,7 +997,11 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
     let token = directory.path().join("openbao-token");
-    fs::write(&ca, b"synthetic CA fixture").unwrap();
+    fs::write(
+        &ca,
+        b"-----BEGIN CERTIFICATE-----\nsynthetic CA fixture\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     fs::write(&policy, b"{}").unwrap();
     fs::write(&token, b"synthetic token fixture").unwrap();
     let ca_path = ca.to_str().unwrap();

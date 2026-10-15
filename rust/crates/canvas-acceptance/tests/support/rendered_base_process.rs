@@ -172,7 +172,11 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
     let token = directory.path().join("openbao-token");
-    std::fs::write(&ca, b"synthetic CA fixture").unwrap();
+    std::fs::write(
+        &ca,
+        b"-----BEGIN CERTIFICATE-----\nsynthetic CA fixture\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     std::fs::write(&policy, b"{}").unwrap();
     std::fs::write(&token, b"synthetic token fixture").unwrap();
     let ca = ca.to_str().unwrap();
