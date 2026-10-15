@@ -419,7 +419,7 @@ mod tests {
         edge_task.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires a disposable HTTPS OpenBao signer and public certificate"]
     async fn oidf_https_handshake_signs_with_versioned_remote_key() {
         async fn upstream(request: Request<Body>) -> Response<Body> {
