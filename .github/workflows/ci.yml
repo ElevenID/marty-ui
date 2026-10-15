@@ -1271,12 +1271,14 @@ jobs:
       - name: Verify feature-regression observer isolation
         if: matrix.lane == 'contracts'
         shell: bash
-        run: >-
-          cargo test --frozen --offline --manifest-path rust/Cargo.toml
-          --package marty-issuance-service --lib
-          --features feature-regression-observer
-          internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up
-          -- --exact
+        run: |
+          set -euo pipefail
+          source scripts/ci/rust_contract_execution.sh
+          run_timed feature_observer cargo test --frozen --offline --manifest-path rust/Cargo.toml \
+            --package marty-issuance-service --lib \
+            --features feature-regression-observer \
+            internal_application_diagnostics::tests::feature_observer_is_task_scoped_non_nested_and_cleans_up \
+            -- --exact
       - name: Compile Bookworm-compatible base runtime acceptance
         if: matrix.lane == 'canvas'
         shell: bash
@@ -1328,7 +1330,8 @@ jobs:
           https_test='canvas_authoritative_https::actual_ags_nrps_https_uses_child_scoped_trust'
           test_list="$("$https_executable" --list)"
           [[ "$test_list" == *"$https_test: test"* ]]
-          "$https_executable" "$https_test" --exact --nocapture --test-threads=1
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed canvas_native_https "$https_executable" "$https_test" --exact --nocapture --test-threads=1
       - name: Test Canvas publication adapter over real HTTPS
         if: matrix.lane == 'canvas'
         working-directory: rust
@@ -1698,7 +1701,9 @@ jobs:
           set -euo pipefail
           test_name='native_passport_gateway_signed_webhook_updates_durable_tenant_job'
           cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres -- --list | grep -Fx "$test_name: test"
-          cargo test --locked -p marty-service-acceptance --test passport_gateway_postgres "$test_name" -- --exact
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed passport_gateway cargo test --locked -p marty-service-acceptance \
+            --test passport_gateway_postgres "$test_name" -- --exact
       - name: Run safe Rust contract groups concurrently
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1793,15 +1798,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           nonce="$(openssl rand -hex 16)"
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed managed_key_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed byok_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material \
               -- --ignored --exact
       - name: Exercise live Signing Keys public contracts on disposable Redis
@@ -1836,6 +1842,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           for ((attempt=1; attempt<=30; attempt++)); do
             if curl --silent --fail http://127.0.0.1:8200/v1/sys/health >/dev/null; then
               break
@@ -1921,7 +1928,7 @@ jobs:
           for test_name in authenticated_gateway_reaches_remaining_rust_signing_handlers \
             authenticated_gateway_rotates_only_a_dedicated_signing_service; do
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$envelope_token" BAO_TOKEN="$envelope_token" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed "$test_name" cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 "$test_name" -- --ignored --exact
           done
           cargo test --locked -p marty-signing-keys --test public_config_resolve_live_contract \
@@ -1934,7 +1941,7 @@ jobs:
             | tee "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
           grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
             "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
-          cargo test --locked -p marty-signing-keys --lib \
+          run_timed registry_credentials cargo test --locked -p marty-signing-keys --lib \
             registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext -- --ignored --exact
           curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
             --header 'Content-Type: application/json' --request PUT \
@@ -1947,24 +1954,24 @@ jobs:
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
           [[ -n "$lti_token" && "$lti_token" != test-only ]]
           MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-            cargo test --locked -p marty-signing-keys --test public_service_sign_live_kms \
+            run_timed managed_openbao_rs256 cargo test --locked -p marty-signing-keys --test public_service_sign_live_kms \
               managed_openbao_rs256_signature_matches_jose_pkcs1_profile -- --ignored --exact
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed passport_profile_csr cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
               authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
             -- --ignored --exact
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+              run_timed dedicated_service_csr cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
               authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
             -- --ignored --exact
             test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
             cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance -- --list | grep -Fx "$test_name: test"
             MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
+              run_timed passport_dsc cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
           chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
           cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             -- --list | grep -Fx "$chain_test: test"
-          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
+          run_timed passport_managed_chain cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
             "$chain_test" -- --ignored --exact
       - name: Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL
         if: matrix.lane == 'contracts'
