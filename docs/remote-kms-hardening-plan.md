@@ -20474,3 +20474,25 @@ and `cargo test -p marty-passport-keyless-edge` passed. The image probe from
 the preceding paragraph predates this forwarding-header correction, so an
 image rebuild/probe is required before claiming installed-image evidence
 for this latest source.
+
+2026-10-14 shared OpenBao HTTPS transport and corrected image proof: added
+staged Rust `marty-openbao-http` with one origin/CA/client policy: HTTPS-only,
+no credentials/path/query/fragment, no proxies or redirects, bounded request
+timeout, and optional explicit single-CA trust for private OpenBao roots.
+The Rust passport TLS bootstrap now uses it rather than constructing its own
+`reqwest` client. A new negative host probe presents the separately issued
+workload CA as the OpenBao CA and requires bootstrap to fail without writing
+output. The edge proxy now discards caller-supplied forwarding and connection
+headers and sets peer IP/HTTPS headers itself. After these source changes,
+the public services Dockerfile built local image
+`sha256:eb17f18b082cf3c4640fea68ef088fb04903d4539e661cf1e2b9d33c859df867`.
+The isolated Linux-image probe passed an HTTPS OpenBao peer check, remote
+bootstrap with exactly five scoped TLS signer identities, remote-signed edge
+callback by Docker DNS name, and wrong-CA rejection with no output files.
+Rust crate checks/tests, a fresh host OpenBao probe, 40 focused Python
+ownership/packaging/schema tests, Python compilation and `git diff --check`
+passed. This remains an unsigned local image and a five-role bootstrap, not
+the complete protected passport graph or the published release artifact.
+Next: adopt the shared HTTPS/CA transport in the existing Signing Keys,
+Issuance, Gateway and other OpenBao callers as one coordinated Rust/Compose
+cutover, then remove the fixture's private TLS key files and plaintext gRPC.
