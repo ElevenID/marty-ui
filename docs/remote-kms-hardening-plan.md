@@ -22890,3 +22890,11 @@ digest-pinned mirror fallback for Windows local image pulls. The current
 packaged Canvas startup check reran locally and all 16 cases passed; focused
 fixture tests and Ruff passed. PR-head CI is running and superseded head
 `669299845` must not be used as final evidence.
+
+PR #1356 review on superseded head found that the CI Docker Hub mirror
+contract listed only PostgreSQL after the image smoke added pinned Redis. The
+contract now includes that Redis digest at pushed head `e663c37b6`; the review
+thread was resolved after 319 affected release/fixture tests passed (19
+skipped), and the broader issuance/CI workflow suites passed (165). The old
+head's costly CI runs were cancelled once superseded; all five required
+checks must be evaluated again on exact head `e663c37b6` before merge.
