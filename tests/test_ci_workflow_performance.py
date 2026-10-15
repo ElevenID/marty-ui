@@ -968,6 +968,19 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
     ]
     assert "cargo test --locked --workspace" in workspace_owner["run"]
     assert "--exclude marty-signing-keys" not in workspace_owner["run"]
+    assert "source ../scripts/ci/rust_contract_execution.sh" in workspace_owner["run"]
+    assert (
+        workspace_owner["run"].count(
+            "run_timed verification target/debug/verification-postgres-contract"
+        )
+        == 1
+    )
+    assert (
+        workspace_owner["run"].count(
+            "run_timed gateway target/debug/gateway-redis-contract"
+        )
+        == 1
+    )
     [live_owner] = [
         step for step in contract_steps
         if step.get("name") == "Exercise live Signing Keys public contracts on disposable Redis"
