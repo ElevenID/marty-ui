@@ -21409,3 +21409,21 @@ CA-verified HTTPS Raft listener whose server identity key stays inside the
 KMS/operator custody boundary, bind the public CA to clients, and prove
 bootstrap, snapshot recovery, rotation and all scoped callers against it.
 Do not use disposable `-dev-tls` as the production substitute.
+
+2026-10-15 Kubernetes Keycloak custody follow-up (staged, not landed): the
+Oracle deployment and configurator now reference the same hardened Keycloak
+digest, and the Rust-only signed stack manifest validator checks that digest
+alongside the services image before a deployment write. The main Keycloak
+container mounts a dedicated Kubernetes Secret containing only the public
+OpenBao CA, two public RS256 certificates and scoped Transit/JWE tokens; its
+remote-key environment uses the reviewed HTTPS address, secret paths, mount,
+prefix and positive key version. The deploy script requires all seven new
+Keycloak inputs, creates the Secret, and an image-only update refuses a stock
+or incomplete pre-cutover Keycloak deployment. Operator documentation and
+catalog contracts now include the inputs. Local focused Kubernetes tests
+passed (101), the rendered Deployment/Job both resolved to the same synthetic
+digest and required Secret, and the Rust deployment-catalog suite passed
+after refreshing the seven-secret contract. No Kubernetes cluster, exact
+published image, Keycloak database or end-to-end login was qualified here.
+The current live self-host/beta Keycloak rows and standalone OpenBao HTTP
+listener remain separate blockers.
