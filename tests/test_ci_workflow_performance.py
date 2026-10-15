@@ -5381,6 +5381,83 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
     assert "marty-signing-keys" not in issuance.get("dev-dependencies", {})
 
 
+def _dev_dependency_packages(
+    manifest: dict, workspace_dependencies: dict
+) -> set[str]:
+    tables = []
+    for owner in (manifest, *manifest.get("target", {}).values()):
+        tables.extend(
+            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
+        )
+    packages = set()
+    for dependencies in tables:
+        for alias, declaration in dependencies.items():
+            package = alias
+            if isinstance(declaration, dict):
+                inherited = workspace_dependencies.get(alias, {})
+                if declaration.get("workspace") and isinstance(inherited, dict):
+                    package = inherited.get("package", package)
+                package = declaration.get("package", package)
+            packages.add(package)
+    return packages
+
+
+def test_service_dev_dependencies_do_not_reintroduce_cross_service_test_edges() -> (
+    None
+):
+    rust = ROOT / "rust"
+    workspace = tomllib.loads((rust / "Cargo.toml").read_text(encoding="utf-8"))
+    manifests = sorted((rust / "services").glob("*/Cargo.toml"))
+    assert manifests
+    documents = {
+        path: tomllib.loads(path.read_text(encoding="utf-8")) for path in manifests
+    }
+    service_packages = {document["package"]["name"] for document in documents.values()}
+    workspace_dependencies = workspace["workspace"]["dependencies"]
+    edges = {
+        (document["package"]["name"], dependency)
+        for document in documents.values()
+        for dependency in _dev_dependency_packages(document, workspace_dependencies)
+        if dependency in service_packages
+    }
+    assert not edges, f"Move cross-service tests to an acceptance package: {sorted(edges)}"
+
+
+def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> None:
+    manifest = {
+        "dev-dependencies": {
+            "gateway_alias": {"package": "marty-gateway", "path": "../gateway"},
+            "inherited_alias": {"workspace": True},
+        },
+        "dev_dependencies": {
+            "signing_alias": {"package": "marty-signing-keys", "path": "../signing-keys"}
+        },
+        "target": {
+            "cfg(unix)": {
+                "dev-dependencies": {
+                    "flow_alias": {"package": "marty-flow", "path": "../flow"}
+                },
+                "dev_dependencies": {
+                    "issuance_alias": {
+                        "package": "marty-issuance-service",
+                        "path": "../issuance",
+                    }
+                }
+            }
+        },
+    }
+    workspace_dependencies = {
+        "inherited_alias": {"package": "marty-auth", "path": "services/auth"}
+    }
+    assert _dev_dependency_packages(manifest, workspace_dependencies) == {
+        "marty-gateway",
+        "marty-auth",
+        "marty-flow",
+        "marty-signing-keys",
+        "marty-issuance-service",
+    }
+
+
 def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies() -> (
     None
 ):
