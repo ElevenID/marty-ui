@@ -16,6 +16,7 @@ public final class GeneratedHmacOverride extends FailClosedKeyFactory {
 
     @Override
     public KeyProvider create(KeycloakSession session, ComponentModel model) {
+        requireSafeConfig(model);
         RealmModel realm = session.realms().getRealm(model.getParentId());
         if (realm == null) {
             throw new IllegalStateException("Remote HS512 realm is missing");

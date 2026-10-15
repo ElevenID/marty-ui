@@ -9,6 +9,11 @@ RUN mvn -B -q -DskipTests package
 COPY --from=upstream /opt/keycloak/lib/lib/main/org.keycloak.keycloak-services-25.0.6.jar /out/keycloak-services.jar
 RUN jar uf /out/keycloak-services.jar -C /work/target/classes org/keycloak/protocol/RestartLoginCookie.class
 RUN jar uf /out/keycloak-services.jar -C /work/target/classes org/keycloak/protocol/oidc/grants/ciba/channel/CIBAAuthenticationRequest.class
+# Remove upstream key factories (generated/imported/keystore). Only the four
+# explicitly registered remote factories in the provider JAR may be discovered.
+RUN mkdir -p /work/remote-only/META-INF/services && \
+    : > /work/remote-only/META-INF/services/org.keycloak.keys.KeyProviderFactory && \
+    jar uf /out/keycloak-services.jar -C /work/remote-only META-INF/services/org.keycloak.keys.KeyProviderFactory
 
 FROM upstream
 COPY --from=build /out/keycloak-services.jar /opt/keycloak/lib/lib/main/org.keycloak.keycloak-services-25.0.6.jar

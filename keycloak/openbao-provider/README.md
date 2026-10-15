@@ -12,9 +12,13 @@ requires `Key.getEncoded()`. A provider SPI alone cannot make those calls
 remote. This module includes the two upstream Apache-2.0 source classes,
 patched to call `RemoteDirectJwe`. The Dockerfile builds the pinned provider
 JAR and replaces only those classes in the pinned `keycloak-services` JAR.
-The Java provider JAR excludes the duplicate upstream classes. The shared
-`BaoHttp` client requires CA-verified HTTPS and reads scoped tokens from
-files; it never reads an AES/HMAC CEK. The Go OpenBao plugin performs compact
+The build also empties the upstream key-factory service descriptor, so the
+four remote factories are the only discovered KeyProvider factories. They
+accept only bounded, non-secret configuration fields and reject attempted
+private-key material. The Java provider JAR excludes the duplicate upstream
+classes. The shared `BaoHttp` client requires CA-verified HTTPS and reads
+scoped tokens from files; it never reads an AES/HMAC CEK. The Go OpenBao
+plugin performs compact
 `dir` / `A256CBC-HS512` JWE with distinct realm and `cookie`/`ciba` keys.
 
 Build the two local images from the repository root:
@@ -44,6 +48,8 @@ Direct PostgreSQL scans and the read-only Keycloak custody gate find no
 generated `secret` rows after bootstrap, realm creation, token issuance and
 KMS-loss denial. The probe
 exports only public certificates and cleans its disposable containers.
+It checks the admin-visible factory inventory and proves synthetic private
+material is rejected on component creation and absent after an update.
 
 The browser-mode proof also enables a disposable CIBA client and a local
 authentication-device acknowledgment endpoint. It checks that the returned

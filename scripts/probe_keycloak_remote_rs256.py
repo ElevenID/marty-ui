@@ -61,6 +61,12 @@ def post_admin(url: str, token: str, payload: dict) -> None:
             raise RuntimeError("Keycloak admin write returned an unexpected status")
 
 
+def get_admin(url: str, token: str) -> dict | list:
+    with urlopen(Request(url, headers={"Authorization": "Bearer " + token}),
+                 timeout=8) as response:
+        return json.load(response)
+
+
 class LoginForm(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -439,7 +445,14 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             started_kc = True
             port = run("docker", "port", kc_name, "8080/tcp").rsplit(":", 1)[-1]
             base = f"http://127.0.0.1:{port}"
-            wait_for_keycloak(base, kc_name)
+            try:
+                wait_for_keycloak(base, kc_name)
+            except RuntimeError as error:
+                observed = subprocess.run(["docker", "logs", "--tail", "100", kc_name],
+                                          capture_output=True, text=True, timeout=10)
+                logs = "\n".join(line for line in (observed.stdout + observed.stderr).splitlines()
+                                 if "ERROR" in line or "Caused by" in line or "Remote key providers" in line)[:1800]
+                raise RuntimeError(f"Keycloak did not start: {error}\n{logs}") from error
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("Keycloak bootstrap stored private key material")
             try:
@@ -454,6 +467,71 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 logs = "\n".join(line for line in (observed.stdout + observed.stderr).splitlines()
                                  if "ERROR" in line or "Caused by" in line)[:2500]
                 raise RuntimeError(f"Keycloak token request failed: HTTP {error.code}\n{logs}") from error
+            if require_browser:
+                server_info = get_admin(base + "/admin/serverinfo", token)
+                providers = server_info.get("componentTypes", {}).get(
+                    "org.keycloak.keys.KeyProvider", [])
+                expected_providers = {
+                    "rsa-generated", "rsa-enc-generated",
+                    "hmac-generated", "aes-generated",
+                }
+                discovered = {provider.get("id") for provider in providers}
+                if discovered != expected_providers or len(providers) != 4:
+                    raise RuntimeError(f"Keycloak exposed unexpected key factories: {discovered}")
+                master_id = get_admin(base + "/admin/realms/master", token)["id"]
+                for field, value in (("privateKey", "synthetic-forbidden"),
+                                     ("algorithm", "synthetic-forbidden")):
+                    forbidden = Request(
+                        base + "/admin/realms/master/components",
+                        data=json.dumps({
+                            "name": "forbidden-local-key-probe",
+                            "parentId": master_id,
+                            "providerType": "org.keycloak.keys.KeyProvider",
+                            "providerId": "rsa-generated",
+                            "config": {field: [value]},
+                        }).encode(),
+                        headers={"Authorization": "Bearer " + token,
+                                 "Content-Type": "application/json"},
+                    )
+                    try:
+                        urlopen(forbidden, timeout=8)
+                    except HTTPError as error:
+                        if error.code < 400 or error.code >= 500:
+                            raise RuntimeError("Local-key component returned an unexpected status") from error
+                    else:
+                        raise RuntimeError("Keycloak accepted a local-key component")
+                    if database_key_counts(pg_name) != (0, 0):
+                        raise RuntimeError("Rejected local-key component reached PostgreSQL")
+                components = get_admin(
+                    base + "/admin/realms/master/components?type=org.keycloak.keys.KeyProvider",
+                    token,
+                )
+                rsa_component = next((component for component in components
+                                      if component.get("providerId") == "rsa-generated"), None)
+                if rsa_component is None:
+                    raise RuntimeError("Master remote RSA component is missing")
+                poisoned = {**rsa_component, "config": {"privateKey": ["synthetic-forbidden"]}}
+                update = Request(
+                    base + f"/admin/realms/master/components/{rsa_component['id']}",
+                    data=json.dumps(poisoned).encode(), method="PUT",
+                    headers={"Authorization": "Bearer " + token,
+                             "Content-Type": "application/json"},
+                )
+                try:
+                    with urlopen(update, timeout=8):
+                        pass
+                except HTTPError as error:
+                    if error.code < 400 or error.code >= 500:
+                        raise RuntimeError("Private-key component update returned an unexpected status") from error
+                else:
+                    updated = get_admin(
+                        base + f"/admin/realms/master/components/{rsa_component['id']}",
+                        token,
+                    )
+                    if "synthetic-forbidden" in json.dumps(updated.get("config", {})):
+                        raise RuntimeError("Keycloak retained a private-key component update")
+                if database_key_counts(pg_name) != (0, 0):
+                    raise RuntimeError("Rejected private-key update reached PostgreSQL")
             try:
                 jwks = http_json(base + "/realms/master/protocol/openid-connect/certs")
             except HTTPError as error:

@@ -16,6 +16,7 @@ public final class GeneratedRsaOverride extends FailClosedKeyFactory {
 
     @Override
     public KeyProvider create(KeycloakSession session, ComponentModel model) {
+        requireSafeConfig(model);
         RealmModel realm = session.realms().getRealm(model.getParentId());
         if (realm == null) {
             throw new IllegalStateException("Remote RS256 realm is missing");
