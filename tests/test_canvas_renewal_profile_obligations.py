@@ -110,7 +110,16 @@ def _compact(text: str) -> str:
 
 
 def _body(source: str, name: str, *, test: bool) -> str:
-    prefix = r"#\[tokio::test\]\s*async fn " if test else r"pub\(super\) async fn "
+    multi_thread = {
+        "base_profile_gateway_composition_child",
+        "base_profile_envoy_composition_child",
+        "kubernetes_profile_gateway_composition_child",
+        "kubernetes_resolved_native_profile_delivers_both_encryption_modes",
+        "base_profile_native_renewal_uses_actual_rendered_configuration",
+    }
+    attribute = (r'#\[tokio::test\(flavor = "multi_thread"\)\]'
+                 if name in multi_thread else r"#\[tokio::test\]")
+    prefix = rf"{attribute}\s*async fn " if test else r"pub\(super\) async fn "
     matches = re.findall(
         rf"(?m)^{prefix}{re.escape(name)}\([^)]*\)\s*\{{(.*?)^\}}",
         source,

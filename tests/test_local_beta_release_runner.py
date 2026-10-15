@@ -943,7 +943,7 @@ def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
     assert "'${MARTY_SERVICES_IMAGE}'" in helper
     assert 'UseRustIssuance' not in script
     assert '"pull", $env:MARTY_ISSUANCE_IMAGE' not in script
-    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage))' in script
+    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_KEYCLOAK_KMS_IMAGE))' in script
     assert '"pull", $image' in script
     assert '"    entrypoint: [/usr/local/bin/marty-issuance-service]"' in helper
     assert "$imageRef = [string]$imageEvidence.inspect_reference" in script

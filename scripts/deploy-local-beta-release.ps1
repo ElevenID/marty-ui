@@ -243,6 +243,27 @@ function Assert-BetaOpenBaoRaftCustody {
     }
 }
 
+function Assert-BetaKeycloakDatabaseNoLocalKeys {
+    $postgres = Get-ComposeContainerId -Service "postgres"
+    if (-not $postgres) { throw "Beta PostgreSQL is required for Keycloak custody preflight" }
+    $sql = "SELECT count(*) FROM public.component_config AS cc JOIN public.component AS c ON c.id = cc.component_id WHERE c.provider_type = 'org.keycloak.keys.KeyProvider' AND cc.name IN ('privateKey', 'secret')"
+    $counts = @(& docker exec $postgres psql -U postgres -d keycloak -At -v ON_ERROR_STOP=1 -c $sql)
+    if ($LASTEXITCODE -ne 0 -or $counts.Count -ne 1 -or $counts[0] -notmatch '^[0-9]+$') {
+        throw "Could not prove beta Keycloak database has no local key material"
+    }
+    if ([int64]$counts[0] -ne 0) {
+        throw "Beta Keycloak database retains local key-provider material; perform the clean KMS-only cutover before release"
+    }
+}
+
+function Assert-BetaKeycloakDatabaseRemoteProviders {
+    $postgres = Get-ComposeContainerId -Service "postgres"
+    if (-not $postgres) { throw "Beta PostgreSQL is required for Keycloak custody verification" }
+    $sql = Get-Content -LiteralPath (Join-Path $script:RepoRoot "scripts/sql/keycloak-kms-only-verify.sql") -Raw
+    $sql | docker exec -i $postgres psql -U postgres -d keycloak -v ON_ERROR_STOP=1 -q
+    if ($LASTEXITCODE -ne 0) { throw "Beta Keycloak database failed the KMS-only provider gate" }
+}
+
 function Get-ComposeContainerId {
     param(
         [Parameter(Mandatory = $true)][string]$Service,
@@ -765,6 +786,7 @@ if ($OfficialStackRelease) {
     }
     $officialPlan = Get-OfficialReleasePlan
     $sourceManifest = $officialPlan.source_manifest
+    $env:MARTY_KEYCLOAK_KMS_IMAGE = [string]$officialPlan.images.keycloak.reference
 }
 else {
     if (-not [string]::IsNullOrWhiteSpace($RecorderRevision)) {
@@ -780,7 +802,12 @@ else {
     if ($sourceManifest.source_kind -ne "local-worktree-snapshot" -or $sourceManifest.promotion_eligible -ne $false) {
         throw "Local source manifest must be a non-promotable worktree snapshot"
     }
+    $env:MARTY_KEYCLOAK_KMS_IMAGE = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_KEYCLOAK_KMS_IMAGE"
 }
+if ($env:MARTY_KEYCLOAK_KMS_IMAGE -cnotmatch '^ghcr\.io/elevenid/marty-ui-oss/keycloak@sha256:[0-9a-f]{64}$') {
+    throw "Beta Keycloak requires the pinned remote-key image digest"
+}
+$env:KEYCLOAK_KMS_IMAGE_DIGEST = ($env:MARTY_KEYCLOAK_KMS_IMAGE -split '@', 2)[1]
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
 $encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)
@@ -1189,6 +1216,7 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
     -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+Assert-BetaKeycloakDatabaseNoLocalKeys
 if ($EnablePassportNative) {
     $existingPassportServices = @{}
     foreach ($passportService in @("passport-beta-bureau", "passport-callback-signer")) {
@@ -1271,7 +1299,12 @@ if ($EnablePassportNative) {
 if ($OfficialStackRelease) {
     $migrationImage = [string]$officialPlan.images.migrations.reference
     $uiImage = [string]$officialPlan.images.ui.reference
-    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage)) {
+    Invoke-Checked -FilePath gh -Arguments @(
+        "attestation", "verify", "oci://$env:MARTY_KEYCLOAK_KMS_IMAGE",
+        "--repo", "ElevenID/marty-ui", "--source-digest", $sourceId,
+        "--source-ref", "refs/heads/main", "--deny-self-hosted-runners"
+    )
+    foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_KEYCLOAK_KMS_IMAGE)) {
         Invoke-Checked -FilePath docker -Arguments @("pull", $image)
     }
     Assert-OfficialImageLabels -Reference $env:MARTY_SERVICES_IMAGE -Role "services" -ExpectedVersion $releaseVersion -ExpectedRevision $sourceId
@@ -1627,6 +1660,11 @@ try {
     Write-Step "Recreate infrastructure writers from release configuration"
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $script:InfrastructureWriterServices)
     Wait-ForServiceHealth $script:InfrastructureWriterServices
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "keycloak-configurator") `
+        -LogPath (Join-Path $logsDir "keycloak-configurator-kms.log") `
+        -FailureMessage "Beta Keycloak remote-key configuration failed"
+    Assert-BetaKeycloakDatabaseRemoteProviders
 
     Write-Step "Recreate application containers from coordinated images"
     $remainingServices = @($script:SelectedApplicationServices)

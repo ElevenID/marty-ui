@@ -12,6 +12,14 @@ import subprocess
 import sys
 from urllib.parse import urlsplit
 
+try:
+    from .check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+except ImportError:
+    try:
+        from scripts.check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+    except ImportError:
+        from check_beta_keycloak_kms import KeycloakKmsError, validate_model as validate_keycloak_kms
+
 MAX_MODEL_BYTES = 8 * 1024 * 1024
 MAX_MOUNT_ENTRIES = 1024
 MAX_MOUNT_FILES = 512
@@ -1089,7 +1097,7 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
 
 def validate_compose(
     *, project, env_files, files, passport_enabled, physical_provider=False,
-    runner=subprocess.run
+    runner=subprocess.run, keycloak_validator=validate_keycloak_kms,
 ):
     command = ["docker", "compose", "--project-name", project]
     for path in env_files:
@@ -1108,10 +1116,14 @@ def validate_compose(
         )
         if result.returncode or len(result.stdout) > MAX_MODEL_BYTES:
             raise PassportConfigurationError("Beta passport Compose validation failed")
+        model = json.loads(result.stdout)
+        keycloak_validator(model, check_files=True)
         validate_model(
-            json.loads(result.stdout), passport_enabled=passport_enabled, files=files,
+            model, passport_enabled=passport_enabled, files=files,
             physical_provider=physical_provider
         )
+    except KeycloakKmsError as error:
+        raise PassportConfigurationError(str(error)) from None
     except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
         raise PassportConfigurationError(
             "Beta passport Compose validation failed"

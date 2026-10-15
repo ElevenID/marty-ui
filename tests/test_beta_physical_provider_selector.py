@@ -14,6 +14,8 @@ import subprocess
 import pytest
 import yaml
 
+from scripts.check_beta_keycloak_kms import validate_model as validate_keycloak_kms
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = runpy.run_path(str(ROOT / "scripts/validate_beta_passport_configuration.py"))
@@ -430,6 +432,10 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "MARTY_NETWORK_NAME": "elevenid-beta-network",
         "MARTY_DB_PASSWORD": "beta-physical-secret-" + "3" * 40,
         "MARTY_SERVICES_IMAGE": IMAGE,
+        "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "c" * 64,
+        "KEYCLOAK_KMS_IMAGE_DIGEST": "sha256:" + "c" * 64,
+        "KEYCLOAK_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "KEYCLOAK_KMS_KEY_VERSION": "1",
         "MARTY_ISSUANCE_IMAGE": IMAGE,
         "MARTY_DOCS_IMAGE": "sha256:" + "a" * 64,
         "GRPC_SERVICE_TOKEN": GRPC,
@@ -474,6 +480,10 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE",
         "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
         "DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE",
+        "KEYCLOAK_SIGNING_KMS_TOKEN_FILE", "KEYCLOAK_MASTER_RS256_CERT_FILE",
+        "KEYCLOAK_11ID_RS256_CERT_FILE", "KEYCLOAK_MASTER_COOKIE_TOKEN_FILE",
+        "KEYCLOAK_MASTER_CIBA_TOKEN_FILE", "KEYCLOAK_11ID_COOKIE_TOKEN_FILE",
+        "KEYCLOAK_11ID_CIBA_TOKEN_FILE",
         "TOKEN_HMAC_KEY", "CORS_ORIGINS",
     )
     env.update({name: "sha256:" + "a" * 64 for name in digest_names})
@@ -529,6 +539,11 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
     synthetic_file.write_text("synthetic-workload-value", encoding="utf-8")
     env.update({name: str(synthetic_file) for name in required_names
                 if name.endswith("_FILE")})
+    for name in required_names:
+        if name.startswith("KEYCLOAK_") and name.endswith("_FILE"):
+            path = tmp_path / name.lower()
+            path.write_text(f"synthetic-distinct-{name}", encoding="utf-8")
+            env[name] = str(path)
     files = [
         "docker-compose.base.yml", "docker-compose.beta.yml",
         "docker-compose.profile.dev.yml", "docker-compose.profile.tunnel.yml",
@@ -543,6 +558,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
                             timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     rendered = json.loads(result.stdout)
+    validate_keycloak_kms(rendered)
     registry = {"schema": "marty.passport-beta-physical-provider-allowlist/v1",
                 "status": "approved", "providers": [{
                     "endpoint": env["PASSPORT_PHYSICAL_PROVIDER_URL"],

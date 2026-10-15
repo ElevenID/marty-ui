@@ -753,6 +753,7 @@ def test_compose_call_is_read_only_and_closed(tmp_path):
         files=[PROFILE],
         passport_enabled=True,
         runner=run,
+        keycloak_validator=lambda model, **_: None,
     )
     command, kwargs = calls[0]
     assert command[-3:] == ["config", "--format", "json"]
@@ -907,8 +908,17 @@ def synthetic_beta_compose_env(tmp_path):
     for name in required:
         if name.endswith("_FILE"):
             fixture = tmp_path / name.lower()
-            fixture.write_text("synthetic-workload-material", encoding="utf-8")
+            if (name.startswith("KEYCLOAK_") and name.endswith("CERT_FILE")) or name == "OPENBAO_TLS_CA_CERT_FILE":
+                content = "-----BEGIN CERTIFICATE-----\ncHVibGlj\n-----END CERTIFICATE-----\n"
+            elif name.startswith("KEYCLOAK_") and name.endswith("TOKEN_FILE"):
+                content = f"synthetic-scoped-{name}-token-value"
+            else:
+                content = "synthetic-workload-material"
+            fixture.write_text(content, encoding="utf-8")
             values[name] = str(fixture)
+    values["KEYCLOAK_KMS_IMAGE_DIGEST"] = "sha256:" + "c" * 64
+    values["KEYCLOAK_KMS_ADDR"] = "https://openbao:8200"
+    values["KEYCLOAK_KMS_KEY_VERSION"] = "1"
     values["GRPC_SERVICE_TOKEN"] = TOKEN
     values["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = RECONCILIATION_TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE

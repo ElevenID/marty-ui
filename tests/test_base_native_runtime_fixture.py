@@ -255,8 +255,11 @@ RUNTIME_GATES = {
 def runtime_registration(script, source, name):
     line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(line) == 1
+    attribute = (r'#\[tokio::test\(flavor = "multi_thread"\)\]'
+                 if name != "base_profile_gateway_composition_isolated"
+                 else r"#\[tokio::test\]")
     match = re.search(
-        rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
+        rf"{attribute}\s*async fn {name}\(\) \{{(.*?)^\}}",
         source,
         re.MULTILINE | re.DOTALL,
     )

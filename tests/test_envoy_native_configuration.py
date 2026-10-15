@@ -126,7 +126,10 @@ def assert_registration(source, runner, workflow):
         matches = re.findall(
             r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
         )
-        assert matches == ["#[tokio::test]\n"], name
+        attribute = ("#[tokio::test(flavor = \"multi_thread\")]\n"
+                     if name == "base_profile_envoy_composition_child"
+                     else "#[tokio::test]\n")
+        assert matches == [attribute], name
         assert f"'{name}: test'" in runner, name
     assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
