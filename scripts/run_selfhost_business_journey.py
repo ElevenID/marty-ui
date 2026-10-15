@@ -22,7 +22,7 @@ from pathlib import Path
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
-    BETA_SERVICES, EXPECTED_SECRET_NAMES, EXPECTED_SERVICES, plan,
+    BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 
@@ -39,6 +39,11 @@ JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
 COMPLETED = frozenset({"db-migrate", "issuance-migrations", "revocation-profile-migrate",
                        "keycloak-configurator"})
 NOT_LOCAL = BETA_SERVICES | {"cloudflared"}
+LOCAL_SERVICES = EXPECTED_SERVICES - NOT_LOCAL
+LOCAL_SECRET_NAMES = frozenset(
+    secret for service in LOCAL_SERVICES
+    for secret in EXPECTED_ROLE_SECRETS.get(service, ())
+)
 
 
 def command(args: list[str], *, cwd: Path | None = None,
@@ -114,7 +119,7 @@ def live_services(raw: str, model: dict) -> dict[str, str]:
         if not isinstance(name, str) or name in actual:
             raise ValueError("installed Compose status contains duplicate or unnamed roles")
         actual[name] = item
-    expected = EXPECTED_SERVICES - NOT_LOCAL
+    expected = LOCAL_SERVICES
     if set(actual) != expected:
         raise ValueError("installed Compose status lacks the exact local service closure")
     states: dict[str, str] = {}
@@ -159,7 +164,7 @@ def fresh_project(state_root: Path, compose: list[str], install_root: Path,
 def required_secrets(secret_root: Path) -> None:
     if secret_root.is_symlink() or not secret_root.is_dir():
         raise ValueError("qualification secret root is absent or linked")
-    for name in sorted(EXPECTED_SECRET_NAMES):
+    for name in sorted(LOCAL_SECRET_NAMES):
         path = secret_root / name
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ValueError(f"qualification secret material is missing: {name}")
@@ -277,7 +282,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     fresh_project(state_root, compose, install_root, environment)
-    selected = sorted(EXPECTED_SERVICES - NOT_LOCAL)
+    selected = sorted(LOCAL_SERVICES)
     started = False
     failure: Exception | None = None
     states: dict[str, str] = {}
