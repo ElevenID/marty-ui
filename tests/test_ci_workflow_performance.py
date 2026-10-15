@@ -18,6 +18,14 @@ import yaml
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_TEST_COMMAND = "python -m pytest tests -n 2 -v --tb=short --durations=20"
+CANVAS_COMPOSITION_COMMAND = (
+    'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
+    'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+    'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    '"$composition_executable" --skip "$serial_composition_test" '
+    '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
+    '--test-threads=4 >"$composition_log" 2>&1 &'
+)
 
 
 def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
@@ -3981,7 +3989,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            CANVAS_COMPOSITION_COMMAND
         )
         == 1
     )
@@ -4073,7 +4081,7 @@ def _assert_gateway_operations_registration(
     _assert_required_canvas_target_completion(published)
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &'
+            CANVAS_COMPOSITION_COMMAND
         )
         == 1
     )
