@@ -189,7 +189,7 @@ def provision_signing_transit(bao: Bao, ca: Path) -> dict[str, str]:
     bao.request("PUT", f"sys/policies/acl/{policy}", {"policy": (
         'path "transit/keys" { capabilities = ["list"] }\n'
         'path "transit/keys/cred-issuer-*" { capabilities = ["create", "update", "read"] '
-        'allowed_parameters = { "type" = ["ecdsa-p256"] } }\n'
+        'allowed_parameters = { "type" = ["ecdsa-p256", "ed25519"] } }\n'
         'path "transit/keys/cred-issuer-*/rotate" { capabilities = ["update"] }\n'
         'path "transit/sign/cred-issuer-*" { capabilities = ["update"] }\n'
         'path "transit/keys/cred-holder-*" { capabilities = ["create", "update", "read", "delete"] '
