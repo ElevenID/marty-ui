@@ -22368,3 +22368,15 @@ rehearsal, and the currently installed dev-mode beta OpenBao will fail the
 new fail-closed Raft guard. A clean KMS-only beta reinstall/cutover and
 installed Keycloak row cleanup still require executable qualification before
 merging or publishing.
+
+Further beta self-review found that `probe_passport_beta_aggregate_kms.py`
+still queried Transit key versions inside the old dev OpenBao container using
+its root-token environment over HTTP. Grouped UI candidate commit `ec636992b`
+instead performs the read from Signing Keys over CA-verified HTTPS using its
+scoped token file, with the token supplied to curl on standard input rather
+than in Docker arguments. It also corrects the disposable dev-TLS CA filename
+to OpenBao's `vault-ca.pem`. A total of 171 focused Python checks passed
+(one skipped), with 534 planner subtests; WSL Compose rejected four mutated
+HTTP/root-token/private-volume/missing-CA graphs. These local checks are not
+live installed-beta qualification. The commit remains unpushed while hosted
+run `38788256643` finishes, so any further CI corrections can be batched.
