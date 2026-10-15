@@ -21588,3 +21588,13 @@ Python modules passed 231 tests. A fresh `origin/main` fetch found no newer
 commits; the grouped branch remains 28 commits ahead. Default Rust tests
 intentionally ignore live KMS, Redis, database and device cases; those need
 the designated disposable/hosted lanes before release qualification.
+
+2026-10-15 grouped UI publication: the clean `ba9b9b4ec` head was pushed
+as `feat/kms-tls-custody-20261014` and opened as
+[marty-ui PR #1344](https://github.com/ElevenID/marty-ui/pull/1344).
+GitHub reports the head mergeable; exact-head CI, CodeQL and open-source
+policy checks queued. The PR states that source qualification is not an
+installed Keycloak/OpenBao cutover and lists the existing Keycloak rows,
+Canvas fixture keys, unprovisioned cloud/device acceptance, and missing
+post-merge local live rerun. Review hosted results and correct the same PR
+head in batches before merge.
