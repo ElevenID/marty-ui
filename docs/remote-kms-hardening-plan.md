@@ -22478,3 +22478,74 @@ was queued at this checkpoint; CodeQL and organization-quality runs were
 also live, while the new open-source policy check had passed. Do not infer
 runtime success from the static/local checks. The beta Keycloak image and
 installed database cutover remain open even if this CI retry passes.
+
+2026-10-15 grouped beta Keycloak candidate: UI commit `1d5f41afb` is local
+and not yet pushed. The beta Compose overlay now requires the same pinned
+remote-key Keycloak image for the server and configurator, an HTTPS OpenBao
+origin, scoped token/certificate secret files, and a positive KMS key version.
+The beta release runner verifies the official image attestation, refuses an
+existing Keycloak database with `privateKey` or generated `secret` key-provider
+rows before deployment, recreates Keycloak, runs the configurator, and executes
+the read-only remote-provider SQL gate. It does not migrate or delete rows;
+the installed beta database with local rows still requires a fresh cutover.
+The rendered-Compose validator rejects a stock image, missing or shared
+secret inputs, private material in the certificate files, and incomplete KMS
+settings. The focused beta and release-gate contract suite passed locally:
+378 passed, two skipped; Ruff, PowerShell parsing and diff hygiene passed.
+This is source/preflight evidence, not a running beta Keycloak or signed-image
+cutover proof.
+
+Exact-head UI run `38795737288` is still live at this checkpoint. Its Release
+Contract Tests lane failed 14 source-discovery assertions because they only
+recognized `#[tokio::test]` after the five peer-owning Canvas tests changed
+to the required multi-thread runtime. Commit `1d5f41afb` updates those
+assertions to require the exact new runtime for the five tests; the 159
+affected local contract tests passed. The current hosted run is on the
+earlier `60c05939f` head and cannot qualify this local correction. Wait for
+all jobs to finish, collect any other failures, then batch the next push.
+
+Remaining graph gap: `docker-compose.base.yml` still declares stock Keycloak
+25.0 for the server and configurator, and
+`docker-compose.profile.conformance-images.yml` still pins a stock Keycloak
+digest for both. The beta override does not change these separate development
+and conformance graphs. Their key-provider behavior must be retired or made
+KMS-only before claiming platform-wide code-level enforcement; a beta-only
+validator cannot close this requirement.
+
+The same `60c05939f` hosted run also failed Rust Contracts after the
+database-only runner correction: its separate HTTPS OpenBao policy probe still
+ran `provider_rebind_publishes_before_cutover_and_preserves_the_prior_method`
+with an HTTP public-key mock, and the hardened external Transit guard rejected
+that origin. The next local UI correction replaces the mock with two real,
+non-exportable Ed25519 Transit keys in the existing disposable HTTPS OpenBao,
+creates a separate read-only issuer key token, and leaves the envelope token
+scoped to envelope operations. The test keeps the same rebind, public DID,
+unavailable-key and rollback assertions. Rust test target compilation, 42
+related Python checks (two skipped), Ruff, Python syntax and file Rustfmt
+passed locally. Real disposable execution requires the next hosted probe.
+
+The same head's Canvas lane finished with 126 passes and five failures: three
+isolated Gateway children exited at `ProviderUnavailable("gRPC TLS dependency")`,
+and two native renewal paths returned 503 for credential-template peer
+availability. The downloaded child diagnostics prove the Gateway error but do
+not expose the underlying TLS handshake cause. Flow (nine passes), Canvas
+worker (110 passes), self-host and image packaging passed. Local UI commit
+`6bb34d30a` adds a scoped OpenBao signature proof and CA-validated direct
+HTTPS probe to the disposable TLS peer before any long Canvas journey. The
+exact Canvas acceptance target compiles locally and Rustfmt passes; the probe
+is diagnostic/acceptance evidence and does not yet establish that the hosted
+handshake is fixed. Wait for the still-running OpenBao recovery lane before
+pushing the grouped follow-up.
+
+Run `38795737288` then finished failed. The OpenBao plugin/Raft recovery lane
+passed, as did self-host, Rust image packaging, Rust lint, browser, security,
+and the other unaffected lanes; Canvas, Rust Contracts and Release Contracts
+failed for the reasons above. The three local UI correction commits
+`1d5f41afb`, `d0609cdaf` and `6bb34d30a` were pushed together as PR #1344
+head `6bb34d30a`. [New exact-head CI run 38799724846](https://github.com/ElevenID/marty-ui/actions/runs/38799724846)
+started, with the policy, organization-quality and CodeQL companions. The PR
+description now names the current head, prior terminal evidence, and open
+acceptance limits. A local Docker Desktop startup attempt could not open its
+stopped Windows service from this session, so no local container handshake was
+claimed. Continue with the new CI result; if its direct peer probe fails,
+correct the actual remote-signing/TLS boundary before another grouped push.
