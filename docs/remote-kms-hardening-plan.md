@@ -21395,3 +21395,17 @@ stack. The existing local Keycloak database is still dirty, standalone
 self-host OpenBao is still HTTP, Kubernetes Keycloak still needs a matching
 KMS-only deployment, and the exact release consumer's fifth-artifact
 acceptance remains to be exercised.
+
+2026-10-15 self-host OpenBao transport audit: the current standalone Raft
+configuration explicitly sets `tls_disable = 1`, the Compose health check and
+bootstrap use HTTP, and the example application `BAO_ADDR` is HTTP. The
+OpenBao image's `-dev-tls` flag is a development server mode and does not
+provide a durable Raft production endpoint. The grouped UI branch now adds
+an operator preflight that rejects a stock or non-digest Keycloak image and
+requires HTTPS origins for `BAO_ADDR`, `KEYCLOAK_KMS_ADDR` and every supplied
+TLS KMS endpoint; nine focused tests passed. This deliberately makes the
+current HTTP standalone scaffold unqualified. Next, provide a durable
+CA-verified HTTPS Raft listener whose server identity key stays inside the
+KMS/operator custody boundary, bind the public CA to clients, and prove
+bootstrap, snapshot recovery, rotation and all scoped callers against it.
+Do not use disposable `-dev-tls` as the production substitute.
