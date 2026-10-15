@@ -170,7 +170,7 @@ public class RestartLoginCookie implements Token {
         return authSession;
     }
 
-    private static RestartLoginCookie decryptAndDecode(KeycloakSession session, String encodedToken) {
+    public static RestartLoginCookie decryptAndDecode(KeycloakSession session, String encodedToken) {
         try {
             byte[] contentBytes = RemoteDirectJwe.decode(session, "cookie", encodedToken);
             String jwt = new String(contentBytes, StandardCharsets.UTF_8);
@@ -182,7 +182,7 @@ public class RestartLoginCookie implements Token {
         }
     }
 
-    private static String encodeAndEncrypt(KeycloakSession session, RestartLoginCookie cookie) {
+    public static String encodeAndEncrypt(KeycloakSession session, RestartLoginCookie cookie) {
         try {
             String encodedJwt = session.tokens().encode(cookie);
             return RemoteDirectJwe.encode(session, "cookie", encodedJwt.getBytes(StandardCharsets.UTF_8));
