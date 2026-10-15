@@ -345,33 +345,45 @@ def test_didcomm_authcrypt_rejects_legacy_issuance_owner() -> None:
         )
 
 
-def test_didcomm_authcrypt_policy_and_token_are_mounted_only_into_native_issuance() -> (
-    None
-):
+def test_didcomm_authcrypt_policy_is_mounted_only_into_native_issuance() -> None:
     overlay = yaml.safe_load(
         (ROOT / stack.DIDCOMM_AUTHCRYPT_FILE).read_text(encoding="utf-8")
     )
-    assert set(overlay["services"]) == {"openbao", "openbao-init", "issuance-native"}
+    assert set(overlay["services"]) == {"issuance-native"}
     issuance = overlay["services"]["issuance-native"]
     assert issuance["environment"] == {
         "DIDCOMM_ENCRYPTION_POLICY_FILE": (
             "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
         ),
-        "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-        "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
     }
     assert [mount["target"] for mount in issuance["volumes"]] == [
         "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
-        "/run/secrets/didcomm-kms",
     ]
     assert issuance["volumes"][0]["read_only"] is True
     assert issuance["volumes"][0]["bind"] == {"create_host_path": False}
-    assert issuance["volumes"][1] == {
-        "type": "volume",
-        "source": "didcomm_issuance_token",
-        "target": "/run/secrets/didcomm-kms",
-        "read_only": True,
-    }
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    native = yaml.safe_load(
+        (ROOT / "docker-compose.profile.issuance-native.yml").read_text(
+            encoding="utf-8"
+        )
+    )["services"]["issuance-native"]
+    assert native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
+    assert (
+        native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+        == "/bao/didcomm-issuance-token/token"
+    )
+    assert (
+        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+        in native["volumes"]
+    )
+    assert (
+        base["services"]["openbao-init"]["environment"][
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
+        ]
+        == "/bao/didcomm-issuance-token/token"
+    )
 
 
 def test_didcomm_holder_receiver_bridge_is_conformance_only() -> None:
@@ -770,9 +782,7 @@ def test_oidf_tls_edge_uses_live_upstream_dns_and_shared_service_image() -> None
     build = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
         encoding="utf-8"
     )
-    released = (ROOT / "docker-compose.profile.ghcr.yml").read_text(
-        encoding="utf-8"
-    )
+    released = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     for peer in ("gateway:8000", "keycloak:8080", "ui:80"):
         assert peer in source
     assert "TcpStream::connect(upstream)" in source
@@ -789,16 +799,16 @@ def test_oidf_tls_edge_preserves_the_complete_public_authority() -> None:
     assert '"example.test:8443"' in source
     assert 'headers.insert("x-forwarded-host", host)' in source
     assert '"x-forwarded-port"' in source
-    assert '|8443|https|127.0.0.1|' in source
+    assert "|8443|https|127.0.0.1|" in source
     assert "gateway_upgrade_tunnels_bidirectional_bytes" in source
 
 
 def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     oidf = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
-    proxy = (
-        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
-    ).read_text(encoding="utf-8")
+    proxy = (ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs").read_text(
+        encoding="utf-8"
+    )
 
     assert "image: ${MARTY_UI_IMAGE:?" in profile
     assert (
@@ -814,9 +824,7 @@ def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
 
 
 def test_oidf_tls_edge_requires_remote_nonexportable_signing_identity() -> None:
-    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(
-        encoding="utf-8"
-    )
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
     edge = (ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs").read_text(
         encoding="utf-8"
     )

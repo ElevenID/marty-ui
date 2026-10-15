@@ -118,48 +118,49 @@ def test_initiation_binding_guard_rejects_consumer_drift(service, key, value) ->
 
 def test_native_authcrypt_mount_is_exact_read_only_and_explicit() -> None:
     overlay = yaml.safe_load((ROOT / AUTHCRYPT).read_text())
-    assert set(overlay) == {"services", "volumes", "x-native-issuance-policy"}
-    assert set(overlay["services"]) == {"openbao", "openbao-init", "issuance-native"}
+    base = yaml.safe_load((ROOT / "docker-compose.base.yml").read_text())
+    native_profile = yaml.safe_load(
+        (ROOT / "docker-compose.profile.issuance-native.yml").read_text()
+    )
+    assert set(overlay) == {"services", "x-native-issuance-policy"}
+    assert set(overlay["services"]) == {"issuance-native"}
     native = overlay["services"]["issuance-native"]
     assert set(native) == {"environment", "volumes", "depends_on"}
     assert native["environment"] == {
         "DIDCOMM_ENCRYPTION_POLICY_FILE": "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
-        "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-        "DIDCOMM_KMS_TOKEN_FILE": "/run/secrets/didcomm-kms/openbao-token",
     }
     assert [mount["target"] for mount in native["volumes"]] == [
         "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json",
-        "/run/secrets/didcomm-kms",
     ]
     assert native["volumes"][0]["read_only"] is True and native["volumes"][0][
         "bind"
     ] == {"create_host_path": False}
-    assert native["volumes"][1] == {
-        "type": "volume",
-        "source": "didcomm_issuance_token",
-        "target": "/run/secrets/didcomm-kms",
-        "read_only": True,
-    }
     assert (
         native["depends_on"]["openbao-init"]["condition"]
         == "service_completed_successfully"
     )
-    assert overlay["volumes"] == {"didcomm_issuance_token": None}
+    selected = native_profile["services"]["issuance-native"]
+    assert selected["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
     assert (
-        overlay["services"]["openbao-init"]["environment"][
-            "DIDCOMM_KMS_PLUGIN_REQUIRED"
-        ]
+        selected["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
+    )
+    assert (
+        selected["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+        == "/bao/didcomm-issuance-token/token"
+    )
+    assert (
+        "openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro"
+        in selected["volumes"]
+    )
+    assert (
+        base["services"]["openbao-init"]["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"]
         == "true"
     )
     assert (
-        overlay["services"]["openbao-init"]["environment"][
-            "DIDCOMM_ISSUANCE_TOKEN_FILE"
+        base["services"]["openbao-init"]["environment"][
+            "BAO_DIDCOMM_ISSUANCE_TOKEN_FILE"
         ]
-        == "/run/didcomm-token/openbao-token"
-    )
-    assert (
-        overlay["services"]["openbao"]["image"]
-        == overlay["services"]["openbao-init"]["image"]
+        == "/bao/didcomm-issuance-token/token"
     )
 
 
@@ -258,16 +259,22 @@ def test_native_kms_and_full_model_guards_reject_configuration_loss(mutation) ->
     gate["assert_native_kms_policy"](expected)
     actual = deepcopy(expected)
     native = actual["services"]["issuance-native"]
+    policy_mount = next(
+        item
+        for item in native["volumes"]
+        if item.get("target")
+        == "/run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json"
+    )
     if mutation == "policy":
         native["environment"].pop("DIDCOMM_ENCRYPTION_POLICY_FILE")
     elif mutation == "source":
-        native["volumes"][0]["source"] = "synthetic-wrong-policy-directory"
+        policy_mount["source"] = "synthetic-wrong-policy-directory"
     elif mutation == "writable":
-        native["volumes"][0]["read_only"] = False
+        policy_mount["read_only"] = False
     elif mutation == "auto-create":
-        native["volumes"][0]["bind"]["create_host_path"] = True
+        policy_mount["bind"]["create_host_path"] = True
     else:
-        actual["services"]["gateway"]["volumes"] = [deepcopy(native["volumes"][0])]
+        actual["services"]["gateway"]["volumes"] = [deepcopy(policy_mount)]
     with pytest.raises(AssertionError):
         gate["assert_model"](actual, expected)
     with pytest.raises(gate["DidcommConfigurationError"]):

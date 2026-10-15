@@ -138,11 +138,6 @@ def assert_native_delta(legacy, actual):
     expected["services"]["issuance-native"] = actual["services"]["issuance-native"]
     if "x-native-issuance-policy" in actual:
         expected["x-native-issuance-policy"] = actual["x-native-issuance-policy"]
-        expected["volumes"]["didcomm_issuance_token"] = actual["volumes"][
-            "didcomm_issuance_token"
-        ]
-        for name in ("openbao", "openbao-init"):
-            expected["services"][name] = actual["services"][name]
     token = actual["services"]["issuance-native"]["environment"]["GRPC_SERVICE_TOKEN"]
     for name in NATIVE["TOKEN_CONSUMERS"]:
         expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token

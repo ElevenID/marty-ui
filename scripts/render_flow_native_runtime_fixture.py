@@ -67,11 +67,13 @@ def mapped_environment(service, spec):
     environment["ISSUANCE_GRPC_TARGET"] = {
         "issuance:9005": spec["legacy_rpc"],
         "issuance-native:9005": spec["native_rpc"],
-        "https://issuance-native:9005": spec["native_rpc"].replace("http://", "https://", 1),
+        "https://issuance-native:9005": spec["native_rpc"].replace(
+            "http://", "https://", 1
+        ),
     }[original["ISSUANCE_GRPC_TARGET"]]
     assert original["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     environment["ISSUANCE_SERVICE_URL"] = spec["legacy_http"]
-    if original.get("BAO_ADDR") == "http://openbao:8200":
+    if original.get("BAO_ADDR") == "https://openbao:8200":
         # The executable grant minter requires an HTTPS KMS origin even when
         # this admission fixture never performs a signing operation.
         environment["BAO_ADDR"] = "https://127.0.0.1:18200"
@@ -80,22 +82,38 @@ def mapped_environment(service, spec):
         ).as_posix()
     declared = {item["source"] for item in service.get("secrets", [])}
     for key, value in original.items():
+        if key == "BAO_CACERT" and original.get("BAO_ADDR") == "https://openbao:8200":
+            continue
         if key.endswith("_FILE") or key in TLS_FILES:
             if not value and key == "PASSPORT_TENANT_API_KEYS_FILE":
                 continue
             if key == "FLOW_SIGN_GRANT_MINT_TOKEN_FILE":
                 if value == "/bao/flow-grant/token":
-                    assert service.get("volumes") == [{
-                        "type": "volume", "source": "openbao_flow_grant",
-                        "target": "/bao/flow-grant", "read_only": True, "volume": {},
-                    }]
+                    assert service.get("volumes") == [
+                        {
+                            "type": "volume",
+                            "source": "openbao_public_ca",
+                            "target": "/bao/public-ca",
+                            "read_only": True,
+                            "volume": {},
+                        },
+                        {
+                            "type": "volume",
+                            "source": "openbao_flow_grant",
+                            "target": "/bao/flow-grant",
+                            "read_only": True,
+                            "volume": {},
+                        },
+                    ]
                 else:
                     assert value == "/run/secrets/sign_grant_mint_flow_wallet_token"
                     assert "sign_grant_mint_flow_wallet_token" in declared
-                environment[key] = (Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token").as_posix()
+                environment[key] = (
+                    Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token"
+                ).as_posix()
                 continue
             name = Path(value).name
-            assert value == f"/run/secrets/{name}" and name in declared
+            assert value == f"/run/secrets/{name}" and name in declared, (key, value)
             assert name in SECRET_VALUES or name in TLS_FILES.values()
             environment[key] = (Path(spec["directory"]) / name).as_posix()
     assert all(isinstance(value, str) for value in environment.values())
@@ -112,8 +130,11 @@ def render(spec, command):
     with tempfile.TemporaryDirectory(prefix="flow-render-model-") as temporary:
         root = Path(temporary)
         required = set()
-        for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"],
-                     SELFHOST["APPROVED"]):
+        for name in (
+            "docker-compose.base.yml",
+            SELFHOST["GATE"]["BASE"],
+            SELFHOST["APPROVED"],
+        ):
             required.update(
                 re.findall(r"\$\{([A-Z0-9_]+):\?", (ROOT / name).read_text())
             )
@@ -170,7 +191,8 @@ def render(spec, command):
         for name, value in SECRET_VALUES.items():
             (directory / name).write_text(value, encoding="utf-8")
         public_certificate = (
-            ROOT / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+            ROOT
+            / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
         ).read_bytes()
         assert b"BEGIN CERTIFICATE" in public_certificate
         assert b"PRIVATE KEY" not in public_certificate

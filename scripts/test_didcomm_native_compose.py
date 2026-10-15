@@ -15,7 +15,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = runpy.run_path(str(ROOT / "scripts/validate_beta_didcomm_configuration.py"))
-assert_native_kms_policy = VALIDATOR["assert_native_kms_policy"]
+assert_native_kms_policy = VALIDATOR["assert_base_https_native_kms"]
 DidcommConfigurationError = VALIDATOR["DidcommConfigurationError"]
 BASE = "docker-compose.base.yml"
 BETA = "docker-compose.beta.yml"
@@ -28,10 +28,12 @@ CA_DIRECTORY = (
 )
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
 POLICY_FILE = POLICY_TARGET + "/didcomm-encryption-policy.json"
-TOKEN_TARGET = "/run/secrets/didcomm-kms"
-TOKEN_FILE = TOKEN_TARGET + "/openbao-token"
+TOKEN_TARGET = "/bao/didcomm-issuance-token"
+TOKEN_FILE = TOKEN_TARGET + "/token"
 CA_TARGET = "/run/secrets/didcomm-conformance-root-ca.pem"
 NATIVE_GRANT_MOUNTS = {
+    ("openbao_public_ca", "/bao/public-ca"),
+    ("openbao_didcomm_issuance_token", TOKEN_TARGET),
     ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
     ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
     ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
@@ -71,9 +73,18 @@ def assert_initiation_consumer_bindings(model):
         "service_completed_successfully"
     )
     assert native["depends_on"]["postgres"]["condition"] == "service_healthy"
-    assert native["environment"]["GRPC_TLS_CA_CERT"] == "/run/secrets/workload_identity_ca_cert"
-    assert native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT"] == "/run/secrets/openbao_tls_ca_cert"
-    assert native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE"] == "/run/secrets/issuance_tls_kms_token"
+    assert (
+        native["environment"]["GRPC_TLS_CA_CERT"]
+        == "/run/secrets/workload_identity_ca_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT"]
+        == "/run/secrets/openbao_tls_ca_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE"]
+        == "/run/secrets/issuance_tls_kms_token"
+    )
 
 
 def mount(source, target):
@@ -90,74 +101,46 @@ def expected_model(baseline, *, authcrypt, conformance):
     expected = deepcopy(baseline)
     native = expected["services"]["issuance-native"]
     if authcrypt:
+        for key, value in (
+            ("DIDCOMM_KMS_ADDR", "https://openbao:8200"),
+            ("DIDCOMM_KMS_CA_CERT_FILE", "/bao/public-ca/ca.crt"),
+            ("DIDCOMM_KMS_TOKEN_FILE", TOKEN_FILE),
+        ):
+            native["environment"].setdefault(key, value)
+        existing_targets = {item.get("target") for item in native.get("volumes", [])}
+        for source, target in (
+            ("openbao_public_ca", "/bao/public-ca"),
+            ("openbao_didcomm_issuance_token", TOKEN_TARGET),
+        ):
+            if target not in existing_targets:
+                native.setdefault("volumes", []).append(
+                    {
+                        "type": "volume",
+                        "source": source,
+                        "target": target,
+                        "read_only": True,
+                    }
+                )
         native["environment"].update(
             {
                 "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY_FILE,
-                "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-                "DIDCOMM_KMS_TOKEN_FILE": TOKEN_FILE,
             }
         )
-        native.setdefault("volumes", []).extend(
-            (
-                mount(
-                    POLICY_DIRECTORY + "/didcomm-encryption-policy.json", POLICY_FILE
-                ),
-                {
-                    "type": "volume",
-                    "source": "didcomm_issuance_token",
-                    "target": TOKEN_TARGET,
-                    "read_only": True,
-                },
-            )
+        native.setdefault("volumes", []).append(
+            mount(POLICY_DIRECTORY + "/didcomm-encryption-policy.json", POLICY_FILE)
         )
         native.setdefault("depends_on", {})["openbao-init"] = {
             "condition": "service_completed_successfully",
             "required": True,
         }
-        image = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}"
-        openbao = expected["services"]["openbao"]
-        openbao["image"] = image
-        openbao["command"] = [
-            "server",
-            "-dev",
-            "-config",
-            "/bao/config/didcomm-plugin.hcl",
-        ]
-        openbao["volumes"].append(
-            mount("./docker/openbao-didcomm-dev.hcl", "/bao/config/didcomm-plugin.hcl")
-        )
-        bootstrap = expected["services"]["openbao-init"]
-        bootstrap["image"] = image
-        bootstrap["environment"]["DIDCOMM_KMS_PLUGIN_REQUIRED"] = "true"
-        bootstrap["environment"]["DIDCOMM_ISSUANCE_TOKEN_FILE"] = (
-            "/run/didcomm-token/openbao-token"
-        )
-        bootstrap["volumes"].append(
-            {
-                "type": "volume",
-                "source": "didcomm_issuance_token",
-                "target": "/run/didcomm-token",
-            }
-        )
-        expected.setdefault("volumes", {})["didcomm_issuance_token"] = {
-            "name": "synthetic-didcomm-config_didcomm_issuance_token"
-        }
         expected["x-native-issuance-policy"] = {
             "environment": {
                 "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY_FILE,
-                "DIDCOMM_KMS_ADDR": "http://openbao:8200",
-                "DIDCOMM_KMS_TOKEN_FILE": TOKEN_FILE,
             },
             "volumes": [
                 mount(
                     POLICY_DIRECTORY + "/didcomm-encryption-policy.json", POLICY_FILE
                 ),
-                {
-                    "type": "volume",
-                    "source": "didcomm_issuance_token",
-                    "target": TOKEN_TARGET,
-                    "read_only": True,
-                },
             ],
         }
     if conformance:
@@ -303,12 +286,9 @@ def assert_bindings(model, compose_command):
         assert environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE") == (
             POLICY_FILE if has_policy else None
         )
-        assert environment.get("DIDCOMM_KMS_ADDR") == (
-            "http://openbao:8200" if has_policy else None
-        )
-        assert environment.get("DIDCOMM_KMS_TOKEN_FILE") == (
-            TOKEN_FILE if has_policy else None
-        )
+        assert environment["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
+        assert environment["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
+        assert environment["DIDCOMM_KMS_TOKEN_FILE"] == TOKEN_FILE
         assert environment.get("DIDCOMM_TLS_CA_FILE") == (CA_TARGET if has_ca else None)
         sources = {
             item["target"]: item["source"].replace("\\", "/")
@@ -320,7 +300,6 @@ def assert_bindings(model, compose_command):
                 values["DIDCOMM_ENCRYPTION_POLICY_DIR"]
                 + "/didcomm-encryption-policy.json"
             )
-            expected_sources[TOKEN_TARGET] = "didcomm_issuance_token"
         if has_ca:
             expected_sources[CA_TARGET] = values["OIDF_TLS_CERT_DIR"] + "/root-ca.pem"
         assert sources == expected_sources

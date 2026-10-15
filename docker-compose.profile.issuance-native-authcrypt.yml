@@ -1,10 +1,8 @@
-# Mount only the reference-only authcrypt policy. OpenBao init mints a scoped
-# token into a dedicated project volume before native Issuance starts.
+# Mount only the reference-only authcrypt policy. The base HTTPS Raft graph
+# provisions the scoped DIDComm token and public KMS CA for native Issuance.
 x-native-issuance-policy: &native-issuance-policy
   environment:
     DIDCOMM_ENCRYPTION_POLICY_FILE: /run/secrets/didcomm-authcrypt/didcomm-encryption-policy.json
-    DIDCOMM_KMS_ADDR: http://openbao:8200
-    DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm-kms/openbao-token
   volumes:
     - type: bind
       source: ${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}/didcomm-encryption-policy.json
@@ -12,34 +10,10 @@ x-native-issuance-policy: &native-issuance-policy
       read_only: true
       bind:
         create_host_path: false
-    - type: volume
-      source: didcomm_issuance_token
-      target: /run/secrets/didcomm-kms
-      read_only: true
+
 services:
-  openbao:
-    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
-    command: ["server", "-dev", "-config", "/bao/config/didcomm-plugin.hcl"]
-    volumes:
-      - type: bind
-        source: ./docker/openbao-didcomm-dev.hcl
-        target: /bao/config/didcomm-plugin.hcl
-        read_only: true
-        bind:
-          create_host_path: false
-  openbao-init:
-    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
-    environment:
-      DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
-      DIDCOMM_ISSUANCE_TOKEN_FILE: /run/didcomm-token/openbao-token
-    volumes:
-      - type: volume
-        source: didcomm_issuance_token
-        target: /run/didcomm-token
   issuance-native:
     <<: *native-issuance-policy
     depends_on:
       openbao-init:
         condition: service_completed_successfully
-volumes:
-  didcomm_issuance_token:
