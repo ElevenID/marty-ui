@@ -22849,3 +22849,20 @@ files by providing the full envelope API through the real Rust Signing Keys
 service with non-exportable OpenBao TLS and Transit keys, then rerun the
 packaged Issuance and Canvas checks locally before pushing a grouped PR.
 Keep the round-trip startup check and the KMS-only invariant intact.
+
+2026-10-15 merge and successor release preparation: grouped UI #1344 merged
+as protected-main commit `3895776efffbb6c13dbeb76205d580909a4dc564`
+after merge-group CI run `38818654916` completed successfully, including the
+real Flow-to-Issuance mTLS, OpenBao DIDComm image, coordinated Raft/PostgreSQL
+restore, Canvas, self-host, Keycloak browser/CIBA/custody, and security gates.
+The merge commit is now `origin/main`. Its push started cache-warming runs;
+the policy-required exact-main full qualification and release have not yet
+run. `v1.1.247` is already published, so release claim cannot use the stale
+`1.1.247` stack lock. A clean successor branch
+`fix/kms-retire-test-tls-files-main-20261015` was created from the merged main,
+cherry-picked the obsolete beta TLS private-key-generator removal, and advanced
+the stack lock, release contract, and cutover guide to unused `v1.1.248`
+(`1195ccae3`). Focused local release and beta tests passed (296, two skipped).
+Hold this local branch for the broad remaining test-fixture cleanup and local
+runtime proof before one follow-up PR; do not charge full-main CI or claim the
+release on the old `1.1.247` lock.
