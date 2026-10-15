@@ -21688,3 +21688,20 @@ full run, so this fixture-only correction did not trigger a second full
 90-second run. The separate Passport disposable OpenBao test is Docker-backed
 and local Docker did not return within the observation window; it requires
 the hosted image lane rather than a source-only acceptance claim.
+
+2026-10-15 local UI commit `057a4d5b5` (still unpushed in PR #1344):
+reconciled eight release and Flow fixtures with the current keyless TLS
+contract. The rendered Flow fixture now preserves the self-host HTTPS
+Issuance target, provides only public certificate/CA files and scoped
+synthetic KMS tokens, and no longer generates test TLS private keys. Its
+Rust child verifies that the deployed configuration selects the keyless
+Issuance channel; the base profile retains the actual synthetic RPC and
+physical-provider behavior checks. This synthetic listener is plaintext,
+so the deployed remote-KMS TLS handshake is not proven by this fixture
+and remains for live OpenBao acceptance. Kubernetes Canvas-worker/Keycloak
+rollout, Notification CA, signed Keycloak release inputs, and Issuance
+ownership/coverage assertions were also updated to match current source.
+The six affected Python modules passed 91 tests; `marty-flow-acceptance`
+test target compiled with Rust 1.95; `git diff --check` passed. Docker
+daemon did not answer a local `docker info` probe and it was interrupted,
+so no Docker-backed Flow acceptance was run.
