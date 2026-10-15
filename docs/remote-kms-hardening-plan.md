@@ -20797,3 +20797,23 @@ one skip. Python compilation, shell syntax and diff checks passed. This proves
 this isolated OpenBao/bootstrap component, not the full Compose passport
 journey: the five downstream BAO consumers still point to HTTP and do not
 mount the public CA, while workload/edge TLS keys and plaintext gRPC remain.
+
+2026-10-15 passport fixture HTTPS consumer cutover and migration transport
+correction, staged in the grouped UI worktree: all five Compose consumers of
+this disposable OpenBao (migrations, Signing Keys, Issuance Native, callback
+signer and Gateway) now use `https://openbao:8200`, set `BAO_CACERT`, and
+mount the project public-CA volume read-only. The model and live-container
+ownership inventories require these exact mounts, CA path and HTTPS origin;
+rendered base and selfhost models were checked. The six focused passport
+model/ownership/producer suites passed 281 cases with two skips. Source review
+then found the Rust `marty-migration-bootstrap` adapter still used a default
+reqwest client, which would reject the private CA despite the Compose change.
+It now constructs the shared `marty-openbao-http` HTTPS client from `BAO_ADDR`
+and `BAO_CACERT`, with no production HTTP transport. Its new opt-in live guard
+check passed over the disposable CA-verified OpenBao in the full
+`--rust-adapter` run; the rest of that probe passed, including holder and
+Gateway custody. The migration binary `cargo check`, 197 Signing Keys library
+tests, Python compilation and diff checks passed. This qualifies the OpenBao
+transport slice locally. The protected passport journey still needs remote
+TLS identity bootstrap and the workload/edge/gRPC fixture cutover before the
+full Compose runtime can boot or issue an acceptance receipt.
