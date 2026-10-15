@@ -17,6 +17,7 @@ import ssl
 import subprocess
 import tempfile
 import threading
+from typing import Callable
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -43,6 +44,12 @@ def http_json(url: str, body: dict[str, str] | None = None) -> dict:
     request = Request(url, data=urlencode(body).encode() if body else None)
     with urlopen(request, timeout=5) as response:
         return json.load(response)
+
+
+def jwe_header(compact: str) -> dict:
+    if len(compact.split(".")) != 5:
+        raise RuntimeError("Keycloak did not return a compact JWE")
+    return json.loads(base64.urlsafe_b64decode(compact.split(".")[0] + "=="))
 
 
 def post_admin(url: str, token: str, payload: dict) -> None:
@@ -94,7 +101,8 @@ class PendingCibaDevice(BaseHTTPRequestHandler):
 
 
 def browser_code(opener, base: str, callback: str, realm: str,
-                 username: str, *, login: bool) -> dict:
+                 username: str, *, login: bool,
+                 before_submit: Callable[[], None] | None = None) -> dict:
     verifier = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()) \
         .rstrip(b"=").decode()
@@ -114,6 +122,8 @@ def browser_code(opener, base: str, callback: str, realm: str,
             form.feed(response.read().decode())
             if not login or not form.action:
                 raise RuntimeError("Keycloak did not present the expected browser login")
+            if before_submit:
+                before_submit()
             try:
                 opener.open(Request(form.action, data=urlencode({
                     "username": username, "password": "synthetic-probe-only",
@@ -287,9 +297,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             bao_base = f"https://127.0.0.1:{bao_port}/v1/"
             bao_tls = ssl.create_default_context(cafile=str(ca_dir / "ca.crt"))
 
-            def bao_api(path: str, payload: dict) -> dict:
+            def bao_api(path: str, payload: dict, token: str | None = None) -> dict:
                 request = Request(bao_base + path, data=json.dumps(payload).encode(),
-                                  headers={"X-Vault-Token": root_token.read_text(),
+                                  headers={"X-Vault-Token": token or root_token.read_text(),
                                            "Content-Type": "application/json"})
                 with urlopen(request, context=bao_tls, timeout=8) as response:
                     body = response.read()
@@ -303,6 +313,24 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 return run("docker", "exec", "-i", bao_name,
                            "/bin/sh", "-c", command, input_text=input_text)
 
+            def jwe_policy(realm: str, purpose: str, versions: tuple[str, ...]) -> str:
+                policy = f'path "didcomm/keycloak/keys/{realm}/{purpose}" {{ capabilities = ["read"] }}\n'
+                for version in versions:
+                    policy += (
+                        f'path "didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
+                        f'path "didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
+                    )
+                return policy
+
+            def rotate_jwe(realm: str, purpose: str, old_version: str) -> str:
+                rotated = bao_api(f"didcomm/keycloak/keys/{realm}/{purpose}/rotate", {})["data"]
+                version = rotated["version"]
+                if version == old_version or rotated.get("kid") != f"keycloak-{realm}-{purpose}-{version}":
+                    raise RuntimeError("Remote JWE rotation did not advance the key version")
+                bao("policy", "write", f"keycloak-{realm}-{purpose}-probe", "-",
+                    input_text=jwe_policy(realm, purpose, (old_version, version)))
+                return version
+
             deadline = time.monotonic() + 25
             while time.monotonic() < deadline:
                 try:
@@ -315,6 +343,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
 
             bao("secrets", "enable", "transit")
             ciba_version = ""
+            cookie_versions = {}
             if require_browser:
                 digest = run("docker", "exec", bao_name, "sha256sum",
                              "/plugins/openbao-didcomm-authcrypt").split()[0]
@@ -328,13 +357,11 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     version = reference["version"]
                     if realm == "11id" and purpose == "ciba":
                         ciba_version = version
-                    policy = (
-                        f'path "didcomm/keycloak/keys/{realm}/{purpose}" {{ capabilities = ["read"] }}\n'
-                        f'path "didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
-                        f'path "didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
-                    )
+                    if purpose == "cookie":
+                        cookie_versions[realm] = version
                     policy_name = f"keycloak-{realm}-{purpose}-probe"
-                    bao("policy", "write", policy_name, "-", input_text=policy)
+                    bao("policy", "write", policy_name, "-",
+                        input_text=jwe_policy(realm, purpose, (version,)))
                     (jwe_token_dir / f"{realm}-{purpose}.token").write_text(
                         bao("token", "create", f"-policy={policy_name}",
                             "-ttl=1h", "-field=token"), encoding="ascii")
@@ -490,14 +517,12 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     "login_hint": "probe11", "scope": "openid",
                 })
                 auth_req_id = ciba.get("auth_req_id", "")
-                if len(auth_req_id.split(".")) != 5:
-                    raise RuntimeError("CIBA did not return a compact remote JWE request ID")
-                header = json.loads(base64.urlsafe_b64decode(
-                    auth_req_id.split(".")[0] + "=="))
+                header = jwe_header(auth_req_id)
                 if (header.get("alg"), header.get("enc"), header.get("kid")) != (
                     "dir", "A256CBC-HS512", f"keycloak-11id-ciba-{ciba_version}"
                 ):
                     raise RuntimeError("CIBA request ID did not use the scoped remote JWE key")
+                new_ciba_version = rotate_jwe("11id", "ciba", ciba_version)
                 try:
                     http_json(base + "/realms/11id/protocol/openid-connect/token", {
                         "client_id": "probe-ciba",
@@ -550,6 +575,15 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     approved["access_token"].split(".")[1] + "=="))
                 if approved_claims.get("preferred_username") != "probe11":
                     raise RuntimeError("CIBA approved the wrong user")
+                after_rotation = http_json(
+                    base + "/realms/11id/protocol/openid-connect/ext/ciba/auth", {
+                        "client_id": "probe-ciba",
+                        "client_secret": "synthetic-ciba-probe-only",
+                        "login_hint": "probe11", "scope": "openid",
+                    })
+                new_header = jwe_header(after_rotation["auth_req_id"])
+                if new_header.get("kid") != f"keycloak-11id-ciba-{new_ciba_version}":
+                    raise RuntimeError("CIBA did not use the new remote key after rotation")
                 (jwe_token_dir / "11id-ciba.token").write_text(
                     "invalid-disposable-token", encoding="ascii")
                 try:
@@ -567,12 +601,31 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     ("master", "probe", jwks),
                     ("11id", "probe11", jwks_11id),
                 ):
-                    browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                    browser_cookies = CookieJar()
+                    browser = build_opener(HTTPCookieProcessor(browser_cookies),
                                            StopAtCallback(callback))
+                    def rotate_during_login() -> None:
+                        restart = next((cookie for cookie in browser_cookies
+                                        if cookie.name == "KC_RESTART"), None)
+                        if restart is None:
+                            raise RuntimeError("Keycloak did not issue a restart cookie before rotation")
+                        old_version = cookie_versions[realm]
+                        if jwe_header(restart.value).get("kid") != f"keycloak-{realm}-cookie-{old_version}":
+                            raise RuntimeError("Restart cookie did not use the old remote key")
+                        cookie_versions[realm] = rotate_jwe(realm, "cookie", old_version)
+                        decrypted = bao_api(
+                            f"didcomm/keycloak/jwe/decode/{realm}/cookie/{old_version}",
+                            {"jwe": restart.value},
+                            token=(jwe_token_dir / f"{realm}-cookie.token").read_text(),
+                        )["data"]["plaintext_base64"]
+                        if len(base64.b64decode(decrypted).split(b".")) != 3:
+                            raise RuntimeError("Old restart cookie did not survive remote rotation")
                     for login in (True, False):
                         try:
                             browser_tokens = browser_code(browser, base, callback,
-                                                          realm, username, login=login)
+                                                          realm, username, login=login,
+                                                          before_submit=rotate_during_login
+                                                          if login else None)
                         except Exception as error:
                             observed = subprocess.run(["docker", "logs", "--tail", "120", kc_name],
                                                       capture_output=True, text=True, timeout=10)
@@ -586,6 +639,21 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                             verify_jwt(browser_tokens[field], realm_jwks,
                                        f"{prefix}-{realm}-rs256-v1",
                                        base + f"/realms/{realm}")
+                    fresh_cookies = CookieJar()
+                    fresh_browser = build_opener(HTTPCookieProcessor(fresh_cookies),
+                                                 StopAtCallback(callback))
+                    def verify_new_cookie() -> None:
+                        restart = next((cookie for cookie in fresh_cookies
+                                        if cookie.name == "KC_RESTART"), None)
+                        if (restart is None or jwe_header(restart.value).get("kid") !=
+                                f"keycloak-{realm}-cookie-{cookie_versions[realm]}"):
+                            raise RuntimeError("New restart cookie did not use the rotated key")
+                    fresh_tokens = browser_code(fresh_browser, base, callback,
+                                                realm, username, login=True,
+                                                before_submit=verify_new_cookie)
+                    verify_jwt(fresh_tokens["access_token"], realm_jwks,
+                               f"{prefix}-{realm}-rs256-v1",
+                               base + f"/realms/{realm}")
                     (jwe_token_dir / f"{realm}-cookie.token").write_text(
                         "invalid-disposable-token", encoding="ascii")
                     denied_browser = build_opener(HTTPCookieProcessor(CookieJar()),
@@ -654,7 +722,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
             verify_database_gate(pg_name)
-            browser_result = "browser/session and completed CIBA, " if require_browser else ""
+            browser_result = "rotated browser/cookie and completed CIBA, " if require_browser else ""
             print(f"Remote RS256 master/11id {browser_result}token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
         finally:
             if ciba_device:

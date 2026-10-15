@@ -35,9 +35,12 @@ python scripts/probe_keycloak_remote_rs256.py --require-browser \
 The proof creates `master` and `11id` with separate RSA/HMAC identities,
 checks direct-grant and successive refresh-token signatures against each
 realm's JWKS, completes authorization-code/PKCE browser login and silent
-session reuse in both `master` and `11id`, and denies new browser logins
-after revoking each realm's separate OpenBao cookie token. Direct PostgreSQL
-scans and the read-only Keycloak custody gate find no `privateKey` or
+session reuse in both `master` and `11id`. It rotates each realm's cookie
+key while a login page holds a restart cookie, decrypts the old cookie using
+only its scoped OpenBao token, verifies a fresh login uses the new version,
+and denies new browser logins after revoking each realm's cookie token.
+Direct PostgreSQL scans and the read-only Keycloak custody gate find no
+`privateKey` or
 generated `secret` rows after bootstrap, realm creation, token issuance and
 KMS-loss denial. The probe
 exports only public certificates and cleans its disposable containers.
@@ -47,12 +50,14 @@ authentication-device acknowledgment endpoint. It checks that the returned
 `auth_req_id` is a compact JWE using the separate `11id` CIBA remote key,
 polling decrypts it to `authorization_pending`, the device callback approves
 the request, and Keycloak issues independently verified tokens for the
-expected user. Revoking only the CIBA token then denies a new request.
+expected user. The CIBA key rotates while the old request is pending; polling
+still completes and a new request uses the new version. Revoking only the
+CIBA token then denies a new request.
 The device callback is a disposable simulator, not a physical device test.
 
 This local proof does not qualify the installed stack. RSA-OAEP and other AES
-flows may still fail closed. Remote-key rotation during active sessions,
-exact-image deployment,
-broad provider controls, and production cutover remain. Do not publish this
+flows may still fail closed. Full Keycloak session and signer rotation,
+exact-image deployment, broad provider controls, and production cutover
+remain. Do not publish this
 image as fully KMS-only until those paths pass with the exact artifact and
 database gate.
