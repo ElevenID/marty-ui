@@ -4262,11 +4262,15 @@ passed. #1343 merged as `e2629fc6`. This closes the direct database runner's
 false-green gap, not the wider A0 inventory, and claims no speedup. The same
 exact-head Canvas log recorded six serial Rust invocations, each with one
 passing test, but its `timed canvas_serial` path still checked only exit
-status. A follow-up candidate reuses the database guard for those serial
-invocations while leaving non-test timing, selection, and gates unchanged.
-The independent review found no regression issue; 244 Canvas/guard tests passed
-(one skipped) and 152 workflow-policy tests passed locally. Hosted validation
-remains required.
+status. Reviewed [#1345](https://github.com/ElevenID/marty-ui/pull/1345)
+reused the database guard for those serial invocations while leaving non-test
+timing, selection, and gates unchanged. Its 244 Canvas/guard local tests passed
+(one skipped), as did 152 workflow-policy tests. [Exact-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38746496272) recorded six
+successful serial rows, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38750340570) passed.
+#1345 merged as `c2966d2a0`. This closes another false-green path; no speedup
+is claimed.
 
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
@@ -4296,6 +4300,18 @@ development edge. The new package owner must compile with a locked manifest
 and the live case must pass in hosted CI before treating the move as merged or
 claiming any package-scoped speed benefit. This does not replace Device
 Registration's service-owned behavior and persistence tests.
+
+October 15 A0 parallel-contract execution candidate: the contracts lane also
+runs two direct libtest executables concurrently for Verification/PostgreSQL
+and Gateway/Redis. The [#1345 exact-head
+run](https://github.com/ElevenID/marty-ui/actions/runs/38746496272) logged one
+passing selected test in each group, but their current aggregate checks only
+exit status. A focused follow-up reuses the existing direct-libtest positive-
+summary guard for both calls, retaining their exact names, ignored filters,
+isolated backing services, parallel group structure, logs, and failure
+aggregation. This closes a potential future zero-selection false green;
+independent review and local checks passed, but hosted/protected validation
+is still required. It is not a speedup claim.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.

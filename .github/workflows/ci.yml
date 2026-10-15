@@ -1705,6 +1705,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           names=(workspace verification gateway)
           pids=()
 
@@ -1723,7 +1724,7 @@ jobs:
           (
             set +e
             VERIFICATION_SESSION_TEST_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/marty_verification_contract \
-              target/debug/verification-postgres-contract \
+              run_timed verification target/debug/verification-postgres-contract \
               --ignored --exact released_migration_and_atomic_repository_contract_hold_on_postgres \
               >"$RUNNER_TEMP/rust-verification.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-verification.status"
@@ -1732,7 +1733,7 @@ jobs:
           (
             set +e
             MARTY_GATEWAY_TEST_REDIS_URL=redis://127.0.0.1:6379/15 \
-              target/debug/gateway-redis-contract \
+              run_timed gateway target/debug/gateway-redis-contract \
               --ignored --exact production_gateway_redis_state_is_atomic_and_replay_safe \
               >"$RUNNER_TEMP/rust-gateway.log" 2>&1
             printf '%s\n' "$?" >"$RUNNER_TEMP/rust-gateway.status"
