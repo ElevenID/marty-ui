@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Direct libtest executables can exit zero after selecting zero tests. Keep the
 # existing streaming logs and timing rows, but require a positive test summary.
-run_timed() (
-  local name="$1"
-  shift
+run_timed_rust_test() (
+  local phase="$1" name="$2"
+  shift 2
   local started ended status log
   local -a pipeline_status
   log="$(mktemp)" || return 1
@@ -18,11 +18,15 @@ run_timed() (
     status="${pipeline_status[1]}"
   fi
   if (( status == 0 )) && ! grep -Eq '^test result: ok\. [1-9][0-9]* passed; 0 failed; ' "$log"; then
-    printf 'Rust contract %s exited successfully without a passing test summary.\n' "$name" >&2
+    printf 'Rust %s test %s exited successfully without a passing test summary.\n' "$phase" "$name" >&2
     status=1
   fi
   ended=$(python3 -c 'import time; print(time.monotonic_ns())')
-  printf 'MARTY_CI_PHASE_V1 {"phase":"contract","name":"%s","duration_ms":%s,"status":"%s"}\n' \
-    "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
+  printf 'MARTY_CI_PHASE_V1 {"phase":"%s","name":"%s","duration_ms":%s,"status":"%s"}\n' \
+    "$phase" "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
   return "$status"
 )
+
+run_timed() {
+  run_timed_rust_test contract "$@"
+}
