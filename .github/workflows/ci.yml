@@ -2162,6 +2162,8 @@ jobs:
               continue
             fi
             case "$name" in
+              MARTY_OPENBAO_DIDCOMM_IMAGE)
+                export "$name=example.invalid/openbao-didcomm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
               *_TLS_KMS_ADDR) export "$name=https://kms.example.invalid" ;;
               *_TLS_KMS_KEY_NAME) export "$name=ci-${name,,}" ;;
               *_TLS_KMS_KEY_VERSION) export "$name=1" ;;

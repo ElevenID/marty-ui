@@ -71,10 +71,8 @@ def test_rehearsal_repeat_and_live_migration_gate_application_startup() -> None:
     )
     assert rehearsal < cleanup < maintenance < backup < live < cutover
     assert "-Image $verificationMigrationImage -DatabaseUrl $copyUrl" in script
-    assert (
-        '-DatabaseUrl "postgresql://marty:${martyDbPassword}@postgres:5432/marty"'
-        in script
-    )
+    assert '$liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"' in script
+    assert "-DatabaseUrl $liveDatabaseUrl" in script
     assert (
         script.count("Invoke-VerificationMigration -Image $verificationMigrationImage")
         == 2

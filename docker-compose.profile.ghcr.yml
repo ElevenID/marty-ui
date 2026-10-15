@@ -25,9 +25,11 @@ services:
 
   openbao:
     <<: *openbao-plugin-image
+    build: !reset null
 
   openbao-init:
     <<: *openbao-plugin-image
+    build: !reset null
 
   oidf-tls-proxy: *service-image
 
