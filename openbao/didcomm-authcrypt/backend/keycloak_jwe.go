@@ -193,7 +193,16 @@ func mutateKeycloakJWEKey(ctx context.Context, req *logical.Request, d *framewor
 			clear(key.CEK)
 			return nil, err
 		}
-		if err := putJSON(ctx, req.Storage, keycloakJWEVersionPath(realm, purpose, key.Version), key); err != nil {
+		versionPath := keycloakJWEVersionPath(realm, purpose, key.Version)
+		existing, err := req.Storage.Get(ctx, versionPath)
+		if err != nil || existing != nil {
+			clear(key.CEK)
+			if err != nil {
+				return nil, err
+			}
+			return nil, errors.New("Keycloak JWE key version collision")
+		}
+		if err := putJSON(ctx, req.Storage, versionPath, key); err != nil {
 			clear(key.CEK)
 			return nil, err
 		}
