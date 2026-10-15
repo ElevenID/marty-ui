@@ -21578,3 +21578,13 @@ backend test module once. The affected Signing Keys library then passed
 197 tests with 19 ignored. The UI worktree is clean. This is local source
 evidence; hosted exact-head CI, disposable live case reruns, installed-image
 proof and cutover are still open.
+
+2026-10-15 merged UI final local source checkpoint: after commit `ba9b9b4ec`
+formatted the Signing Keys TLS validation contract, selected Rust package
+format checking passed. The merged-head six-package Rust test batch exited
+zero with the 589-pass Issuance, 165-pass Gateway and 197-pass Signing Keys
+libraries among its targets. The three affected workflow/context/release
+Python modules passed 231 tests. A fresh `origin/main` fetch found no newer
+commits; the grouped branch remains 28 commits ahead. Default Rust tests
+intentionally ignore live KMS, Redis, database and device cases; those need
+the designated disposable/hosted lanes before release qualification.
