@@ -71,7 +71,7 @@ jobs:
           python=false
           rust=false
           rust_runtime=false
-          rust_matrix='["canvas","contracts"]'
+          rust_matrix='["canvas","contracts","selfhost"]'
           openbao=false
           planner_only=false
           rollback_test_only=false
@@ -918,7 +918,7 @@ jobs:
         # A maintainer may label a PR before its next synchronize event for an
         # additive hosted worker or self-host rehearsal. Label changes do not trigger
         # this full workflow, avoiding extra runs for unrelated labels.
-        # Its normal Canvas/contracts lanes and every merge-group gate remain.
+        # Its normal Canvas/contracts/selfhost lanes and every merge-group gate remain.
         lane: >-
           ${{ fromJSON(github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
@@ -928,7 +928,7 @@ jobs:
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
-          '["canvas","contracts","worker"]' ||
+          '["canvas","contracts","worker","selfhost"]' ||
           github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
@@ -1372,7 +1372,7 @@ jobs:
         shell: bash
         run: python3 ../scripts/ci/run-db-contract-groups.py preflights
       - name: Expose public image compiler cache credentials
-        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
+        if: matrix.lane == 'selfhost'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3
         with:
           script: |
@@ -1384,7 +1384,7 @@ jobs:
             core.exportVariable('SCCACHE_GHA_CACHE_URL', url);
             core.exportVariable('SCCACHE_GHA_RW_MODE', 'READ_ONLY');
       - name: Build public selfhost image
-        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
+        if: matrix.lane == 'selfhost'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:
           context: .
@@ -1403,7 +1403,7 @@ jobs:
             sccache_url=SCCACHE_GHA_CACHE_URL
             sccache_mode=SCCACHE_GHA_RW_MODE
       - name: Prepare public selfhost image loader acceptance
-        if: matrix.lane == 'canvas' || matrix.lane == 'selfhost'
+        if: matrix.lane == 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -1418,7 +1418,7 @@ jobs:
           printf 'MARTY_SELFHOST_TEST_IMAGE=%s\n' "$selfhost_image_id" >> "$GITHUB_ENV"
           printf 'MARTY_SELFHOST_TEST_REVISION=%s\n' "$selfhost_revision" >> "$GITHUB_ENV"
       - name: Verify local passport signing is forbidden
-        if: matrix.lane == 'canvas'
+        if: matrix.lane == 'selfhost'
         shell: bash
         run: |
           set -euo pipefail
@@ -2069,7 +2069,7 @@ jobs:
           elif [[ "${{ matrix.lane }}" == selfhost ]]; then
             python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas
           else
-            python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}
+            python3 ../scripts/ci/run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}
           fi
       - name: Verify opted-in Canvas migrated-base parity and isolation
         if: github.event_name == 'workflow_dispatch' && inputs.canvas_migrated_base_pilot && matrix.lane == 'canvas'
@@ -3258,10 +3258,10 @@ jobs:
                "$RUST_SELECTED" == false && "$RUST_RUNTIME_SELECTED" == false &&
                "$VERIFICATION_SELECTED" == false ]]
           fi
-          # The aggregate matrix result alone cannot prove both lanes ran.
+          # The aggregate matrix result alone cannot prove all required lanes ran.
           # Accept only these exact plans and require the full plan in queue.
           case "$RUST_SELECTED:$RUST_RUNTIME_SELECTED:$RUST_MATRIX" in
-            'true:true:["canvas","contracts"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts"]') ;;
+            'true:true:["canvas","contracts","selfhost"]'|'true:false:["contracts"]'|'false:false:["canvas","contracts","selfhost"]') ;;
             'true:false:["worker"]'|'true:false:["flow"]'|'true:false:["selfhost"]')
               [[ "${{ github.event_name }}" == pull_request ]] ;;
             *) echo 'Invalid Rust lane selection or matrix plan' >&2; exit 1 ;;
@@ -3269,7 +3269,7 @@ jobs:
           if [[ "${{ github.event_name }}" == merge_group ]]; then
             [[ "$ROLLBACK_TEST_ONLY" == false && "$DIDCOMM_RELEASE_TEST_ONLY" == false ]]
             [[ "$RUST_SELECTED" == true && "$RUST_RUNTIME_SELECTED" == true &&
-               "$RUST_MATRIX" == '["canvas","contracts"]' ]]
+               "$RUST_MATRIX" == '["canvas","contracts","selfhost"]' ]]
             for result in "${results[@]}"; do
               [[ "$result" == success ]]
             done
