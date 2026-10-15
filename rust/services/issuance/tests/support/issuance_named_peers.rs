@@ -250,7 +250,7 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
     }
     let bytes = to_bytes(request.into_body(), 128 * 1024).await.unwrap();
     let response = match path.as_str() {
-        "/health" | "/health/ready" if state.base_gateway => {
+        "/health" | "/health/ready" => {
             assert_eq!(method, "GET");
             assert!(bytes.is_empty());
             Json(json!({"status":"healthy"})).into_response()
