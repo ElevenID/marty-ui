@@ -21472,3 +21472,16 @@ holder-proof fixture that asserted HTTP were updated to use the same public
 CA without generating local private keys. This proves a disposable recovery
 path, not the live stack, exact signed release images, real cloud providers,
 or physical device.
+
+2026-10-15 release recovery gate consolidation (grouped UI worktree,
+unlanded): `probe_selfhost_openbao_raft_bootstrap.py` now performs the
+clean HTTPS Raft bootstrap plus authenticated snapshot export, stopped
+state-volume cold copy, and force restore into a fresh node with a distinct
+KMS-owned TLS CA. Both recovery routes prove the preexisting non-exportable
+Transit ciphertext and versioned DIDComm sender/HAIP keys remain usable.
+The old PowerShell recovery script, which could only call the HTTP listener,
+was deleted; CI runs the expanded Python probe once instead of two separate
+Raft setups, and the exact-image release gate runs the same probe. The
+expanded probe passed twice locally against the candidate OpenBao image;
+194 focused CI/release workflow contract tests passed. No hosted CI or
+published digest has qualified this grouped branch yet.
