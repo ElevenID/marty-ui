@@ -21216,3 +21216,25 @@ validation, rotation and outage behavior. The same services JAR contains
 `auth_req_id`; the source change must cover that path too rather than
 silently dropping CIBA behavior. Keep the browser gate
 failing until the complete path passes with no local secret material.
+
+2026-10-15 K12 OpenBao direct-JWE implementation, grouped UI commits
+`316223818`, `bb0d81068` and `a177785e7`: the existing Go OpenBao plugin now owns a
+versioned 512-bit direct-JWE CEK for each Keycloak realm and `cookie`/`ciba`
+purpose. Transactional creation/rotation keeps the key only in OpenBao
+storage and plugin memory; read APIs return reference metadata only. Scoped
+encode/decode endpoints use compact `dir` / `A256CBC-HS512` JWE and require
+the exact realm, purpose, version and protected `kid`. The content encryption
+and HMAC primitive is shared with the existing DIDComm packer. Unit tests
+proved independent go-jose decryption, round trips, tamper and cross-purpose
+denial, old-version decryption after rotation, non-transactional storage
+rejection, and rollback on metadata-write failure. The full Go module tests
+and pinned Dockerfile build/vet passed. Disposable built plugin image
+`sha256:66d8fbe6c6b55dce7cea7d166ee00fa7e6ae6186a7531afb7a2bf5140332d60f`
+was exercised in live OpenBao: file-backed storage rejected key creation;
+dev storage completed an encrypt/decrypt round trip and rotation. A token
+scoped to the initially created `11id` cookie version could call only its public read and exact
+encode/decode paths; key rotation, master and CIBA paths returned HTTP 403.
+The disposable probe cleaned up its containers. This is an actual remote
+crypto capability, **not** Keycloak integration: the pinned source change,
+login/CIBA/session acceptance, outage and rotation behavior at the Java
+boundary, exact release image and installed database gate remain open.
