@@ -401,9 +401,9 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                        "SELFHOST_SOURCE_SHA": preflight["source_sha"],
                        "SELFHOST_ARCHIVE_SHA256": preflight["archive_sha256"],
                        "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"]}
-        if evidence.exists() or signature.exists():
-            raise ValueError("KMS custody output exists before fresh fixture setup")
         with measured(diagnostics, "fixture_setup"):
+            if evidence.exists() or signature.exists():
+                raise ValueError("KMS custody output exists before fresh fixture setup")
             fixture_setup(setup_script, setup_sha256, integration_checkout)
             command([sys.executable, str(setup_script)], cwd=integration_checkout,
                     env=journey_env, timeout=600)
