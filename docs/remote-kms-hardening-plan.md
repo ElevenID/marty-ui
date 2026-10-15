@@ -21757,3 +21757,13 @@ OpenBao's stock dev TLS emits a generated listener certificate and key
 inside its server directory but cannot be assumed to match Compose DNS;
 the existing Go self-host initializer explicitly issues a server certificate
 for `openbao` and loopback. No dev graph conversion is claimed yet.
+
+PR #1344's title/body were refreshed for grouped head `ce6fb9add`: the
+description now states the implemented remote TLS custody, local validation,
+and the remaining dev graph/Keycloak database/installed-image limits without
+claiming deployment completion. GitHub registered CI run
+[`38752357622`](https://github.com/ElevenID/marty-ui/actions/runs/38752357622)
+for the exact head. Initial Classify Changes, Lint Python, Fast Feedback,
+Service Tests, Public Protocol Contract, and dependency review checks had
+completed successfully while Rust, image, and release contract jobs were
+still running. Do not treat this partial result as a green gate.
