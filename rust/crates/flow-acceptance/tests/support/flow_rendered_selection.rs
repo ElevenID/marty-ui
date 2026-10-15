@@ -313,6 +313,12 @@ pub(super) async fn run(database_url: &str) {
         ["base", "base_native", "selfhost"]
     );
     let before = snapshot(&pool).await;
+    for name in ["base", "base_native"] {
+        assert_eq!(
+            profiles[name]["original_environment"]["ISSUANCE_GRPC_TARGET"],
+            "https://issuance-native:9005"
+        );
+    }
     let base: BTreeMap<String, String> =
         serde_json::from_value(profiles["base"]["environment"].clone()).unwrap();
     assert_eq!(base["ISSUANCE_GRPC_TARGET"], native.origin());

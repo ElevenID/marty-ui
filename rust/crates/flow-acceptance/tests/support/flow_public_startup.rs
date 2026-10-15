@@ -375,6 +375,10 @@ pub(super) async fn run(database_url: &str, redis_url: &str) {
         .await
         .unwrap();
     assert_eq!(model["schema"], "marty.flow-rendered-selection/v1");
+    assert_eq!(
+        model["profiles"]["base_native"]["original_environment"]["ISSUANCE_GRPC_TARGET"],
+        "https://issuance-native:9005"
+    );
     let mut environment: BTreeMap<String, String> =
         serde_json::from_value(model["profiles"]["base_native"]["environment"].clone()).unwrap();
     assert_eq!(environment["ENVIRONMENT"], "development");

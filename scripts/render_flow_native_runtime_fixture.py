@@ -60,15 +60,17 @@ def validate_spec(spec):
     return directory
 
 
-def mapped_environment(service, spec):
-    """Only owned listener and declared-file paths may differ from Compose."""
+def mapped_environment(service, spec, profile):
+    """Bind development admission tests to closed peers; retain deployed TLS."""
     original = service["environment"]
     environment = deepcopy(original)
     environment["ISSUANCE_GRPC_TARGET"] = {
         "issuance:9005": spec["legacy_rpc"],
         "issuance-native:9005": spec["native_rpc"],
-        "https://issuance-native:9005": spec["native_rpc"].replace(
-            "http://", "https://", 1
+        "https://issuance-native:9005": (
+            spec["native_rpc"].replace("http://", "https://", 1)
+            if profile == "selfhost"
+            else spec["native_rpc"]
         ),
     }[original["ISSUANCE_GRPC_TARGET"]]
     assert original["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
@@ -116,6 +118,13 @@ def mapped_environment(service, spec):
             assert value == f"/run/secrets/{name}" and name in declared, (key, value)
             assert name in SECRET_VALUES or name in TLS_FILES.values()
             environment[key] = (Path(spec["directory"]) / name).as_posix()
+    if profile != "selfhost":
+        # The admission peers are intentionally plaintext and cannot exercise
+        # KMS TLS. Assert the original rendered TLS selection in the caller;
+        # only the closed development child drops TLS inputs for this journey.
+        for key in tuple(environment):
+            if key.startswith("GRPC_WORKLOAD_TLS_"):
+                del environment[key]
     assert all(isinstance(value, str) for value in environment.values())
     return environment
 
@@ -183,7 +192,7 @@ def render(spec, command):
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {
-                "environment": mapped_environment(model["services"]["flow"], spec),
+                "environment": mapped_environment(model["services"]["flow"], spec, name),
                 "original_environment": model["services"]["flow"]["environment"],
             }
             for name, model in models.items()
