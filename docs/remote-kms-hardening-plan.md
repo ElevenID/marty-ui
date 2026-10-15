@@ -20687,3 +20687,23 @@ the regression assertions without generating test TLS private keys. The
 `--rust-adapter` gate remains failing until that replacement runs. Current
 Rust formatting, production checks for Signing Keys, Signing Grant and
 Device Registration, Python compilation and diff checks passed.
+
+2026-10-15 managed issuer-profile real-OpenBao replacement, staged in the
+grouped UI worktree: added an opt-in Rust route test running with the same
+disposable HTTPS OpenBao and Redis as the all-in-one policy probe. It uses
+the shipped managed policy and a CA-verified guard, creates an Ed25519 issuer
+profile through the HTTP router, proves its key exists in OpenBao as
+non-exportable/non-backupable, resolves only public JWK coordinates, verifies
+the DID document and rejects KMS endpoint, token and key reference leakage.
+The same test issues an explicit Transit-deny token and proves no profile
+is stored; it then pre-provisions a non-exportable key, uses the shipped
+read-only credential-service policy to resolve that key without create
+permission, and proves a missing key fails without storing a profile. This
+test passed in the `--rust-adapter` runner; no private key is generated or
+loaded in Rust. The runner intentionally continues to the older five-test
+`managed_key_create_live_contract` HTTP mock suite, which still fails under
+production HTTPS enforcement. Its remaining coverage includes missing-mount
+and broader inventory/algorithm cases; preserve and replace those with real
+OpenBao evidence before retiring the obsolete HTTP mock suite. Rust source
+format, test compilation, production check, Python compilation and diff
+checks passed. The grouped UI changes remain uncommitted/unlanded.
