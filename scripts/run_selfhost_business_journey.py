@@ -515,6 +515,22 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "owned_teardown": "observed", "observed_services": sorted(states)}
 
 
+def diagnostic_target(args: argparse.Namespace) -> Path | None:
+    target = args.diagnostic_output
+    if target is None:
+        return None
+    resolved = target.resolve()
+    if (not target.is_absolute() or target.is_symlink() or target.exists()
+            or not target.parent.is_dir()
+            or resolved.is_relative_to(args.source_checkout.resolve())
+            or resolved.is_relative_to(args.install_root.resolve())
+            or resolved.is_relative_to(args.integration_checkout.resolve())
+            or resolved.is_relative_to(args.secret_root.resolve())
+            or resolved == args.output.resolve()):
+        raise ValueError("diagnostic output path is not fresh and isolated")
+    return target
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("archive", "image-lock", "transaction", "receipt", "descriptor",
@@ -529,36 +545,42 @@ def main() -> int:
     parser.add_argument("--diagnostic-output", type=Path,
                         help="optional redacted timing and host-resource report")
     args = parser.parse_args()
+    try:
+        target = diagnostic_target(args)
+        if (not args.output.is_absolute() or not args.output.parent.is_dir()
+                or args.output.exists() or args.output.is_symlink()):
+            raise ValueError("installed journey output is not fresh and absolute")
+    except (OSError, ValueError) as error:
+        print(f"installed journey output preflight failed: {error}", file=sys.stderr)
+        return 2
     diagnostics = RunDiagnostics(args.state_root)
     diagnostics.start()
     status = 0
+    result: dict | None = None
     try:
         result = run(args, diagnostics)
-        if args.output.exists():
-            raise ValueError("installed journey output already exists")
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
-                               encoding="utf-8")
     except (OSError, KeyError, TypeError, ValueError) as error:
         print(f"installed journey failed: {error}", file=sys.stderr)
         status = 2
     finally:
         diagnostics.stop()
-    if args.diagnostic_output is not None:
+    if target is not None:
         try:
-            target = args.diagnostic_output
-            if (not target.is_absolute() or target.is_symlink()
-                    or target.resolve().is_relative_to(args.source_checkout.resolve())
-                    or target.resolve().is_relative_to(args.install_root.resolve())
-                    or target.resolve().is_relative_to(args.integration_checkout.resolve())
-                    or target.resolve().is_relative_to(args.secret_root.resolve())
-                    or target.resolve() == args.output.resolve()):
-                raise ValueError("diagnostic output path is not isolated")
             with target.open("x", encoding="utf-8") as stream:
                 json.dump(diagnostics.report(result="passed" if status == 0 else "failed"),
                           stream, indent=2, sort_keys=True)
                 stream.write("\n")
         except (OSError, ValueError) as error:
             print(f"installed journey diagnostic failed: {error}", file=sys.stderr)
+            status = 2
+    if status == 0 and result is not None:
+        try:
+            with diagnostics.measure("output_write"):
+                with args.output.open("x", encoding="utf-8") as stream:
+                    json.dump(result, stream, indent=2, sort_keys=True)
+                    stream.write("\n")
+        except (OSError, ValueError) as error:
+            print(f"installed journey output failed: {error}", file=sys.stderr)
             status = 2
     return status
 

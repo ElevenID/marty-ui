@@ -114,3 +114,26 @@ def test_success_keeps_installed_result_separate_from_unqualified_diagnostics(
     assert diagnostics["result"] == "passed"
     assert diagnostics["first_failure_phase"] is None
     assert diagnostics["qualification"] == "unqualified"
+
+
+def test_existing_diagnostic_file_refuses_to_run_or_write_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    install = tmp_path / "install"
+    integration = tmp_path / "integration"
+    secrets = tmp_path / "secrets"
+    for path in (source, install, integration, secrets):
+        path.mkdir()
+    diagnostic_output = tmp_path / "diagnostic.json"
+    diagnostic_output.write_text("keep", encoding="utf-8")
+    args = argparse.Namespace(
+        state_root=tmp_path, source_checkout=source, install_root=install,
+        integration_checkout=integration, secret_root=secrets,
+        diagnostic_output=diagnostic_output, output=tmp_path / "success.json",
+    )
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda *_args: args)
+    monkeypatch.setattr(runner, "run", lambda *_args: pytest.fail("journey was run"))
+    assert runner.main() == 2
+    assert diagnostic_output.read_text(encoding="utf-8") == "keep"
+    assert not args.output.exists()

@@ -20,7 +20,7 @@ PHASES = frozenset({
     "input_validation", "compose_render", "artifact_preflight",
     "public_key_tool_build", "fresh_project", "image_pull", "startup",
     "readiness", "fixture_setup", "custody_verification", "public_journey",
-    "cleanup",
+    "cleanup", "output_write",
 })
 
 
