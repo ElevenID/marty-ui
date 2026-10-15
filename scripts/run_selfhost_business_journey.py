@@ -18,13 +18,15 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
-    BETA_SERVICES, EXPECTED_SECRET_NAMES, EXPECTED_SERVICES, plan,
+    BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
+from selfhost_journey_diagnostics import RunDiagnostics
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -39,6 +41,42 @@ JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
 COMPLETED = frozenset({"db-migrate", "issuance-migrations", "revocation-profile-migrate",
                        "keycloak-configurator"})
 NOT_LOCAL = BETA_SERVICES | {"cloudflared"}
+LOCAL_SERVICES = EXPECTED_SERVICES - NOT_LOCAL
+LOCAL_SECRET_NAMES = frozenset(
+    secret for service in LOCAL_SERVICES
+    for secret in EXPECTED_ROLE_SECRETS.get(service, ())
+)
+SECRET_CATALOG = Path(__file__).resolve().parents[1] / "deploy-config/catalog/secrets.json"
+
+
+def optional_local_secrets(catalog_path: Path = SECRET_CATALOG) -> frozenset[str]:
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if catalog.get("schema_version") != 1 or not isinstance(catalog.get("secrets"), dict):
+        raise ValueError("self-host secret catalog is invalid")
+    optional = set()
+    for entry in catalog["secrets"].values():
+        if not isinstance(entry, dict):
+            raise ValueError("self-host secret catalog entry is invalid")
+        name = entry.get("compose_secret")
+        if entry.get("allow_empty") is True and name in LOCAL_SECRET_NAMES:
+            optional.add(name)
+    return frozenset(optional)
+
+
+OPTIONAL_LOCAL_SECRET_NAMES = optional_local_secrets()
+FALSE_VALUES = frozenset({"false", "0", "no", "n", "off"})
+CANVAS_DISABLED_FLAGS = frozenset({
+    "CANVAS_PORTABLE_INTEGRATION_ENABLED", "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+    "CANVAS_MIRROR_WORKER_ENABLED",
+})
+CANVAS_UNUSED_SETTINGS = frozenset({
+    "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+    "CANVAS_CREDENTIALS_ISSUER_ID", "CANVAS_CREDENTIALS_BADGECLASS_ID",
+})
+
+
+def measured(diagnostics: RunDiagnostics | None, name: str):
+    return diagnostics.measure(name) if diagnostics is not None else nullcontext()
 
 
 def command(args: list[str], *, cwd: Path | None = None,
@@ -114,7 +152,7 @@ def live_services(raw: str, model: dict) -> dict[str, str]:
         if not isinstance(name, str) or name in actual:
             raise ValueError("installed Compose status contains duplicate or unnamed roles")
         actual[name] = item
-    expected = EXPECTED_SERVICES - NOT_LOCAL
+    expected = LOCAL_SERVICES
     if set(actual) != expected:
         raise ValueError("installed Compose status lacks the exact local service closure")
     states: dict[str, str] = {}
@@ -156,13 +194,62 @@ def fresh_project(state_root: Path, compose: list[str], install_root: Path,
     empty_project(compose, install_root, environment)
 
 
-def required_secrets(secret_root: Path) -> None:
+def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
+    if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
+        return frozenset()
+    services = model["services"]
+
+    def environment(service: str) -> dict | None:
+        entry = services.get(service)
+        if not isinstance(entry, dict) or not isinstance(entry.get("environment"), dict):
+            return None
+        return entry["environment"]
+
+    allowed = {"google_analytics_measurement_id", "google_site_verification"}
+    keycloak = environment("keycloak-configurator")
+    notification = environment("notification")
+    if keycloak is not None:
+        social = keycloak.get("KEYCLOAK_SOCIAL_LOGIN_ENABLED")
+        if isinstance(social, str) and social.lower() in FALSE_VALUES:
+            allowed.update(("google_client_id", "google_client_secret"))
+        if (notification is not None
+                and keycloak.get("KEYCLOAK_SMTP_USERNAME") == ""
+                and notification.get("SMTP_USERNAME") == ""):
+            allowed.add("smtp_password")
+    observed_canvas: set[str] = set()
+    canvas_disabled = True
+    for service in sorted(LOCAL_SERVICES):
+        env = environment(service)
+        if env is None:
+            continue
+        for name in CANVAS_DISABLED_FLAGS:
+            if name in env:
+                observed_canvas.add(name)
+                value = env[name]
+                if not isinstance(value, str) or value.lower() not in FALSE_VALUES:
+                    canvas_disabled = False
+        for name in CANVAS_UNUSED_SETTINGS:
+            if name in env:
+                observed_canvas.add(name)
+                if env[name] != "":
+                    canvas_disabled = False
+    if (canvas_disabled and observed_canvas ==
+            CANVAS_DISABLED_FLAGS | CANVAS_UNUSED_SETTINGS):
+        allowed.add("canvas_credentials_shared_secret")
+    return frozenset(allowed & OPTIONAL_LOCAL_SECRET_NAMES)
+
+
+def required_secrets(secret_root: Path, model: dict | None = None) -> None:
     if secret_root.is_symlink() or not secret_root.is_dir():
         raise ValueError("qualification secret root is absent or linked")
-    for name in sorted(EXPECTED_SECRET_NAMES):
+    empty_allowed = disabled_optional_secrets(model)
+    for name in sorted(LOCAL_SECRET_NAMES):
         path = secret_root / name
-        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        if (path.is_symlink() or not path.is_file()
+                or (path.stat().st_size == 0 and name not in empty_allowed)):
             raise ValueError(f"qualification secret material is missing: {name}")
+        if path.stat().st_size == 0:
+            continue
         # Bundled examples use these literal sentinels. Never read secret
         # contents into a report or command line.
         with path.open("rb") as stream:
@@ -273,11 +360,13 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       environment: dict[str, str], setup_script: Path,
                       setup_sha256: str,
                       evidence: Path, signature: Path, public_key: Path,
-                      preflight: dict, trusted_keys: frozenset[str]
+                      preflight: dict, trusted_keys: frozenset[str],
+                      diagnostics: RunDiagnostics | None = None,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
-    fresh_project(state_root, compose, install_root, environment)
-    selected = sorted(EXPECTED_SERVICES - NOT_LOCAL)
+    with measured(diagnostics, "fresh_project"):
+        fresh_project(state_root, compose, install_root, environment)
+    selected = sorted(LOCAL_SERVICES)
     started = False
     failure: Exception | None = None
     states: dict[str, str] = {}
@@ -285,22 +374,25 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
     try:
         # A temporary empty Docker config prevents borrowing operator registry
         # credentials. Every pulled image has already been matched to the lock.
-        command([*compose, "pull", *selected], cwd=install_root,
-                env=environment, timeout=1200)
+        with measured(diagnostics, "image_pull"):
+            command([*compose, "pull", *selected], cwd=install_root,
+                    env=environment, timeout=1200)
         started = True
-        command([*compose, "up", "-d", "--no-build", *selected],
-                cwd=install_root, env=environment, timeout=900)
-        deadline = time.monotonic() + 300
-        while True:
-            status = command([*compose, "ps", "--all", "--format", "json"],
-                             cwd=install_root, env=environment)
-            try:
-                states = live_services(status, model)
-                break
-            except ValueError:
-                if time.monotonic() >= deadline:
-                    raise ValueError("installed service closure did not become healthy") from None
-                time.sleep(5)
+        with measured(diagnostics, "startup"):
+            command([*compose, "up", "-d", "--no-build", *selected],
+                    cwd=install_root, env=environment, timeout=900)
+        with measured(diagnostics, "readiness"):
+            deadline = time.monotonic() + 300
+            while True:
+                status = command([*compose, "ps", "--all", "--format", "json"],
+                                 cwd=install_root, env=environment)
+                try:
+                    states = live_services(status, model)
+                    break
+                except ValueError:
+                    if time.monotonic() >= deadline:
+                        raise ValueError("installed service closure did not become healthy") from None
+                    time.sleep(5)
         journey_env = {**environment, "PYTHONDONTWRITEBYTECODE": "1",
                        "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH": str(evidence),
                        "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature),
@@ -309,24 +401,28 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                        "SELFHOST_SOURCE_SHA": preflight["source_sha"],
                        "SELFHOST_ARCHIVE_SHA256": preflight["archive_sha256"],
                        "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"]}
-        if evidence.exists() or signature.exists():
-            raise ValueError("KMS custody output exists before fresh fixture setup")
-        fixture_setup(setup_script, setup_sha256, integration_checkout)
-        command([sys.executable, str(setup_script)], cwd=integration_checkout,
-                env=journey_env, timeout=600)
-        custody_sha256 = verify_kms_custody(evidence, signature, public_key,
-                                            preflight, journey_env, trusted_keys)
-        command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                 JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
+        with measured(diagnostics, "fixture_setup"):
+            if evidence.exists() or signature.exists():
+                raise ValueError("KMS custody output exists before fresh fixture setup")
+            fixture_setup(setup_script, setup_sha256, integration_checkout)
+            command([sys.executable, str(setup_script)], cwd=integration_checkout,
+                    env=journey_env, timeout=600)
+        with measured(diagnostics, "custody_verification"):
+            custody_sha256 = verify_kms_custody(evidence, signature, public_key,
+                                                preflight, journey_env, trusted_keys)
+        with measured(diagnostics, "public_journey"):
+            command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                     JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
     except Exception as error:
         failure = error
     finally:
         if started:
             try:
-                command([*compose, "down", "--volumes", "--remove-orphans",
-                         "--timeout", "30"], cwd=install_root, env=environment,
-                        timeout=120)
-                empty_project(compose, install_root, environment)
+                with measured(diagnostics, "cleanup"):
+                    command([*compose, "down", "--volumes", "--remove-orphans",
+                             "--timeout", "30"], cwd=install_root, env=environment,
+                            timeout=120)
+                    empty_project(compose, install_root, environment)
             except Exception as error:
                 raise ValueError("owned qualification project teardown failed") from error
     if failure is not None:
@@ -334,7 +430,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
     return states, custody_sha256
 
 
-def run(args: argparse.Namespace) -> dict:
+def validate_inputs(args: argparse.Namespace) -> frozenset[str]:
     if sys.platform != "linux":
         raise ValueError("installed business journey requires Linux Docker")
     if PROJECT.fullmatch(args.project_name) is None:
@@ -369,26 +465,35 @@ def run(args: argparse.Namespace) -> dict:
     trusted_keys = trusted_custody_keys(args.source_checkout, args.source_sha)
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
+    return trusted_keys
+
+
+def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> dict:
+    with measured(diagnostics, "input_validation"):
+        trusted_keys = validate_inputs(args)
     environment = os.environ.copy()
     compose = ["docker", "compose", "--project-name", args.project_name,
                "--env-file", str(args.env_file),
                "-f", str(args.install_root / "docker-compose.yml")]
-    raw_model = command([*compose, "--profile", "*", "config", "--format", "json"],
-                        cwd=args.install_root, env=environment)
-    model = json.loads(raw_model)
-    preflight = check(args.archive, args.image_lock, args.transaction, args.receipt,
-                      Path(args.compose_model), args.source_checkout,
-                      args.source_sha, args.run_id, args.install_root,
-                      args.state_root, args.secret_root)
-    if json.loads(args.compose_model.read_text(encoding="utf-8")) != model:
-        raise ValueError("rendered installed Compose model differs from live source")
-    runtime_plan = plan(model, preflight, args.secret_root)
-    if runtime_plan.get("qualification") != "unqualified":
-        raise ValueError("installed runtime plan unexpectedly claims qualification")
-    required_secrets(args.secret_root)
+    with measured(diagnostics, "compose_render"):
+        raw_model = command([*compose, "--profile", "*", "config", "--format", "json"],
+                            cwd=args.install_root, env=environment)
+        model = json.loads(raw_model)
+    with measured(diagnostics, "artifact_preflight"):
+        preflight = check(args.archive, args.image_lock, args.transaction, args.receipt,
+                          Path(args.compose_model), args.source_checkout,
+                          args.source_sha, args.run_id, args.install_root,
+                          args.state_root, args.secret_root)
+        if json.loads(args.compose_model.read_text(encoding="utf-8")) != model:
+            raise ValueError("rendered installed Compose model differs from live source")
+        runtime_plan = plan(model, preflight, args.secret_root)
+        if runtime_plan.get("qualification") != "unqualified":
+            raise ValueError("installed runtime plan unexpectedly claims qualification")
+        required_secrets(args.secret_root, model)
     with (tempfile.TemporaryDirectory(prefix="marty-selfhost-jwk-build-") as build_root,
           tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config):
-        jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
+        with measured(diagnostics, "public_key_tool_build"):
+            jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
         environment["SELFHOST_KMS_JWK_TOOL"] = str(jwk_tool)
         environment["DOCKER_CONFIG"] = config
         states, custody_sha256 = installed_journey(
@@ -397,7 +502,7 @@ def run(args: argparse.Namespace) -> dict:
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight, trusted_keys)
+            args.kms_custody_public_key, preflight, trusted_keys, diagnostics)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
@@ -408,6 +513,22 @@ def run(args: argparse.Namespace) -> dict:
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
+
+
+def diagnostic_target(args: argparse.Namespace) -> Path | None:
+    target = args.diagnostic_output
+    if target is None:
+        return None
+    resolved = target.resolve()
+    if (not target.is_absolute() or target.is_symlink() or target.exists()
+            or not target.parent.is_dir()
+            or resolved.is_relative_to(args.source_checkout.resolve())
+            or resolved.is_relative_to(args.install_root.resolve())
+            or resolved.is_relative_to(args.integration_checkout.resolve())
+            or resolved.is_relative_to(args.secret_root.resolve())
+            or resolved == args.output.resolve()):
+        raise ValueError("diagnostic output path is not fresh and isolated")
+    return target
 
 
 def main() -> int:
@@ -421,17 +542,47 @@ def main() -> int:
     for name in ("source-sha", "run-id", "integration-sha", "project-name",
                  "fixture-setup-sha256"):
         parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--diagnostic-output", type=Path,
+                        help="optional redacted timing and host-resource report")
     args = parser.parse_args()
     try:
-        result = run(args)
-        if args.output.exists():
-            raise ValueError("installed journey output already exists")
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
-                               encoding="utf-8")
+        target = diagnostic_target(args)
+        if (not args.output.is_absolute() or not args.output.parent.is_dir()
+                or args.output.exists() or args.output.is_symlink()):
+            raise ValueError("installed journey output is not fresh and absolute")
+    except (OSError, ValueError) as error:
+        print(f"installed journey output preflight failed: {error}", file=sys.stderr)
+        return 2
+    diagnostics = RunDiagnostics(args.state_root)
+    diagnostics.start()
+    status = 0
+    result: dict | None = None
+    try:
+        result = run(args, diagnostics)
     except (OSError, KeyError, TypeError, ValueError) as error:
         print(f"installed journey failed: {error}", file=sys.stderr)
-        return 2
-    return 0
+        status = 2
+    finally:
+        diagnostics.stop()
+    if target is not None:
+        try:
+            with target.open("x", encoding="utf-8") as stream:
+                json.dump(diagnostics.report(
+                    checks_result="passed" if status == 0 else "failed"),
+                          stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        except (OSError, ValueError) as error:
+            print(f"installed journey diagnostic failed: {error}", file=sys.stderr)
+            status = 2
+    if status == 0 and result is not None:
+        try:
+            with args.output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        except (OSError, ValueError) as error:
+            print(f"installed journey output failed: {error}", file=sys.stderr)
+            status = 2
+    return status
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ else:
         ("Test native passport Gateway signed webhook on PostgreSQL", 1),
         ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
         ("Exercise OIDF keyless HTTPS edge against disposable OpenBao", 1),
+        ("Exercise live Signing Keys public contracts on disposable Redis", 1),
+        ("Test beta passport reconciliation and native batch on PostgreSQL", 1),
     ],
 )
 def test_focused_rust_ci_cases_require_positive_execution(

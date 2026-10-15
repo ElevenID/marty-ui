@@ -1859,6 +1859,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
           nonce="$(openssl rand -hex 16)"
           for db in 13 14; do
             docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
@@ -1872,7 +1873,7 @@ jobs:
               | tee "$RUNNER_TEMP/signing-$suite.log"
             grep -Eq "test result: ok\\. $expected passed; 0 failed; 0 ignored;" "$RUNNER_TEMP/signing-$suite.log"
           done
-          cargo test --locked -p marty-signing-keys --lib \
+          run_timed document_storage_private_material cargo test --locked -p marty-signing-keys --lib \
             document_storage_refuses_private_material_on_read_and_write -- --ignored
       - name: Qualify scoped provider callback verification against disposable OpenBao
         if: matrix.lane == 'contracts'
@@ -1996,7 +1997,10 @@ jobs:
         env:
           MARTY_PASSPORT_RECONCILIATION_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_passport_reconciliation_test
         run: |
-          cargo test --locked -p marty-issuance-service --lib passport_http::reconciliation_tests:: -- --test-threads=1
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
+            --lib passport_http::reconciliation_tests:: -- --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

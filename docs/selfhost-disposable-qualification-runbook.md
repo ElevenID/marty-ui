@@ -15,6 +15,15 @@ no existing qualification project. Canvas qualification may use the same host
 sequentially, after its Docker project and state have been removed. The local
 Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
 
+The 32 GiB figure is the current qualification target, not a memory check in
+the installer. A smaller disposable host may be used for an exploratory run
+of this same ZIP and journey, but record its physical/VM RAM, CPU, free disk,
+peak container and host memory, swap activity, OOM kills, and any failed
+health or business step. Keep the result **unqualified** until the complete
+journey and custody checks pass, the lower-memory operating envelope is
+reviewed, and this qualification target is updated. A Compose render or image
+pull alone does not establish a smaller supported minimum.
+
 ## Stage exact inputs
 
 1. From the successful Stack release run, download the unique
@@ -31,9 +40,15 @@ Windows Docker/WSL configuration is not a suitable 32 GiB qualifier.
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. In a private operator directory outside both repositories, create an empty
-   state directory, a secret directory containing every non-placeholder secret
-   named by `EXPECTED_SECRET_NAMES` in
-   `scripts/check_selfhost_installed_runtime_plan.py`, and a Compose env file.
+   state directory, a secret directory containing every file named by
+   `LOCAL_SECRET_NAMES` in `scripts/run_selfhost_business_journey.py`, and a
+   Compose env file. Files explicitly marked `allow_empty` in the reviewed
+   secret catalog may stay empty only when the rendered Compose settings show
+   their integrations are disabled (for example, Google login is off); an
+   enabled integration needs non-placeholder material. The
+   runner does not start either Cloudflare tunnel, so their two token files
+   are not required for this local journey. The full all-profile Compose
+   secret declarations and service bindings are still checked unchanged.
    Set `SELFHOST_STATE_DIR`, `SELFHOST_SECRET_DIR`, `MARTY_ORG_ID`,
    `MARTY_ORG_ADMIN_EMAIL`, and `PUBLIC_DOMAIN` before rendering. The admin
    email must be a synthetic `@selfhost.marty.invalid` address. Use disposable
@@ -106,8 +121,21 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --kms-custody-evidence "$private/custody.json" \
   --kms-custody-signature "$private/custody.sig" \
   --kms-custody-public-key "$private/custody.pub" \
-  --output "$private/installed-journey.json"
+  --output "$private/installed-journey.json" \
+  --diagnostic-output "$private/installed-diagnostic.json"
 ```
+
+The separate diagnostic file is written on success or ordinary runner failure
+and contains fixed phase names, durations, the first failed phase, Linux-visible
+CPU/RAM and initial free disk, and sampled host memory/swap high-water marks.
+It contains no credentials or test payloads and is always **unqualified**.
+Its `checks_result` describes the installed checks, not persistence of the
+separate success report; only `installed-journey.json` records a completed
+installed run. A diagnostic with passed checks alone is never a handoff pass.
+The sampled values can miss short spikes; they do not measure per-container
+memory or OOM kills. Retain independent Docker/host observations before
+assessing a smaller hardware envelope. Never treat a diagnostic file as the
+successful installed-journey report.
 
 The run passes only when all local services reach the reviewed health states,
 migrations finish, the KMS-backed synthetic issuer and verifier bind to their

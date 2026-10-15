@@ -11,9 +11,13 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import run_selfhost_business_journey as runner  # noqa: E402
 from run_selfhost_business_journey import (  # noqa: E402
     BETA_SERVICES,
     COMPLETED,
+    LOCAL_SECRET_NAMES,
+    LOCAL_SERVICES,
+    OPTIONAL_LOCAL_SECRET_NAMES,
     EXPECTED_SERVICES,
     NOT_LOCAL,
     build_public_kms_jwk_tool,
@@ -25,6 +29,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     trusted_custody_keys,
     verify_kms_custody,
 )
+from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 
 
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
@@ -87,10 +92,104 @@ def status_fixture() -> tuple[str, dict]:
     return json.dumps(rows), model
 
 
+def disabled_optional_model() -> dict:
+    _, model = status_fixture()
+    model["services"]["keycloak-configurator"]["environment"] = {
+        "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
+    }
+    model["services"]["notification"]["environment"] = {"SMTP_USERNAME": ""}
+    model["services"]["issuance"]["environment"] = {
+        **{name: "false" for name in runner.CANVAS_DISABLED_FLAGS},
+        **{name: "" for name in runner.CANVAS_UNUSED_SETTINGS},
+    }
+    return model
+
+
 def test_exact_local_service_closure_passes_without_tunnel() -> None:
     raw, model = status_fixture()
     states = live_services(raw, model)
     assert set(states) == EXPECTED_SERVICES - BETA_SERVICES - {"cloudflared"}
+
+
+def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) -> None:
+    from check_selfhost_installed_runtime_plan import (
+        EXPECTED_ROLE_SECRETS, EXPECTED_SECRET_NAMES,
+    )
+
+    assert LOCAL_SECRET_NAMES == frozenset(
+        secret for service in LOCAL_SERVICES
+        for secret in EXPECTED_ROLE_SECRETS.get(service, ())
+    )
+    assert EXPECTED_SECRET_NAMES - LOCAL_SECRET_NAMES == {
+        "cloudflare_tunnel_token", "cloudflare_beta_tunnel_token",
+    }
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text("disposable-test-material", encoding="utf-8")
+    required_secrets(tmp_path)
+    (tmp_path / "marty_db_password").unlink()
+    with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path)
+
+
+def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
+    tmp_path: Path,
+) -> None:
+    model = disabled_optional_model()
+    assert OPTIONAL_LOCAL_SECRET_NAMES == {
+        "canvas_credentials_shared_secret", "google_analytics_measurement_id",
+        "google_client_id", "google_client_secret", "google_site_verification",
+        "smtp_password",
+    }
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    required_secrets(tmp_path, model)
+    (tmp_path / "marty_db_password").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path, model)
+    (tmp_path / "marty_db_password").write_text("disposable-test-material", encoding="utf-8")
+    (tmp_path / "google_client_id").write_text("change-me-oauth", encoding="utf-8")
+    with pytest.raises(ValueError, match="placeholder: google_client_id"):
+        required_secrets(tmp_path, model)
+    assert runner.disabled_optional_secrets(model) == OPTIONAL_LOCAL_SECRET_NAMES
+
+
+@pytest.mark.parametrize("service,setting,value,rejected", [
+    ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "true", "google_client_id"),
+    ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "unexpected", "google_client_id"),
+    ("keycloak-configurator", "KEYCLOAK_SMTP_USERNAME", "sender", "smtp_password"),
+    ("notification", "SMTP_USERNAME", "sender", "smtp_password"),
+    ("issuance", "CANVAS_PORTABLE_INTEGRATION_ENABLED", "true", "canvas_credentials_shared_secret"),
+    ("issuance", "CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.test", "canvas_credentials_shared_secret"),
+])
+def test_empty_secret_requires_disabled_rendered_integration(
+    tmp_path: Path, service: str, setting: str, value: str, rejected: str,
+) -> None:
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    model = disabled_optional_model()
+    model["services"][service]["environment"][setting] = value
+    with pytest.raises(ValueError, match=f"missing: {rejected}"):
+        required_secrets(tmp_path, model)
+
+
+def test_empty_secret_fails_closed_without_rendered_controls(tmp_path: Path) -> None:
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    with pytest.raises(ValueError, match="canvas_credentials_shared_secret"):
+        required_secrets(tmp_path)
+    model = disabled_optional_model()
+    del model["services"]["issuance"]["environment"]["CANVAS_CREDENTIALS_PUBLISH_URL"]
+    with pytest.raises(ValueError, match="canvas_credentials_shared_secret"):
+        required_secrets(tmp_path, model)
 
 
 def test_missing_service_and_unhealthy_gateway_fail_closed() -> None:
@@ -124,7 +223,10 @@ def test_compose_ndjson_status_is_accepted() -> None:
     assert parse_status("\n".join(json.dumps(row) for row in rows)) == rows
 
 
-def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("stale_name", [None, "custody.json", "custody.sig"])
+def test_custody_failure_tears_down_owned_project(
+    monkeypatch, tmp_path: Path, stale_name: str | None,
+) -> None:
     import run_selfhost_business_journey as runner
 
     raw, model = status_fixture()
@@ -136,6 +238,8 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
     integration.mkdir()
     state = tmp_path / "state"
     state.mkdir()
+    if stale_name is not None:
+        (tmp_path / stale_name).write_text("stale", encoding="utf-8")
 
     def fake_command(argv, **_kwargs):
         nonlocal active
@@ -149,7 +253,10 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
-    with pytest.raises(ValueError, match="signed custody evidence is absent"):
+    diagnostics = RunDiagnostics(tmp_path)
+    error = ("KMS custody output exists before fresh fixture setup" if stale_name
+             else "signed custody evidence is absent")
+    with pytest.raises(ValueError, match=error):
         installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
                           tmp_path, state, tmp_path / "compose.json", tmp_path / "secrets",
                           model, integration, {}, setup_script,
@@ -157,10 +264,21 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
                           tmp_path / "custody.json", tmp_path / "custody.sig",
                           tmp_path / "custody.pub",
                           {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                           "image_lock_sha256": "c" * 64}, frozenset())
+                           "image_lock_sha256": "c" * 64}, frozenset(), diagnostics)
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
+    report = diagnostics.report(checks_result="failed")
+    expected_phase = "fixture_setup" if stale_name else "custody_verification"
+    assert report["first_failure_phase"] == expected_phase
+    expected_names = ["fresh_project", "image_pull", "startup", "readiness",
+                      "fixture_setup"]
+    if stale_name is None:
+        expected_names.append("custody_verification")
+    expected_names.append("cleanup")
+    assert [row["name"] for row in report["phases"]] == expected_names
+    assert next(row for row in report["phases"] if row["name"] == expected_phase)["status"] == "failed"
+    assert report["phases"][-1]["status"] == "passed"
 
 
 def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
@@ -235,7 +353,7 @@ def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path,
                                               placeholder: str) -> None:
     import run_selfhost_business_journey as runner
 
-    monkeypatch.setattr(runner, "EXPECTED_SECRET_NAMES", frozenset({"issuer_token"}))
+    monkeypatch.setattr(runner, "LOCAL_SECRET_NAMES", frozenset({"issuer_token"}))
     (tmp_path / "issuer_token").write_text(placeholder, encoding="utf-8")
     with pytest.raises(ValueError, match="placeholder: issuer_token"):
         required_secrets(tmp_path)

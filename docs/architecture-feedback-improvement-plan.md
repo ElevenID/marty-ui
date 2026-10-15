@@ -1,11 +1,35 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-13 UTC checkpoint; UI main `4d1dfb87c`).
+Status: active implementation (2026-10-15 UTC checkpoint; UI main `397fc4d1c`).
+Current delivery priority (2026-10-15): enable outside testers to anonymously
+download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
+preparation and independent archive/Compose/image-pull checks; the same bytes
+are now an explicitly unqualified experimental prerelease. Its seven assets
+were anonymously downloaded, checksum-verified, and archive/lineage-checked.
+Next: collect disposable tester installation evidence and hardware limits;
+complete the clean Linux installed journey and KMS custody proof, publish
+signed qualified assets, and replay anonymous installation before any
+supported handoff. Do not treat preparation or a lower-memory exploratory run
+as qualification. Defer unrelated A0-A7 optimization behind this handoff.
 Self-host preparation and opt-in consumer probes through #1266 are merged, but
-there is no qualified or released self-host bundle or independently qualified
+there is no qualified or supported self-host bundle or independently qualified
 standalone verifier. Core v0.2.2 publishes a headless verifier preview bundle;
 its external-user handoff remains unqualified.
+
+October 15 self-host tester checkpoint: UI [#1351](https://github.com/ElevenID/marty-ui/pull/1351)
+merged the local-role-only secret closure for the installed journey, and
+[#1352](https://github.com/ElevenID/marty-ui/pull/1352) merged fail-closed
+validation for catalog-declared empty optional secrets only when their rendered
+integrations are disabled. Both passed protected merge-group CI. This follow-up
+records redacted installed-journey phase and host-memory diagnostics, including
+the first failing phase, without classifying that record as a successful
+installation. The published [preview .2](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.2)
+remains an unsupported experimental download; there is still no complete
+installed journey, KMS custody qualification, or measured 16 GiB operating
+envelope. The separate KMS-custody branch and one-command disposable setup
+remain prerequisites to a new tester bundle.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
@@ -4316,13 +4340,14 @@ the unchanged-head failed-job rerun and all 23 protected combined-head jobs
 passed. [#1346](https://github.com/ElevenID/marty-ui/pull/1346) merged as
 `5559aea1` on October 15. This is not a speedup claim.
 
-October 15 A0 follow-up candidate: several other focused Rust commands in the
-contracts/Canvas lanes use `--exact` but accept libtest's zero-selected exit
-status. Reuse the #1343 shared positive-summary guard for the feature-observer,
-Canvas HTTPS, passport Gateway, and Signing Keys/Gateway exact cases without
-changing filters, service fixtures, gates, or test implementations. Retain
-case-level timing and require local policy tests, independent review, and
-exact-head/protected CI before merging. In #1346's protected Canvas run,
+October 15 A0 follow-up: [#1348](https://github.com/ElevenID/marty-ui/pull/1348)
+reused the #1343 positive-summary guard for twelve focused feature-observer,
+Canvas HTTPS, passport Gateway, and Signing Keys/Gateway Rust invocations.
+Their filters, service fixtures, gates, and test implementations were retained.
+Exact-head CI and [protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38768652402)
+passed; #1348 merged as `d19599032`. This closes selected false-green paths,
+not the full A0 obligation inventory, and is not a speedup claim. In #1346's
+protected Canvas run,
 Bookworm-isolated reusable compilation took 476 seconds; the host `sccache`
 snapshot captured only three non-cacheable calls because the compile runs
 inside a network-isolated container. Therefore host zero-hit counters do not
@@ -4330,6 +4355,16 @@ prove a failing compiler cache or justify relaxing the runtime-compatible
 compile boundary. The published-worker group took about 501 seconds within
 the concurrent database phase; changing its real-time lifecycle intervals
 without separate evidence would risk test guarantees.
+
+October 15 A0 follow-up: [#1354](https://github.com/ElevenID/marty-ui/pull/1354)
+reused the positive-summary guard for the Signing Keys private-material case
+and five-case passport reconciliation group in their existing contracts-lane
+steps. Case filters, backing services, and protected gates were unchanged.
+Independent review, 171 focused local policy tests, exact-head CI with both
+positive execution rows, and [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38811347250) passed;
+#1354 merged as `f39b0e6ea`. This closes those two false-green paths, not the
+full A0 obligation inventory, and claims no speedup.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
