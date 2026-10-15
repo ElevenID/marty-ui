@@ -22913,3 +22913,13 @@ read-only KMS-only custody SQL before opening traffic. Retain the original
 backup for complete rollback; do not add private-key row/table migration
 scripts or delete rows in place. The post-cutover beta deployment preflight
 must then pass against the clean database.
+
+The exact-head [#1356 CI run 38823843965](https://github.com/ElevenID/marty-ui/actions/runs/38823843965)
+completed successfully at `e663c37b6bb95f39f2948413f43d118b57741113`,
+including the packaged Issuance/Signing Keys startup, 16 Canvas cases,
+contract and Canvas suites, and coordinated OpenBao PostgreSQL/Raft recovery.
+CodeQL Actions/Rust, open-source policy, and organization quality checks also
+passed; no unresolved review threads remained. The PR was queued into the
+protected `main` merge queue at 2026-10-15T23:55:34Z, position 2. It is not
+merged yet. Recheck merge-group checks and the resulting exact main SHA before
+dispatching full-main CI or claiming `v1.1.248`.
