@@ -21841,3 +21841,17 @@ Run `38756048027` later completed Rust Service Images successfully. Its
 Rust Service Tests (selfhost) lane was still building the public image; the
 local correction commit is `02d617248` and remains unpushed pending that
 lane's result so one grouped CI cycle can cover every known failure.
+
+Run `38756048027` completed red. Rust Service Tests (selfhost) built the
+public image successfully but its installed loader refused before service
+startup: the preflight's independently rendered bundle model still supplied
+HTTP OpenBao, omitted Keycloak KMS image/reference selectors and rejected
+the required public `BAO_CACERT`/DIDComm CA bindings. The pinned-image
+packager also still expected two OpenBao services after the TLS initializer
+became a third service. UI commits `02d617248` and `9687b49b6` correct these
+alongside the other five failing lanes. Local Windows Rust 1.95 validation
+passed all 20 selfhost executable-bundle/package-contract tests with the
+installed standalone Compose 5.4.0 binary. Its exact extracted model gate
+now passes through qualification; the live container loader remains a hosted
+retest. Keep the prior red run as evidence, then push this grouped correction
+batch for one new CI run.
