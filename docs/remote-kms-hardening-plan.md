@@ -21324,3 +21324,25 @@ still denies new operations, and the Keycloak PostgreSQL custody gate stays
 clear. This proves version retention and new-key selection across live local
 flows; it does not prove all Keycloak session or RS256/HS512 signer rotation
 semantics, installed images, or deployed cutover.
+
+2026-10-15 K12 provider bypass hardening, grouped UI commit `d1133e9c9`:
+the pinned Keycloak image now empties the upstream KeyProvider service
+descriptor. The provider JAR advertises only Marty’s four remote factories;
+the live admin `/serverinfo` inventory returned exactly those four IDs and
+no generated ECDSA/EdDSA, imported RSA or Java keystore factory. A negative
+admin create request with synthetic `privateKey` initially returned success;
+the first probe stopped before checking whether that value persisted. The
+remote factories now
+validate a strict non-secret configuration field/value allowlist before
+component creation and again before key use. Fresh bootstrap required only
+`keyUse`, `priority` and `algorithm` metadata; after the fix, admin create
+requests with `privateKey` or a synthetic value in `algorithm` returned 4xx.
+An update request returned success but Keycloak discarded the private-key
+field; the read-back representation and PostgreSQL scan contained no
+synthetic value or `privateKey` row. The complete two-realm browser/CIBA,
+rotation, direct-grant, refresh, JWKS, KMS-loss and PostgreSQL gate probe
+passed against the rebuilt local image. This controls the tested KeyProvider
+SPI and admin component paths, but arbitrary extensions, direct database
+writes, other Keycloak secret stores, installed artifact composition and
+deployed cutover remain to be audited. Do not equate this with whole-stack
+KMS-only enforcement.
