@@ -22287,3 +22287,46 @@ ordering; it is deliberately unpushed while Canvas, contracts, self-host,
 plugin and image lanes of the same run remain live, so any additional
 corrections can share one CI retry. The Core #355 and Credentials #313
 hardening PRs remain merged; this UI integration PR is still open.
+
+2026-10-15 exact-head CI triage for grouped UI PR #1344: run
+[`38785167966`](https://github.com/ElevenID/marty-ui/actions/runs/38785167966)
+is terminal and failed. Self-host and image lanes passed. The Release Contract
+lane found stale Canvas fixture fields, a missing test-only Docker-context
+entry, beta selector regressions, and an undiagnosed hosted Compose-render
+failure whose captured stderr had been hidden. The Canvas lane had five
+composition failures; downloaded owned child diagnostics identify the same
+rustls process CryptoProvider-selection panic in all three child failures,
+and the direct failures show the same panic. The contracts lane's OIDF
+keyless-HTTPS test attempted to register a blocking `std::net::TcpListener`
+with Tokio. The OpenBao plugin lane timed out starting its disposable image
+before its coordinated-restore probe ran. The prior rustfmt-only lint failure
+was corrected locally in `3a5087b64`.
+
+The grouped UI worktree now has an unpushed correction batch: the Canvas peer
+selects an explicit aws-lc rustls provider and sets its listener nonblocking;
+the OIDF HTTPS test also sets its listener nonblocking; fixture spec and
+Docker-context inventories include the remote TLS peer; Compose-render
+failures will expose stderr on retry; and the disposable OpenBao wrapper
+pre-pulls its pinned image with a separate bounded timeout, then starts with
+`--pull=never` and label-checked cleanup. The base OpenBao TLS initializer
+uses `network_mode: none`, avoiding a spurious default network in beta
+provider deployments. Local evidence: 397 selected Python checks passed (two
+skipped), Rust 1.95 Canvas/OIDF/callback targets compiled, Rust formatting,
+Ruff, Python compilation, shell syntax, Compose rendering, and diff checks
+passed. Hosted runtime acceptance is still required; do not push until the
+batch passes self-review and the beta release-path mismatch below is resolved.
+
+Self-review found an actual beta compatibility defect masked by old tests:
+the beta callback signer still used HTTP and an inline OpenBao dev-root token,
+and its binary loaded unrelated full signing-service configuration. Local
+candidate code now provisions a dedicated no-default-policy callback-HMAC
+token only when the beta passport profile is selected, mounts it read-only
+with the public CA, uses HTTPS, waits for bootstrap completion, and narrows
+the Rust process configuration. The beta and physical selectors now pass
+with these model changes. However, `deploy-local-beta-release.ps1`,
+`prepare_passport_beta_aggregate_compose.py`, and
+`verify_passport_beta_aggregate_runtime.py` still assume a live dev-mode
+OpenBao root-token environment and HTTP. Their focused legacy tests pass but
+do not qualify the new Raft/scoped-token cutover. Repair or retire these
+old assumptions with an explicit installed-beta path and executable proof
+before merging #1344; no fallback to dev/root-token custody is acceptable.
