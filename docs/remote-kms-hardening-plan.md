@@ -22213,3 +22213,26 @@ policy already allows Ed25519. The unpushed PR worktree now adds Ed25519 to
 that disposable issuer-key policy; Python compilation, diff check, and 171
 focused workflow/contract tests passed. Wait for the remaining lanes of the
 current run, batch any further corrections, and then push one reviewed head.
+
+2026-10-15 subsequent qualification: the isolated base HTTPS/Raft conversion
+was committed locally as `280529fc4`. Native DIDComm and conformance Compose
+checks, a new rendered-graph custody guard, Python lint and formatting, and
+the broader local suite passed (836 passed, one skipped). This replaces the
+earlier failing synthetic-fixture result, but no live local Raft/container
+proof is available because Docker Desktop remains unavailable. The commit
+has not been pushed or merged into the grouped PR. The exact-head PR run
+`38780095995` has now finished: contracts failed on the scoped Transit
+fixture's Ed25519 omission, corrected locally in `c1ae70f9c`; Canvas failed
+four profile-composition tests in its isolated database-contract step. The
+Canvas failures need diagnosis and a grouped correction before pushing a new
+PR head. The CI gate failed as a consequence; other completed lanes passed.
+
+The KMS-only boundary remains explicit: OpenBao's own Raft listener TLS key
+may be a protected file inside its KMS-owned state for bootstrap and recovery.
+Workload, edge, and application TLS private-key files are not acceptable.
+The fresh Marty service database schema has no private-key table; the generic
+Keycloak `COMPONENT_CONFIG` table must remain, but existing beta/self-host
+Keycloak installations still have four `privateKey` and four generated
+`secret` rows each. Fresh remote-provider schema and runtime-write proofs do
+not clean those installed rows. K10/K12 remain open until the installed
+cutover removes them and the read-only database gate passes there.
