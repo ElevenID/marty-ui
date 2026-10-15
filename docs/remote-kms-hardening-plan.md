@@ -21178,3 +21178,19 @@ compilation and the live probe passed locally. This closes the disposable
 PostgreSQL *remote signing and storage* proof; it is not exact shipping-image
 attestation, browser login/session/JWE acceptance, or a clean installed
 self-host/beta cutover. Existing Keycloak databases still contain old rows.
+
+2026-10-15 K12 browser-flow acceptance gap, grouped UI commit `5af4dd6cd`:
+the disposable PostgreSQL-backed probe now has a `--require-browser` mode
+that configures a public authorization-code/PKCE client and tries `11id`
+browser login followed by silent session reuse. The default signing/refresh
+probe still passes. Browser mode failed closed at the first authorization
+request with HTTP 400. Keycloak 25.0.6 logs show `Error encoding cookie`,
+`Failed to find key: realm=11id algorithm=AES use=ENC`, and failure to
+create an AES fallback key. This confirms AES is required by a real login
+path, not merely present as an unused default provider. Implement remote
+cookie encryption/decryption through an appropriate Keycloak SPI and an
+OpenBao-contained operation before claiming OIDC feature preservation;
+do not restore a local `SecretKey` to make the login test pass. Re-run the
+same mode for browser token/ID-token signature, session reuse and database
+custody once AES is available. This failed proof is deliberate evidence
+of a blocker within the active goal, not a shipped acceptance pass.
