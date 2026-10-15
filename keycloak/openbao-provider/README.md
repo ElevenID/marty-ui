@@ -45,13 +45,14 @@ exports only public certificates and cleans its disposable containers.
 The browser-mode proof also enables a disposable CIBA client and a local
 authentication-device acknowledgment endpoint. It checks that the returned
 `auth_req_id` is a compact JWE using the separate `11id` CIBA remote key,
-polling decrypts it to `authorization_pending`, and revoking only the CIBA
-token denies a new request. It does not simulate user approval or a completed
-CIBA authentication.
+polling decrypts it to `authorization_pending`, the device callback approves
+the request, and Keycloak issues independently verified tokens for the
+expected user. Revoking only the CIBA token then denies a new request.
+The device callback is a disposable simulator, not a physical device test.
 
-This local proof does not qualify the installed stack. Completed CIBA
-authentication, RSA-OAEP and other AES flows may still fail closed. Remote-key
-rotation during active sessions, exact-image deployment,
+This local proof does not qualify the installed stack. RSA-OAEP and other AES
+flows may still fail closed. Remote-key rotation during active sessions,
+exact-image deployment,
 broad provider controls, and production cutover remain. Do not publish this
 image as fully KMS-only until those paths pass with the exact artifact and
 database gate.

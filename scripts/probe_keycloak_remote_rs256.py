@@ -77,8 +77,13 @@ class StopAtCallback(HTTPRedirectHandler):
 
 
 class PendingCibaDevice(BaseHTTPRequestHandler):
+    received_tokens: list[str] = []
+
     def do_POST(self) -> None:
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        authorization = self.headers.get("Authorization", "")
+        if authorization.startswith("Bearer "):
+            self.received_tokens.append(authorization)
         self.send_response(201)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -234,6 +239,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
         root_token.write_text(secrets.token_hex(32), encoding="ascii")
         try:
             if require_browser:
+                PendingCibaDevice.received_tokens = []
                 ciba_device = ThreadingHTTPServer(("0.0.0.0", 0), PendingCibaDevice)
                 threading.Thread(target=ciba_device.serve_forever, daemon=True).start()
             run("docker", "network", "create", network)
@@ -501,6 +507,31 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         raise RuntimeError("CIBA polling did not decrypt the remote request ID") from error
                 else:
                     raise RuntimeError("Unapproved CIBA request unexpectedly issued a token")
+                if len(PendingCibaDevice.received_tokens) != 1:
+                    raise RuntimeError("CIBA device did not receive one callback capability")
+                callback_request = Request(
+                    base + "/realms/11id/protocol/openid-connect/ext/ciba/auth/callback",
+                    data=json.dumps({"status": "SUCCEED"}).encode(),
+                    headers={"Content-Type": "application/json",
+                             "Authorization": PendingCibaDevice.received_tokens.pop()},
+                )
+                with urlopen(callback_request, timeout=8) as response:
+                    if response.status != 200:
+                        raise RuntimeError("CIBA device approval was not acknowledged")
+                time.sleep(max(1, int(ciba.get("interval", 5))))
+                approved = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                    "client_id": "probe-ciba",
+                    "client_secret": "synthetic-ciba-probe-only",
+                    "grant_type": "urn:openid:params:grant-type:ciba",
+                    "auth_req_id": auth_req_id,
+                })
+                for field in ("access_token", "id_token"):
+                    verify_jwt(approved[field], jwks_11id,
+                               f"{prefix}-11id-rs256-v1", base + "/realms/11id")
+                approved_claims = json.loads(base64.urlsafe_b64decode(
+                    approved["access_token"].split(".")[1] + "=="))
+                if approved_claims.get("preferred_username") != "probe11":
+                    raise RuntimeError("CIBA approved the wrong user")
                 (jwe_token_dir / "11id-ciba.token").write_text(
                     "invalid-disposable-token", encoding="ascii")
                 try:
@@ -605,7 +636,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
             verify_database_gate(pg_name)
-            browser_result = "browser/session and CIBA request/poll, " if require_browser else ""
+            browser_result = "browser/session and completed CIBA, " if require_browser else ""
             print(f"Remote RS256 master/11id {browser_result}token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
         finally:
             if ciba_device:
