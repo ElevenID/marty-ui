@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-13 UTC checkpoint; UI main `4d1dfb87c`).
+Status: active implementation (2026-10-15 UTC checkpoint; UI main `d19599032`).
 Current delivery priority (2026-10-15): enable outside testers to anonymously
 download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
 preparation and independent archive/Compose/image-pull checks; the same bytes
@@ -13,7 +13,7 @@ signed qualified assets, and replay anonymous installation before any
 supported handoff. Do not treat preparation or a lower-memory exploratory run
 as qualification. Defer unrelated A0-A7 optimization behind this handoff.
 Self-host preparation and opt-in consumer probes through #1266 are merged, but
-there is no qualified or released self-host bundle or independently qualified
+there is no qualified or supported self-host bundle or independently qualified
 standalone verifier. Core v0.2.2 publishes a headless verifier preview bundle;
 its external-user handoff remains unqualified.
 Required PR and protected merge-group gates remain in force. The following
