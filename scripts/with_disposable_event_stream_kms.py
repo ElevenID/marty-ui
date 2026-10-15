@@ -38,6 +38,14 @@ def run(args: list[str], timeout: int = 30) -> str:
     return result.stdout.strip()
 
 
+def require_pinned_image(image: str) -> None:
+    """Acquire a pinned image before the bounded container startup."""
+    try:
+        run(["docker", "image", "inspect", image], timeout=20)
+    except RuntimeError:
+        run(["docker", "pull", image], timeout=180)
+
+
 class Bao:
     def __init__(self, endpoint: str, ca: Path, token: str) -> None:
         self.endpoint = endpoint
@@ -358,20 +366,22 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
         command = command[1:]
     if not command:
         raise RuntimeError("an acceptance command is required")
+    require_pinned_image(image)
     container = "marty-event-stream-kms-" + secrets.token_hex(8)
     root_token = secrets.token_hex(32 if profile == "passport-bootstrap" else 24)
-    started = False
+    attempted = False
     with tempfile.TemporaryDirectory(prefix="marty-event-stream-kms-") as temporary:
         root = Path(temporary).resolve()
         try:
+            attempted = True
             run([
-                "docker", "run", "-d", "--name", container,
+                "docker", "run", "-d", "--pull=never", "--name", container,
+                "--label", "marty.disposable=event-stream-kms",
                 "-p", "127.0.0.1::8200", "--tmpfs", "/tmp/bao-tls:rw,mode=1777",
                 "-e", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200",
                 "-e", f"BAO_DEV_ROOT_TOKEN_ID={root_token}", image,
                 "server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp/bao-tls",
-            ])
-            started = True
+            ], timeout=60)
             binding = run(["docker", "port", container, "8200/tcp"])
             if not binding.startswith("127.0.0.1:"):
                 raise RuntimeError("disposable OpenBao must bind only to loopback")
@@ -466,11 +476,22 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                 raise RuntimeError("unknown disposable workload TLS profile")
             return subprocess.run(command, env=environment, check=False).returncode
         finally:
-            if started:
-                subprocess.run(
-                    ["docker", "rm", "-f", container], check=False,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
-                )
+            if attempted:
+                try:
+                    owned = subprocess.run(
+                        ["docker", "inspect", "--format", "{{json .Config.Labels}}", container],
+                        capture_output=True, text=True, timeout=10, check=False,
+                    )
+                    labels = json.loads(owned.stdout) if owned.returncode == 0 else {}
+                    if labels.get("marty.disposable") == "event-stream-kms":
+                        subprocess.run(
+                            ["docker", "rm", "-f", container], check=False,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+                        )
+                except (OSError, ValueError, subprocess.TimeoutExpired):
+                    # Preserve the original fixture failure; an operator can
+                    # locate a timed-out container by its disposable label.
+                    pass
 
 
 def main() -> int:

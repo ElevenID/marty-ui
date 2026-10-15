@@ -217,6 +217,7 @@ services:
     entrypoint: ["/usr/local/bin/selfhost-tls-init"]
     volumes:
       - openbao_data:/bao/data
+    network_mode: none
     restart: "no"
 
   openbao-init:

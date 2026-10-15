@@ -181,12 +181,17 @@ impl RemoteTlsPeer {
         certified
             .keys_match()
             .expect("remote TLS key matches public certificate");
-        let mut config = ServerConfig::builder()
-            .with_no_client_auth()
-            .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified)));
+        let mut config = ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified)));
         config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let port = listener.local_addr().unwrap().port();
         let handle = axum_server::Handle::new();
         let shutdown = handle.clone();

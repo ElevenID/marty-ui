@@ -49,6 +49,7 @@ def spec(tmp_path):
         "synthetic stat-only policy control"
     )
     (tmp_path / "openbao-token").write_text("synthetic stat-only token control")
+    (tmp_path / "grpc-tls-token").write_text("synthetic scoped token")
     return {
         "inputs": dict.fromkeys(FIXTURE["INPUT_KEYS"], "synthetic"),
         "http_port": 28105,
@@ -57,6 +58,11 @@ def spec(tmp_path):
         "database_url": "postgresql://synthetic:owned@127.0.0.1:25432/owned",
         "redis_url": "redis://127.0.0.1:26379",
         "peer_origin": "http://127.0.0.1:28500",
+        "grpc_peer_origin": "https://127.0.0.1:28502",
+        "grpc_ca_file": str(tmp_path / "ca.pem"),
+        "grpc_tls_certificate_file": str(tmp_path / "ca.pem"),
+        "grpc_tls_token_file": str(tmp_path / "grpc-tls-token"),
+        "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
         "legacy_origin": "http://127.0.0.1:28501",
         "ca_file": str(tmp_path / "ca.pem"),
         "policy_directory": str(tmp_path),
@@ -86,6 +92,11 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("redis_url", "redis://production.example:6379"),
         ("peer_origin", "http://user:password@127.0.0.1:28500"),
         ("legacy_origin", "http://127.0.0.1:28500"),
+        ("grpc_peer_origin", "http://127.0.0.1:28502"),
+        ("grpc_ca_file", "absent"),
+        ("grpc_tls_certificate_file", "absent"),
+        ("grpc_tls_token_file", "absent"),
+        ("grpc_tls_key_name", "wrong-key"),
         ("ca_file", "absent"),
         ("policy_directory", "relative"),
         ("kms_url", "http://production.example:8200"),

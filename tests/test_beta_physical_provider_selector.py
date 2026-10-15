@@ -29,10 +29,14 @@ SIGNING = "ordinary-signing-secret-00000001"
 
 
 def model(tmp_path: Path) -> dict:
-    def grant_volumes(*names: str) -> list[dict]:
-        return [{"type": "volume", "source": f"openbao_{name}_grant",
-                 "target": f"/bao/{name.replace('_', '-')}-grant",
-                 "read_only": True, "volume": {}} for name in names]
+    def grant_volumes(*names: str, token: str | None = None) -> list[dict]:
+        mounts = [("openbao_public_ca", "/bao/public-ca")]
+        if token:
+            mounts.append((f"openbao_{token}_token", f"/bao/{token.replace('_', '-')}-token"))
+        mounts.extend((f"openbao_{name}_grant", f"/bao/{name.replace('_', '-')}-grant")
+                      for name in names)
+        return [{"type": "volume", "source": source, "target": target,
+                 "read_only": True, "volume": {}} for source, target in mounts]
 
     secret_root = tmp_path / "elevenid-beta-passport-physical"
     secret_root.mkdir()
@@ -55,7 +59,7 @@ def model(tmp_path: Path) -> dict:
         path = parent / name
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
         secrets[name] = {"file": str(path)}
-    return {"name": "elevenid-beta", "secrets": secrets,
+    result = {"name": "elevenid-beta", "secrets": secrets,
             "volumes": {f"openbao_{name}_grant": {
                 "name": f"elevenid-beta_openbao_{name}_grant"} for name in (
                 "gateway", "flow", "verify", "issuance_credential",
@@ -91,7 +95,8 @@ def model(tmp_path: Path) -> dict:
         }},
         "issuance-native": {"networks": {"marty-network": {}},
             "volumes": grant_volumes("issuance_credential", "issuance_canvas",
-                                     "issuance_readiness", "issuance_passport"),
+                                     "issuance_readiness", "issuance_passport",
+                                     token="didcomm_issuance"),
             "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
@@ -113,7 +118,7 @@ def model(tmp_path: Path) -> dict:
                         "issuance_workload_server_cert", "issuance_tls_kms_token",
                         "openbao_tls_ca_cert"]},
         "signing-keys": {"networks": {"marty-network": {}},
-            "volumes": grant_volumes("verify"), "environment": {
+            "volumes": grant_volumes("verify", token="signing_keys"), "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
@@ -163,6 +168,10 @@ def model(tmp_path: Path) -> dict:
             }, "secrets": ["passport_callback_signer_api_key",
                             "marty_db_password"]},
     }}
+    for name in ("openbao_public_ca", "openbao_didcomm_issuance_token",
+                 "openbao_signing_keys_token"):
+        result["volumes"][name] = {"name": f"elevenid-beta_{name}"}
+    return result
 
 
 def validate(candidate: dict) -> None:

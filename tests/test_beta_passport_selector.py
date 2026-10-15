@@ -88,10 +88,17 @@ def model(tmp_path, enabled=True):
             "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
             "SIGNING_KEYS_SERVICE_PORT": "8018",
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "BAO_ADDR": "http://openbao:8200",
-            "BAO_TOKEN": "synthetic-existing-openbao-token",
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/public-ca/ca.crt",
+            "BAO_TOKEN_FILE": "/bao/passport-callback/token",
         },
         "networks": {"passport-callback-signing": None},
+        "volumes": [
+            {"type": "volume", "source": "openbao_public_ca",
+             "target": "/bao/public-ca", "read_only": True},
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True},
+        ],
     }
     services["passport-beta-bureau"] = {
         "image": IMAGE,
@@ -328,6 +335,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "callback_signer_disabled",
         "callback_signer_image",
         "callback_signer_key_mismatch",
+        "callback_signer_token_mount_leak",
         "callback_signer_extra_member",
     ),
 )
@@ -523,6 +531,11 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
         services["passport-callback-signer"]["environment"][
             "SIGNING_KEYS_INTERNAL_API_KEY"
         ] = "another-key"
+    elif mutation == "callback_signer_token_mount_leak":
+        services["gateway"]["volumes"] = [
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True}
+        ]
     elif mutation == "callback_signer_extra_member":
         services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:

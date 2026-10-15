@@ -64,6 +64,7 @@ CANVAS_COMPOSITION_TEST_FILES = (
     "support/didcomm_unkeyed_grpc_initiation.rs",
     "support/owned_cleanup.rs",
     "support/remote_didcomm_sender.rs",
+    "support/remote_tls_peer.rs",
     "support/rendered_base_process.rs",
     "support/renewal_binding_postgres.rs",
     "support/renewal_canvas_binding.rs",

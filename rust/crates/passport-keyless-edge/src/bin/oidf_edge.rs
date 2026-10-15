@@ -435,6 +435,7 @@ mod tests {
         });
         let tls = keyless_tls_config("OIDF_EDGE").await.unwrap();
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
         let address = listener.local_addr().unwrap();
         let edge_task = tokio::spawn(async move {
             axum_server::from_tcp_rustls(listener, tls)

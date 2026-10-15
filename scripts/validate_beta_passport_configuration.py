@@ -69,6 +69,22 @@ def is_known_beta_canvas_config(source, service_name, repository_root):
             and not candidate.is_symlink() and candidate.resolve() == expected)
 
 
+def is_known_openbao_bootstrap_file(source, service_name, repository_root):
+    """Allow only the two KMS-owned Raft bootstrap inputs in beta."""
+    allowed = {
+        "openbao": {"docker/openbao-selfhost.hcl"},
+        "openbao-init": {"docker/openbao-selfhost-init.sh"},
+    }
+    root = Path(repository_root).resolve()
+    candidate = Path(source).absolute() if isinstance(source, str) else None
+    return (
+        candidate is not None
+        and any(candidate == root / relative for relative in allowed.get(service_name, ()))
+        and not candidate.is_symlink()
+        and candidate.resolve() == candidate
+    )
+
+
 def environment(service):
     value = service.get("environment")
     if isinstance(value, dict):
@@ -76,6 +92,17 @@ def environment(service):
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return dict(item.split("=", 1) for item in value if "=" in item)
     raise PassportConfigurationError("Invalid beta passport service environment")
+
+
+def has_readonly_volume(service, source, target):
+    return any(
+        isinstance(mount, dict)
+        and mount.get("type") == "volume"
+        and mount.get("source") == source
+        and mount.get("target") == target
+        and mount.get("read_only") is True
+        for mount in service.get("volumes", [])
+    )
 
 
 def contains_credential(value, credential):
@@ -400,7 +427,11 @@ def validate_physical_model(model, files, provider_registry=None):
                        and service.get("network_mode") == "service:issuance"
                        and set(services.get("issuance", {}).get("networks", {}))
                        == {"marty-network"})
-        physical_require((not service.get("network_mode") or bridge_mode)
+        isolated_kms_init = (name == "openbao-tls-init"
+                             and service.get("network_mode") == "none"
+                             and not service_networks)
+        physical_require((not service.get("network_mode") or bridge_mode
+                          or isolated_kms_init)
                          and not service.get("volumes_from"),
                          "Beta physical provider service inherited network or volumes")
         if "passport-provider-signing" in service_networks:
@@ -448,6 +479,8 @@ def validate_physical_model(model, files, provider_registry=None):
             source_for_name_check = physical_source_for_name_check(
                 source, kind, Path(__file__).resolve().parents[1])
             physical_require(known_beta_canvas_config
+                             or is_known_openbao_bootstrap_file(
+                                 source, name, Path(__file__).resolve().parents[1])
                              or not re.search(r"prod|production|selfhost",
                                               source_for_name_check,
                                               re.IGNORECASE),
@@ -489,6 +522,12 @@ def validate_physical_model(model, files, provider_registry=None):
         ],
         "signing-keys": [("openbao_verify_grant", "/bao/verify-grant")],
     }
+    for owner in ("gateway", "flow", "issuance-native", "signing-keys"):
+        grant_volumes[owner].insert(0, ("openbao_public_ca", "/bao/public-ca"))
+    grant_volumes["issuance-native"].insert(
+        1, ("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"))
+    grant_volumes["signing-keys"].insert(
+        1, ("openbao_signing_keys_token", "/bao/signing-keys-token"))
     for name, service in (("gateway", services["gateway"]),
                           ("flow", services["flow"]),
                           ("issuance-native", services["issuance-native"]),
@@ -499,7 +538,7 @@ def validate_physical_model(model, files, provider_registry=None):
                             "target": target, "read_only": True, "volume": {}}
                            for source, target in grant_volumes.get(name, [])]
         physical_require(service.get("volumes", []) == allowed_volumes,
-                         "Beta physical provider service escaped isolation")
+                         f"Beta physical provider service escaped isolation: {name}")
         physical_require(not any(service.get(field) for field in (
             "configs", "privileged", "network_mode", "container_name", "volumes_from",
             "devices", "extra_hosts", "pid", "ipc", "cgroup_parent")),
@@ -938,13 +977,27 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             == "true"
             and str(callback_signer_env.get("SIGNING_KEYS_SERVICE_PORT")) == "8018"
             and callback_signer_env.get("SIGNING_KEYS_INTERNAL_API_KEY") == signing_key
-            and callback_signer_env.get("BAO_ADDR") == "http://openbao:8200"
-            and callback_signer_env.get("BAO_TOKEN")
-            and callback_signer_env.get("BAO_TOKEN") == signing.get("BAO_TOKEN")
+            and callback_signer_env.get("BAO_ADDR") == "https://openbao:8200"
+            and callback_signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and callback_signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and not any(callback_signer_env.get(name) for name in (
+                "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
+            and has_readonly_volume(callback_signer, "openbao_public_ca", "/bao/public-ca")
+            and has_readonly_volume(callback_signer, "openbao_passport_callback", "/bao/passport-callback")
+            and len(callback_signer.get("volumes", [])) == 2
         ):
             raise PassportConfigurationError(
                 "Beta callback signer configuration is invalid"
             )
+        for service_name, service in services.items():
+            if service_name in {"openbao-init", "passport-callback-signer"}:
+                continue
+            if any(isinstance(mount, dict) and
+                   mount.get("source") == "openbao_passport_callback"
+                   for mount in service.get("volumes", [])):
+                raise PassportConfigurationError(
+                    "Beta callback token is mounted outside its owner"
+                )
         if not re.fullmatch(
             r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
             str(bureau.get("image", "")),
@@ -974,7 +1027,6 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             for name in (
                 "ports",
                 "secrets",
-                "volumes",
                 "build",
                 "entrypoint",
                 "command",

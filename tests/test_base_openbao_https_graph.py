@@ -123,6 +123,21 @@ def assert_https_graph(model):
             "/bao/didcomm-issuance-token",
             True,
         )
+    if "passport-callback-signer" in services:
+        signer = services["passport-callback-signer"]
+        signer_env = environment(signer)
+        assert signer_env["BAO_ADDR"] == HTTPS_KMS
+        assert signer_env["BAO_CACERT"] == PUBLIC_CA
+        assert signer_env["BAO_TOKEN_FILE"] == "/bao/passport-callback/token"
+        assert "BAO_TOKEN" not in signer_env
+        assert mount(signer, "openbao_public_ca", "/bao/public-ca", True)
+        assert mount(signer, "openbao_passport_callback", "/bao/passport-callback", True)
+        assert (
+            environment(bootstrap)["BAO_PASSPORT_CALLBACK_TOKEN_FILE"]
+            == "/bao/passport-callback/token"
+        )
+        assert mount(bootstrap, "openbao_passport_callback", "/bao/passport-callback", False)
+        assert signer["depends_on"]["openbao-init"]["condition"] == "service_completed_successfully"
 
 
 def rendered(*profiles):
@@ -131,8 +146,9 @@ def rendered(*profiles):
         command.extend(["-f", profile])
     command.extend(["config", "--no-interpolate", "--format", "json"])
     result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, check=True
+        command, cwd=ROOT, capture_output=True, text=True, check=False
     )
+    assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
 
 
@@ -146,6 +162,7 @@ def rendered(*profiles):
             "docker-compose.profile.issuance-native-authcrypt.yml",
         ),
         ("docker-compose.profile.ghcr.yml",),
+        ("docker-compose.profile.passport-native-beta.yml",),
     ],
 )
 def test_rendered_base_graph_keeps_keys_inside_openbao(profiles):
