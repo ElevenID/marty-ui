@@ -20,7 +20,7 @@ PHASES = frozenset({
     "input_validation", "compose_render", "artifact_preflight",
     "public_key_tool_build", "fresh_project", "image_pull", "startup",
     "readiness", "fixture_setup", "custody_verification", "public_journey",
-    "cleanup", "output_write",
+    "cleanup",
 })
 
 
@@ -111,17 +111,17 @@ class RunDiagnostics:
                                 "duration_ms": max(0, (time.monotonic_ns() - started)
                                                    // 1_000_000)})
 
-    def report(self, *, result: str) -> dict:
-        if result not in {"passed", "failed"}:
+    def report(self, *, checks_result: str) -> dict:
+        if checks_result not in {"passed", "failed"}:
             raise ValueError("unknown diagnostic result")
         memory = self._initial_memory
         return {
             "schema": "marty.selfhost-install-diagnostics/v1",
             "qualification": "unqualified",
-            "result": result,
+            "checks_result": checks_result,
             "first_failure_phase": (
                 self._first_failure_phase or self.current_phase
-                if result == "failed" else None
+                if checks_result == "failed" else None
             ),
             "total_duration_ms": max(0, (time.monotonic_ns() - self._started_ns)
                                        // 1_000_000),

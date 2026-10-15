@@ -261,7 +261,7 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
-    report = diagnostics.report(result="failed")
+    report = diagnostics.report(checks_result="failed")
     assert report["first_failure_phase"] == "custody_verification"
     assert [row["name"] for row in report["phases"]] == [
         "fresh_project", "image_pull", "startup", "readiness", "fixture_setup",

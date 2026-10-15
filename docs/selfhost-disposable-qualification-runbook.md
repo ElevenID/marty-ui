@@ -129,6 +129,9 @@ The separate diagnostic file is written on success or ordinary runner failure
 and contains fixed phase names, durations, the first failed phase, Linux-visible
 CPU/RAM and initial free disk, and sampled host memory/swap high-water marks.
 It contains no credentials or test payloads and is always **unqualified**.
+Its `checks_result` describes the installed checks, not persistence of the
+separate success report; only `installed-journey.json` records a completed
+installed run. A diagnostic with passed checks alone is never a handoff pass.
 The sampled values can miss short spikes; they do not measure per-container
 memory or OOM kills. Retain independent Docker/host observations before
 assessing a smaller hardware envelope. Never treat a diagnostic file as the

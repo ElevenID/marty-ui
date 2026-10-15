@@ -39,7 +39,7 @@ def test_first_failure_survives_successful_cleanup_and_excludes_private_values(
     with diagnostics.measure("cleanup"):
         pass
     diagnostics.stop()
-    report = diagnostics.report(result="failed")
+    report = diagnostics.report(checks_result="failed")
     assert report["first_failure_phase"] == "public_journey"
     assert [row["status"] for row in report["phases"]] == ["failed", "passed"]
     assert report["linux_visible_ram_bytes"] == 16 * 1024**3
@@ -49,7 +49,7 @@ def test_first_failure_survives_successful_cleanup_and_excludes_private_values(
     assert report["container_oom_measured"] is False
     assert "private-credential" not in json.dumps(report)
     assert set(report) == {
-        "schema", "qualification", "result", "first_failure_phase",
+        "schema", "qualification", "checks_result", "first_failure_phase",
         "total_duration_ms", "phases", "linux_visible_logical_cpus",
         "linux_visible_ram_bytes", "initial_free_disk_bytes",
         "host_memory_sample_count", "max_observed_host_used_memory_bytes",
@@ -79,7 +79,7 @@ def test_failed_runner_writes_only_unqualified_redacted_diagnostic(
         ValueError("private-credential")))
     assert runner.main() == 2
     report = json.loads(diagnostic_output.read_text(encoding="utf-8"))
-    assert report["result"] == "failed"
+    assert report["checks_result"] == "failed"
     assert report["qualification"] == "unqualified"
     assert report["first_failure_phase"] == "input_validation"
     assert "private-credential" not in json.dumps(report)
@@ -111,9 +111,42 @@ def test_success_keeps_installed_result_separate_from_unqualified_diagnostics(
     diagnostics = json.loads(args.diagnostic_output.read_text(encoding="utf-8"))
     assert result["public_journey"] == "passed"
     assert "host_memory_sample_count" not in result
-    assert diagnostics["result"] == "passed"
+    assert diagnostics["checks_result"] == "passed"
     assert diagnostics["first_failure_phase"] is None
     assert diagnostics["qualification"] == "unqualified"
+
+
+def test_success_report_write_failure_does_not_claim_runner_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    install = tmp_path / "install"
+    integration = tmp_path / "integration"
+    secrets = tmp_path / "secrets"
+    for path in (source, install, integration, secrets):
+        path.mkdir()
+    args = argparse.Namespace(
+        state_root=tmp_path, source_checkout=source, install_root=install,
+        integration_checkout=integration, secret_root=secrets,
+        diagnostic_output=tmp_path / "diagnostic.json",
+        output=tmp_path / "success.json",
+    )
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda *_args: args)
+    monkeypatch.setattr(runner, "run", lambda *_args: {"public_journey": "passed"})
+    original_open = Path.open
+
+    def fail_success_output(path: Path, *open_args: object, **open_kwargs: object):
+        if path == args.output:
+            raise PermissionError("cannot write success report")
+        return original_open(path, *open_args, **open_kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_success_output)
+    assert runner.main() == 2
+    diagnostic = json.loads(args.diagnostic_output.read_text(encoding="utf-8"))
+    assert diagnostic["checks_result"] == "passed"
+    assert diagnostic["qualification"] == "unqualified"
+    assert "output_write" not in json.dumps(diagnostic)
+    assert not args.output.exists()
 
 
 def test_existing_diagnostic_file_refuses_to_run_or_write_success(

@@ -567,7 +567,8 @@ def main() -> int:
     if target is not None:
         try:
             with target.open("x", encoding="utf-8") as stream:
-                json.dump(diagnostics.report(result="passed" if status == 0 else "failed"),
+                json.dump(diagnostics.report(
+                    checks_result="passed" if status == 0 else "failed"),
                           stream, indent=2, sort_keys=True)
                 stream.write("\n")
         except (OSError, ValueError) as error:
@@ -575,10 +576,9 @@ def main() -> int:
             status = 2
     if status == 0 and result is not None:
         try:
-            with diagnostics.measure("output_write"):
-                with args.output.open("x", encoding="utf-8") as stream:
-                    json.dump(result, stream, indent=2, sort_keys=True)
-                    stream.write("\n")
+            with args.output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, sort_keys=True)
+                stream.write("\n")
         except (OSError, ValueError) as error:
             print(f"installed journey output failed: {error}", file=sys.stderr)
             status = 2
