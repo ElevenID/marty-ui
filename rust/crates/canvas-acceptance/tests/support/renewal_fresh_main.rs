@@ -405,7 +405,8 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 "database_url":database_url, "redis_url":redis_url,
                 "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
-                "kms_url":remote_sender.base_url, "kms_token_file":remote_sender.token_file,
+                "kms_url":remote_sender.base_url, "kms_ca_file":remote_sender.ca_file,
+                "kms_token_file":remote_sender.token_file,
                 "integration_secret_kms_url":super::issuance_process::remote_integration_secret::base_url(),
                 "integration_secret_kms_ca_file":super::issuance_process::remote_integration_secret::ca_file(),
                 "authcrypt":authenticated, "allow_private_ips":allow_private_ips
@@ -454,16 +455,28 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 .env("DIDCOMM_ALLOW_PRIVATE_IPS", "true")
                 .env("DIDCOMM_ENCRYPTION_POLICY_FILE", &policy)
                 .env("DIDCOMM_KMS_ADDR", &remote_sender.base_url)
+                .env("DIDCOMM_KMS_CA_CERT_FILE", &remote_sender.ca_file)
                 .env("DIDCOMM_KMS_TOKEN_FILE", &remote_sender.token_file)
                 .env("DIDCOMM_TLS_CA_FILE", &wallet.ca_file);
             command
         };
         // Translate deployed secret mounts to a disposable, operation-scoped
         // token for the host process; keep every other signing origin closed.
-        command.env("BAO_ADDR", &remote_sender.base_url).env(
-            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
-            &credential_grant_file,
-        );
+        command
+            .env("BAO_ADDR", &remote_sender.base_url)
+            .env("BAO_CACERT", &remote_sender.ca_file)
+            .env(
+                "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+                &credential_grant_file,
+            );
+        let startup_stderr = wallet
+            .ca_file
+            .parent()
+            .unwrap()
+            .join("issuance-startup.stderr");
+        command.stderr(std::process::Stdio::from(
+            std::fs::File::create(&startup_stderr).unwrap(),
+        ));
         drop((http_listener, grpc_listener, gateway_reservation));
         let mut child = ChildGuard(command.spawn().unwrap());
         let client = bounded_http_client(Duration::from_secs(20));
@@ -483,10 +496,19 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
         .await;
         let timed_out = health_result.is_err();
         let health = health_result.unwrap_or(None);
+        let startup_diagnostic = if health.is_none() {
+            std::fs::read_to_string(&startup_stderr)
+                .unwrap_or_default()
+                .chars()
+                .take(2048)
+                .collect::<String>()
+        } else {
+            String::new()
+        };
         assert_eq!(
             health,
             Some(json!({"status":"healthy","service":"issuance-service"})),
-            "{mode} packaged issuance startup timed out: {timed_out}; process status: {:?}",
+            "{mode} packaged issuance startup timed out: {timed_out}; process status: {:?}; bounded synthetic stderr: {startup_diagnostic}",
             child.0.try_wait().unwrap()
         );
         let startup_migration_not_after: chrono::DateTime<chrono::Utc> =

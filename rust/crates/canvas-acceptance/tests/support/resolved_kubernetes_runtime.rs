@@ -355,6 +355,7 @@ struct Spec {
     ca_file: PathBuf,
     policy_directory: PathBuf,
     kms_url: String,
+    kms_ca_file: PathBuf,
     kms_token_file: PathBuf,
     integration_secret_kms_url: String,
     integration_secret_kms_ca_file: PathBuf,
@@ -522,6 +523,7 @@ fn checked_spec(value: &Value) -> Result<Spec> {
             && secret_url.username().is_empty()
             && secret_url.password().is_none()
             && spec.ca_file.is_file()
+            && spec.kms_ca_file.is_file()
             && spec.integration_secret_kms_ca_file.is_file()
             && spec.policy_directory.is_dir()
             && spec.ca_file.parent() == Some(spec.policy_directory.as_path())
@@ -766,7 +768,12 @@ fn overlay(
     native.insert("ISSUANCE_GRPC_PORT".into(), spec.grpc_port.to_string());
     require(native["DIDCOMM_KMS_ADDR"] == "https://vault.example.com")?;
     require(native["DIDCOMM_KMS_TOKEN_FILE"] == "/run/secrets/didcomm-kms/token")?;
+    require(native["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/issuance-server-kms/ca.crt")?;
     native.insert("DIDCOMM_KMS_ADDR".into(), spec.kms_url.clone());
+    native.insert(
+        "DIDCOMM_KMS_CA_CERT_FILE".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
     native.insert(
         "DIDCOMM_KMS_TOKEN_FILE".into(),
         spec.kms_token_file.to_str().ok_or(ERROR)?.into(),
@@ -1020,6 +1027,7 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "ca_file": ca_path,
         "policy_directory": directory.path(),
         "kms_url": "https://127.0.0.1:18200",
+        "kms_ca_file": ca,
         "kms_token_file": token,
         "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
         "integration_secret_kms_ca_file": ca,
@@ -1038,6 +1046,10 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         let native = &resolved.native_environment;
         let gateway = &resolved.gateway_environment;
         assert!(matches!(resolved.isolation, Isolation::Kubernetes));
+        assert_eq!(
+            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
+            Some(ca_path)
+        );
         assert_eq!(
             native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
             if allow_private_ips {

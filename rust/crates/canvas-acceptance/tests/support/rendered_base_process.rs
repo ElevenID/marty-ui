@@ -208,7 +208,8 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "legacy_origin": "http://127.0.0.1:18002",
             "ca_file": ca,
             "policy_directory": directory.path(),
-            "kms_url": "http://127.0.0.1:18200",
+            "kms_url": "https://127.0.0.1:18200",
+            "kms_ca_file": ca,
             "kms_token_file": token,
             "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
             "integration_secret_kms_ca_file": ca,
@@ -228,7 +229,11 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
-            Some("http://127.0.0.1:18200")
+            Some("https://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
+            Some(ca)
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),

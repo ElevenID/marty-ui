@@ -71,6 +71,13 @@ def mapped_environment(service, spec):
     }[original["ISSUANCE_GRPC_TARGET"]]
     assert original["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     environment["ISSUANCE_SERVICE_URL"] = spec["legacy_http"]
+    if original.get("BAO_ADDR") == "http://openbao:8200":
+        # The executable grant minter requires an HTTPS KMS origin even when
+        # this admission fixture never performs a signing operation.
+        environment["BAO_ADDR"] = "https://127.0.0.1:18200"
+        environment["BAO_CACERT"] = (
+            Path(spec["directory"]) / "openbao_tls_ca_cert"
+        ).as_posix()
     declared = {item["source"] for item in service.get("secrets", [])}
     for key, value in original.items():
         if key.endswith("_FILE") or key in TLS_FILES:
@@ -121,6 +128,13 @@ def render(spec, command):
             SELFHOST_STATE_DIR=(directory / "unused-state").as_posix(),
             SELFHOST_SECRET_DIR=directory.as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
+            BAO_ADDR="https://127.0.0.1:18200",
+            FLOW_CLIENT_TLS_KMS_ADDR="https://127.0.0.1:18200",
+            FLOW_CLIENT_TLS_KMS_KEY_NAME="synthetic-flow-client-tls",
+            FLOW_CLIENT_TLS_KMS_KEY_VERSION="1",
+            FLOW_SERVER_TLS_KMS_ADDR="https://127.0.0.1:18200",
+            FLOW_SERVER_TLS_KMS_KEY_NAME="synthetic-flow-server-tls",
+            FLOW_SERVER_TLS_KMS_KEY_VERSION="1",
         )
         (root / "images.env").write_text(
             "".join(f"{key}={value}\n" for key, value in sorted(inputs.items())),

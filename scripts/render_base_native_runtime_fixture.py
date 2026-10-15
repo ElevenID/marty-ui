@@ -47,6 +47,7 @@ SPEC_KEYS = frozenset(
         "ca_file",
         "policy_directory",
         "kms_url",
+        "kms_ca_file",
         "kms_token_file",
         "integration_secret_kms_url",
         "integration_secret_kms_ca_file",
@@ -86,9 +87,14 @@ def validate_spec(spec):
     assert all(type(port) is int and 0 < port < 65536 for port in ports)
     owned_url(spec["database_url"], {"postgres", "postgresql"})
     owned_url(spec["redis_url"], {"redis"})
-    owned_url(spec["kms_url"], {"http"})
+    owned_url(spec["kms_url"], {"https"})
     kms = urlsplit(spec["kms_url"])
     assert not kms.username and not kms.password and kms.path in {"", "/"}
+    kms_ca = Path(spec["kms_ca_file"])
+    assert kms_ca.is_absolute() and kms_ca.is_file()
+    kms_ca_bytes = kms_ca.read_bytes()
+    assert b"BEGIN CERTIFICATE" in kms_ca_bytes
+    assert b"PRIVATE KEY" not in kms_ca_bytes
     for name in ("peer_origin", "legacy_origin"):
         owned_url(spec[name], {"http"})
         assert not urlsplit(spec[name]).username and not urlsplit(spec[name]).password
@@ -129,6 +135,7 @@ def fixture_overlay(spec, selected):
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL": spec["peer_origin"],
         "DIDCOMM_TLS_CA_FILE": spec["ca_file"],
         "DIDCOMM_KMS_ADDR": spec["kms_url"],
+        "DIDCOMM_KMS_CA_CERT_FILE": spec["kms_ca_file"],
         "DIDCOMM_KMS_TOKEN_FILE": spec["kms_token_file"],
         "INTEGRATION_SECRET_KMS_URL": spec["integration_secret_kms_url"],
         "INTEGRATION_SECRET_KMS_CA_FILE": spec["integration_secret_kms_ca_file"],

@@ -123,10 +123,14 @@ impl Process {
         let deadline = Instant::now() + Duration::from_secs(45);
         loop {
             self.check_output();
-            assert!(
-                self.child.lock().unwrap().try_wait().unwrap().is_none(),
-                "Flow exited before readiness"
-            );
+            if let Some(status) = self.child.lock().unwrap().try_wait().unwrap() {
+                let stderr = std::fs::read_to_string(self.directory.join("flow.stderr"))
+                    .unwrap_or_else(|_| "Flow stderr unavailable".into());
+                panic!(
+                    "Flow exited before readiness ({status}); bounded synthetic stderr: {}",
+                    stderr.chars().take(2048).collect::<String>()
+                );
+            }
             let remaining = deadline
                 .checked_duration_since(Instant::now())
                 .expect("Owned Flow readiness deadline");
@@ -376,6 +380,8 @@ pub(super) async fn run(database_url: &str, redis_url: &str) {
     assert_eq!(environment["ENVIRONMENT"], "development");
     assert_eq!(environment["ISSUANCE_GRPC_TARGET"], native.origin());
     assert_eq!(environment["ISSUANCE_SERVICE_URL"], peers.url("legacy"));
+    assert_eq!(environment["BAO_ADDR"], "https://127.0.0.1:18200");
+    assert!(Path::new(&environment["BAO_CACERT"]).is_file());
     assert_eq!(
         environment["ISSUANCE_NATIVE_SERVICE_URL"],
         "http://issuance-native:8005"
