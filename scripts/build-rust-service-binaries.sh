@@ -24,6 +24,6 @@ exec cargo build --locked --release "$@" \
   -p marty-verification-service --bin marty-verification-service \
   -p marty-issuance-service --bin marty-issuance-service --bin marty-canvas-sync-worker --bin marty-passport-beta-bureau --bin marty-passport-provider-ingress \
   -p marty-canvas-sandbox --bin marty-canvas-sandbox \
-  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap \
+  -p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge \
   -p marty-deployment-profile --bin marty-deployment-profile \
   -p marty-compliance-profile --bin marty-compliance-profile

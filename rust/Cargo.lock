@@ -4503,6 +4503,8 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "http 1.5.0",
+ "hyper",
+ "hyper-util",
  "marty-openbao-http",
  "mmf-platform",
  "reqwest",
