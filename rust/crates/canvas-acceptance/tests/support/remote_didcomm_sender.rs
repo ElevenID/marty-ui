@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 
 pub(super) struct RemoteSenderFixture {
     pub(super) base_url: String,
+    pub(super) ca_file: PathBuf,
     pub(super) token_file: PathBuf,
     pub(super) reference: String,
     pub(super) public_key: String,
@@ -17,7 +18,7 @@ impl RemoteSenderFixture {
         let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL")
             .expect("Canvas DIDComm requires disposable plugin OpenBao URL");
         let url = url::Url::parse(&base_url).expect("OpenBao URL");
-        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert!(url.port().is_some());
         assert_eq!(url.path(), "/");
@@ -25,7 +26,11 @@ impl RemoteSenderFixture {
         assert!(url.query().is_none() && url.fragment().is_none());
         let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN")
             .expect("Canvas DIDComm requires disposable plugin OpenBao root token");
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let ca_file = PathBuf::from(
+            std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE")
+                .expect("Canvas DIDComm requires the disposable OpenBao public CA"),
+        );
+        let client = super::issuance_named_peers::canvas_openbao_client(&ca_file);
         let name = format!("canvas_{}", uuid::Uuid::new_v4().simple());
         let sender_key_id = format!("{issuer_did}#key-1");
         let created: Value = client
@@ -76,6 +81,7 @@ impl RemoteSenderFixture {
         std::fs::write(&token_file, token).unwrap();
         Self {
             base_url,
+            ca_file,
             token_file,
             reference,
             public_key: public_key.to_owned(),
@@ -83,6 +89,11 @@ impl RemoteSenderFixture {
     }
 
     pub(super) fn client(&self) -> RemoteDidcommKms {
-        RemoteDidcommKms::new(&self.base_url, self.token_file.clone()).unwrap()
+        RemoteDidcommKms::new(
+            &self.base_url,
+            self.token_file.clone(),
+            Some(self.ca_file.clone()),
+        )
+        .unwrap()
     }
 }

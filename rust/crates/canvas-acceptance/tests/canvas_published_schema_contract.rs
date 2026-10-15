@@ -52,7 +52,13 @@ mod runtime_failure_diagnostics;
 async fn scoped_transit_signer_verifies_without_key_read_authority() {
     let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
     let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
-    let signer = issuance_named_peers::RemoteIssuerSigner::create(&base_url, &root_token).await;
+    let ca_file = std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap();
+    let signer = issuance_named_peers::RemoteIssuerSigner::create(
+        &base_url,
+        &root_token,
+        std::path::Path::new(&ca_file),
+    )
+    .await;
     let payload = b"canvas managed issuer signing proof";
     let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
     signer

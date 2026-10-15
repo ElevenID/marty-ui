@@ -23,7 +23,8 @@ const CREDENTIAL_GRANT_KEY: &str =
 
 async fn credential_grant_token(directory: &std::path::Path, base_url: &str) -> std::path::PathBuf {
     let root = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
-    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let ca_file = std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap();
+    let client = super::issuance_named_peers::canvas_openbao_client(std::path::Path::new(&ca_file));
     let key_url = format!("{base_url}/v1/transit/keys/{CREDENTIAL_GRANT_KEY}");
     let lookup = client
         .get(&key_url)
@@ -224,6 +225,7 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             RemoteIssuerSigner::create(
                 &remote_sender.base_url,
                 &std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap(),
+                &remote_sender.ca_file,
             )
             .await,
         );

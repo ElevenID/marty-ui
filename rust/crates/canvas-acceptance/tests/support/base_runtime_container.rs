@@ -262,7 +262,7 @@ struct OwnedContainer {
     creation_attempted: bool,
     child: &'static str,
     prepared: Option<(String, String)>,
-    kms: Option<(String, String)>,
+    kms: Option<(String, String, String)>,
 }
 
 impl OwnedContainer {
@@ -348,6 +348,10 @@ impl OwnedContainer {
             (
                 "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
                 self.kms.as_ref().map(|v| v.1.as_str()),
+            ),
+            (
+                "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
+                self.kms.as_ref().map(|v| v.2.as_str()),
             ),
         ] {
             let prefix = format!("{name}=");
@@ -474,6 +478,7 @@ struct KmsSidecar {
     image: String,
     url: String,
     root_token: String,
+    ca_file: PathBuf,
 }
 
 impl KmsSidecar {
@@ -484,6 +489,8 @@ impl KmsSidecar {
         let image = std::env::var("MARTY_CANVAS_OPENBAO_IMAGE")
             .map_err(|_| "Canvas KMS plugin image is missing")?;
         require(!image.is_empty(), "Canvas KMS plugin image is empty")?;
+        let ca_file =
+            std::env::temp_dir().join(format!("canvas-kms-ca-{}.pem", Uuid::new_v4().simple(),));
         let mut command = Command::new(python);
         command.env_clear();
         for name in ["PATH", "SystemRoot", "WINDIR"] {
@@ -495,7 +502,9 @@ impl KmsSidecar {
             .env("MARTY_CANVAS_OPENBAO_IMAGE", &image)
             .arg(root.join("scripts/ci/start-canvas-didcomm-openbao.py"))
             .arg("--namespace-postgres-id")
-            .arg(postgres);
+            .arg(postgres)
+            .arg("--ca-output")
+            .arg(&ca_file);
         let output = super::bounded_fixture_command::run(
             &mut command,
             None,
@@ -524,8 +533,16 @@ impl KmsSidecar {
             .as_str()
             .ok_or("Disposable Canvas KMS URL is missing")?;
         require(
-            url == "http://127.0.0.1:8200",
+            url == "https://127.0.0.1:8200",
             "Canvas KMS namespace URL differs",
+        )?;
+        require(
+            value["ca_cert_file"].as_str() == ca_file.to_str()
+                && ca_file.is_file()
+                && std::fs::read_to_string(&ca_file).is_ok_and(|pem| {
+                    pem.contains("BEGIN CERTIFICATE") && !pem.contains("PRIVATE KEY")
+                }),
+            "Canvas KMS public CA is invalid",
         )?;
         let root_token = value["root_token"]
             .as_str()
@@ -540,10 +557,18 @@ impl KmsSidecar {
             image,
             url: url.into(),
             root_token: root_token.into(),
+            ca_file,
         })
     }
 
     fn close(self) -> Result<(), String> {
+        let result = self.close_container();
+        let ca_cleanup = std::fs::remove_file(&self.ca_file)
+            .map_err(|_| "Canvas KMS public CA cleanup failed".to_owned());
+        retain_failure(result, ca_cleanup)
+    }
+
+    fn close_container(&self) -> Result<(), String> {
         let found = docker(&[
             "ps",
             "--all",
@@ -699,7 +724,14 @@ async fn run_child(
             return result;
         }
     };
-    container.kms = Some((kms.url.clone(), kms.root_token.clone()));
+    container
+        .mounts
+        .insert(kms.ca_file.to_str().unwrap().to_owned());
+    container.kms = Some((
+        kms.url.clone(),
+        kms.root_token.clone(),
+        kms.ca_file.to_str().unwrap().to_owned(),
+    ));
     let result = execute(&mut container).await;
     let cleanup = container.cleanup();
     let kms_cleanup = kms.close();
@@ -760,6 +792,7 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         .ok_or("Canvas KMS sidecar is missing")?;
     let kms_url_env = format!("MARTY_CANVAS_OPENBAO_URL={}", kms.0);
     let kms_token_env = format!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN={}", kms.1);
+    let kms_ca_env = format!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE={}", kms.2);
     let mounts: Vec<_> = container
         .mounts
         .iter()
@@ -793,6 +826,8 @@ async fn execute(container: &mut OwnedContainer) -> Result<(), String> {
         &kms_url_env,
         "--env",
         &kms_token_env,
+        "--env",
+        &kms_ca_env,
         "--env",
         "PYTHONDONTWRITEBYTECODE=1",
     ];
@@ -973,25 +1008,37 @@ mod tests {
             *changed.pointer_mut(pointer).unwrap() = value;
             assert!(container.checked(&changed, &id).is_err(), "{pointer}");
         }
-        container.kms = Some(("http://127.0.0.1:8200".into(), "a".repeat(32)));
+        container.kms = Some((
+            "https://127.0.0.1:8200".into(),
+            "a".repeat(32),
+            "/synthetic/canvas-ca.pem".into(),
+        ));
+        container.mounts.insert("/synthetic/canvas-ca.pem".into());
         let mut kms_info = info.clone();
         kms_info["Config"]["Env"].as_array_mut().unwrap().extend([
-            json!("MARTY_CANVAS_OPENBAO_URL=http://127.0.0.1:8200"),
+            json!("MARTY_CANVAS_OPENBAO_URL=https://127.0.0.1:8200"),
             json!(format!(
                 "MARTY_CANVAS_OPENBAO_ROOT_TOKEN={}",
                 "a".repeat(32)
             )),
+            json!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE=/synthetic/canvas-ca.pem"),
         ]);
+        kms_info["Mounts"].as_array_mut().unwrap().push(json!({
+            "Type":"bind", "Source":"/synthetic/canvas-ca.pem",
+            "Destination":"/synthetic/canvas-ca.pem", "RW":false,
+        }));
         container.checked(&kms_info, &id).unwrap();
         for (index, value) in [
             (6, json!("MARTY_CANVAS_OPENBAO_URL=http://foreign:8200")),
             (7, json!("MARTY_CANVAS_OPENBAO_ROOT_TOKEN=wrong")),
+            (8, json!("MARTY_CANVAS_OPENBAO_CA_CERT_FILE=/foreign")),
         ] {
             let mut changed = kms_info.clone();
             changed["Config"]["Env"][index] = value;
             assert!(container.checked(&changed, &id).is_err());
         }
         container.kms = None;
+        container.mounts.remove("/synthetic/canvas-ca.pem");
         container.child = KUBERNETES_CHILD;
         container.prepared = Some(("/synthetic/prepared.json".into(), "a".repeat(64)));
         container.mounts.insert("/synthetic/prepared.json".into());

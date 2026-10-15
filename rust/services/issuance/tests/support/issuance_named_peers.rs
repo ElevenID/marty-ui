@@ -61,9 +61,24 @@ pub(super) struct RemoteIssuerSigner {
     verifying_key: VerifyingKey,
 }
 
+pub(super) fn canvas_openbao_client(ca_file: &std::path::Path) -> reqwest::Client {
+    let pem = std::fs::read(ca_file).expect("disposable OpenBao public CA");
+    let certificate = reqwest::Certificate::from_pem(&pem).expect("OpenBao CA certificate");
+    reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(certificate)
+        .build()
+        .unwrap()
+}
+
 impl RemoteIssuerSigner {
-    pub(super) async fn create(base_url: &str, root_token: &str) -> Self {
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    pub(super) async fn create(
+        base_url: &str,
+        root_token: &str,
+        ca_file: &std::path::Path,
+    ) -> Self {
+        assert!(base_url.starts_with("https://127.0.0.1:"));
+        let client = canvas_openbao_client(ca_file);
         let key_name = format!("canvas_issuer_{}", uuid::Uuid::new_v4().simple());
         client
             .post(format!("{base_url}/v1/transit/keys/{key_name}"))
