@@ -21830,3 +21830,10 @@ JWE operations with that token, and retains relevant Java call frames on
 failure. This requires hosted Docker confirmation; do not infer that the
 403 or K12 is resolved. Rust Service Images and selfhost tests were still
 running, so wait for their outcomes before pushing the next grouped batch.
+The Windows Rust 1.95 follow-up passed 15/15 Kubernetes-native tests after
+the shell fixture correction; the remaining exact envsubst test needs Linux.
+The base development Compose graph still uses stock Keycloak 25.0 and an
+HTTP OpenBao `server -dev` listener. Its initializers and several workloads
+point to `http://openbao:8200`. The production KMS-only claim must exclude
+that graph until it uses the remote Keycloak image and verified HTTPS CA
+distribution throughout; do not weaken HTTPS clients to keep it running.
