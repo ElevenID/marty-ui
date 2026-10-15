@@ -22836,3 +22836,16 @@ The disposable success does not cleanse or qualify either installed database;
 do not delete those rows before an exact-image cutover and a recoverable
 clean-install/rollback procedure are ready. Merge-group CI for #1344 is still
 running at this checkpoint.
+
+The remaining active Issuance image and Canvas worker startup fixtures still
+generate RSA CA/leaf TLS private-key files for
+`scripts/synthetic_integration_secret_service.py`. A local attempt to replace
+that peer with only a disposable HTTPS OpenBao listener was rejected after an
+actual packaged Issuance startup failed `InvalidConfig`: native Issuance
+always performs an integration-secret encrypt/decrypt proof at startup, even
+with an empty secret table. The uncommitted fixture swap was fully reverted;
+the follow-up worktree is clean at `6615e0688`. Retire these test private-key
+files by providing the full envelope API through the real Rust Signing Keys
+service with non-exportable OpenBao TLS and Transit keys, then rerun the
+packaged Issuance and Canvas checks locally before pushing a grouped PR.
+Keep the round-trip startup check and the KMS-only invariant intact.
