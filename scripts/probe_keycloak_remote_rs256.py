@@ -521,13 +521,28 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 with urlopen(callback_request, timeout=8) as response:
                     if response.status != 200:
                         raise RuntimeError("CIBA device approval was not acknowledged")
-                time.sleep(max(1, int(ciba.get("interval", 5))))
-                approved = http_json(base + "/realms/11id/protocol/openid-connect/token", {
-                    "client_id": "probe-ciba",
-                    "client_secret": "synthetic-ciba-probe-only",
-                    "grant_type": "urn:openid:params:grant-type:ciba",
-                    "auth_req_id": auth_req_id,
-                })
+                approved = None
+                for _ in range(4):
+                    time.sleep(max(1, int(ciba.get("interval", 5))))
+                    try:
+                        approved = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                            "client_id": "probe-ciba",
+                            "client_secret": "synthetic-ciba-probe-only",
+                            "grant_type": "urn:openid:params:grant-type:ciba",
+                            "auth_req_id": auth_req_id,
+                        })
+                        break
+                    except HTTPError as error:
+                        details = json.loads(error.read())
+                        if error.code != 400 or details.get("error") not in (
+                            "authorization_pending", "slow_down"
+                        ):
+                            raise RuntimeError(
+                                f"Approved CIBA poll failed: HTTP {error.code} "
+                                f"{details.get('error')}"
+                            ) from error
+                if approved is None:
+                    raise RuntimeError("Approved CIBA request never issued a token")
                 for field in ("access_token", "id_token"):
                     verify_jwt(approved[field], jwks_11id,
                                f"{prefix}-11id-rs256-v1", base + "/realms/11id")
