@@ -21874,3 +21874,10 @@ request path (never token or response bytes) on HTTP failure and compares
 the Keycloak-mounted token file digest with the host token file after
 rotation. It remains unpushed while the other lanes of the same CI run
 finish, and the underlying K12 issue remains unresolved.
+The same local grouped commit `17b8ffeaa` restores the scoped CIBA token
+after proving token-loss denial, verifies a new remote CIBA request succeeds,
+then starts the browser flow. The prior probe left CIBA access intentionally
+broken across unrelated browser acceptance. Browser failures now report only
+the route and a closed error marker, and Keycloak logs are filtered from the
+start of the browser phase to avoid mistaking the expected CIBA 403 for the
+browser failure. Live behavior remains unverified until the next hosted run.
