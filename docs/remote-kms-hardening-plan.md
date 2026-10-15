@@ -21732,3 +21732,28 @@ The broader self-host/bootstrap-related Python batch passed 269 tests
 (seven skipped on Windows). Local Docker Desktop processes were present,
 but `com.docker.service` was stopped and could not be started from this
 session; this still leaves the real installed-bundle handoff unqualified.
+
+2026-10-15 grouped hosted gate request: fetched PR #1344's unchanged
+remote head `ba9b9b4ec` and confirmed it is an ancestor of the clean local
+head. Ten locally batched KMS TLS, Canvas, release-contract, and installed
+handoff commits were pushed together to PR #1344 at `ce6fb9add`. Before the
+push, the 14 affected source/release Python modules passed 247 tests and
+534 mutation subtests (one skipped); `scripts/check_rust_ownership.py` and
+the self-host Canvas worker Compose render passed. A full Windows Python
+suite was stopped after it stalled inside the Docker-backed Passport probe;
+no full-suite pass is claimed. Local Docker remains unavailable, so the
+new head's hosted Linux/Docker checks are necessary acceptance evidence.
+The prior immutable failed PR head `ba9b9b4ec` had 62 release-contract
+failures and several Rust/image failures; its logs remain evidence only for
+that older head. The current PR head had no checks registered immediately
+after the push and must be observed by exact SHA before any merge decision.
+
+Development Compose KMS graph inventory: `docker-compose.base.yml` still
+gives HTTP OpenBao to `openbao-init`, `db-migrate`, `gateway`, `notification`,
+`signing-keys`, `flow`, `issuance`, and `canvas-sync-worker`; the DIDComm
+overlay also uses that listener. A CA-only client volume and a certificate
+with the `openbao` DNS SAN are required for graph-wide verified HTTPS.
+OpenBao's stock dev TLS emits a generated listener certificate and key
+inside its server directory but cannot be assumed to match Compose DNS;
+the existing Go self-host initializer explicitly issues a server certificate
+for `openbao` and loopback. No dev graph conversion is claimed yet.
