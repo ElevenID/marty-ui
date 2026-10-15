@@ -22748,3 +22748,23 @@ unavailable, so the connected KMS run is pending the next grouped PR head.
 This proof will cover the Flow channel primitive, while installed Flow service
 configuration, Keycloak database cutover and release-artifact qualification
 remain separate acceptance requirements.
+
+2026-10-15 grouped UI merge qualification: `015210c63` completed all 23 jobs
+in [exact-head CI run 38812248400](https://github.com/ElevenID/marty-ui/actions/runs/38812248400).
+The follow-on Flow mTLS gate at `a849420fe` did not start CI because `main`
+advanced into a PR workflow conflict. The grouped branch merged current main
+without restoring duplicate or obsolete contract steps: the HTTPS scoped
+Signing Keys probe already runs the remote holder lifecycle and managed
+passport chain, while retired Gateway test files and the old Raft recovery
+script are replaced by the live HTTPS grant and Go Raft probes. The merged
+head `5931c5ba4` is pushed to [PR #1344](https://github.com/ElevenID/marty-ui/pull/1344).
+Local review of the merged workflow found a duplicate holder step and kept
+the single owner in `probe_signing_keys_openbao_policy.py`; the focused
+Rust-contract tests passed (22), the self-host and Rust-contract group passed
+(65), and the performance suite passed 152 of 153 tests before removal of the
+duplicate; the formerly failing single test then passed. Ruff, YAML parsing,
+and diff hygiene passed. [Exact-head CI run 38815681551](https://github.com/ElevenID/marty-ui/actions/runs/38815681551)
+is running. These checks have not yet established a published artifact or an
+installed KMS-only cutover. The generic Keycloak `COMPONENT_CONFIG` table must
+remain, but its existing four `privateKey` and four generated `secret` rows in
+each beta/self-host database still require removal and a read-only SQL gate.
