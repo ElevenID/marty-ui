@@ -106,7 +106,9 @@ final class TransitKey {
     }
 
     X509Certificate certificate(PublicKey expected) {
-        try (var input = Files.newInputStream(Path.of(required("MARTY_KEYCLOAK_RS256_CERT_FILE")))) {
+        Path certificateFile = Path.of(required("MARTY_KEYCLOAK_RS256_CERT_DIR"),
+                name + ".crt");
+        try (var input = Files.newInputStream(certificateFile)) {
             X509Certificate certificate = (X509Certificate) CertificateFactory.getInstance("X.509")
                     .generateCertificate(input);
             certificate.checkValidity();

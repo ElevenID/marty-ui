@@ -38,6 +38,15 @@ def http_json(url: str, body: dict[str, str] | None = None) -> dict:
         return json.load(response)
 
 
+def post_admin(url: str, token: str, payload: dict) -> None:
+    request = Request(url, data=json.dumps(payload).encode(), method="POST",
+                      headers={"Authorization": "Bearer " + token,
+                               "Content-Type": "application/json"})
+    with urlopen(request, timeout=8) as response:
+        if response.status not in (201, 204):
+            raise RuntimeError("Keycloak admin write returned an unexpected status")
+
+
 def wait_for(path: Path, seconds: int = 30) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -79,7 +88,8 @@ def database_key_counts(container: str) -> tuple[int, int]:
     return counts.get("privateKey", 0), counts.get("secret", 0)
 
 
-def verify_jwt(jwt: str, jwks: dict, expected_kid: str) -> None:
+def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
+               expected_issuer: str) -> bytes:
     parts = jwt.split(".")
     if len(parts) != 3:
         raise RuntimeError("Keycloak did not return a JWT")
@@ -90,6 +100,9 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str) -> None:
     header = json.loads(decoded(parts[0]))
     if header.get("alg") != "RS256" or header.get("kid") != expected_kid:
         raise RuntimeError("Keycloak JWT did not use the pinned remote RS256 key")
+    claims = json.loads(decoded(parts[1]))
+    if claims.get("iss") != expected_issuer:
+        raise RuntimeError("Keycloak JWT came from an unexpected realm")
     key = next((item for item in jwks["keys"] if item.get("kid") == expected_kid), None)
     if key is None or key.get("kty") != "RSA":
         raise RuntimeError("Keycloak JWKS omitted the remote RSA public key")
@@ -99,6 +112,7 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str) -> None:
     ).public_key()
     public.verify(decoded(parts[2]), f"{parts[0]}.{parts[1]}".encode(),
                   padding.PKCS1v15(), hashes.SHA256())
+    return decoded(key["n"])
 
 
 def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
@@ -116,6 +130,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
         root = Path(temporary)
         ca_dir = root / "ca"
         ca_dir.mkdir()
+        cert_dir = root / "certs"
+        cert_dir.mkdir()
         root_token = root / "root-token"
         scoped_token = root / "keycloak-token"
         root_token.write_text(secrets.token_hex(32), encoding="ascii")
@@ -169,11 +185,6 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 raise RuntimeError("OpenBao HTTPS did not become healthy")
 
             bao("secrets", "enable", "transit")
-            name = f"{prefix}-master-rs256"
-            hmac_name = f"{prefix}-master-hs512"
-            bao("write", f"transit/keys/{name}", "type=rsa-2048", "exportable=false")
-            bao("write", f"transit/keys/{hmac_name}", "type=hmac",
-                "key_size=64", "exportable=false")
             bao_api("sys/mounts/pki", {"type": "pki"})
             ca = bao_api("pki/root/generate/internal", {
                 "common_name": "Marty disposable Keycloak CA", "ttl": "24h",
@@ -186,19 +197,27 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 "max_ttl": "1h", "use_csr_common_name": False,
                 "use_csr_sans": False,
             })
-            csr = bao_api(f"transit/keys/{name}/csr", {"version": 1})["data"]["csr"]
-            signed = bao_api("pki/sign/keycloak-rs256", {
-                "csr": csr, "common_name": "master.keycloak.internal", "ttl": "1h",
-            })["data"]
-            if "private_key" in signed:
-                raise RuntimeError("OpenBao exported the remote RS256 private key")
-            certificate = root / "master-rs256.crt"
-            certificate.write_text(signed["certificate"], encoding="ascii")
-            policy = f'path "transit/keys/{name}" {{ capabilities = ["read"] }}\n' \
-                     f'path "transit/sign/{name}" {{ capabilities = ["update"] }}\n' \
-                     f'path "transit/keys/{hmac_name}" {{ capabilities = ["read"] }}\n' \
-                     f'path "transit/hmac/{hmac_name}/sha2-512" {{ capabilities = ["update"] }}\n' \
-                     f'path "transit/verify/{hmac_name}/sha2-512" {{ capabilities = ["update"] }}\n'
+            policy = ""
+            for realm in ("master", "11id"):
+                name = f"{prefix}-{realm}-rs256"
+                hmac_name = f"{prefix}-{realm}-hs512"
+                bao("write", f"transit/keys/{name}", "type=rsa-2048",
+                    "exportable=false")
+                bao("write", f"transit/keys/{hmac_name}", "type=hmac",
+                    "key_size=64", "exportable=false")
+                csr = bao_api(f"transit/keys/{name}/csr", {"version": 1})["data"]["csr"]
+                signed = bao_api("pki/sign/keycloak-rs256", {
+                    "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": "1h",
+                })["data"]
+                if "private_key" in signed:
+                    raise RuntimeError("OpenBao exported a remote RS256 private key")
+                (cert_dir / f"{name}.crt").write_text(signed["certificate"],
+                                                        encoding="ascii")
+                policy += f'path "transit/keys/{name}" {{ capabilities = ["read"] }}\n' \
+                          f'path "transit/sign/{name}" {{ capabilities = ["update"] }}\n' \
+                          f'path "transit/keys/{hmac_name}" {{ capabilities = ["read"] }}\n' \
+                          f'path "transit/hmac/{hmac_name}/sha2-512" {{ capabilities = ["update"] }}\n' \
+                          f'path "transit/verify/{hmac_name}/sha2-512" {{ capabilities = ["update"] }}\n'
             bao("policy", "write", "keycloak-rs256-probe", "-", input_text=policy)
             scoped_token.write_text(bao("token", "create", "-policy=keycloak-rs256-probe",
                                         "-ttl=1h", "-field=token"), encoding="ascii")
@@ -211,13 +230,13 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 "--mount", f"type=bind,src={jar},dst=/opt/keycloak/providers/marty-kms-probe.jar,readonly",
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
-                "--mount", f"type=bind,src={certificate},dst=/run/kms/rs256.crt,readonly",
+                "--mount", f"type=bind,src={cert_dir},dst=/run/kms/certs,readonly",
                 "-e", "KEYCLOAK_ADMIN=probe",
                 "-e", "KEYCLOAK_ADMIN_PASSWORD=synthetic-probe-only",
                 "-e", "BAO_ADDR=https://openbao:8200",
                 "-e", "BAO_CACERT=/run/kms/ca.crt",
                 "-e", "BAO_TOKEN_FILE=/run/kms/token",
-                "-e", "MARTY_KEYCLOAK_RS256_CERT_FILE=/run/kms/rs256.crt",
+                "-e", "MARTY_KEYCLOAK_RS256_CERT_DIR=/run/kms/certs",
                 "-e", f"MARTY_KEYCLOAK_KMS_KEY_PREFIX={prefix}",
                 "-e", "MARTY_KEYCLOAK_KMS_KEY_VERSION=1",
                 keycloak_image, "start-dev",
@@ -247,23 +266,52 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 logs = "\n".join(line for line in (observed.stdout + observed.stderr).splitlines()
                                  if "ERROR" in line or "Caused by" in line)[:2500]
                 raise RuntimeError(f"Keycloak JWKS request failed: HTTP {error.code}\n{logs}") from error
-            verify_jwt(token, jwks, name + "-v1")
+            master_modulus = verify_jwt(token, jwks, f"{prefix}-master-rs256-v1",
+                                        base + "/realms/master")
+            post_admin(base + "/admin/realms", token,
+                       {"realm": "11id", "enabled": True,
+                        "sslRequired": "NONE"})
+            post_admin(base + "/admin/realms/11id/users", token, {
+                "username": "probe11", "enabled": True,
+                "firstName": "Disposable", "lastName": "Probe",
+                "email": "probe11@example.invalid", "emailVerified": True,
+                "credentials": [{"type": "password", "value": "synthetic-probe-only",
+                                 "temporary": False}],
+            })
+            if database_key_counts(kc_name) != (0, 0):
+                raise RuntimeError("11id realm creation stored private key material")
+            try:
+                token_11id = http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                    "client_id": "admin-cli", "grant_type": "password",
+                    "username": "probe11", "password": "synthetic-probe-only",
+                })["access_token"]
+            except HTTPError as error:
+                response = json.loads(error.read())
+                raise RuntimeError(f"11id token request failed: {error.code} "
+                                   f"{response.get('error')} {response.get('error_description')}") from error
+            jwks_11id = http_json(base + "/realms/11id/protocol/openid-connect/certs")
+            realm_modulus = verify_jwt(token_11id, jwks_11id,
+                                       f"{prefix}-11id-rs256-v1",
+                                       base + "/realms/11id")
+            if realm_modulus == master_modulus:
+                raise RuntimeError("master and 11id reused one remote RSA key")
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("Keycloak token issuance stored private key material")
             scoped_token.write_text("invalid-disposable-token", encoding="ascii")
-            try:
-                http_json(base + "/realms/master/protocol/openid-connect/token", {
-                    "client_id": "admin-cli", "grant_type": "password",
-                    "username": "probe", "password": "synthetic-probe-only",
-                })
-            except HTTPError as error:
-                if error.code != 500:
-                    raise RuntimeError("OpenBao loss returned an unexpected status") from error
-            else:
-                raise RuntimeError("Keycloak issued a token without its remote signer")
+            for realm, username in (("master", "probe"), ("11id", "probe11")):
+                try:
+                    http_json(base + f"/realms/{realm}/protocol/openid-connect/token", {
+                        "client_id": "admin-cli", "grant_type": "password",
+                        "username": username, "password": "synthetic-probe-only",
+                    })
+                except HTTPError as error:
+                    if error.code != 500:
+                        raise RuntimeError("OpenBao loss returned an unexpected status") from error
+                else:
+                    raise RuntimeError(f"{realm} issued a token without its remote signer")
             if database_key_counts(kc_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
-            print("Remote RS256 Keycloak token/JWKS, KMS-loss denial, and zero-private-row probe passed")
+            print("Remote RS256 master/11id token/JWKS, KMS-loss denial, and zero-private-row probe passed")
         finally:
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)

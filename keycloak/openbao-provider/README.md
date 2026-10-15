@@ -10,17 +10,21 @@ fail closed until their remote operations are implemented and qualified.
 On a fresh disposable Keycloak 25.0.6 instance, this JAR allowed the master
 realm to start with all four expected KeyProvider components and no
 `privateKey` or `secret` entries in `COMPONENT_CONFIG`. A live disposable
-HTTPS OpenBao probe then issued a master-realm RS256 token, verified it with
-Keycloak's JWKS, and found zero private rows after issuance. Invalidating the
-scoped OpenBao token made subsequent issuance fail with HTTP 500, again with
-zero private rows. The probe provisions its CA and leaf certificate inside
-OpenBao; only public certificates leave that boundary.
+HTTPS OpenBao probe then created `11id` and issued RS256 tokens in both
+realms. It checked realm issuers, distinct remote RSA public keys, and each
+signature against the corresponding Keycloak JWKS. Direct database scans
+after startup, realm creation, and issuance found zero private-key or
+generated-secret rows. Invalidating the scoped OpenBao token made issuance
+fail with HTTP 500 in both realms; the database remained clear. The probe
+provisions its CA and leaf certificates inside OpenBao; only public
+certificates leave that boundary.
 
 Do not add this JAR to a production Keycloak image or the protected passport
 fixture. The completed extension must cover remote RSA-OAEP and AES behavior
-required by Keycloak; handle versioned public keys and rotation; support both
-`master` and `11id`; and pass the PostgreSQL custody verifier plus connected
-login, session and refresh tests.
+required by Keycloak; handle versioned public keys and rotation; and pass the
+PostgreSQL custody verifier plus connected login, session and refresh tests
+for both realms. The two-realm proof uses a disposable H2 database and direct
+grant, not the product's browser login or installed stack.
 
 The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
 may change between releases. Keycloak's Admin REST component representation
