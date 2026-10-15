@@ -21668,3 +21668,14 @@ that transport must be changed with CA-only distribution rather than merely
 updating a test expectation. The affected-Rust planner selection still has
 18 failing cases (49 passed, one skipped) from stale source markers and is
 part of the remaining local CI batch.
+
+2026-10-15 Rust planner repair, local UI commit `660d2a0a2`: refreshed all
+source-backed non-Cargo consumer markers that had drifted during keyless TLS
+and async gRPC migration. The planner again observes the actual remote-TLS
+Auth/Gateway channel, CA-bound Gateway organization/event streams, async
+control-plane clients, and authenticated event publication. Its full local
+suite passed 55 tests and 534 mutation subtests (one skipped). The native
+DIDComm gate remains green. Separate Kubernetes token/release checks passed
+53 tests and issuance consumer/Kubernetes service coverage passed 88. These
+are local source and render gates, not proof of live KMS cryptography or
+published-image behavior; PR #1344 still awaits the grouped push/hosted CI.
