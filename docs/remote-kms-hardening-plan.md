@@ -21300,3 +21300,13 @@ development/beta Compose and Oracle Kubernetes manifests, and the official
 release transaction does not publish the pinned Keycloak image. Those are
 the next packaging/cutover gates; do not infer deployment readiness from the
 local flow proof.
+
+The CI-shaped local build completed for both image Dockerfiles. Its first
+completed-CIBA run returned HTTP 400 after the simulated callback had been
+acknowledged; the original probe polled exactly once. Grouped UI commit
+`6db04db23` bounds polling to four attempts at the advertised interval,
+accepting only `authorization_pending`/`slow_down` while waiting and failing
+on any other error or absent final token. The same rebuilt image tags then
+passed the complete browser/CIBA/PostgreSQL probe. This is local evidence;
+the hosted CI lane has not run and remains staged in the dirty grouped UI
+worktree.
