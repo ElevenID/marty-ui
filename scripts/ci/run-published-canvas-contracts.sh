@@ -536,7 +536,8 @@ run_historical_serial_tests
 # root authority in this acceptance process; the native binary gets only the
 # exact-version read/pack token file provisioned by the Rust fixture.
 kms_config=$(mktemp "${RUNNER_TEMP:?}/canvas-kms.XXXXXX")
-kms_ca_file=$(mktemp "${RUNNER_TEMP:?}/canvas-kms-ca.XXXXXX.pem")
+kms_ca_dir=$(mktemp -d "${RUNNER_TEMP:?}/canvas-kms-ca.XXXXXX")
+kms_ca_file="$kms_ca_dir/ca.crt"
 chmod 600 "$kms_config"
 kms_container=""
 kms_owner_pid=$BASHPID
@@ -546,7 +547,8 @@ cleanup_canvas_kms() {
     docker rm -f "$kms_container" >/dev/null 2>&1 || true
     kms_container=""
   fi
-  rm -f -- "$kms_config" "$kms_ca_file"
+  rm -f -- "$kms_config" "$kms_ca_file" "$kms_ca_dir/.ca.crt.tmp"
+  rmdir -- "$kms_ca_dir"
 }
 trap cleanup_canvas_kms EXIT
 python3 "$(dirname "${BASH_SOURCE[0]}")/start-canvas-didcomm-openbao.py" \
@@ -556,7 +558,7 @@ kms_url=$(jq -er '.url' "$kms_config")
 kms_root_token=$(jq -er '.root_token' "$kms_config")
 [[ "$kms_container" =~ ^canvas-kms-[a-f0-9]{12}$ ]]
 [[ "$kms_url" =~ ^https://127\.0\.0\.1:[0-9]+$ ]]
-[[ "$kms_root_token" =~ ^[a-f0-9]{32}$ ]]
+[[ "$kms_root_token" =~ ^[a-f0-9]{64}$ ]]
 [[ "$(jq -er '.ca_cert_file' "$kms_config")" == "$kms_ca_file" ]]
 grep -q -- 'BEGIN CERTIFICATE' "$kms_ca_file"
 ! grep -q -- 'PRIVATE KEY' "$kms_ca_file"

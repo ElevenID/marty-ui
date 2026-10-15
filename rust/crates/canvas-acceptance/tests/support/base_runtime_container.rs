@@ -479,6 +479,7 @@ struct KmsSidecar {
     url: String,
     root_token: String,
     ca_file: PathBuf,
+    ca_dir: tempfile::TempDir,
 }
 
 impl KmsSidecar {
@@ -489,8 +490,11 @@ impl KmsSidecar {
         let image = std::env::var("MARTY_CANVAS_OPENBAO_IMAGE")
             .map_err(|_| "Canvas KMS plugin image is missing")?;
         require(!image.is_empty(), "Canvas KMS plugin image is empty")?;
-        let ca_file =
-            std::env::temp_dir().join(format!("canvas-kms-ca-{}.pem", Uuid::new_v4().simple(),));
+        let ca_dir = tempfile::Builder::new()
+            .prefix("canvas-kms-ca-")
+            .tempdir()
+            .map_err(|_| "Canvas KMS public CA directory could not be created")?;
+        let ca_file = ca_dir.path().join("ca.crt");
         let mut command = Command::new(python);
         command.env_clear();
         for name in ["PATH", "SystemRoot", "WINDIR"] {
@@ -548,7 +552,7 @@ impl KmsSidecar {
             .as_str()
             .ok_or("Disposable Canvas KMS token is missing")?;
         require(
-            root_token.len() == 32 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit()),
+            root_token.len() == 64 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit()),
             "Disposable Canvas KMS token is invalid",
         )?;
         Ok(Self {
@@ -558,12 +562,15 @@ impl KmsSidecar {
             url: url.into(),
             root_token: root_token.into(),
             ca_file,
+            ca_dir,
         })
     }
 
     fn close(self) -> Result<(), String> {
         let result = self.close_container();
-        let ca_cleanup = std::fs::remove_file(&self.ca_file)
+        let ca_cleanup = self
+            .ca_dir
+            .close()
             .map_err(|_| "Canvas KMS public CA cleanup failed".to_owned());
         retain_failure(result, ca_cleanup)
     }

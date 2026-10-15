@@ -443,7 +443,7 @@ if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
   printf 'kms-start|%s\\n' "$1" >> "$TEST_LOG"
   [[ "${{2:-}}" == --ca-output && -n "${{3:-}}" ]] || exit 90
   printf '%s\\n' '-----BEGIN CERTIFICATE-----' 'synthetic-public-ca' '-----END CERTIFICATE-----' > "$3"
-  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"https://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ca_cert_file":"'"$3"'"}}'
+  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"https://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ca_cert_file":"'"$3"'"}}'
   exit 0
 fi
 exec "{Path(sys.executable).as_posix()}" "$@"
@@ -473,11 +473,11 @@ if [[ "$1" == -er ]]; then
     exit 0
   fi
   if [[ "$#" == 3 && "$2" == .ca_cert_file && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
-    printf '%s\n' "$RUNNER_TEMP"/canvas-kms-ca.*
+    printf '%s\n' "$RUNNER_TEMP"/canvas-kms-ca.*/ca.crt
     exit 0
   fi
   if [[ "$#" == 3 && "$2" == .root_token && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
-    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
     exit 0
   fi
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
