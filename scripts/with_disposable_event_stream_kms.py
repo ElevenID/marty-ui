@@ -71,7 +71,7 @@ class Bao:
 
 
 def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]:
-    if role not in {"event-stream", "signing-keys", "passport-edge", "oidf-edge"}:
+    if role not in {"event-stream", "signing-keys", "signing-keys-image", "passport-edge", "oidf-edge"}:
         raise RuntimeError("unknown disposable server TLS role")
     bao.request("POST", "sys/mounts/transit", {"type": "transit"})
     key_name = role + "-tls-" + secrets.token_hex(8)
@@ -93,11 +93,15 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
         "allow_any_name": True, "allow_localhost": True, "server_flag": True,
         "allow_ip_sans": True, "client_flag": False, "key_type": "ec", "key_bits": 256,
         "max_ttl": "24h", "use_csr_common_name": False,
+        "use_csr_sans": False,
     })
     csr = bao.request("POST", f"transit/keys/{key_name}/csr", {"version": 1})
-    sign_request = {"csr": csr["data"]["csr"], "common_name": "localhost", "ttl": "1h"}
-    if role == "signing-keys":
+    common_name = "synthetic-secret-service" if role == "signing-keys-image" else "localhost"
+    sign_request = {"csr": csr["data"]["csr"], "common_name": common_name, "ttl": "1h"}
+    if role in {"signing-keys", "signing-keys-image"}:
         sign_request["ip_sans"] = "127.0.0.1"
+    if role == "signing-keys-image":
+        sign_request["alt_names"] = "localhost"
     signed = bao.request("POST", f"pki/sign/{role}", sign_request)
     if "private_key" in signed.get("data", {}):
         raise RuntimeError("OpenBao PKI returned a leaf private key")
@@ -186,6 +190,62 @@ def provision_notification(bao: Bao, root: Path) -> dict[str, str]:
         raise RuntimeError("Notification token accessed a foreign Transit key")
     return {"BAO_ADDR": bao.endpoint,
             "NOTIFICATION_OPENBAO_TOKEN_FILE": str(token_file)}
+
+
+def provision_integration_secret_fixture(bao: Bao, root: Path) -> dict[str, str]:
+    """Give the packaged Signing Keys test only envelope and grant-verification rights."""
+    key = "integration-secret-envelope-marty-aes256"
+    bao.request("POST", f"transit/keys/{key}", {
+        "type": "aes256-gcm96", "exportable": False,
+        "allow_plaintext_backup": False,
+    })
+    metadata = bao.request("GET", f"transit/keys/{key}")["data"]
+    if (metadata["type"] != "aes256-gcm96" or metadata["exportable"] is not False
+            or metadata["allow_plaintext_backup"] is not False):
+        raise RuntimeError("disposable integration-secret key is exportable")
+    policy = "integration-secret-image-" + secrets.token_hex(6)
+    bao.request("PUT", f"sys/policies/acl/{policy}", {"policy": (
+        f'path "transit/keys/{key}" {{ capabilities = ["read"] }}\n'
+        f'path "transit/encrypt/{key}" {{ capabilities = ["update"] }}\n'
+        f'path "transit/decrypt/{key}" {{ capabilities = ["update"] }}'
+    )})
+    envelope_token = bao.request("POST", "auth/token/create", {
+        "policies": [policy], "no_default_policy": True, "ttl": "1h",
+    })["auth"]["client_token"]
+    grant_policy = "integration-secret-grant-verify-" + secrets.token_hex(6)
+    bao.request("PUT", f"sys/policies/acl/{grant_policy}", {"policy": (
+        'path "transit/verify/marty-grant-test/sha2-256" '
+        '{ capabilities = ["update"] }'
+    )})
+    grant_token = bao.request("POST", "auth/token/create", {
+        "policies": [grant_policy], "no_default_policy": True, "ttl": "1h",
+    })["auth"]["client_token"]
+    foreign = "foreign-integration-secret-" + secrets.token_hex(5)
+    bao.request("POST", f"transit/keys/{foreign}", {
+        "type": "aes256-gcm96", "exportable": False,
+        "allow_plaintext_backup": False,
+    })
+    for token, path in (
+        (envelope_token, f"transit/keys/{foreign}"),
+        (grant_token, f"transit/keys/{key}"),
+    ):
+        try:
+            bao.request("GET", path, token=token)
+        except HTTPError as error:
+            if error.code != 403:
+                raise RuntimeError("integration-secret fixture returned an unexpected scope denial") from error
+        else:
+            raise RuntimeError("integration-secret fixture token crossed its scope")
+    for name, token in (("envelope", envelope_token), ("grant-verify", grant_token)):
+        path = root / f"integration-secret-{name}-token"
+        path.write_text(token, encoding="ascii")
+        # The disposable, scoped token is mounted read-only by the image's
+        # unprivileged uid 10001. The parent directory is short-lived.
+        path.chmod(0o644)
+    return {
+        "MARTY_TEST_SIGNING_KEYS_ENVELOPE_TOKEN_FILE": str(root / "integration-secret-envelope-token"),
+        "MARTY_TEST_SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": str(root / "integration-secret-grant-verify-token"),
+    }
 
 
 def provision_signing_transit(bao: Bao, ca: Path) -> dict[str, str]:
@@ -417,8 +477,11 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                     f"{prefix}_KMS_URL": bao.endpoint,
                     f"{prefix}_KMS_CA": str(ca),
                 })
-            elif profile == "signing-keys":
-                identity = provision_server_identity(bao, root, "signing-keys")
+            elif profile in ("signing-keys", "signing-keys-image"):
+                identity = provision_server_identity(
+                    bao, root,
+                    "signing-keys-image" if profile == "signing-keys-image" else "signing-keys",
+                )
                 environment.update({
                     "MARTY_TEST_SIGNING_KEYS_TLS_CERT": identity["cert"],
                     "MARTY_TEST_SIGNING_KEYS_TLS_CA": identity["workload_ca"],
@@ -427,6 +490,11 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                     "MARTY_TEST_SIGNING_KEYS_TLS_KMS_URL": bao.endpoint,
                     "MARTY_TEST_SIGNING_KEYS_TLS_KMS_CA": str(ca),
                 })
+                if profile == "signing-keys-image":
+                    environment.update(provision_integration_secret_fixture(bao, root))
+                    environment["MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER"] = container
+                    identity_token = Path(identity["token_file"])
+                    identity_token.chmod(0o644)
             elif profile == "passport-edge":
                 identity = provision_server_identity(bao, root, "passport-edge")
                 environment.update({
@@ -497,7 +565,7 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "notification"), default="event-stream")
+    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-keys-image", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "notification"), default="event-stream")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     return execute(args.image, args.command, args.profile)

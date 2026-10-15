@@ -1,48 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-image="${1:?usage: smoke-issuance-image.sh IMAGE}"
+image="${1:?usage: smoke-issuance-image.sh IMAGE [SIGNING_KEYS_IMAGE]}"
+signing_image="${2:-marty-signing-keys:ci}"
 repository_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -z "${MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER:-}" ]]; then
+  python_command=(python3)
+  child_bash=bash
+  child_script="$repository_root/scripts/smoke-issuance-image.sh"
+  if [[ "${OSTYPE:-}" == msys* ]]; then
+    python_command=(py -3.12)
+    child_bash="$(cygpath -w "$(command -v bash)")"
+    child_script="$(cygpath -w "$child_script")"
+  fi
+  exec "${python_command[@]}" "$repository_root/scripts/with_disposable_event_stream_kms.py" \
+    --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+    --profile signing-keys-image -- \
+    "$child_bash" "$child_script" "$image" "$signing_image"
+fi
 postgres_image="$(bash "$repository_root/scripts/ci/pull-pinned-dockerhub-image.sh" \
   postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f)"
+redis_image="$(bash "$repository_root/scripts/ci/pull-pinned-dockerhub-image.sh" \
+  redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99)"
 postgres_password="marty-test"
 suffix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
 network="issuance-ci-${suffix}"
 postgres="issuance-postgres-${suffix}"
 service="issuance-service-${suffix}"
 secret_service="issuance-secret-service-${suffix}"
+redis="issuance-redis-${suffix}"
 secret_api_key="ci-only-signing-key-api-key-32-characters"
 envelope_api_key="ci-only-dedicated-integration-secret-key-32-chars"
-tls_dir="$(mktemp -d "$repository_root/.issuance-smoke-tls-XXXXXXXX")"
-python_image="ghcr.io/elevenid/marty-credentials-issuance@sha256:9f15b64bc0ec7a693339cada3142b2952a575d2b50ee89230aabe078d0026176"
-
 cleanup() {
-  docker rm --force "$service" "$secret_service" "$postgres" >/dev/null 2>&1 || true
+  local status=$?
+  if [[ "$status" -ne 0 ]]; then
+    docker logs "$secret_service" 2>/dev/null || true
+    docker logs "$service" 2>/dev/null || true
+  fi
+  docker rm --force "$service" "$secret_service" "$redis" "$postgres" >/dev/null 2>&1 || true
+  docker network disconnect --force "$network" "$MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER" >/dev/null 2>&1 || true
   docker network rm "$network" >/dev/null 2>&1 || true
-  rm -f -- "$tls_dir/ca.crt" "$tls_dir/ca.key" "$tls_dir/ca.srl" \
-    "$tls_dir/tls.crt" "$tls_dir/tls.key" "$tls_dir/tls.csr" "$tls_dir/tls.ext"
-  rmdir -- "$tls_dir" 2>/dev/null || true
 }
 trap cleanup EXIT
 
-openssl req -x509 -newkey rsa:2048 -sha256 -days 1 -nodes \
-  -subj '/CN=Disposable Issuance Smoke CA' \
-  -addext 'basicConstraints=critical,CA:TRUE' \
-  -addext 'keyUsage=critical,keyCertSign,cRLSign' \
-  -keyout "$tls_dir/ca.key" -out "$tls_dir/ca.crt" >/dev/null 2>&1
-openssl req -newkey rsa:2048 -sha256 -nodes \
-  -subj '/CN=synthetic-secret-service' \
-  -keyout "$tls_dir/tls.key" -out "$tls_dir/tls.csr" >/dev/null 2>&1
-printf '%s\n' 'basicConstraints=critical,CA:FALSE' \
-  'keyUsage=critical,digitalSignature,keyEncipherment' \
-  'extendedKeyUsage=serverAuth' \
-  'subjectAltName=DNS:synthetic-secret-service' >"$tls_dir/tls.ext"
-openssl x509 -req -in "$tls_dir/tls.csr" \
-  -CA "$tls_dir/ca.crt" -CAkey "$tls_dir/ca.key" -CAcreateserial \
-  -out "$tls_dir/tls.crt" -days 1 -sha256 -extfile "$tls_dir/tls.ext" \
-  >/dev/null 2>&1
-
-docker network create "$network" >/dev/null
+docker network create --internal "$network" >/dev/null
+docker network connect --alias synthetic-secret-service \
+  "$network" "$MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER"
+docker run --detach \
+  --name "$redis" --network "$network" --network-alias signing-redis \
+  "$redis_image" >/dev/null
 docker run --detach \
   --name "$postgres" \
   --network "$network" \
@@ -72,24 +78,41 @@ docker exec "$postgres" psql --username marty --dbname marty --set ON_ERROR_STOP
   >/dev/null
 
 # The packaged API must prove its separate remote secret boundary at startup.
-# This no-key test service checks the round trip; live Transit is qualified by
-# the OpenBao integration tests.
-docker run --detach \
+# The real Rust Signing Keys service serves HTTPS using a non-exportable
+# Transit TLS key and encrypts the bound secret with a separate Transit key.
+echo 'Starting keyless Signing Keys fixture' >&2
+docker run --rm --network "container:$MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER" \
+  --entrypoint getent "$signing_image" hosts signing-redis >/dev/null
+MSYS_NO_PATHCONV=1 docker run --detach \
   --name "$secret_service" \
-  --network "$network" \
-  --network-alias synthetic-secret-service \
-  --env SYNTHETIC_API_KEY="$envelope_api_key" \
-  --env SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt \
-  --env SYNTHETIC_TLS_KEY_FILE=/verification/tls/tls.key \
-  --mount "type=bind,source=$repository_root/scripts/synthetic_integration_secret_service.py,target=/verification/synthetic_integration_secret_service.py,readonly" \
-  --mount "type=bind,source=$tls_dir/tls.crt,target=/verification/tls/tls.crt,readonly" \
-  --mount "type=bind,source=$tls_dir/tls.key,target=/verification/tls/tls.key,readonly" \
-  --entrypoint python \
-  "$python_image" \
-  //verification/synthetic_integration_secret_service.py \
+  --network "container:$MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER" \
+  --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
+  --env SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY=ci-only-service-sign-gateway-key-32-chars \
+  --env SIGNING_KEYS_ISSUER_SIGN_KEY=ci-only-issuer-sign-key-32-characters \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_KEY="$envelope_api_key" \
+  --env ISSUER_BASE_URL=https://issuer.example \
+  --env SIGNING_KEYS_REDIS_URL=redis://signing-redis:6379/2 \
+  --env SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE=/verification/grant-token \
+  --env BAO_ADDR=https://127.0.0.1:8200 \
+  --env BAO_CACERT=/verification/bao-ca.crt \
+  --env BAO_TOKEN_FILE=/verification/envelope-token \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE=/verification/tls.crt \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR=https://127.0.0.1:8200 \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE=/verification/bao-ca.crt \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE=/verification/tls-token \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME="$MARTY_TEST_SIGNING_KEYS_TLS_KMS_KEY_NAME" \
+  --env SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION=1 \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_TLS_CERT,target=/verification/tls.crt,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_TLS_CA,target=/verification/workload-ca.crt,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_TLS_KMS_CA,target=/verification/bao-ca.crt,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_TLS_KMS_TOKEN_FILE,target=/verification/tls-token,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_ENVELOPE_TOKEN_FILE,target=/verification/envelope-token,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE,target=/verification/grant-token,readonly" \
+  "$signing_image" \
   >/dev/null
 for attempt in {1..60}; do
-  if docker exec "$secret_service" python -c 'import socket; socket.create_connection(("127.0.0.1", 8017), 1).close()' >/dev/null 2>&1; then
+  if MSYS_NO_PATHCONV=1 docker exec "$secret_service" curl --fail --silent \
+    --cacert /verification/workload-ca.crt https://localhost:8018/health >/dev/null 2>&1; then
     break
   fi
   if [[ "$attempt" == 60 ]]; then
@@ -98,11 +121,12 @@ for attempt in {1..60}; do
   fi
   sleep 0.5
 done
+echo 'Keyless Signing Keys fixture is ready' >&2
 
 # Startup/health here performs no signing. Unreachable grant authority and
 # absent token files keep any unexpected sign attempt fail-closed; live OpenBao
 # signing is qualified separately by the managed-route probes.
-docker run --detach \
+MSYS_NO_PATHCONV=1 docker run --detach \
   --name "$service" \
   --network "$network" \
   --env SERVICE_NAME=issuance_native \
@@ -118,33 +142,14 @@ docker run --detach \
   --env ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-readiness-grant \
   --env ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-passport-grant \
   --env SIGNING_KEYS_INTERNAL_URL=http://synthetic-secret-service:8017/internal/signing-keys \
-  --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8017/internal \
+  --env INTEGRATION_SECRET_KMS_URL=https://synthetic-secret-service:8018/internal \
   --env INTEGRATION_SECRET_KMS_CA_FILE=/verification/tls/ca.crt \
-  --mount "type=bind,source=$tls_dir/ca.crt,target=/verification/tls/ca.crt,readonly" \
+  --mount "type=bind,source=$MARTY_TEST_SIGNING_KEYS_TLS_CA,target=/verification/tls/ca.crt,readonly" \
   --env DATABASE_URL="postgresql://marty:${postgres_password}@issuance-postgres/marty" \
-  --publish 127.0.0.1::8005 \
   "$image" \
   >/dev/null
-port=""
 for attempt in {1..60}; do
-  port_mapping="$(docker port "$service" 8005/tcp 2>/dev/null || true)"
-  port="${port_mapping##*:}"
-  if [[ -n "$port_mapping" && "$port" =~ ^[0-9]+$ ]]; then
-    break
-  fi
-  if [[ "$(docker inspect --format '{{.State.Running}}' "$service")" != true ]]; then
-    break
-  fi
-  sleep 0.25
-done
-if [[ -z "$port_mapping" || ! "$port" =~ ^[0-9]+$ ]]; then
-  docker inspect --format 'Issuance container state: {{.State.Status}}' "$service" || true
-  docker logs "$service" || true
-  docker logs "$secret_service" || true
-  exit 1
-fi
-for attempt in {1..60}; do
-  if curl --fail --silent "http://127.0.0.1:${port}/health" \
+  if docker exec "$service" curl --fail --silent http://127.0.0.1:8005/health \
     | grep --fixed-strings --quiet '"service":"issuance-service"'; then
     break
   fi
