@@ -155,6 +155,9 @@ def browser_code(opener, base: str, callback: str, realm: str,
             form.feed(response.read().decode())
             if not login or not form.action:
                 raise RuntimeError("Keycloak did not present the expected browser login")
+            if urlparse(form.action).netloc != urlparse(base).netloc \
+                    or urlparse(form.action).scheme != urlparse(base).scheme:
+                raise RuntimeError("Keycloak login form action has an unexpected origin")
             if before_submit:
                 before_submit()
             try:
@@ -202,7 +205,9 @@ def browser_log_summary(container: str, since: str) -> str:
         "Caused by:",
         "Error encoding cookie",
         "Remote restart cookie could not be authenticated",
+        "KC_RESTART cookie doesn't exist",
         "Failed to verify encoded RestartLoginCookie",
+        "Skip restarting from the KC_RESTART",
         "Authentication session not found",
         "Authentication session restart from cookie succeeded",
         "Failed to parse RestartLoginCookie",
@@ -210,6 +215,14 @@ def browser_log_summary(container: str, since: str) -> str:
         "at org.keycloak.protocol.RestartLoginCookie",
         "at org.keycloak.protocol.oidc.grants.ciba.channel.CIBAAuthenticationRequest",
     )))[:2400]
+
+
+def browser_cookie_summary(cookies: CookieJar) -> str:
+    # Browser-session diagnostics must never expose cookie values or tokens.
+    return ", ".join(sorted(
+        f"{cookie.name}:secure={int(cookie.secure)}:domain={cookie.domain}:path={cookie.path}"
+        for cookie in cookies
+    ))[:900]
 
 
 def wait_for(path: Path, seconds: int = 30) -> None:
@@ -788,14 +801,16 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     ("master", "probe", jwks),
                     ("11id", "probe11", jwks_11id),
                 ):
+                    baseline_cookies = CookieJar()
                     baseline_browser = build_opener(
-                        HTTPCookieProcessor(CookieJar()), StopAtCallback(callback))
+                        HTTPCookieProcessor(baseline_cookies), StopAtCallback(callback))
                     try:
                         baseline_tokens = browser_code(
                             baseline_browser, base, callback, realm, username, login=True)
                     except Exception as error:
                         raise RuntimeError(
-                            f"{realm} baseline browser login failed: {error}\n"
+                            f"{realm} baseline browser login failed: {error}; "
+                            f"cookies {browser_cookie_summary(baseline_cookies)}\n"
                             + browser_log_summary(kc_name, browser_log_since)
                         ) from error
                     for field in ("access_token", "id_token"):
@@ -844,11 +859,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                                           before_submit=rotate_during_login
                                                           if login else None)
                         except Exception as error:
-                            names = sorted({cookie.name for cookie in browser_cookies
-                                            if cookie.name in {"AUTH_SESSION_ID", "KC_RESTART", "KC_RESTART_LEGACY"}})
                             raise RuntimeError(
                                 f"{realm} rotated browser flow failed: {error}; "
-                                f"cookie types {names}\n"
+                                f"cookies {browser_cookie_summary(browser_cookies)}\n"
                                 + browser_log_summary(kc_name, browser_log_since)
                             ) from error
                         for field in ("access_token", "id_token"):
