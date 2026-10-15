@@ -21024,3 +21024,13 @@ self-host and beta Keycloak databases and failed as intended on each with
 4 private-key entries, 4 local-secret entries, 8 non-remote providers, and
 0 of 2 realms with remote providers. No extension or successful Keycloak
 journey is yet present.
+
+2026-10-15 K11 producer-guard hardening, staged in the grouped UI worktree:
+the protected disposable model preflight now rejects TLS/mTLS identity key
+settings ending in `_KEY`, `_KEY_FILE`, or `_KEY_PATH`, including client,
+server, identity, and private-key aliases. This closes an alias gap in the
+previous `TLS_KEY_FILE`-only selector while leaving public certs and scoped
+KMS key names accepted. Four alias-negative cases were added to the existing
+Compose model tests; all nine tests in that module passed locally. The guard
+does not make the current Gateway fixture acceptable: it still lacks Auth
+and contains insecure graph edges. The grouped branch remains unlanded.
