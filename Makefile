@@ -544,15 +544,8 @@ tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides (then runs se
 
 setup-keycloak: ## Patch Keycloak with env-var credentials (Google IdP, redirect URIs)
 	@echo "$(BLUE)⚙️  Running Keycloak configurator...$(NC)"
-	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
-		--entrypoint bash \
-		--network marty-infra-network \
-		--env-file "$(BETA_ENV_FILE)" \
-		-e KC_URL=http://marty-keycloak:8080 \
-		-e KCADM_PATH=/opt/keycloak/bin/kcadm.sh \
-		-v "$(CURDIR)/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro" \
-		quay.io/keycloak/keycloak:25.0 \
-		/scripts/setup-keycloak.sh 2>&1 | sed 's/^/  /'
+	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+		$(TUNNEL_COMPOSE) run --rm --no-deps keycloak-configurator 2>&1 | sed 's/^/  /'
 	@echo "$(GREEN)✅ Keycloak configured$(NC)"
 
 tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all tunnel-sensitive services
