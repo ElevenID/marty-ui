@@ -21310,3 +21310,17 @@ on any other error or absent final token. The same rebuilt image tags then
 passed the complete browser/CIBA/PostgreSQL probe. This is local evidence;
 the hosted CI lane has not run and remains staged in the dirty grouped UI
 worktree.
+
+2026-10-15 K12 rotation proof, grouped UI commit `c728acfd0`: the local
+PostgreSQL/HTTPS OpenBao/pinned Keycloak probe now rotates the CIBA JWE key
+while an `auth_req_id` is outstanding. The old request still decrypts and
+completes after the policy gains only the new version's scoped paths; a new
+request carries the new `kid`. For each of `master` and `11id`, the probe
+captures a `KC_RESTART` cookie on the login page, rotates that realm's
+cookie key before form submission, uses the same scoped token to decrypt the
+old cookie after rotation, completes login and silent reuse, and verifies a
+fresh login page's cookie carries the new version. Cookie/CIBA token loss
+still denies new operations, and the Keycloak PostgreSQL custody gate stays
+clear. This proves version retention and new-key selection across live local
+flows; it does not prove all Keycloak session or RS256/HS512 signer rotation
+semantics, installed images, or deployed cutover.
