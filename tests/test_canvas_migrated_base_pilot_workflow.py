@@ -58,7 +58,7 @@ def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> Non
     }
     assert "run-db-contract-groups.py worker-canvas" in group["run"]
     assert "run-db-contract-groups.py selfhost-canvas" in group["run"]
-    assert "run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}" in group["run"]
+    assert "run-db-contract-groups.py ${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}" in group["run"]
     assert all(
         SWITCH not in step.get("env", {})
         for step in steps

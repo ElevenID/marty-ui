@@ -4172,6 +4172,8 @@ handoff artifact; no external self-host support claim follows from the merge.
 
 ## Design references
 
+October 15 A6 parallel self-host acceptance candidate: [#1338](https://github.com/ElevenID/marty-ui/pull/1338) merged the two-worker root release-contract suite after exact-head and protected CI, retaining 6,735 passed/25 skipped cases. Its protected root pytest step fell from 530.95s on #1335 to 356.49s on #1338; overall workflow wall time varied, so this is a step-level result only. In #1338's protected Canvas job, reusable test compilation took 376s, the public self-host image 386s, and the database group 485s. The existing self-host-only diagnostic owner proves an exact twelve-case test inventory and candidate image identity. A candidate now requires that owner as a parallel third lane for runtime PRs and protected merge groups, and omits only those twelve cases and the image build from Canvas. Worker, composition, Flow, database, full-qualification, and protected gates remain required. This change adds one standard public-repository runner; it does not claim a wall-time saving until exact-head and protected runs verify lane execution and comparable timings. The prior migrated-base database reuse pilot was slower in hosted runs and remains manual-only.
+
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
 disposable Redis to prove that unauthenticated and cross-tenant configuration

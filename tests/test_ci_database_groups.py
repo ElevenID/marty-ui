@@ -75,6 +75,7 @@ def test_retained_preflights_all_finish_when_one_fails(tmp_path: Path) -> None:
     "mode,expected",
     [
         ("canvas", "published-canvas"),
+        ("canvas-without-selfhost", "published-canvas"),
         ("rust-db", "rust-db"),
         ("worker-canvas", "published-worker"),
         ("selfhost-canvas", "published-selfhost"),
@@ -97,6 +98,8 @@ def test_split_lanes_run_exactly_their_owned_database_group(
     assert set(observed) == {expected}
     if mode == "canvas":
         assert observed[expected][-1] == "full-after-preflights"
+    elif mode == "canvas-without-selfhost":
+        assert observed[expected][-1] == "full-after-preflights-without-selfhost"
     elif mode == "worker-canvas":
         assert observed[expected][-1] == "worker-full-after-preflights"
     elif mode == "selfhost-canvas":
@@ -122,6 +125,24 @@ def test_worker_only_group_without_preflight_proof_retains_full_worker_suite(
     assert GROUPS.main("worker-canvas") == 0
     assert set(observed) == {"published-worker"}
     assert observed["published-worker"][-1] == "worker-full"
+
+
+def test_canvas_without_selfhost_still_runs_full_suite_without_preflight_proof(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(GROUPS, "_has_preflight_evidence", lambda: False)
+    observed = {}
+
+    def fake_groups(commands, directory):
+        observed.update(commands)
+        for name in commands:
+            (directory / f"{name}.log").write_text("passed\n", encoding="utf-8")
+        return {name: 0 for name in commands}
+
+    monkeypatch.setattr(GROUPS, "run_groups", fake_groups)
+    assert GROUPS.main("canvas-without-selfhost") == 0
+    assert set(observed) == {"published-canvas"}
+    assert observed["published-canvas"][-1] == "full-without-selfhost"
 
 
 @pytest.mark.parametrize("qualification,count", [("0", 2), ("1", 4)])

@@ -1403,6 +1403,28 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     assert len([call for call in calls if call[0] == "kms-start"]) == 1
 
 
+@pytest.mark.parametrize(
+    "mode", ["full-without-selfhost", "full-after-preflights-without-selfhost"]
+)
+def test_parallel_canvas_owner_preserves_non_selfhost_cases(shell_case, tmp_path, mode):
+    if "after-preflights" in mode:
+        (tmp_path / "canvas-published-preflights.sha256").write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + "\n12345\n1\ntest-rust-services\n0\n",
+            newline="\n",
+        )
+    result, calls = shell_case([mode])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert not any(call[:2] == ["child", "selfhost-contract"] for call in children)
+    for owner in ("contract", "worker-contract", "flow-contract"):
+        assert any(
+            call[:2] == ["child", owner] and "--test-threads=4" in call
+            for call in children
+        )
+    assert '"phase":"canvas_target","name":"selfhost"' not in result.stdout
+
+
 def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     shell_case, tmp_path
 ):
@@ -1963,10 +1985,10 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "  python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas\n"
         "else\n"
         "  python3 ../scripts/ci/run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}\n"
+        "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}\n"
         "fi\n"
     )
-    assert steps[image]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+    assert steps[image]["if"] == "matrix.lane == 'selfhost'"
     assert "if" not in steps[full]
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)

@@ -815,7 +815,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         include_rust_plan=True,
     )[0]
     assert mixed["rust_runtime"] == "true"
-    assert mixed["rust_matrix"] == '["canvas","contracts"]'
+    assert mixed["rust_matrix"] == '["canvas","contracts","selfhost"]'
     for paths in (
         ["rust/services/issuance/src/unreviewed_tests.rs"],
         ["rust/crates/oid4vp-contract/tests/unreviewed.rs"],
@@ -830,43 +830,43 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     # A deleted leaf cannot pass the source-ownership proof in the checkout.
     deleted = _classify_changed_paths(
         [leaves[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert deleted["rust_runtime"] == "true"
-    assert deleted["rust_matrix"] == '["canvas","contracts"]'
+    assert deleted["rust_matrix"] == '["canvas","contracts","selfhost"]'
     nested_without_proof = _classify_changed_paths(
         [nested], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert nested_without_proof["rust_runtime"] == "true"
-    assert nested_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert nested_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     oid_without_proof = _classify_changed_paths(
         [leaves[-1]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert oid_without_proof["rust_runtime"] == "true"
-    assert oid_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert oid_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     oid_deleted = _classify_changed_paths(
         [leaves[-2]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert oid_deleted["rust_runtime"] == "true"
-    assert oid_deleted["rust_matrix"] == '["canvas","contracts"]'
+    assert oid_deleted["rust_matrix"] == '["canvas","contracts","selfhost"]'
     empty = _classify_changed_paths(
         [], tmp_path, combined=True, include_rust_plan=True
     )[0]
     assert empty["rust"] == empty["rust_runtime"] == "false"
-    assert empty["rust_matrix"] == '["canvas","contracts"]'
+    assert empty["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
         [leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
     on_main = _classify_changed_paths(
         [leaves[-1]], tmp_path, event="push", include_rust_plan=True
     )[0]
     assert on_main["rust_runtime"] == "true"
-    assert on_main["rust_matrix"] == '["canvas","contracts"]'
+    assert on_main["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_verified_contract_test_sources_select_contracts_only_on_pr(
@@ -944,22 +944,22 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     unverified = _classify_changed_paths(
         [contract_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert unverified["rust_runtime"] == "true"
-    assert unverified["rust_matrix"] == '["canvas","contracts"]'
+    assert unverified["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
         [contract_tests[-1]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
     on_main = _classify_changed_paths(
         [contract_tests[-1]], tmp_path, event="push", include_rust_plan=True
     )[0]
     assert on_main["rust_runtime"] == "true"
-    assert on_main["rust_matrix"] == '["canvas","contracts"]'
+    assert on_main["rust_matrix"] == '["canvas","contracts","selfhost"]'
     jobs = yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))["jobs"]
     assert jobs["test-rust-services"]["if"] == "needs.changes.outputs.rust == 'true'"
     contract_steps = jobs["test-rust-services"]["steps"]
@@ -1030,22 +1030,22 @@ def test_verified_worker_test_sources_select_only_worker_on_pr(tmp_path: Path) -
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     without_proof = _classify_changed_paths(
         [worker_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert without_proof["rust_runtime"] == "true"
-    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     roster_without_proof = _classify_changed_paths(
         [worker_tests[-1]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert roster_without_proof["rust_runtime"] == "true"
-    assert roster_without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert roster_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
         [worker_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> None:
@@ -1100,17 +1100,17 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     without_proof = _classify_changed_paths(
         [flow_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert without_proof["rust_runtime"] == "true"
-    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
         [flow_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
@@ -1162,17 +1162,17 @@ def test_verified_selfhost_test_sources_select_only_selfhost_on_pr(
             paths, tmp_path, combined=True, include_rust_plan=True
         )[0]
         assert selected["rust_runtime"] == "true"
-        assert selected["rust_matrix"] == '["canvas","contracts"]'
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]'
     without_proof = _classify_changed_paths(
         [selfhost_tests[0]], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
     assert without_proof["rust_runtime"] == "true"
-    assert without_proof["rust_matrix"] == '["canvas","contracts"]'
+    assert without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
         [selfhost_tests[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
@@ -1190,7 +1190,7 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
         assert (ROOT / path).is_file(), path
         selected = _classify_changed_paths([path], tmp_path, include_rust_plan=True)[0]
         assert selected["rust"] == selected["rust_runtime"] == "true", path
-        assert selected["rust_matrix"] == '["canvas","contracts"]', path
+        assert selected["rust_matrix"] == '["canvas","contracts","selfhost"]', path
     queued = _classify_changed_paths(
         ["rust/services/issuance/src/lib.rs"],
         tmp_path,
@@ -1198,7 +1198,7 @@ def test_generated_beta_image_inputs_retain_runtime_and_canvas_matrix(
         include_rust_plan=True,
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
-    assert queued["rust_matrix"] == '["canvas","contracts"]'
+    assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
 
 
 def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> None:
@@ -1519,7 +1519,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
             if selfhost_only
             else '["contracts"]'
             if leaf_only
-            else '["canvas","contracts"]'
+            else '["canvas","contracts","selfhost"]'
         )
         environment.update(selection_overrides or {})
         environment.update({key: results[name] for name, key in result_env.items()})
@@ -1613,7 +1613,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         exercise(
             ("rust",),
             leaf_only=True,
-            selection_overrides={"RUST_MATRIX": '["canvas","contracts"]'},
+            selection_overrides={"RUST_MATRIX": '["canvas","contracts","selfhost"]'},
         ).returncode
         != 0
     )
@@ -1755,7 +1755,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     matrix = job["strategy"]["matrix"]["lane"]
     assert "github.event_name == 'pull_request'" in matrix
     assert "ci-worker-diagnostic" in matrix
-    assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "ci-selfhost-diagnostic" in matrix
     assert '\'["canvas","contracts","selfhost"]\'' in matrix
     assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
@@ -1768,7 +1768,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas AGS/NRPS over real HTTPS",
         "Test Canvas publication adapter over real HTTPS",
         "Prepare required rendered base executable acceptance",
-        "Verify local passport signing is forbidden",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
         "Test native Canvas operation timeout TLS parity",
@@ -1792,15 +1791,9 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Expose public image compiler cache credentials",
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
+        "Verify local passport signing is forbidden",
     ):
-        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
-        assert not steps[name].get("continue-on-error", False)
-    for name in (
-        "Expose public image compiler cache credentials",
-        "Build public selfhost image",
-        "Prepare public selfhost image loader acceptance",
-    ):
-        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert steps[name]["if"] == "matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
     assert steps["Prepare isolated Canvas worker harness dependencies"]["if"] == (
         "matrix.lane == 'canvas' || matrix.lane == 'worker'"
@@ -2922,7 +2915,7 @@ def test_kubernetes_policy_test_source_pr_keeps_full_protected_checks(
         "python": "false",
         "rust": "false",
         "rust_runtime": "false",
-        "rust_matrix": '["canvas","contracts"]',
+        "rust_matrix": '["canvas","contracts","selfhost"]',
         "openbao": "false",
         "planner_only": "false",
         "rollback_test_only": "false",
@@ -3322,7 +3315,7 @@ def test_rollback_test_only_pr_keeps_full_mixed_and_protected_validation(
         "python": "false",
         "rust": "false",
         "rust_runtime": "false",
-        "rust_matrix": '["canvas","contracts"]',
+        "rust_matrix": '["canvas","contracts","selfhost"]',
         "openbao": "false",
         "planner_only": "false",
         "rollback_test_only": "true",
@@ -3731,7 +3724,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert "run-db-contract-groups.py worker-canvas" in gate["run"]
     assert (
         "run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+        "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}"
     ) in gate["run"]
     published = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
         encoding="utf-8"
@@ -4020,7 +4013,8 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         )
         == 1
     )
-    assert 'kill "$composition_pid" "$worker_pid" "$selfhost_pid"' in published
+    assert 'kill "$composition_pid" "$worker_pid"' in published
+    assert 'if [[ -n "$selfhost_pid" ]]; then kill "$selfhost_pid"' in published
     assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in published
     assert 'tail --pid="$pid"' in published
     assert (

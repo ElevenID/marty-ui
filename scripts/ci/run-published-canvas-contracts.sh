@@ -23,10 +23,15 @@ if [[ "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" != 0 && "${MARTY_CANVAS_FULL_QUALI
   echo "Invalid Canvas qualification mode" >&2
   exit 2
 fi
-if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight && "$mode" != worker-full && "$mode" != worker-full-after-preflights && "$mode" != worker-mixed-roster-preflight && "$mode" != worker-timeout-preflight && "$mode" != worker-body-timeout-preflight && "$mode" != worker-lease-expiry-preflight && "$mode" != selfhost-only ]]; then
-  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight|worker-full|worker-full-after-preflights|worker-timeout-preflight|worker-lease-expiry-preflight|worker-body-timeout-preflight|worker-mixed-roster-preflight|selfhost-only]" >&2
+if (( $# > 1 )) || [[ "$mode" != full && "$mode" != full-after-preflights && "$mode" != full-without-selfhost && "$mode" != full-after-preflights-without-selfhost && "$mode" != mixed-roster-preflight && "$mode" != timeout-preflight && "$mode" != body-timeout-preflight && "$mode" != lease-expiry-preflight && "$mode" != worker-full && "$mode" != worker-full-after-preflights && "$mode" != worker-mixed-roster-preflight && "$mode" != worker-timeout-preflight && "$mode" != worker-body-timeout-preflight && "$mode" != worker-lease-expiry-preflight && "$mode" != selfhost-only ]]; then
+  echo "Usage: run-published-canvas-contracts.sh [full|full-after-preflights|full-without-selfhost|full-after-preflights-without-selfhost|timeout-preflight|lease-expiry-preflight|body-timeout-preflight|mixed-roster-preflight|worker-full|worker-full-after-preflights|worker-timeout-preflight|worker-lease-expiry-preflight|worker-body-timeout-preflight|worker-mixed-roster-preflight|selfhost-only]" >&2
   exit 2
 fi
+selfhost_delegated=0
+case "$mode" in
+  full-without-selfhost) mode=full; selfhost_delegated=1 ;;
+  full-after-preflights-without-selfhost) mode=full-after-preflights; selfhost_delegated=1 ;;
+esac
 if [[ -v MARTY_CANVAS_WORKER_RETRY_AFTER_TIER ]]; then
   echo "Native Retry-After tier is owned by this runner, not caller environment" >&2
   exit 2
@@ -275,7 +280,7 @@ export MARTY_ISSUANCE_TEST_BINARY="$issuance_binary"
 composition_tests=$("$composition_executable" --list)
 worker_tests=$("$worker_executable" --list)
 selfhost_tests=''
-if [[ -z "$preflight_target" ]]; then
+if [[ -z "$preflight_target" && "$selfhost_delegated" == 0 ]]; then
   selfhost_executable=$(find_executable selfhost_public_image_contract)
   selfhost_tests=$("$selfhost_executable" --list)
   require_selfhost_tests "$selfhost_tests"
@@ -355,8 +360,10 @@ printf '%s\n' "$all_test_names" | grep -Fx 'heartbeat_readiness_matches_publishe
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_native_renewal_uses_actual_rendered_configuration: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_gateway_composition_isolated: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'base_profile_gateway_composition_child: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'selfhost_public_image_loader_isolated: test'
-printf '%s\n' "$all_test_names" | grep -Fx 'selfhost_public_image_loader_child: test'
+if (( selfhost_delegated == 0 )); then
+  printf '%s\n' "$all_test_names" | grep -Fx 'selfhost_public_image_loader_isolated: test'
+  printf '%s\n' "$all_test_names" | grep -Fx 'selfhost_public_image_loader_child: test'
+fi
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_resolved_native_profile_delivers_both_encryption_modes: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_profile_gateway_composition_isolated: test'
 printf '%s\n' "$all_test_names" | grep -Fx 'kubernetes_profile_gateway_composition_child: test'
@@ -512,7 +519,10 @@ for historical_serial_test in "${historical_serial_tests[@]}"; do
 done
 worker_parallel_list=$("$worker_executable" --list --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}")
 worker_parallel_tests=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
-selfhost_parallel_tests=$(printf '%s\n' "$selfhost_tests" | grep -c ': test$')
+selfhost_parallel_tests=0
+if (( selfhost_delegated == 0 )); then
+  selfhost_parallel_tests=$(printf '%s\n' "$selfhost_tests" | grep -c ': test$')
+fi
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test" "$deadline_serial_test" "${historical_serial_tests[@]}"
 parallel_tests=$((composition_parallel_tests + flow_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
@@ -589,11 +599,15 @@ relay_target_timing() {
     python3 -c 'import time; print(time.monotonic_ns())' >"$end_file"
   fi
 }
-selfhost_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-"$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
-selfhost_pid=$!
-relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &
-selfhost_relay_pid=$!
+selfhost_pid=
+selfhost_relay_pid=
+if (( selfhost_delegated == 0 )); then
+  selfhost_started=$(python3 -c 'import time; print(time.monotonic_ns())')
+  "$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
+  selfhost_pid=$!
+  relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &
+  selfhost_relay_pid=$!
+fi
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
 MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
@@ -630,7 +644,7 @@ drain_target_relays() {
   wait "$composition_relay_pid" || true
   if [[ -n "$flow_relay_pid" ]]; then wait "$flow_relay_pid" || true; fi
   wait "$worker_relay_pid" || true
-  wait "$selfhost_relay_pid" || true
+  if [[ -n "$selfhost_relay_pid" ]]; then wait "$selfhost_relay_pid" || true; fi
 }
 report_target_logs() {
   printf 'Canvas composition target exit: %s\n' "$1"
@@ -641,13 +655,18 @@ report_target_logs() {
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$flow_log"
   printf 'Canvas worker target exit: %s\n' "$2"
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
-  printf 'Selfhost target exit: %s\n' "$3"
-  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"
+  if (( selfhost_delegated == 0 )); then
+    printf 'Selfhost target exit: %s\n' "$3"
+    sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"
+  else
+    printf 'Selfhost target: required parallel matrix lane\n'
+  fi
 }
 stop_targets() {
   local composition_stopped=0 flow_stopped=not-started worker_stopped=0 selfhost_stopped=0
   trap - INT TERM
-  kill "$composition_pid" "$worker_pid" "$selfhost_pid" 2>/dev/null || true
+  kill "$composition_pid" "$worker_pid" 2>/dev/null || true
+  if [[ -n "$selfhost_pid" ]]; then kill "$selfhost_pid" 2>/dev/null || true; fi
   if [[ -n "$flow_pid" ]]; then kill "$flow_pid" 2>/dev/null || true; fi
   wait "$composition_pid" 2>/dev/null || composition_stopped=$?
   if [[ -n "$flow_pid" ]]; then
@@ -655,14 +674,16 @@ stop_targets() {
     wait "$flow_pid" 2>/dev/null || flow_stopped=$?
   fi
   wait "$worker_pid" 2>/dev/null || worker_stopped=$?
-  wait "$selfhost_pid" 2>/dev/null || selfhost_stopped=$?
+  if [[ -n "$selfhost_pid" ]]; then wait "$selfhost_pid" 2>/dev/null || selfhost_stopped=$?; fi
   drain_target_relays
   report_target_timing composition "$composition_started" "$composition_stopped" "$composition_end"
   if [[ -n "$flow_pid" ]]; then
     report_target_timing flow "$flow_started" "$flow_stopped" "$flow_end"
   fi
   report_target_timing worker "$worker_started" "$worker_stopped" "$worker_end"
-  report_target_timing selfhost "$selfhost_started" "$selfhost_stopped" "$selfhost_end"
+  if (( selfhost_delegated == 0 )); then
+    report_target_timing selfhost "$selfhost_started" "$selfhost_stopped" "$selfhost_end"
+  fi
   report_target_logs "$composition_stopped" "$worker_stopped" "$selfhost_stopped" "$flow_stopped"
   exit "$1"
 }
@@ -682,12 +703,14 @@ relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &
 flow_relay_pid=$!
 wait "$flow_pid" || flow_status=$?
 wait "$worker_pid" || worker_status=$?
-wait "$selfhost_pid" || selfhost_status=$?
+if [[ -n "$selfhost_pid" ]]; then wait "$selfhost_pid" || selfhost_status=$?; fi
 drain_target_relays
 report_target_timing composition "$composition_started" "$composition_status" "$composition_end"
 report_target_timing flow "$flow_started" "$flow_status" "$flow_end"
 report_target_timing worker "$worker_started" "$worker_status" "$worker_end"
-report_target_timing selfhost "$selfhost_started" "$selfhost_status" "$selfhost_end"
+if (( selfhost_delegated == 0 )); then
+  report_target_timing selfhost "$selfhost_started" "$selfhost_status" "$selfhost_end"
+fi
 report_target_logs "$composition_status" "$worker_status" "$selfhost_status" "$flow_status"
 (( composition_status == 0 && flow_status == 0 && worker_status == 0 && selfhost_status == 0 ))
 timeout_completions=$(grep -Fo 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1' "$composition_log" | wc -l || true)
