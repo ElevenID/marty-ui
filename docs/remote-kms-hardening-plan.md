@@ -20735,3 +20735,31 @@ converted while preserving its remaining coverage. The protected passport
 disposable fixture still mounts TLS private-key files. These are current
 pre-push blockers; no hosted PR or exact signed-artifact qualification is
 claimed from this local evidence.
+
+2026-10-15 CI HTTPS cutover and public Signing Keys contract preservation,
+staged in the grouped UI worktree: the old inline CI step that provisioned
+HTTP OpenBao and invoked signing/CSR/passport tests was replaced with the
+already locally passing `probe_signing_keys_openbao_policy.py --grant-verifier`
+HTTPS probe. Its managed Passport CSCA/DSC/SOD, one-use grant and public CSR
+coverage remains. The preceding `--rust-adapter` probe already covers the five
+Gateway signing/CSR/rotation cases and managed RSA signing. It now also
+exercises VDS-NC registration, public key metadata, registry ciphertext
+persistence and the older public configuration and rotation regression cases.
+The latter two files were moved to Signing Keys `cfg(test)` library modules
+because their in-process HTTP mock KMS is incompatible with production
+HTTPS-only validation; their mock loopback allowance is absent from release
+builds. The OpenBao envelope for these cases uses a separate non-exportable
+Transit key and scoped token, while the disposable sentinel is checked with a
+separate root guard token. The runner asserts exact passed counts for all five
+newly consolidated cohorts so a missing test cannot pass vacuously.
+
+The expanded `--rust-adapter` probe passed end-to-end twice against fresh
+CA-verified disposable OpenBao/Redis/PostgreSQL; one intermediate run exposed
+a timing-sensitive holder pending-deletion assertion that passed on rerun and
+needs monitoring in hosted CI. `--grant-verifier` passed in the prior local
+run. Signing Keys library tests passed 197/0 with 18 opt-in ignored, and
+`cargo check` passed. The full workflow/Docker-context Python suite passed
+181/0; formatting, Python compilation and diff checks passed. This removes
+the known HTTP OpenBao hosted step without dropping its intended coverage,
+but the grouped UI code remains uncommitted/unpushed, the protected passport
+TLS private-key fixture remains, and no exact published release proof exists.
