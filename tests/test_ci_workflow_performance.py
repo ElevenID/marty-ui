@@ -17,7 +17,7 @@ import yaml
 
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
-RELEASE_TEST_COMMAND = "python -m pytest tests -v --tb=short --durations=20"
+RELEASE_TEST_COMMAND = "python -m pytest tests -n 2 -v --tb=short --durations=20"
 
 
 def test_crawler_uses_the_locally_installed_puppeteer_browser_cli() -> None:
@@ -59,7 +59,7 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         for line in installation.splitlines()
         if "uv pip install --system pytest" in line
     )
-    assert {"pytest", "sqlalchemy"} <= set(command.split())
+    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy"} <= set(command.split())
     assert (
         steps["Run repository release checks"]["run"]
         == RELEASE_TEST_COMMAND
