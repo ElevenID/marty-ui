@@ -10,6 +10,7 @@ from html.parser import HTMLParser
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import secrets
 import ssl
@@ -382,6 +383,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             run(
                 "docker", "run", "-d", "--name", kc_name,
                 "--network", network, "-p", "127.0.0.1::8080",
+                *(["--add-host", "host.docker.internal:host-gateway"]
+                  if require_browser and os.name != "nt" else []),
                 *provider_mount,
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
