@@ -20451,3 +20451,26 @@ Python compilation and `git diff --check` passed. The image is an unsigned
 local build and the protected passport Compose fixture still mounts legacy
 TLS private keys, so exact release-artifact qualification and complete graph
 cutover remain open.
+
+2026-10-14 passport fixture dependency review: the current protected fixture
+still starts OpenBao on HTTP and the bootstrap shell explicitly requires
+`http://openbao:8200`. Its existing Rust OpenBao callers include Signing Keys
+bootstrap/HAIP/envelope paths and Issuance managed-signing/artifact paths that
+construct ordinary `reqwest` clients without adding the disposable OpenBao
+CA. Reqwest's Rustls client requires an explicitly trusted root for this
+private CA (see the [ClientBuilder TLS certificate methods](https://docs.rs/reqwest/latest/reqwest/struct.ClientBuilder.html)); setting the
+CLI's `BAO_CACERT` alone does not configure these Rust clients. Coordinate
+one shared Rust OpenBao HTTP client with authenticated HTTPS and explicit CA
+trust across those callers before switching the fixture and protected
+bootstrap to `PASSPORT_BAO_TLS_MODE=required`. Keep the protected keyless
+preflight strict during that transition; do not add an HTTP or local-key
+fallback. Separate Rust edge self-review found that its initial proxy passed
+caller-supplied forwarding headers through to Gateway. The staged edge now
+removes `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, hop-by-hop and caller
+`Content-Length` headers, then sets the trusted peer IP and HTTPS origin.
+The edge unit test asserts spoofed forwarding and connection-nominated
+headers do not reach Gateway; a fresh real-OpenBao host TLS/callback probe
+and `cargo test -p marty-passport-keyless-edge` passed. The image probe from
+the preceding paragraph predates this forwarding-header correction, so an
+image rebuild/probe is required before claiming installed-image evidence
+for this latest source.
