@@ -20496,3 +20496,27 @@ the complete protected passport graph or the published release artifact.
 Next: adopt the shared HTTPS/CA transport in the existing Signing Keys,
 Issuance, Gateway and other OpenBao callers as one coordinated Rust/Compose
 cutover, then remove the fixture's private TLS key files and plaintext gRPC.
+
+2026-10-14 production DIDComm transport cutover, staged in the grouped UI
+worktree: `RemoteDidcommKms` now constructs its OpenBao client through
+`marty-openbao-http`, rejecting HTTP and accepting an explicit public CA
+file. The native Issuance startup accepts `DIDCOMM_KMS_CA_CERT_FILE` only
+with the address and token-file pair. Self-host Issuance and Issuance-native
+mount `openbao_tls_ca_cert`; Kubernetes Issuance-native reuses the mounted
+`issuance-server-kms/ca.crt`. The reviewed self-host model snapshot and hash
+were updated for exactly those new bindings. Rust Issuance check and focused
+unit tests passed; 112 focused self-host/Kubernetes model tests passed.
+Built the staged Go OpenBao DIDComm extension as local image
+`sha256:c51254086ed19102ac8fd8813fa6ce229f51f3c8e702518eb39591737d81e82c`,
+then ran the native `didcomm_remote_kms_live` test against disposable
+CA-verified HTTPS OpenBao with the plugin mounted. It passed scoped
+non-exportable sender-key creation, key rotation, authcrypt pack and holder
+decryption, and rejection of a wrong OpenBao CA; the dedicated probe
+removes its OpenBao container. This is real local backend evidence, not a
+published image or physical wallet test. The existing coordinated-restore
+CI probe still starts its Raft OpenBao on HTTP and invokes this live test;
+that gate will now fail until the Raft probe and its other OpenBao clients
+are converted to authenticated HTTPS. The current same-machine self-host
+OpenBao scaffold and example `BAO_ADDR` are also HTTP. Do not push the
+grouped UI branch until those dependencies and the passport fixture are
+converted and retested; do not reinstate an HTTP DIDComm fallback.
