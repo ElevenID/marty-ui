@@ -21052,11 +21052,10 @@ inspection of the pinned Keycloak 25.0.6 jars shows that both
 `DefaultKeyProviders.createProviders`. That method explicitly adds
 `rsa-generated`, `rsa-enc-generated`, `hmac-generated` (HS512), and
 `aes-generated`; these are the four providers found in each live database.
-Merely installing a higher-priority remote Java `KeyProvider` cannot satisfy
+Merely installing a remote Java `KeyProvider` under a new ID cannot satisfy
 KMS-only, because realm creation still inserts generated-provider components
-and their current factories store private/secret material. The exact
-Keycloak bootstrap/distribution must be changed or replaced and tested from
-an empty database before the remote SPI can be considered a solution.
+and their current factories store private/secret material. The factory IDs
+used during bootstrap must be replaced or safely overridden from first boot.
 
 The live config confirms `rsa-enc-generated` is `RSA-OAEP`, HMAC is `HS512`,
 and signing is RS256 in the product realm. Keycloak 25.0.6 also has a
@@ -21070,6 +21069,33 @@ compatibility as unproven backend operations; if active Keycloak flows need
 them, implement those private operations in the planned Go OpenBao extension
 or choose an OIDC provider with a proved remote interface. Do not wire a
 partial RS256-only provider into the protected deployment. First qualify a
-source-built Keycloak distribution that never creates generated providers,
+source-built Keycloak distribution that never creates private material,
 then exercise master/11id login, refresh, JWKS/rotation and optional JWE
 paths against the remote backend and run the read-only database gate.
+
+2026-10-15 disposable Keycloak 25.0.6 bootstrap experiment corrected the
+implementation route. The SPI is named `keys` (confirmed from the pinned
+`KeySpi` class). Disabling its four built-in factories with
+`--spi-keys-<provider-id>-enabled=false` prevents master startup with
+`No such provider 'rsa-generated'`; this alone cannot ship. Keycloak's
+[25.0.6 provider guide](https://www.keycloak.org/docs/25.0.6/server_development/index.html)
+documents overriding a built-in factory with the same ID and a higher
+`order()`. A staged Java proof JAR implements that pattern for all four
+IDs with fail-closed factories. A fresh disposable master realm started
+successfully; a count-only copy of its H2 database had four provider
+components and **zero** `privateKey` or `secret` config rows. The admin
+token request returned HTTP 500 as intended because remote signing is not
+implemented; a second database scan after that request still had zero key
+material rows. This proves an SPI override can avoid a Keycloak source fork
+for the *bootstrap-storage* problem on this pinned version, while preserving
+fail-closed behavior. It does not yet implement OIDC crypto or prove 11id,
+rotation, refresh, JWE, or production PostgreSQL. Do not deploy the proof
+JAR; replace its failing factories with complete remote operations and
+attest the exact JAR/image before K12 acceptance. The SQL verifier must be
+adapted to attest the approved override IDs and distribution rather than
+trusting the provider ID string alone.
+The initial experiment used the wrong SPI name `key-provider`; Keycloak
+started and its database still contained two `privateKey` and two `secret`
+rows for master. Admin REST omitted those fields even though H2 held them.
+This is why neither a successful start nor the Admin REST component view is
+an acceptable custody check; use direct read-only database inspection.
