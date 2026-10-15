@@ -29,6 +29,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     trusted_custody_keys,
     verify_kms_custody,
 )
+from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 
 
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
@@ -247,6 +248,7 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
+    diagnostics = RunDiagnostics(tmp_path)
     with pytest.raises(ValueError, match="signed custody evidence is absent"):
         installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
                           tmp_path, state, tmp_path / "compose.json", tmp_path / "secrets",
@@ -255,10 +257,17 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
                           tmp_path / "custody.json", tmp_path / "custody.sig",
                           tmp_path / "custody.pub",
                           {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                           "image_lock_sha256": "c" * 64}, frozenset())
+                           "image_lock_sha256": "c" * 64}, frozenset(), diagnostics)
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
+    report = diagnostics.report(result="failed")
+    assert report["first_failure_phase"] == "custody_verification"
+    assert [row["name"] for row in report["phases"]] == [
+        "fresh_project", "image_pull", "startup", "readiness", "fixture_setup",
+        "custody_verification", "cleanup",
+    ]
+    assert report["phases"][-1]["status"] == "passed"
 
 
 def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:

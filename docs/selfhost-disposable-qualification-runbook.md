@@ -121,8 +121,18 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --kms-custody-evidence "$private/custody.json" \
   --kms-custody-signature "$private/custody.sig" \
   --kms-custody-public-key "$private/custody.pub" \
-  --output "$private/installed-journey.json"
+  --output "$private/installed-journey.json" \
+  --diagnostic-output "$private/installed-diagnostic.json"
 ```
+
+The separate diagnostic file is written on success or ordinary runner failure
+and contains fixed phase names, durations, the first failed phase, Linux-visible
+CPU/RAM and initial free disk, and sampled host memory/swap high-water marks.
+It contains no credentials or test payloads and is always **unqualified**.
+The sampled values can miss short spikes; they do not measure per-container
+memory or OOM kills. Retain independent Docker/host observations before
+assessing a smaller hardware envelope. Never treat a diagnostic file as the
+successful installed-journey report.
 
 The run passes only when all local services reach the reviewed health states,
 migrations finish, the KMS-backed synthetic issuer and verifier bind to their
