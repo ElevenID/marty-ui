@@ -22274,3 +22274,8 @@ not acceptance. Both Windows Docker Desktop and WSL Docker were unavailable,
 so the OpenBao PKI, TLS handshake, Gateway/Issuance process composition, and
 Raft restart behavior require hosted Docker execution. Preserve run
 `38780095995` as immutable failed evidence.
+
+The grouped PR description was rewritten for head `5fcb8b450` and the
+base HTTPS/Raft scope. [Exact-head run 38785167966](https://github.com/ElevenID/marty-ui/actions/runs/38785167966)
+is currently live; Canvas, contracts, self-host, image, and plugin jobs have
+started. Treat the outcome as pending until every required lane is terminal.
