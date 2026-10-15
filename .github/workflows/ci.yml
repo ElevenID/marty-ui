@@ -1838,6 +1838,21 @@ jobs:
             --profile oidf-edge -- cargo test --locked -p marty-passport-keyless-edge \
             --bin marty-oidf-keyless-edge tests::oidf_https_handshake_signs_with_versioned_remote_key \
             -- --ignored --exact --nocapture
+      - name: Exercise Flow-to-Issuance mutual TLS with remote keys
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          test_name=grpc_providers::tests::flow_issuance_channel_requires_remote_key_mutual_tls
+          cargo test --locked -p marty-flow --lib -- --list | grep -Fx "$test_name: test"
+          run_timed flow_issuance_kms python3 ../scripts/with_disposable_event_stream_kms.py \
+            --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+            --profile flow-issuance -- cargo test --locked -p marty-flow --lib \
+            "$test_name" -- --ignored --exact --nocapture \
+            | tee "$RUNNER_TEMP/flow-issuance-kms.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/flow-issuance-kms.log"
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'
         working-directory: rust
