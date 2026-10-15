@@ -415,9 +415,8 @@ unqualified, distinct from the tested peer2 full service representation.
 
 ### Operator TLS trust parity
 
-The source-hashed executable capture in `scripts/capture_didcomm_tls_reference.py`
-and `contracts/didcomm-tls-python-reference.json` records Python's per-delivery
-trust loading. Missing/malformed CA files fail with the exact public 503 detail
+The frozen, source-hashed `contracts/didcomm-tls-python-reference.json`
+records Python's per-delivery trust loading. Missing/malformed CA files fail with the exact public 503 detail
 after controlled signing/encryption, before any HTTP client is created. Python
 has already saved issuer context once but has not finalized the credential.
 Real SSL contexts accept multiple PEM certificates and observe same-path file

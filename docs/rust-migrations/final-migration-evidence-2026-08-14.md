@@ -31,7 +31,7 @@ The measured revisions were:
 | `ElevenID/marty-subscriptions` | `46ffa2497beba48e4fae3b3feba729ee531a6d07` |
 | `ElevenID/marty-ui` | `5abfe0dfe42b68b137a8f40210401011f6eeb022` |
 
-The report can be reproduced with the procedure in [language-composition evidence](language-composition-evidence.md). Generated/vendor/build trees are excluded, tracked worktrees must be clean, and every revision is recorded in the report.
+The report was produced from the clean, pinned revisions listed above. Generated, vendor, and build trees were excluded, and the source measurement tooling is retained in Git history.
 
 ## Implementation and deletion chain
 
