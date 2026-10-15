@@ -2,12 +2,11 @@
 
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
+from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 HTTPS_KMS = "https://openbao:8200"
@@ -154,7 +153,8 @@ def rendered(*profiles):
         required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", (ROOT / name).read_text()))
     env = {name: os.environ[name] for name in (
         "PATH", "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
-        "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG") if name in os.environ}
+        "HOME", "HOMEDRIVE", "HOMEPATH", "PROGRAMFILES", "PROGRAMFILES(X86)",
+        "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG") if name in os.environ}
     env.update({name: "synthetic-required-value" for name in required})
     env["MARTY_RUNTIME_CONFIG_ROOT"] = str(ROOT)
     env["MARTY_OPENBAO_DIDCOMM_IMAGE"] = PINNED_PLUGIN
