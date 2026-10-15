@@ -22390,3 +22390,20 @@ that test. The OIDF binary's three normal tests passed locally and the
 ignored KMS handshake target compiled; the actual remote handshake must be
 rerun in hosted CI. The image lane passed; Canvas, plugin and self-host lanes
 remain live at this checkpoint.
+
+Run `38788256643` is now terminal failed. The image, self-host, and OpenBao
+plugin lanes passed; the plugin lane completed its coordinated PostgreSQL/Raft
+recovery probe. The four failures were Release Contracts, Rust Lint, Rust
+Contracts, and Canvas, so CI Gate failed. The first three have local fixes
+described above. Canvas's downloaded owned-child diagnostics identify an
+additional real fixture error: the packaged Issuance process read an
+unavailable deployment TLS certificate path rather than the disposable
+public certificate, exiting before health. Local grouped commit `274d79493`
+binds all seven Issuance remote TLS identity settings to the fixture's
+certificate, CA, versioned key and scoped token in both rendered Base and
+Kubernetes compositions. It also captures bounded Gateway startup stderr
+for the two remaining opaque Gateway child failures; their cause is not yet
+proven. The Canvas target compiled and targeted Clippy passed locally, but
+the actual packaged-process test is Linux/Docker-only and needs the next
+exact-head CI run. The grouped UI branch has not yet been pushed at this
+checkpoint; do not count this failed run as release qualification.
