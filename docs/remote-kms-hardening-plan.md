@@ -21959,3 +21959,13 @@ were corrected in local commit `6e257e08f`. Neither Canvas live startup nor
 the Keycloak restart-cookie failure is qualified by these edits. The
 selfhost lane was still in progress when last checked, so hold one grouped
 push until its result is known.
+
+Run `38764261250` completed with the Rust selfhost lane successful and the
+four other failures described above; no further selfhost correction was
+needed. The three local UI correction commits were pushed together to PR
+[#1344](https://github.com/ElevenID/marty-ui/pull/1344) at exact head
+`f2b7efe4ed3287ce906d49eceb84d860a4ad3c1b`, and its review body was
+updated. Exact-head [CI run `38767505426`](https://github.com/ElevenID/marty-ui/actions/runs/38767505426)
+was queued at inspection; policy had passed and CodeQL/organization gates
+were still live. The local Docker-backed Canvas/Keycloak corrections require
+this new hosted run; the previous red run does not qualify the new head.
