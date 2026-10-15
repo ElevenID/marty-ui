@@ -21485,3 +21485,18 @@ Raft setups, and the exact-image release gate runs the same probe. The
 expanded probe passed twice locally against the candidate OpenBao image;
 194 focused CI/release workflow contract tests passed. No hosted CI or
 published digest has qualified this grouped branch yet.
+
+2026-10-15 self-host TLS renewal (grouped UI worktree, unlanded): the
+OpenBao-owned listener certificate and key are now stored together in a
+0600 `server.pem` under the KMS state volume, allowing one atomic file
+replacement. The Go initializer verifies the existing chain, names,
+ownership and matching private key; renews the listener under the same
+KMS-owned CA when fewer than 30 days remain; and supports a forced renewal.
+The Makefile operator target renews, restarts OpenBao and reruns bootstrap to
+unseal it. A disposable probe forced renewal, observed a changed listener
+digest, unchanged public CA and `600:openbao` custody, then passed HTTPS
+bootstrap, cold-copy and snapshot restore. The Go image built with tests and
+vet; the complete disposable Rust/PostgreSQL/OpenBao coordinated restore
+passed again against the renewed PEM format. CA rollover and trust-anchor
+redistribution remain a separate operational task before the five-year CA
+expires; live deployment and signed-image qualification remain pending.
