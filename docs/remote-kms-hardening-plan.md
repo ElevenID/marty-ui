@@ -21991,3 +21991,17 @@ commit `0fd80e0d9` enables that mount before creating/checking its
 non-exportable integration-secret key. The exact workflow assertion passed.
 The Keycloak cookie diagnosis is evidence-based but not yet confirmed by a
 live rerun; do not claim the browser gate is qualified.
+
+The same run's selfhost lane passed its installed image and database
+contracts. Its Canvas lane passed the disposable HTTPS/OpenBao sidecar probe
+and earlier preflights, then failed the separate published-process caller:
+that caller still supplied a flat pre-created `.pem` file, while the shared
+helper requires a new `ca.crt` in a writable public-CA directory. Local UI
+commit `b3af37155` changes both the Bash published-process caller and the
+Rust namespace caller to owned temporary CA directories, preserves cleanup
+after container stop, and updates their root-token checks to the current
+64-hex fixture. Focused published-preflight tests passed 3/3, Bash syntax
+passed, direct Rust formatting passed, and the exact Canvas schema-contract
+test executable compiled on Windows. Live published Canvas remains a hosted
+retest. The contracts lane was still running its scoped HTTPS grant probe;
+hold the grouped UI push for its final result.
