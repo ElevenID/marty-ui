@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT / "scripts/ci/run-rust-db-contracts.sh"
@@ -18,16 +19,51 @@ else:
     BASH = shutil.which("bash")
 
 
+@pytest.mark.parametrize(
+    "step_name,guarded_calls",
+    [
+        ("Verify feature-regression observer isolation", 1),
+        ("Test native Canvas AGS/NRPS over real HTTPS", 1),
+        ("Test native passport Gateway signed webhook on PostgreSQL", 1),
+        ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
+        ("Exercise Gateway CSR and managed passport chain with disposable OpenBao", 7),
+    ],
+)
+def test_focused_rust_ci_cases_require_positive_execution(
+    step_name: str, guarded_calls: int
+) -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    [step] = [entry for entry in steps if entry.get("name") == step_name]
+    script = step["run"]
+    assert "source " in script and "rust_contract_execution.sh" in script
+    assert script.count("run_timed ") == guarded_calls
+    if BASH is not None:
+        syntax = subprocess.run(
+            [BASH, "-n", "-c", script], capture_output=True, text=True, check=False
+        )
+        assert syntax.returncode == 0, syntax.stderr
+
+
 def test_database_runner_uses_positive_execution_guard() -> None:
     source = RUNNER.read_text(encoding="utf-8")
-    assert 'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
+    assert (
+        'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
+    )
     assert source.count("run_timed ") == 19
 
 
 def test_canvas_serial_runner_uses_positive_execution_guard() -> None:
     source = CANVAS_RUNNER.read_text(encoding="utf-8")
-    assert 'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
-    assert 'if [[ "$phase" == canvas_serial ]]; then\n    run_timed_rust_test "$phase" "$name" "$@"' in source
+    assert (
+        'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
+    )
+    assert (
+        'if [[ "$phase" == canvas_serial ]]; then\n    run_timed_rust_test "$phase" "$name" "$@"'
+        in source
+    )
     assert source.count("timed canvas_serial ") == 9
 
 
