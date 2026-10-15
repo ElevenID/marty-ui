@@ -682,10 +682,38 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             )
             ensure(status in (200, 204), "install scoped envelope policy")
             public_contract_token = issue(["kms-public-contract-envelope"])
+            issuer_rebind_keys = (
+                "kms-public-contract-issuer-a",
+                "kms-public-contract-issuer-b",
+            )
+            for reference in issuer_rebind_keys:
+                status, _ = call(
+                    "POST", f"transit/keys/{reference}", root_token,
+                    {"type": "ed25519", "exportable": False,
+                     "allow_plaintext_backup": False},
+                )
+                ensure(status == 200, f"create non-exportable {reference}")
+                status, metadata = call("GET", f"transit/keys/{reference}", root_token)
+                ensure(status == 200 and metadata["data"]["type"] == "ed25519"
+                       and metadata["data"]["exportable"] is False,
+                       f"verify non-exportable {reference}")
+            issuer_policy = "\n".join(
+                f'path "transit/keys/{reference}" {{ capabilities = ["read"] }}'
+                for reference in issuer_rebind_keys
+            )
+            status, _ = call(
+                "PUT", "sys/policies/acl/kms-issuer-rebind-public", root_token,
+                {"policy": issuer_policy},
+            )
+            ensure(status in (200, 204), "install scoped issuer read policy")
+            issuer_rebind_token = issue(["kms-issuer-rebind-public"])
             public_contract_environment = dict(
                 environment,
                 MARTY_TEST_OPENBAO_TOKEN=public_contract_token,
                 BAO_TOKEN=public_contract_token,
+                MARTY_TEST_ISSUER_REBIND_TOKEN=issuer_rebind_token,
+                MARTY_TEST_ISSUER_REBIND_KEY_A=issuer_rebind_keys[0],
+                MARTY_TEST_ISSUER_REBIND_KEY_B=issuer_rebind_keys[1],
             )
             for suite, expected in (
                 ("vdsnc_registration_live_contract", 2),
@@ -702,6 +730,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 if result.returncode or f"test result: ok. {expected} passed; 0 failed" not in result.stdout:
                     detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                     detail = detail.replace(public_contract_token, "[envelope]")
+                    detail = detail.replace(issuer_rebind_token, "[issuer-read]")
                     raise RuntimeError(
                         f"Rust public Signing Keys contract {suite} failed:\n"
                         f"{detail[-2000:]}"
