@@ -22407,3 +22407,10 @@ proven. The Canvas target compiled and targeted Clippy passed locally, but
 the actual packaged-process test is Linux/Docker-only and needs the next
 exact-head CI run. The grouped UI branch has not yet been pushed at this
 checkpoint; do not count this failed run as release qualification.
+
+The grouped UI correction batch was pushed as `274d79493` to PR #1344,
+and its description now reflects the Raft-only beta path, the exact prior
+failure, and installed-cutover limits. [New exact-head CI run 38791978877](https://github.com/ElevenID/marty-ui/actions/runs/38791978877)
+is queued, with related policy, CodeQL and organization-quality runs live.
+Wait for terminal exact-head results before treating any runtime lane as
+qualified; the installed beta/Keycloak cutover remains separate required work.
