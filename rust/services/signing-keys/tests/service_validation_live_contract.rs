@@ -76,7 +76,10 @@ async fn tenant_token_and_namespace_reach_every_custom_transit_probe() {
     .expect("validation request");
     let result = validate(request).await;
 
-    assert!(result.ok, "custom transit validation should pass: {result:?}");
+    assert!(
+        result.ok,
+        "custom transit validation should pass: {result:?}"
+    );
     let requests = captured.lock().await;
     assert_eq!(requests.len(), 3);
     assert_eq!(
