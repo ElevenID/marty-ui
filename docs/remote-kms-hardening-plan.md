@@ -22137,3 +22137,25 @@ passed for the new binary. It is not yet packaged or wired to Compose; its
 upgrade tunnel, published-image route parity, remote certificate bootstrap,
 and full official runner still require qualification. The deployed OIDF
 `tls.key` path therefore remains open.
+
+2026-10-15 contracts-lane correction: run `38776076785` also failed the
+ignored managed-key Gateway acceptance because its CI step provided the
+retired HTTP OpenBao fixture variables while the test now requires guarded
+HTTPS, public CA, and a scoped token distinct from its sentinel root token.
+Local UI commit `6c27f434a` routes that single invocation through the
+existing disposable HTTPS OpenBao `signing-transit` fixture, keeps the
+positive-test-execution guard, and adds a workflow regression assertion.
+Five focused workflow tests and Bash syntax passed locally. The actual
+Docker-backed managed-key test still requires hosted re-execution. The
+selfhost-image and OpenBao integration-secret recovery jobs remain live, so
+these three correction commits have not yet been pushed to PR #1344.
+
+The isolated OIDF Rust branch reached local commit `c47dbad63`: it packages
+the keyless binary in the shared service image and exercises route mapping,
+spoofed forwarding-header replacement, and an actual bidirectional Gateway
+HTTP Upgrade tunnel (three tests pass). The existing passport edge regression
+test also passed after extracting shared TLS identity setup. A direct Hyper
+request initially used absolute-form upstream and failed the tunnel proof;
+the tested implementation now preserves origin-form. A local Compose draft
+has begun replacing Nginx with this binary, but it is not yet complete or
+qualified, so the OIDF TLS private-key boundary remains open.
