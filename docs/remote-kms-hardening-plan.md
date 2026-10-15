@@ -20568,3 +20568,20 @@ syntax and diff checks passed. This is source/config evidence only. The base
 beta OpenBao, disposable migration probes and current same-machine Raft
 listener still use HTTP; their live Notification envelope/migration contract
 must be moved to authenticated HTTPS and rerun before push.
+
+2026-10-14 Notification real-backend evidence, staged in the grouped UI
+worktree: extended the existing disposable HTTPS OpenBao helper with a
+Notification profile. It creates a non-exportable, non-backupable Transit
+AES key and a token restricted to that key's read/encrypt/decrypt paths;
+the helper verifies that token cannot read a foreign key. The helper's
+root-token HTTP client now refuses redirects as well as proxies. A new
+opt-in native test used the actual `WebhookSecretEnvelope` against this
+disposable server and passed readiness, remote wrap/unwrap, organization
+and webhook binding rejection, wrong public CA rejection, and refusal to
+substitute a shared token for the dedicated token. A separate local run
+combined the same HTTPS profile with a disposable pinned PostgreSQL image;
+the existing `postgres_integration` test passed migration, encrypted
+webhook storage and outbox behavior. Both unique Docker containers were
+removed, and Python compilation/diff checks passed. This proves the
+Notification source path with real OpenBao/PostgreSQL, but not the published
+service image or the HTTP-based disposable migration and beta fixtures.
