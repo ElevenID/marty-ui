@@ -20707,3 +20707,31 @@ and broader inventory/algorithm cases; preserve and replace those with real
 OpenBao evidence before retiring the obsolete HTTP mock suite. Rust source
 format, test compilation, production check, Python compilation and diff
 checks passed. The grouped UI changes remain uncommitted/unlanded.
+2026-10-15 Signing Keys HTTPS and CI consolidation follow-up, staged in the
+grouped UI worktree: the previously failing `--rust-adapter` policy probe now
+passes end-to-end against a disposable CA-verified OpenBao, Redis and
+PostgreSQL. The five historical in-process HTTP Transit mock tests were moved
+into the Signing Keys library's `cfg(test)` module, where the existing
+test-only loopback allowance retains their regression coverage without
+shipping an HTTP path in integration/production builds. The separate real
+HTTPS managed-profile route test proves non-exportable metadata, public-only
+responses, denied create and pre-provisioned read-only resolution. Gateway
+managed creation and dedicated rotation acceptance now use real disposable
+OpenBao over HTTPS. The external Transit registry now persists `ca_cert_file`
+and binds it to the sealed credential configuration; without this, external
+CA-verified rotation lost the CA path. The Signing Keys library run passed
+197 tests with 14 opt-in tests ignored.
+
+The separate `--grant-verifier` policy probe now passes its real one-use grant
+verification, Signing Keys public CSR route and managed passport
+CSCA/DSC/SOD chain over CA-verified HTTPS. The CI contract-source inventory
+was updated for the keyless TLS acceptance target and its release Docker
+context exclusions; 180 Python workflow/context tests passed, with the one
+new-target expectation subsequently fixed and rechecked in isolation. Rust
+formatting, Python compilation and `git diff --check` passed. The old hosted
+CI step `Exercise Gateway CSR and managed passport chain with disposable
+OpenBao` still provisions HTTP OpenBao and has not yet been replaced or
+converted while preserving its remaining coverage. The protected passport
+disposable fixture still mounts TLS private-key files. These are current
+pre-push blockers; no hosted PR or exact signed-artifact qualification is
+claimed from this local evidence.
