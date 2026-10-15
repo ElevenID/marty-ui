@@ -21940,3 +21940,22 @@ holder case. Its focused Python test passed locally; the Keycloak live
 diagnostics remain unverified. Canvas, contracts, selfhost and image jobs
 were still running when inspected. Local Docker still did not answer
 `docker info`; the hung command was stopped without changing Docker state.
+
+2026-10-15 next grouped UI correction, still local: run `38764261250`
+passed the Rust image and lint/package jobs but failed the Canvas namespace
+fixture and contracts lanes. Canvas reached its OpenBao container, then its
+custom dev TLS launch did not expose the CA file at the expected path. Commit
+`9194c2308` switches that disposable fixture to the shared HTTPS OpenBao
+helper, retaining a public-CA handoff and keeping its synthetic root token
+out of Docker environment metadata. The contracts lane reached the shared
+disposable HTTP OpenBao fixture, then received 404 while checking the
+non-exportable integration-secret Transit key: that key had never been
+created in this fixture. Commit `f2b7efe4e` creates it with AES-256-GCM,
+`exportable=false`, and `allow_plaintext_backup=false` before verifying its
+policy; the exact workflow test passes locally. The shared HTTP fixture is
+test-only; the scoped HTTPS holder lifecycle ran successfully in the earlier
+step. The release static assertion and Keycloak browser-rotation diagnostics
+were corrected in local commit `6e257e08f`. Neither Canvas live startup nor
+the Keycloak restart-cookie failure is qualified by these edits. The
+selfhost lane was still in progress when last checked, so hold one grouped
+push until its result is known.
