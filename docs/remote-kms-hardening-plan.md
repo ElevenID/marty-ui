@@ -22114,3 +22114,26 @@ UI, and the rest to Gateway while preserving the public Host and forwarding
 headers; it needs a streaming HTTP/1.1 upgrade-capable path and regression
 tests against the present Nginx route table before removing `tls.key` and its
 generator. This is source-design evidence, not an implemented OIDF edge.
+
+2026-10-15 CI and local correction checkpoint: exact-head PR #1344 run
+`38776076785` is still in progress. The release-contract lane failed four
+cases because the native synthetic spec omitted the new HTTPS KMS CA field
+and still used an HTTP KMS URL. The Canvas lane failed because its Rust-owned
+renderer fixture wrote a markerless synthetic CA file that the strengthened
+public-certificate validation rejected. Local UI commits `f240132c0` and
+`4aa9903ff` correct the Python fixture and both Rust synthetic CA writers.
+The focused Python fixture suite passed 74 cases; the Canvas acceptance
+target compiled and Rust formatting passed locally. The Linux-only Canvas
+case cannot execute on this Windows host, so it still needs its next hosted
+run. These corrections remain local while the other current-head CI lanes
+finish, to batch further findings into one push.
+
+Separately, local branch `feat/kms-oidf-keyless-edge-20261015` now has an
+uncommitted Rust OIDF edge prototype sharing the passport edge's keyless TLS
+identity loader. It streams HTTP bodies through Hyper, routes the Nginx
+public paths to Keycloak/UI/Gateway, filters spoofed forwarding headers, and
+supports Gateway HTTP upgrades. Rust 1.95 `cargo check` and two local tests
+passed for the new binary. It is not yet packaged or wired to Compose; its
+upgrade tunnel, published-image route parity, remote certificate bootstrap,
+and full official runner still require qualification. The deployed OIDF
+`tls.key` path therefore remains open.
