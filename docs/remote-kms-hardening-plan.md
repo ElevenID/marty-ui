@@ -21427,3 +21427,30 @@ after refreshing the seven-secret contract. No Kubernetes cluster, exact
 published image, Keycloak database or end-to-end login was qualified here.
 The current live self-host/beta Keycloak rows and standalone OpenBao HTTP
 listener remain separate blockers.
+
+2026-10-15 disposable Raft HTTPS progress (grouped UI worktree, unlanded):
+the self-host OpenBao image now builds a Go TLS initializer. It creates and
+verifies a CA and server certificate under the KMS node's durable
+`/bao/data/tls` state, with 0600 private files owned by `openbao`; no
+application volume receives either private key. The production Raft listener,
+Compose health check and bootstrap use CA-verified HTTPS, and bootstrap
+publishes only the public CA to `openbao_tls_ca_cert`. The same public CA is
+bound to signing-grant callers; the snapshot exporter now requires loopback
+HTTPS and that CA. Documentation and the operator health probe were updated.
+The Go image built with tests and vet, Compose rendered, exporter tests passed
+(6), and a fresh disposable Docker-volume Raft node initialized and unsealed
+through the real bootstrap. It reported active Raft over verified HTTPS; an
+untrusted client failed certificate verification, a client using the
+published public CA succeeded, and the public CA contained no private-key
+marker. The current live self-host node remains on its old HTTP image/state;
+no live cutover, restore/rotation proof, complete app graph, published image,
+or installed qualification has occurred. The local Keycloak DBs still have
+the four `privateKey` and four generated `secret` rows each. The generic
+Keycloak `COMPONENT_CONFIG` table is not itself a private-key table and must
+remain for other configuration; clean-install and deployed gates require its
+key-bearing rows to be absent and blocked from reappearing.
+The disposable Raft node was also stopped and restarted: it returned sealed,
+then the existing bootstrap unsealed it over verified HTTPS and reused its
+service and signing tokens. Raft returned active and unsealed with the same
+cluster identity. The Notification token was reminted by the existing
+bootstrap policy, which needs separate idempotence review before cutover.
