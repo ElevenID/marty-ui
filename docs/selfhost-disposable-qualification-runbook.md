@@ -41,8 +41,11 @@ pull alone does not establish a smaller supported minimum.
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. In a private operator directory outside both repositories, create an empty
    state directory, a secret directory containing every non-placeholder secret
-   named by `EXPECTED_SECRET_NAMES` in
-   `scripts/check_selfhost_installed_runtime_plan.py`, and a Compose env file.
+   named by `LOCAL_SECRET_NAMES` in
+   `scripts/run_selfhost_business_journey.py`, and a Compose env file. The
+   runner does not start either Cloudflare tunnel, so their two token files
+   are not required for this local journey. The full all-profile Compose
+   secret declarations and service bindings are still checked unchanged.
    Set `SELFHOST_STATE_DIR`, `SELFHOST_SECRET_DIR`, `MARTY_ORG_ID`,
    `MARTY_ORG_ADMIN_EMAIL`, and `PUBLIC_DOMAIN` before rendering. The admin
    email must be a synthetic `@selfhost.marty.invalid` address. Use disposable

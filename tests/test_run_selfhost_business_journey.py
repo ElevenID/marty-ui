@@ -14,6 +14,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from run_selfhost_business_journey import (  # noqa: E402
     BETA_SERVICES,
     COMPLETED,
+    LOCAL_SECRET_NAMES,
+    LOCAL_SERVICES,
     EXPECTED_SERVICES,
     NOT_LOCAL,
     build_public_kms_jwk_tool,
@@ -91,6 +93,26 @@ def test_exact_local_service_closure_passes_without_tunnel() -> None:
     raw, model = status_fixture()
     states = live_services(raw, model)
     assert set(states) == EXPECTED_SERVICES - BETA_SERVICES - {"cloudflared"}
+
+
+def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) -> None:
+    from check_selfhost_installed_runtime_plan import (
+        EXPECTED_ROLE_SECRETS, EXPECTED_SECRET_NAMES,
+    )
+
+    assert LOCAL_SECRET_NAMES == frozenset(
+        secret for service in LOCAL_SERVICES
+        for secret in EXPECTED_ROLE_SECRETS.get(service, ())
+    )
+    assert EXPECTED_SECRET_NAMES - LOCAL_SECRET_NAMES == {
+        "cloudflare_tunnel_token", "cloudflare_beta_tunnel_token",
+    }
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text("disposable-test-material", encoding="utf-8")
+    required_secrets(tmp_path)
+    (tmp_path / "marty_db_password").unlink()
+    with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path)
 
 
 def test_missing_service_and_unhealthy_gateway_fail_closed() -> None:
@@ -235,7 +257,7 @@ def test_required_secrets_rejects_placeholder(monkeypatch, tmp_path: Path,
                                               placeholder: str) -> None:
     import run_selfhost_business_journey as runner
 
-    monkeypatch.setattr(runner, "EXPECTED_SECRET_NAMES", frozenset({"issuer_token"}))
+    monkeypatch.setattr(runner, "LOCAL_SECRET_NAMES", frozenset({"issuer_token"}))
     (tmp_path / "issuer_token").write_text(placeholder, encoding="utf-8")
     with pytest.raises(ValueError, match="placeholder: issuer_token"):
         required_secrets(tmp_path)
