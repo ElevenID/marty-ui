@@ -21881,3 +21881,21 @@ broken across unrelated browser acceptance. Browser failures now report only
 the route and a closed error marker, and Keycloak logs are filtered from the
 start of the browser phase to avoid mistaking the expected CIBA 403 for the
 browser failure. Live behavior remains unverified until the next hosted run.
+
+The same run's contracts lane failed at the old `holder_remote_live_kms`
+invocation because that duplicate workflow step supplied `http://127.0.0.1:8200`
+to a test that now requires verified HTTPS. The immediately preceding
+`probe_signing_keys_openbao_policy.py --rust-adapter` step already exercises
+that exact holder lifecycle against a disposable scoped HTTPS OpenBao and
+fresh PostgreSQL, including the holder runtime private-material scan. The
+local grouped UI correction removes only the redundant HTTP invocation.
+The Canvas lane reached its disposable namespace OpenBao startup and timed
+out before the listener became ready. Its launcher used a read-only config
+file mounted into the image entrypoint's config directory, while the
+working HTTPS disposable fixtures use `BAO_LOCAL_CONFIG` and writable
+temporary TLS storage. The local correction uses that same entrypoint
+contract, and records bounded token-redacted container/status diagnostics
+if startup still fails. Python compilation, workflow YAML parsing and diff
+checks pass; no live Docker rerun is claimed. Selfhost and image lanes of
+`38759939281` were still running when inspected, so retain this correction
+locally until their results are known, then batch one UI push.
