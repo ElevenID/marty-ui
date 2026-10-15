@@ -437,6 +437,9 @@ def test_gateway_live_config_case_has_exact_contracts_lane_invocation() -> None:
     assert execution["if"] == "matrix.lane == 'contracts'"
     script = execution["run"]
     assert "MARTY_TEST_REDIS_DISPOSABLE_NONCE=\"$nonce\"" in script
+    assert "with_disposable_event_stream_kms.py" in script
+    assert "--profile signing-transit" in script
+    assert "BAO_TOKEN=test-only" not in script
     assert "-p marty-service-acceptance --test gateway_signing_acceptance" in script
     assert re.search(
         r"byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material"

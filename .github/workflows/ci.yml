@@ -1816,8 +1816,10 @@ jobs:
           source ../scripts/ci/rust_contract_execution.sh
           nonce="$(openssl rand -hex 16)"
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
-              run_timed managed_key_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
+              run_timed managed_key_gateway python3 ../scripts/with_disposable_event_stream_kms.py \
+              --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+              --profile signing-transit -- cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
