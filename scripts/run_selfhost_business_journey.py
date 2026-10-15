@@ -44,6 +44,33 @@ LOCAL_SECRET_NAMES = frozenset(
     secret for service in LOCAL_SERVICES
     for secret in EXPECTED_ROLE_SECRETS.get(service, ())
 )
+SECRET_CATALOG = Path(__file__).resolve().parents[1] / "deploy-config/catalog/secrets.json"
+
+
+def optional_local_secrets(catalog_path: Path = SECRET_CATALOG) -> frozenset[str]:
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    if catalog.get("schema_version") != 1 or not isinstance(catalog.get("secrets"), dict):
+        raise ValueError("self-host secret catalog is invalid")
+    optional = set()
+    for entry in catalog["secrets"].values():
+        if not isinstance(entry, dict):
+            raise ValueError("self-host secret catalog entry is invalid")
+        name = entry.get("compose_secret")
+        if entry.get("allow_empty") is True and name in LOCAL_SECRET_NAMES:
+            optional.add(name)
+    return frozenset(optional)
+
+
+OPTIONAL_LOCAL_SECRET_NAMES = optional_local_secrets()
+FALSE_VALUES = frozenset({"false", "0", "no", "n", "off"})
+CANVAS_DISABLED_FLAGS = frozenset({
+    "CANVAS_PORTABLE_INTEGRATION_ENABLED", "CANVAS_LEGACY_EVENT_INGEST_ENABLED",
+    "CANVAS_MIRROR_WORKER_ENABLED",
+})
+CANVAS_UNUSED_SETTINGS = frozenset({
+    "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
+    "CANVAS_CREDENTIALS_ISSUER_ID", "CANVAS_CREDENTIALS_BADGECLASS_ID",
+})
 
 
 def command(args: list[str], *, cwd: Path | None = None,
@@ -161,13 +188,62 @@ def fresh_project(state_root: Path, compose: list[str], install_root: Path,
     empty_project(compose, install_root, environment)
 
 
-def required_secrets(secret_root: Path) -> None:
+def disabled_optional_secrets(model: dict | None) -> frozenset[str]:
+    if not isinstance(model, dict) or not isinstance(model.get("services"), dict):
+        return frozenset()
+    services = model["services"]
+
+    def environment(service: str) -> dict | None:
+        entry = services.get(service)
+        if not isinstance(entry, dict) or not isinstance(entry.get("environment"), dict):
+            return None
+        return entry["environment"]
+
+    allowed = {"google_analytics_measurement_id", "google_site_verification"}
+    keycloak = environment("keycloak-configurator")
+    notification = environment("notification")
+    if keycloak is not None:
+        social = keycloak.get("KEYCLOAK_SOCIAL_LOGIN_ENABLED")
+        if isinstance(social, str) and social.lower() in FALSE_VALUES:
+            allowed.update(("google_client_id", "google_client_secret"))
+        if (notification is not None
+                and keycloak.get("KEYCLOAK_SMTP_USERNAME") == ""
+                and notification.get("SMTP_USERNAME") == ""):
+            allowed.add("smtp_password")
+    observed_canvas: set[str] = set()
+    canvas_disabled = True
+    for service in sorted(LOCAL_SERVICES):
+        env = environment(service)
+        if env is None:
+            continue
+        for name in CANVAS_DISABLED_FLAGS:
+            if name in env:
+                observed_canvas.add(name)
+                value = env[name]
+                if not isinstance(value, str) or value.lower() not in FALSE_VALUES:
+                    canvas_disabled = False
+        for name in CANVAS_UNUSED_SETTINGS:
+            if name in env:
+                observed_canvas.add(name)
+                if env[name] != "":
+                    canvas_disabled = False
+    if (canvas_disabled and observed_canvas ==
+            CANVAS_DISABLED_FLAGS | CANVAS_UNUSED_SETTINGS):
+        allowed.add("canvas_credentials_shared_secret")
+    return frozenset(allowed & OPTIONAL_LOCAL_SECRET_NAMES)
+
+
+def required_secrets(secret_root: Path, model: dict | None = None) -> None:
     if secret_root.is_symlink() or not secret_root.is_dir():
         raise ValueError("qualification secret root is absent or linked")
+    empty_allowed = disabled_optional_secrets(model)
     for name in sorted(LOCAL_SECRET_NAMES):
         path = secret_root / name
-        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+        if (path.is_symlink() or not path.is_file()
+                or (path.stat().st_size == 0 and name not in empty_allowed)):
             raise ValueError(f"qualification secret material is missing: {name}")
+        if path.stat().st_size == 0:
+            continue
         # Bundled examples use these literal sentinels. Never read secret
         # contents into a report or command line.
         with path.open("rb") as stream:
@@ -390,7 +466,7 @@ def run(args: argparse.Namespace) -> dict:
     runtime_plan = plan(model, preflight, args.secret_root)
     if runtime_plan.get("qualification") != "unqualified":
         raise ValueError("installed runtime plan unexpectedly claims qualification")
-    required_secrets(args.secret_root)
+    required_secrets(args.secret_root, model)
     with (tempfile.TemporaryDirectory(prefix="marty-selfhost-jwk-build-") as build_root,
           tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config):
         jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))

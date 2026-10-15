@@ -40,9 +40,12 @@ pull alone does not establish a smaller supported minimum.
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. In a private operator directory outside both repositories, create an empty
-   state directory, a secret directory containing every non-placeholder secret
-   named by `LOCAL_SECRET_NAMES` in
-   `scripts/run_selfhost_business_journey.py`, and a Compose env file. The
+   state directory, a secret directory containing every file named by
+   `LOCAL_SECRET_NAMES` in `scripts/run_selfhost_business_journey.py`, and a
+   Compose env file. Files explicitly marked `allow_empty` in the reviewed
+   secret catalog may stay empty only when the rendered Compose settings show
+   their integrations are disabled (for example, Google login is off); an
+   enabled integration needs non-placeholder material. The
    runner does not start either Cloudflare tunnel, so their two token files
    are not required for this local journey. The full all-profile Compose
    secret declarations and service bindings are still checked unchanged.

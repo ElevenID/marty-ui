@@ -11,11 +11,13 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import run_selfhost_business_journey as runner  # noqa: E402
 from run_selfhost_business_journey import (  # noqa: E402
     BETA_SERVICES,
     COMPLETED,
     LOCAL_SECRET_NAMES,
     LOCAL_SERVICES,
+    OPTIONAL_LOCAL_SECRET_NAMES,
     EXPECTED_SERVICES,
     NOT_LOCAL,
     build_public_kms_jwk_tool,
@@ -89,6 +91,19 @@ def status_fixture() -> tuple[str, dict]:
     return json.dumps(rows), model
 
 
+def disabled_optional_model() -> dict:
+    _, model = status_fixture()
+    model["services"]["keycloak-configurator"]["environment"] = {
+        "KEYCLOAK_SOCIAL_LOGIN_ENABLED": "false", "KEYCLOAK_SMTP_USERNAME": "",
+    }
+    model["services"]["notification"]["environment"] = {"SMTP_USERNAME": ""}
+    model["services"]["issuance"]["environment"] = {
+        **{name: "false" for name in runner.CANVAS_DISABLED_FLAGS},
+        **{name: "" for name in runner.CANVAS_UNUSED_SETTINGS},
+    }
+    return model
+
+
 def test_exact_local_service_closure_passes_without_tunnel() -> None:
     raw, model = status_fixture()
     states = live_services(raw, model)
@@ -113,6 +128,67 @@ def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) ->
     (tmp_path / "marty_db_password").unlink()
     with pytest.raises(ValueError, match="missing: marty_db_password"):
         required_secrets(tmp_path)
+
+
+def test_local_optional_secrets_follow_catalog_without_weakening_required_files(
+    tmp_path: Path,
+) -> None:
+    model = disabled_optional_model()
+    assert OPTIONAL_LOCAL_SECRET_NAMES == {
+        "canvas_credentials_shared_secret", "google_analytics_measurement_id",
+        "google_client_id", "google_client_secret", "google_site_verification",
+        "smtp_password",
+    }
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    required_secrets(tmp_path, model)
+    (tmp_path / "marty_db_password").write_text("", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing: marty_db_password"):
+        required_secrets(tmp_path, model)
+    (tmp_path / "marty_db_password").write_text("disposable-test-material", encoding="utf-8")
+    (tmp_path / "google_client_id").write_text("change-me-oauth", encoding="utf-8")
+    with pytest.raises(ValueError, match="placeholder: google_client_id"):
+        required_secrets(tmp_path, model)
+    assert runner.disabled_optional_secrets(model) == OPTIONAL_LOCAL_SECRET_NAMES
+
+
+@pytest.mark.parametrize("service,setting,value,rejected", [
+    ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "true", "google_client_id"),
+    ("keycloak-configurator", "KEYCLOAK_SOCIAL_LOGIN_ENABLED", "unexpected", "google_client_id"),
+    ("keycloak-configurator", "KEYCLOAK_SMTP_USERNAME", "sender", "smtp_password"),
+    ("notification", "SMTP_USERNAME", "sender", "smtp_password"),
+    ("issuance", "CANVAS_PORTABLE_INTEGRATION_ENABLED", "true", "canvas_credentials_shared_secret"),
+    ("issuance", "CANVAS_CREDENTIALS_PUBLISH_URL", "https://canvas.test", "canvas_credentials_shared_secret"),
+])
+def test_empty_secret_requires_disabled_rendered_integration(
+    tmp_path: Path, service: str, setting: str, value: str, rejected: str,
+) -> None:
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    model = disabled_optional_model()
+    model["services"][service]["environment"][setting] = value
+    with pytest.raises(ValueError, match=f"missing: {rejected}"):
+        required_secrets(tmp_path, model)
+
+
+def test_empty_secret_fails_closed_without_rendered_controls(tmp_path: Path) -> None:
+    for name in LOCAL_SECRET_NAMES:
+        (tmp_path / name).write_text(
+            "" if name in OPTIONAL_LOCAL_SECRET_NAMES else "disposable-test-material",
+            encoding="utf-8",
+        )
+    with pytest.raises(ValueError, match="canvas_credentials_shared_secret"):
+        required_secrets(tmp_path)
+    model = disabled_optional_model()
+    del model["services"]["issuance"]["environment"]["CANVAS_CREDENTIALS_PUBLISH_URL"]
+    with pytest.raises(ValueError, match="canvas_credentials_shared_secret"):
+        required_secrets(tmp_path, model)
 
 
 def test_missing_service_and_unhealthy_gateway_fail_closed() -> None:
