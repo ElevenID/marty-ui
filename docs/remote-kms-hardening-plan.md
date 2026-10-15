@@ -20659,3 +20659,10 @@ both production crates passed `cargo check --locked --offline`. The older
 all-in-one policy/Redis runner and its HTTP-asserting live tests still need
 coordinated HTTPS conversion. This local proof does not qualify the signed
 release artifact or the full grant replay flow.
+
+Signing Keys' live external/managed Transit registration probe also reused a
+generic HTTP client even after its sign/create paths moved to HTTPS. The
+staged correction now calls the same `kms::transit_http_client` as actual
+operations, so its health/auth/capability probe receives the same HTTPS,
+CA, proxy and redirect policy; cloud validator bridges keep their separate
+provider client. The 197 Signing Keys library tests passed after this edit.
