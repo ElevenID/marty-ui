@@ -22577,3 +22577,37 @@ remains unproven locally because Docker Desktop's service is unavailable.
 The grouped fix was pushed as UI PR #1344 head `a39986959`, and the PR
 description was reconciled with that head and the prior failed run. Await its
 new immutable CI evidence before claiming the Canvas or beta path works.
+
+The follow-up base/conformance inventory confirms the remaining Keycloak
+source boundary: `docker-compose.base.yml` uses the stock
+`quay.io/keycloak/keycloak:25.0` image for both the server and configurator;
+the server has no OpenBao signer settings or scoped public-certificate/token
+secrets. `docker-compose.profile.conformance-images.yml` overrides both with
+the stock Keycloak digest. The base OpenBao initializer mounts no Keycloak
+token/certificate outputs. A platform-wide KMS-only change therefore must
+replace both image selections, provision the Keycloak remote keys and public
+certificates/scoped tokens in the base initializer (or require equivalent
+externally provisioned references), and update the base/conformance render
+and runtime contracts together. Merely moving beta's image override into the
+base file would leave the local bootstrap unable to start safely. This work
+remains open while PR #1344's exact-head run `38802947432` executes.
+
+2026-10-15 base/conformance KMS-only source candidate: new local UI worktree
+`feat/kms-keycloak-unified-20261015` branches from PR #1344 head
+`a39986959`. The base Compose graph now requires the pinned remote-key
+Keycloak digest, HTTPS OpenBao address, positive key version and eight scoped
+or public files; beta inherits that one definition instead of duplicating it.
+The conformance image profile uses the same digest for Keycloak and its
+configurator, never the stock Keycloak digest. WSL Compose rendered base+beta
+and base+conformance with synthetic inputs, and the existing Keycloak KMS
+custody checker accepted both rendered graphs. Focused base/conformance/KMS
+source tests passed (117); beta selector tests passed (180, two skipped).
+The candidate is local and unpushed. This proves source/render enforcement,
+not key provisioning, runtime startup, installed database cutover, or a
+released artifact. The base initializer does not yet provision the required
+Keycloak scoped tokens/certificates, and Windows Docker Desktop remains
+stopped; complete those pieces and broad regression review before its push.
+The source candidate is committed locally as `40bc747cd` with a fail-closed
+`.env.example` inventory. This is deliberately not pushed while PR #1344's
+long exact-head gates execute and while the base initializer's Keycloak
+references remain unprovisioned.
