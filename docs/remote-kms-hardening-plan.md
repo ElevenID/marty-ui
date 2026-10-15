@@ -22159,3 +22159,31 @@ request initially used absolute-form upstream and failed the tunnel proof;
 the tested implementation now preserves origin-form. A local Compose draft
 has begun replacing Nginx with this binary, but it is not yet complete or
 qualified, so the OIDF TLS private-key boundary remains open.
+
+2026-10-15 grouped UI PR #1344 update: prior exact-head CI run
+[`38776076785`](https://github.com/ElevenID/marty-ui/actions/runs/38776076785)
+finished failed in release contracts, contracts, and Canvas; the OpenBao
+plugin recovery, selfhost, image, lint, and independent jobs passed. The
+three local corrections above were batched with the OIDF Rust edge as pushed
+head `455ab61286dc92343a1d73ecc9ea477f384bba02`. The new exact-head CI
+run [`38780095995`](https://github.com/ElevenID/marty-ui/actions/runs/38780095995)
+was queued at inspection. PR title/body now describe the grouped service,
+Keycloak and OIDF scope, the prior immutable failure, and remaining installed
+cutover work.
+
+The OIDF profile now selects the shared Rust service image in released mode
+and source build locally. It mounts only the public `tls.crt`, public OpenBao
+CA, and scoped token; its Nginx config and local OpenSSL private-key generator
+are deleted. The isolated runner bridge and the complete public Host/port
+route map are retained. A disposable HTTPS OpenBao fixture provisions a
+non-exportable OIDF TLS key and scoped signer, and the new ignored Rust test
+performs an actual TLS handshake through that signer. Its hosted execution
+is required before any K11 claim. Local combined checks passed: 300 Python
+workflow/fixture/Compose tests; three OIDF Rust route/header/Upgrade tests;
+the existing passport edge regression; native OIDF and DIDComm Compose
+renders; Rust formatting and diff checks. The Docker Desktop service could
+not be started on this host, so there is no local KMS/container runtime
+proof. The official OIDF runner, cert provisioning in an installed graph,
+and deployed KMS reachability still need verification. The base development
+OpenBao listener remains HTTP; the updated operator guide requires a
+separately provisioned HTTPS KMS endpoint until that graph is converted.
