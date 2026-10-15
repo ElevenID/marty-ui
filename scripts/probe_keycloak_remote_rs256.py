@@ -8,12 +8,14 @@ import base64
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import secrets
 import ssl
 import subprocess
 import tempfile
+import threading
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -72,6 +74,17 @@ class StopAtCallback(HTTPRedirectHandler):
             return None
         return super().redirect_request(request, fp, code, message, headers,
                                         newurl)
+
+
+class PendingCibaDevice(BaseHTTPRequestHandler):
+    def do_POST(self) -> None:
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        self.send_response(201)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
 
 
 def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
@@ -206,6 +219,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
     started_bao = False
     started_kc = False
     started_pg = False
+    ciba_device = None
     with tempfile.TemporaryDirectory(prefix="marty-keycloak-kms-") as temporary:
         root = Path(temporary)
         ca_dir = root / "ca"
@@ -218,6 +232,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
         scoped_token = root / "keycloak-token"
         root_token.write_text(secrets.token_hex(32), encoding="ascii")
         try:
+            if require_browser:
+                ciba_device = ThreadingHTTPServer(("0.0.0.0", 0), PendingCibaDevice)
+                threading.Thread(target=ciba_device.serve_forever, daemon=True).start()
             run("docker", "network", "create", network)
             created_network = True
             run("docker", "run", "-d", "--name", pg_name,
@@ -289,6 +306,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 raise RuntimeError("OpenBao HTTPS did not become healthy")
 
             bao("secrets", "enable", "transit")
+            ciba_version = ""
             if require_browser:
                 digest = run("docker", "exec", bao_name, "sha256sum",
                              "/plugins/openbao-didcomm-authcrypt").split()[0]
@@ -296,17 +314,20 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     "command": "openbao-didcomm-authcrypt", "sha256": digest,
                 })
                 bao_api("sys/mounts/didcomm", {"type": "openbao-didcomm-authcrypt"})
-                for realm in ("master", "11id"):
-                    reference = bao_api(f"didcomm/keycloak/keys/{realm}/cookie", {})["data"]
+                for realm, purpose in (("master", "cookie"), ("11id", "cookie"),
+                                       ("11id", "ciba")):
+                    reference = bao_api(f"didcomm/keycloak/keys/{realm}/{purpose}", {})["data"]
                     version = reference["version"]
+                    if realm == "11id" and purpose == "ciba":
+                        ciba_version = version
                     policy = (
-                        f'path "didcomm/keycloak/keys/{realm}/cookie" {{ capabilities = ["read"] }}\n'
-                        f'path "didcomm/keycloak/jwe/encode/{realm}/cookie/{version}" {{ capabilities = ["update"] }}\n'
-                        f'path "didcomm/keycloak/jwe/decode/{realm}/cookie/{version}" {{ capabilities = ["update"] }}\n'
+                        f'path "didcomm/keycloak/keys/{realm}/{purpose}" {{ capabilities = ["read"] }}\n'
+                        f'path "didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
+                        f'path "didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}" {{ capabilities = ["update"] }}\n'
                     )
-                    policy_name = f"keycloak-{realm}-cookie-probe"
+                    policy_name = f"keycloak-{realm}-{purpose}-probe"
                     bao("policy", "write", policy_name, "-", input_text=policy)
-                    (jwe_token_dir / f"{realm}-cookie.token").write_text(
+                    (jwe_token_dir / f"{realm}-{purpose}.token").write_text(
                         bao("token", "create", f"-policy={policy_name}",
                             "-ttl=1h", "-field=token"), encoding="ascii")
             bao_api("sys/mounts/pki", {"type": "pki"})
@@ -373,6 +394,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 "-e", "MARTY_KEYCLOAK_JWE_MOUNT=didcomm",
                 "-e", f"MARTY_KEYCLOAK_KMS_KEY_PREFIX={prefix}",
                 "-e", "MARTY_KEYCLOAK_KMS_KEY_VERSION=1",
+                *(["-e", "KC_SPI_CIBA_AUTH_CHANNEL_CIBA_HTTP_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI="
+                   f"http://host.docker.internal:{ciba_device.server_port}/"]
+                  if ciba_device else []),
                 keycloak_image, "start-dev",
             )
             started_kc = True
@@ -440,6 +464,54 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     "protocol": "openid-connect", "redirectUris": [callback],
                     "attributes": {"pkce.code.challenge.method": "S256"},
                 })
+                post_admin(base + "/admin/realms/11id/clients", token, {
+                    "clientId": "probe-ciba", "enabled": True,
+                    "publicClient": False, "clientAuthenticatorType": "client-secret",
+                    "secret": "synthetic-ciba-probe-only",
+                    "standardFlowEnabled": False,
+                    "directAccessGrantsEnabled": False,
+                    "protocol": "openid-connect",
+                    "attributes": {"oidc.ciba.grant.enabled": "true"},
+                })
+                ciba = http_json(base + "/realms/11id/protocol/openid-connect/ext/ciba/auth", {
+                    "client_id": "probe-ciba",
+                    "client_secret": "synthetic-ciba-probe-only",
+                    "login_hint": "probe11", "scope": "openid",
+                })
+                auth_req_id = ciba.get("auth_req_id", "")
+                if len(auth_req_id.split(".")) != 5:
+                    raise RuntimeError("CIBA did not return a compact remote JWE request ID")
+                header = json.loads(base64.urlsafe_b64decode(
+                    auth_req_id.split(".")[0] + "=="))
+                if (header.get("alg"), header.get("enc"), header.get("kid")) != (
+                    "dir", "A256CBC-HS512", f"keycloak-11id-ciba-{ciba_version}"
+                ):
+                    raise RuntimeError("CIBA request ID did not use the scoped remote JWE key")
+                try:
+                    http_json(base + "/realms/11id/protocol/openid-connect/token", {
+                        "client_id": "probe-ciba",
+                        "client_secret": "synthetic-ciba-probe-only",
+                        "grant_type": "urn:openid:params:grant-type:ciba",
+                        "auth_req_id": auth_req_id,
+                    })
+                except HTTPError as error:
+                    if error.code != 400 or json.loads(error.read()).get("error") != "authorization_pending":
+                        raise RuntimeError("CIBA polling did not decrypt the remote request ID") from error
+                else:
+                    raise RuntimeError("Unapproved CIBA request unexpectedly issued a token")
+                (jwe_token_dir / "11id-ciba.token").write_text(
+                    "invalid-disposable-token", encoding="ascii")
+                try:
+                    http_json(base + "/realms/11id/protocol/openid-connect/ext/ciba/auth", {
+                        "client_id": "probe-ciba",
+                        "client_secret": "synthetic-ciba-probe-only",
+                        "login_hint": "probe11", "scope": "openid",
+                    })
+                except HTTPError as error:
+                    if error.code != 503:
+                        raise RuntimeError("CIBA key loss returned an unexpected status") from error
+                else:
+                    raise RuntimeError("CIBA request succeeded without its remote key")
                 browser = build_opener(HTTPCookieProcessor(CookieJar()),
                                        StopAtCallback(callback))
                 for login in (True, False):
@@ -526,9 +598,12 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
             verify_database_gate(pg_name)
-            browser_result = "browser/session, " if require_browser else ""
+            browser_result = "browser/session and CIBA request/poll, " if require_browser else ""
             print(f"Remote RS256 master/11id {browser_result}token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
         finally:
+            if ciba_device:
+                ciba_device.shutdown()
+                ciba_device.server_close()
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)
             if started_bao:

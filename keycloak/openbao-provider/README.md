@@ -41,9 +41,16 @@ Keycloak custody gate find no `privateKey` or generated `secret` rows after
 bootstrap, realm creation, token issuance and KMS-loss denial. The probe
 exports only public certificates and cleans its disposable containers.
 
-This local proof does not qualify the installed stack. CIBA behavior has
-been patched but has no connected acceptance proof; RSA-OAEP and other AES
-flows may still fail closed. Master browser login, key rotation during
-active sessions, exact-image deployment, broad provider controls, and
-production cutover remain. Do not publish this image as fully KMS-only until
-those paths pass with the exact artifact and database gate.
+The browser-mode proof also enables a disposable CIBA client and a local
+authentication-device acknowledgment endpoint. It checks that the returned
+`auth_req_id` is a compact JWE using the separate `11id` CIBA remote key,
+polling decrypts it to `authorization_pending`, and revoking only the CIBA
+token denies a new request. It does not simulate user approval or a completed
+CIBA authentication.
+
+This local proof does not qualify the installed stack. Completed CIBA
+authentication, RSA-OAEP and other AES flows may still fail closed. Master
+browser login, key rotation during active sessions, exact-image deployment,
+broad provider controls, and production cutover remain. Do not publish this
+image as fully KMS-only until those paths pass with the exact artifact and
+database gate.
