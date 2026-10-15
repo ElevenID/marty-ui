@@ -4131,6 +4131,13 @@ speedup is claimed yet.
 
 The Trust Profile witness subsequently merged in [#1309](https://github.com/ElevenID/marty-ui/pull/1309)
 as `de4149d580b695672b3d65048c41f79079fd3284`.
+Its first eligible [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/38344819332)
+completed in 3m06s (04:05:59–04:09:05 UTC), selecting the release and public
+protocol owners while skipping unrelated PR lanes. The corresponding full
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38345109010)
+passed in 30m50s (04:09:45–04:40:35 UTC), including Canvas and OpenBao. These
+different scopes demonstrate faster early feedback for that exact input, not
+a faster protected gate or a general repository-wide saving.
 
 October 14 A0/A3 local candidate: Issuance has a separate, previously
 unrecorded non-Cargo dependency on Signing Keys' authenticated integration-
@@ -4244,12 +4251,22 @@ CI, and full [protected combined-head CI](https://github.com/ElevenID/marty-ui/a
 passed. Existing cases, fixtures, and CI lanes remain unchanged. This closes
 that probe's false-green gap, not the wider A0 inventory, and claims no
 speedup. A subsequent audit of the same protected run found that the separate
-database-contract runner also trusts exit status for 29 direct libtest
-invocations. All 29 ran at least one passing test in that run, so a focused
-positive-summary guard can protect future selection drift without dropping
-current coverage. It still requires independent review and hosted validation.
-The independent code review found no regression issue; hosted validation is
-still pending.
+database-contract runner also trusted exit status for 29 direct libtest
+invocations. All 29 ran at least one passing test in that run. Reviewed
+[#1343](https://github.com/ElevenID/marty-ui/pull/1343) added the positive-
+summary guard without changing the invocation roster; 227 focused local
+checks passed. Its [exact-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38737846977)
+recorded 29 successful contract timing rows and no failed row, and full
+[protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38741370850)
+passed. #1343 merged as `e2629fc6`. This closes the direct database runner's
+false-green gap, not the wider A0 inventory, and claims no speedup. The same
+exact-head Canvas log recorded six serial Rust invocations, each with one
+passing test, but its `timed canvas_serial` path still checked only exit
+status. A follow-up candidate reuses the database guard for those serial
+invocations while leaving non-test timing, selection, and gates unchanged.
+The independent review found no regression issue; 244 Canvas/guard tests passed
+(one skipped) and 152 workflow-policy tests passed locally. Hosted validation
+remains required.
 
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
