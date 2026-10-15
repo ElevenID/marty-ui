@@ -14,19 +14,22 @@ CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 
 
 def _native_source(beta):
-    assert beta["services"]["issuance-native"] == {
-        "extends": {
-            "file": "docker-compose.service.issuance-native.yml",
-            "service": "issuance-native",
-        }
+    overlay = beta["services"]["issuance-native"]
+    assert set(overlay) == {"extends", "environment", "secrets"}
+    assert overlay["extends"] == {
+        "file": "docker-compose.service.issuance-native.yml",
+        "service": "issuance-native",
     }
     extraction = runpy.run_path(
         str(ROOT / "scripts/test_conformance_native_compose.py")
     )
-    return extraction["complete_common"](
+    native = extraction["complete_common"](
         yaml.safe_load((ROOT / extraction["COMMON"]).read_text()),
         yaml.safe_load((ROOT / extraction["RUNTIME"]).read_text()),
     )["services"]["issuance-native"]
+    native["environment"].update(overlay["environment"])
+    native["secrets"].extend(overlay["secrets"])
+    return native
 
 
 def test_beta_native_inherits_existing_resolver_and_endpoint_policy() -> None:
@@ -70,7 +73,7 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     assert base_flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     assert production["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     assert production["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"] == (
         "http://issuance:8005"

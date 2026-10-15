@@ -38,9 +38,9 @@ NATIVE_GRANT_MOUNTS = {
     ("openbao_issuance_passport_grant", "/bao/issuance-passport-grant"),
 }
 INITIATION_CONTROL_PLANE = {
-    "ORG_GRPC_TARGET": "organization:9002",
-    "CT_GRPC_TARGET": "credential-template:9003",
-    "RP_GRPC_TARGET": "revocation-profile:9013",
+    "ORG_GRPC_TARGET": "https://organization:9002",
+    "CT_GRPC_TARGET": "https://credential-template:9003",
+    "RP_GRPC_TARGET": "https://revocation-profile:9013",
     "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
 }
 
@@ -54,7 +54,7 @@ def assert_initiation_consumer_bindings(model):
         assert native["environment"][name] == legacy["environment"][name] == expected
     assert native["environment"]["ISSUANCE_GRPC_ENABLED"] == "true"
     assert native["environment"]["ISSUANCE_GRPC_PORT"] == "9005"
-    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
     assert flow["environment"]["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert (
         flow["environment"]["GRPC_SERVICE_TOKEN"]
@@ -71,6 +71,9 @@ def assert_initiation_consumer_bindings(model):
         "service_completed_successfully"
     )
     assert native["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert native["environment"]["GRPC_TLS_CA_CERT"] == "/run/secrets/workload_identity_ca_cert"
+    assert native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT"] == "/run/secrets/openbao_tls_ca_cert"
+    assert native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE"] == "/run/secrets/issuance_tls_kms_token"
 
 
 def mount(source, target):
@@ -288,7 +291,7 @@ def assert_bindings(model, compose_command):
         for name, expected in INITIATION_CONTROL_PLANE.items():
             assert environment[name] == expected
         flow = default_model["services"]["flow"]["environment"]
-        assert flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+        assert flow["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
         assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
         assert flow["GRPC_SERVICE_TOKEN"] == environment["GRPC_SERVICE_TOKEN"]
         assert environment["ISSUANCE_OFFER_TTL_MINUTES"] == "10080"

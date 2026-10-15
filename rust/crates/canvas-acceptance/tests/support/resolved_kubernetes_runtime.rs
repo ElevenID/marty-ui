@@ -59,6 +59,23 @@ const GATEWAY_URLS: &[(&str, &str)] = &[
     ),
     ("SIGNING_KEYS_SERVICE_URL", "http://signing-keys:8017"),
 ];
+const TLS_KMS_OWNERS: &[&str] = &[
+    "AUTH",
+    "AUTH_SERVER",
+    "COMPLIANCE_PROFILE",
+    "CT",
+    "DEPLOYMENT_PROFILE",
+    "ES",
+    "FLOW_CLIENT",
+    "FLOW_SERVER",
+    "GATEWAY",
+    "ISSUANCE",
+    "ORG",
+    "PP",
+    "RP",
+    "SIGNING_KEYS",
+    "VERIFICATION",
+];
 
 fn require(value: bool) -> Result<()> {
     if value {
@@ -112,7 +129,7 @@ fn synthetic_inputs() -> Result<BTreeMap<String, String>> {
             inputs.insert(name.to_owned(), String::new());
         }
     }
-    let expected:BTreeSet<_>="BAO_ADDR CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS
+    let mut expected:BTreeSet<_>="BAO_ADDR CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS
         CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS CANVAS_CREDENTIALS_API_BASE_URL
         CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
         CANVAS_CREDENTIALS_ASSERTION_SCOPE CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
@@ -128,6 +145,30 @@ fn synthetic_inputs() -> Result<BTreeMap<String, String>> {
         OIDC_ISSUER_URL_EXTERNAL OIDC_POST_LOGOUT_REDIRECT_URI OIDC_REDIRECT_URI ORGANIZATION_CREATION_ENABLED
         PUBLIC_API_URL PUBLIC_DOMAIN RATE_LIMIT_RPM SMTP_HOST SMTP_PORT UI_ADDITIONAL_BASE_URLS UI_BASE_URL
         UNIVERSAL_RESOLVER_URL".split_whitespace().map(str::to_owned).collect();
+    // Keep the finite synthetic inventory aligned with every deployed
+    // workload TLS identity. Values are public references, never key material.
+    for owner in TLS_KMS_OWNERS {
+        for field in ["ADDR", "KEY_NAME", "KEY_VERSION"] {
+            let name = format!("{owner}_TLS_KMS_{field}");
+            expected.insert(name.clone());
+            require(inputs.contains_key(&name))?;
+            let value = match field {
+                "ADDR" => "https://vault.example.com".to_owned(),
+                "KEY_NAME" => format!("synthetic-{}-tls", owner.to_ascii_lowercase()),
+                "KEY_VERSION" => "1".to_owned(),
+                _ => unreachable!(),
+            };
+            inputs.insert(name, value);
+        }
+    }
+    for (name, value) in [
+        ("KEYCLOAK_KMS_ADDR", "https://vault.example.com"),
+        ("KEYCLOAK_KMS_KEY_VERSION", "1"),
+    ] {
+        expected.insert(name.to_owned());
+        require(inputs.contains_key(name))?;
+        inputs.insert(name.to_owned(), value.to_owned());
+    }
     require(inputs.keys().cloned().collect::<BTreeSet<_>>() == expected)?;
     for (name, value) in [
         ("OCIR_REGISTRY", "synthetic.registry.invalid"),
@@ -900,6 +941,21 @@ fn prepared_model_uses_actual_envsubst_and_rejects_identity_drift() {
         }
         assert!(matches!(changed.validate(), Err(ERROR)));
     }
+}
+
+#[test]
+fn synthetic_kubernetes_inputs_cover_remote_tls_references() {
+    let inputs = synthetic_inputs().unwrap();
+    for owner in TLS_KMS_OWNERS {
+        assert_eq!(
+            inputs[&format!("{owner}_TLS_KMS_ADDR")],
+            "https://vault.example.com"
+        );
+        assert!(!inputs[&format!("{owner}_TLS_KMS_KEY_NAME")].is_empty());
+        assert_eq!(inputs[&format!("{owner}_TLS_KMS_KEY_VERSION")], "1");
+    }
+    assert_eq!(inputs["KEYCLOAK_KMS_ADDR"], "https://vault.example.com");
+    assert_eq!(inputs["KEYCLOAK_KMS_KEY_VERSION"], "1");
 }
 
 #[test]
