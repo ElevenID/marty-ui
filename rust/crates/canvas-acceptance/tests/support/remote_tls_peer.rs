@@ -10,8 +10,8 @@ use axum_server::tls_rustls::RustlsConfig;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rustls::{
     pki_types::CertificateDer,
-    sign::{CertifiedKey, SingleCertAndKey},
-    ServerConfig,
+    sign::{CertifiedKey, SigningKey, SingleCertAndKey},
+    ServerConfig, SignatureScheme,
 };
 use serde_json::{json, Value};
 
@@ -182,6 +182,12 @@ impl RemoteTlsPeer {
         )
         .await
         .unwrap();
+        let proof = signer
+            .choose_scheme(&[SignatureScheme::ECDSA_NISTP256_SHA256])
+            .expect("disposable TLS key supports P-256")
+            .sign(b"canvas-disposable-tls-remote-signing-proof")
+            .expect("disposable TLS key signs through scoped OpenBao");
+        assert!(!proof.is_empty(), "disposable TLS signature is empty");
         let certified = CertifiedKey::new(vec![CertificateDer::from(leaf_der)], Arc::new(signer));
         certified
             .keys_match()
@@ -210,6 +216,36 @@ impl RemoteTlsPeer {
                 .await
                 .unwrap();
         });
+        let probe = reqwest::Client::builder()
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(ca_pem.as_bytes()).expect("disposable TLS peer CA"),
+            )
+            .no_proxy()
+            .https_only(true)
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        let mut last_error = None;
+        for _ in 0..20 {
+            match probe
+                .get(format!("https://127.0.0.1:{port}/health"))
+                .send()
+                .await
+            {
+                Ok(_) => {
+                    last_error = None;
+                    break;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+        assert!(
+            last_error.is_none(),
+            "disposable TLS peer handshake failed: {last_error:?}"
+        );
         Self {
             port,
             ca_file,
