@@ -21362,3 +21362,17 @@ Marty database schema passed private-key table/content checks previously,
 but the existing self-host and beta Keycloak databases still had four
 `privateKey` and four generated `secret` rows each at last inspection; do not
 declare K10/K12 complete until the deployed cutover and SQL custody gate pass.
+
+2026-10-15 installed-Keycloak fail-closed follow-up: the grouped UI branch's
+installed-runtime planner now requires both Keycloak services to use the same
+`ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:...` image, checks Keycloak's
+HTTPS OpenBao address, public CA path, signing-token path, certificate/JWE
+directories, mount, key prefix and positive key version, and rejects a stock
+Keycloak tag or HTTP KMS origin. Its model and negative tests passed (29
+tests). A read-only rerun of the custody SQL against the live self-host
+Keycloak PostgreSQL database still failed with four `privateKey` and four
+generated `secret` rows; this is unresolved deployed state. The standalone
+self-host OpenBao project remains HTTP, so it cannot supply the required
+Keycloak HTTPS origin as currently configured. A released fifth Keycloak
+image role and an HTTPS OpenBao deployment path remain prerequisites; this
+source gate alone is not installed KMS-only proof.
