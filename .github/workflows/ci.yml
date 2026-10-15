@@ -1889,7 +1889,10 @@ jobs:
         shell: bash
         env:
           FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@127.0.0.1:5432/marty_atomic_test
-        run: target/debug/flow-postgres-contract --test-threads=1
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1
       - name: Prepare owned runtime failure diagnostics
         if: matrix.lane == 'canvas'
         shell: bash

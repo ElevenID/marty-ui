@@ -4416,7 +4416,7 @@ def test_rust_contracts_reuse_local_executables_without_artifact_transfer() -> N
     _assert_no_rust_executable_transfer(rust_job["steps"])
     for group in ("workspace", "verification", "gateway"):
         assert f"rust-{group}.status" in source
-    assert "target/debug/flow-postgres-contract --test-threads=1" in source
+    assert "run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1" in source
     assert "target/debug/verification-postgres-contract" in source
     assert "target/debug/gateway-redis-contract" in source
     assert (

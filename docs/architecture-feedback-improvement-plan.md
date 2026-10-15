@@ -4366,6 +4366,16 @@ CI](https://github.com/ElevenID/marty-ui/actions/runs/38811347250) passed;
 #1354 merged as `f39b0e6ea`. This closes those two false-green paths, not the
 full A0 obligation inventory, and claims no speedup.
 
+The remaining direct Flow PostgreSQL contract executable also ran without a
+positive test-summary guard. [#1355](https://github.com/ElevenID/marty-ui/pull/1355)
+wraps its existing invocation in the same guard, retaining its serial position
+after the workspace suite, database URL, complete unfiltered case selection,
+and protected gates. Twenty-three focused post-merge local tests, Ruff, and independent
+review passed. Exact-head [CI](https://github.com/ElevenID/marty-ui/actions/runs/38818521929)
+recorded one passing Flow PostgreSQL test and the positive execution marker;
+protected combined-head CI remains required before merge. This is another
+coverage-integrity fix, not a measured speedup.
+
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
 - [Contract versus functional tests](https://docs.pact.io/consumer/contract_tests_not_functional_tests): message compatibility does not establish durable side effects.
