@@ -2,6 +2,15 @@
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
 Status: active implementation (2026-10-13 UTC checkpoint; UI main `4d1dfb87c`).
+Current delivery priority (2026-10-15): enable outside testers to anonymously
+download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
+preparation and independent archive/Compose/image-pull checks, but remains an
+unqualified Actions artifact, not a public release asset. Next: choose whether
+an explicitly unsupported preview is acceptable; otherwise complete the clean
+Linux installed journey and KMS custody proof, review the tester hardware
+envelope, publish signed qualified assets, and replay anonymous download and
+installation. Do not treat preparation or a lower-memory exploratory run as
+qualification. Defer unrelated A0-A7 optimization slices behind this handoff.
 Self-host preparation and opt-in consumer probes through #1266 are merged, but
 there is no qualified or released self-host bundle or independently qualified
 standalone verifier. Core v0.2.2 publishes a headless verifier preview bundle;
