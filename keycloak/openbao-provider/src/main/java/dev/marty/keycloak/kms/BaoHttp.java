@@ -59,6 +59,9 @@ final class BaoHttp {
 
     Map<?, ?> request(String method, String path, String body) {
         try {
+            if (path.length() > 256 || !path.matches("[A-Za-z0-9_/-]+")) {
+                throw new IllegalStateException("OpenBao operation path is invalid");
+            }
             URI url = base.resolve(base.getPath().replaceAll("/$", "") + "/v1/" + path);
             String token = Files.readString(tokenFile, StandardCharsets.UTF_8).trim();
             if (token.isEmpty()) {
@@ -76,7 +79,7 @@ final class BaoHttp {
                     HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 throw new IllegalStateException("OpenBao operation failed with HTTP "
-                        + response.statusCode());
+                        + response.statusCode() + " at " + path);
             }
             return JsonSerialization.readValue(response.body(), Map.class);
         } catch (Exception error) {

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from datetime import datetime, timezone
 from http.cookiejar import CookieJar
 from html.parser import HTMLParser
 import hashlib
@@ -168,8 +169,15 @@ def browser_code(opener, base: str, callback: str, realm: str,
                 raise RuntimeError("Browser login did not redirect to the callback")
     except HTTPError as callback_response:
         if callback_response.code != 302:
+            body = callback_response.read(16 * 1024).decode("utf-8", errors="replace")
+            marker = next((candidate for candidate in (
+                "invalid_code", "expired_code", "invalid_request",
+                "session_expired", "Restart login cookie",
+            ) if candidate in body), "none")
             raise RuntimeError(f"Browser authorization failed: HTTP "
-                               f"{callback_response.code}") from callback_response
+                               f"{callback_response.code}, route "
+                               f"{urlparse(callback_response.url).path}, "
+                               f"error marker {marker}") from callback_response
         location = callback_response.headers.get("Location", "")
     if not location.startswith(callback + "?"):
         raise RuntimeError("Keycloak redirected browser to an unexpected callback")
@@ -374,6 +382,14 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     bao("token", "create", f"-policy={policy_name}",
                         "-ttl=1h", "-field=token"), encoding="ascii")
                 token = token_file.read_text(encoding="ascii")
+                mounted_copy = root / f"mounted-{realm}-{purpose}.token"
+                run("docker", "cp",
+                    f"{kc_name}:/run/kms/jwe-tokens/{realm}-{purpose}.token",
+                    str(mounted_copy))
+                mounted_digest = hashlib.sha256(mounted_copy.read_bytes()).digest()
+                mounted_copy.unlink()
+                if mounted_digest != hashlib.sha256(token_file.read_bytes()).digest():
+                    raise RuntimeError("Keycloak scoped token mount did not follow rotation")
                 current = bao_api(f"didcomm/keycloak/keys/{realm}/{purpose}",
                                   token=token)["data"]
                 if current.get("version") != version:
@@ -718,8 +734,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 new_header = jwe_header(after_rotation["auth_req_id"])
                 if new_header.get("kid") != f"keycloak-11id-ciba-{new_ciba_version}":
                     raise RuntimeError("CIBA did not use the new remote key after rotation")
-                (jwe_token_dir / "11id-ciba.token").write_text(
-                    "invalid-disposable-token", encoding="ascii")
+                ciba_token_file = jwe_token_dir / "11id-ciba.token"
+                valid_ciba_token = ciba_token_file.read_text(encoding="ascii")
+                ciba_token_file.write_text("invalid-disposable-token", encoding="ascii")
                 try:
                     http_json(base + "/realms/11id/protocol/openid-connect/ext/ciba/auth", {
                         "client_id": "probe-ciba",
@@ -731,6 +748,20 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         raise RuntimeError("CIBA key loss returned an unexpected status") from error
                 else:
                     raise RuntimeError("CIBA request succeeded without its remote key")
+                finally:
+                    ciba_token_file.write_text(valid_ciba_token, encoding="ascii")
+                recovered_ciba = http_json(
+                    base + "/realms/11id/protocol/openid-connect/ext/ciba/auth", {
+                        "client_id": "probe-ciba",
+                        "client_secret": "synthetic-ciba-probe-only",
+                        "login_hint": "probe11", "scope": "openid",
+                    })
+                if jwe_header(recovered_ciba["auth_req_id"]).get("kid") != (
+                    f"keycloak-11id-ciba-{new_ciba_version}"
+                ):
+                    raise RuntimeError("CIBA remote key did not recover after token restoration")
+                browser_log_since = datetime.now(timezone.utc).isoformat(
+                    timespec="milliseconds").replace("+00:00", "Z")
                 for realm, username, realm_jwks in (
                     ("master", "probe", jwks),
                     ("11id", "probe11", jwks_11id),
@@ -761,14 +792,17 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                                           before_submit=rotate_during_login
                                                           if login else None)
                         except Exception as error:
-                            observed = subprocess.run(["docker", "logs", "--tail", "120", kc_name],
+                            observed = subprocess.run(["docker", "logs", "--since",
+                                                      browser_log_since, "--tail", "120", kc_name],
                                                       capture_output=True, text=True, timeout=10)
                             lines = (observed.stdout + observed.stderr).splitlines()
                             logs = "\n".join(line for line in lines
                                              if "Failed to create fallback key" in line
                                              or "Caused by:" in line
                                              or "Error encoding cookie" in line
-                                             or "at dev.marty.keycloak.kms." in line)[:2400]
+                                             or "at dev.marty.keycloak.kms." in line
+                                             or "at org.keycloak.protocol.RestartLoginCookie" in line
+                                             or "at org.keycloak.protocol.oidc.grants.ciba.channel.CIBAAuthenticationRequest" in line)[:2400]
                             raise RuntimeError(f"{realm} browser flow failed: {error}\n{logs}") from error
                         for field in ("access_token", "id_token"):
                             verify_jwt(browser_tokens[field], realm_jwks,
