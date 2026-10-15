@@ -20817,3 +20817,19 @@ tests, Python compilation and diff checks passed. This qualifies the OpenBao
 transport slice locally. The protected passport journey still needs remote
 TLS identity bootstrap and the workload/edge/gRPC fixture cutover before the
 full Compose runtime can boot or issue an acceptance receipt.
+
+2026-10-15 protected passport remote TLS handoff, staged in the grouped UI
+worktree: the producer no longer creates TLS private keys before OpenBao
+startup. After the HTTPS OpenBao policy bootstrap it runs the signed Rust
+`marty-passport-tls-bootstrap` binary on the plan-bound private network,
+mounting only the OpenBao root token, read-only public CA and a private output
+directory. The handoff admits exactly the five public certificates, public CA
+and five distinct scoped signer tokens, rejecting a private-key PEM, root-token
+reuse, missing files or destination conflicts before service startup. Partial
+teardown and ownership inventory now recognize this helper and its exact image
+and mounts. The three focused producer/ownership suites passed 144 tests with
+two skips; Python compilation and diff checks passed. The disposable Compose
+fixture still declares workload and nginx edge TLS private-key files and
+plaintext gRPC. Convert those service selectors and edge to the remote signer,
+then qualify the full protected journey against paired local images before
+the grouped UI PR is pushed. No published release proof is claimed.
