@@ -434,20 +434,33 @@ def test_render_recheck_requires_protected_source(monkeypatch):
         compose.verify_render_plan(plan)
 
 
-def test_preserved_openbao_token_matches_new_signer_without_exposing_it(monkeypatch):
+def test_preserved_openbao_raft_custody_excludes_dev_root_and_binds_scoped_signer(monkeypatch):
     handoff, intent, beta, ui = candidate()
     plan = prepare(handoff, intent, beta, ui)
-    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "secret"
+    beta["services"]["passport-callback-signer"]["environment"].update({
+        "BAO_ADDR": "https://openbao:8200",
+        "BAO_CACERT": "/bao/public-ca/ca.crt",
+        "BAO_TOKEN_FILE": "/bao/passport-callback/token",
+    })
+    beta["services"]["openbao-init"] = {"environment": {
+        "BAO_PASSPORT_CALLBACK_TOKEN_FILE": "/bao/passport-callback/token"}}
     monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
     monkeypatch.setattr(compose, "render_candidate", lambda _: (beta, ui, {}))
-    monkeypatch.setattr(compose, "inspect", lambda _id, _runner: {
+    observed = {
         "Id": plan["old_container_ids_by_service"]["openbao"],
-        "Config": {"Env": ["BAO_DEV_ROOT_TOKEN_ID=secret"]},
-    })
-    assert compose.verify_preserved_openbao_token(plan)["verified"] is True
-    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "wrong"
-    with pytest.raises(ComposePlanError, match="differs from preserved OpenBao"):
-        compose.verify_preserved_openbao_token(plan)
+        "Config": {"Env": [], "Cmd": ["server", "-config=/bao/config/openbao.hcl"]},
+        "Mounts": [{"Type": "volume", "Destination": "/bao/data",
+                    "Name": "elevenid-beta_openbao_data"}],
+    }
+    monkeypatch.setattr(compose, "inspect", lambda _id, _runner: observed)
+    assert compose.verify_preserved_openbao_custody(plan)["verified"] is True
+    observed["Config"]["Env"] = ["BAO_DEV_ROOT_TOKEN_ID=retired"]
+    with pytest.raises(ComposePlanError, match="scoped Raft"):
+        compose.verify_preserved_openbao_custody(plan)
+    observed["Config"]["Env"] = []
+    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN_FILE"] = "/wrong"
+    with pytest.raises(ComposePlanError, match="scoped Raft"):
+        compose.verify_preserved_openbao_custody(plan)
 
 
 def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_path):

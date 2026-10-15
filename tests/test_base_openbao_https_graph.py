@@ -1,7 +1,9 @@
 """Rendered base-stack custody boundary; no Docker daemon or secret reads."""
 
 import json
+import os
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -10,6 +12,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 HTTPS_KMS = "https://openbao:8200"
 PUBLIC_CA = "/bao/public-ca/ca.crt"
+PINNED_PLUGIN = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "a" * 64
 KMS_ROLES = {"openbao-tls-init", "openbao", "openbao-init"}
 CLIENTS = {
     "db-migrate",
@@ -144,9 +147,20 @@ def rendered(*profiles):
     command = ["docker", "compose", "-f", "docker-compose.base.yml"]
     for profile in profiles:
         command.extend(["-f", profile])
-    command.extend(["config", "--no-interpolate", "--format", "json"])
+    command.extend(["config", "--format", "json"])
+    selected = ("docker-compose.base.yml", *profiles)
+    required = set()
+    for name in selected:
+        required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", (ROOT / name).read_text()))
+    env = {name: os.environ[name] for name in (
+        "PATH", "SYSTEMROOT", "WINDIR", "USERPROFILE", "APPDATA", "LOCALAPPDATA",
+        "HOME", "DOCKER_HOST", "DOCKER_CONTEXT", "DOCKER_CONFIG") if name in os.environ}
+    env.update({name: "synthetic-required-value" for name in required})
+    env["MARTY_RUNTIME_CONFIG_ROOT"] = str(ROOT)
+    env["MARTY_OPENBAO_DIDCOMM_IMAGE"] = PINNED_PLUGIN
+    env["MARTY_SERVICES_IMAGE"] = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "b" * 64
     result = subprocess.run(
-        command, cwd=ROOT, capture_output=True, text=True, check=False
+        command, cwd=ROOT, env=env, capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
     return json.loads(result.stdout)
@@ -172,7 +186,7 @@ def test_rendered_base_graph_keeps_keys_inside_openbao(profiles):
         for name in KMS_ROLES:
             service = model["services"][name]
             assert "build" not in service
-            assert service["image"].startswith("${MARTY_OPENBAO_DIDCOMM_IMAGE:?")
+            assert service["image"] == PINNED_PLUGIN
 
 
 @pytest.mark.parametrize(

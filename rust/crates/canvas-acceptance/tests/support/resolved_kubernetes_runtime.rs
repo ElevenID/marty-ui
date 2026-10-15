@@ -839,9 +839,10 @@ fn overlay(
     for name in ["GRPC_TLS_CA_CERT", "ORG_GRPC_CA_CERT", "ES_GRPC_CA_CERT"] {
         gateway.insert(name.into(), spec.grpc_ca_file.to_str().ok_or(ERROR)?.into());
     }
-    for name in ["GRPC_WORKLOAD_TLS_CA_CERT"] {
-        gateway.insert(name.into(), spec.grpc_ca_file.to_str().ok_or(ERROR)?.into());
-    }
+    gateway.insert(
+        "GRPC_WORKLOAD_TLS_CA_CERT".into(),
+        spec.grpc_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
     for (name, value) in [
         (
             "GRPC_WORKLOAD_TLS_CLIENT_CERT",

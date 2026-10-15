@@ -34,8 +34,8 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "--verify-only" in script
     assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=true") == 2
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert '"BAO_TOKEN"' in script
+    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
     assert "CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid" in script
     assert '"did:web:${betaHost}:orgs:marty"' in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" not in script
@@ -912,22 +912,26 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
 def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert (
-        'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' in script
-    )
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' not in script
     assert (
         "$rehearsalContainers = "
         "@($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
     ) in script
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
-    assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
+    assert '"BAO_ADDR=https://localhost:8200"' in script
+    assert '"${copyOpenBaoContainer}:/tmp/bao-tls/vault-ca.pem"' in script
+    assert '-ca-cert=/tmp/bao-tls/vault-ca.pem' in script
+    assert '"--network", "container:$copyOpenBaoContainer"' in script
+    assert '"--mount", $copyCaMount' in script
+    assert '"BAO_CACERT=/bao-public-ca/ca.crt"' in script
     assert '"BAO_TOKEN=$copyBaoToken"' in script
     assert '"NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken"' in script
-    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' in script
-    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 2
-    assert "$env:BAO_TOKEN = $baoDevRootToken" in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert script.count('"--env", "BAO_TOKEN"') == 1
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
+    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 1
+    assert "$env:BAO_TOKEN = $baoDevRootToken" not in script
+    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
+    assert script.count('"--env", "BAO_TOKEN"') == 0
     assert '"dev-only-token"' not in script
 
 

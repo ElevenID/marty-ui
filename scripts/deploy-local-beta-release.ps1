@@ -217,6 +217,32 @@ function Get-DotEnvValue([string]$Path, [string]$Name) {
     return $value
 }
 
+function Assert-BetaOpenBaoRaftCustody {
+    $containers = @(docker ps --filter "label=com.docker.compose.project=$script:BetaProject" `
+        --filter "label=com.docker.compose.service=openbao" --format '{{.ID}}')
+    if ($LASTEXITCODE -ne 0 -or $containers.Count -ne 1 -or -not $containers[0]) {
+        throw "Exactly one preserved beta OpenBao container is required"
+    }
+    $details = @(docker inspect $containers[0] | ConvertFrom-Json)
+    if ($LASTEXITCODE -ne 0 -or $details.Count -ne 1) {
+        throw "Preserved beta OpenBao inspection failed"
+    }
+    $node = $details[0]
+    $command = @($node.Config.Cmd)
+    $hasRaftState = @($node.Mounts | Where-Object {
+        $_.Type -eq "volume" -and $_.Name -eq "${script:BetaProject}_openbao_data" `
+            -and $_.Destination -eq "/bao/data" -and $_.RW -eq $true
+    }).Count -eq 1
+    $hasDevSecret = @($node.Config.Env | Where-Object {
+        $_ -match '^(BAO_DEV_ROOT_TOKEN_ID|BAO_TOKEN|VAULT_TOKEN)='
+    }).Count -gt 0
+    if ($command.Count -ne 2 -or $command[0] -ne "server" `
+        -or $command[1] -ne "-config=/bao/config/openbao.hcl" `
+        -or -not $hasRaftState -or $hasDevSecret) {
+        throw "Beta OpenBao must use preserved Raft state without dev-root custody"
+    }
+}
+
 function Get-ComposeContainerId {
     param(
         [Parameter(Mandatory = $true)][string]$Service,
@@ -758,7 +784,7 @@ else {
 $martyDbPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "MARTY_DB_PASSWORD"
 $redisPassword = Get-DotEnvValue -Path $GeneratedEnvFile -Name "REDIS_PASSWORD"
 $encodedRedisPassword = [Uri]::EscapeDataString($redisPassword)
-$baoDevRootToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"
+Assert-BetaOpenBaoRaftCustody
 $grpcServiceToken = Get-DotEnvValue -Path $GeneratedEnvFile -Name "GRPC_SERVICE_TOKEN"
 if ($grpcServiceToken.Length -lt 32 -or $grpcServiceToken -match '^(?i:change[-_]?me|changeme|replace[-_]?me)') {
     throw "GRPC_SERVICE_TOKEN must be a non-placeholder value of at least 32 characters"
@@ -1327,6 +1353,7 @@ $copyPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximu
 $copyRedisPassword = -join ((1..32) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
 $encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)
 $copyBaoToken = -join ((1..40) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+$copyBaoImage = "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
 $rehearsalContainers = @($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)
 try {
     foreach ($candidate in $rehearsalContainers) {
@@ -1336,7 +1363,7 @@ try {
         }
     }
     Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyContainer, "--network", $script:BetaNetwork, "--env", "POSTGRES_PASSWORD=$copyPassword", "postgres:15-alpine")
-    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", "quay.io/openbao/openbao:2", "server", "-dev")
+    Invoke-Checked -FilePath docker -Arguments @("run", "--detach", "--name", $copyOpenBaoContainer, "--network", $script:BetaNetwork, "--tmpfs", "/tmp/bao-tls:rw,mode=1777", "--env", "BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken", "--env", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200", $copyBaoImage, "server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp/bao-tls")
     Invoke-Checked -FilePath docker -Arguments @(
         "run", "--detach", "--name", $copyRedisContainer, "--network", $script:BetaNetwork,
         "redis:7-alpine", "redis-server", "--requirepass", $copyRedisPassword
@@ -1353,23 +1380,33 @@ try {
     foreach ($attempt in 1..60) {
         $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
         if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
-        docker exec $copyOpenBaoContainer bao status -address=http://127.0.0.1:8200 2>$null | Out-Null
+        docker exec $copyOpenBaoContainer bao status -address=https://127.0.0.1:8200 -ca-cert=/tmp/bao-tls/vault-ca.pem 2>$null | Out-Null
         if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
         if ($redisReady -and $openBaoReady) { break }
         Start-Sleep -Seconds 2
     }
     if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
     if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
+    $copyCaPath = Join-Path $logsDir "openbao-copy-public-ca.crt"
+    Invoke-Checked -FilePath docker -Arguments @("cp", "${copyOpenBaoContainer}:/tmp/bao-tls/vault-ca.pem", $copyCaPath)
+    $copyCaContent = Get-Content -LiteralPath $copyCaPath -Raw
+    if ($copyCaContent -notmatch '-----BEGIN CERTIFICATE-----' -or $copyCaContent -match 'PRIVATE KEY') {
+        throw "Rehearsal OpenBao public CA is invalid"
+    }
+    $copyCaMount = "type=bind,src=$copyCaPath,dst=/bao-public-ca/ca.crt,readonly"
     Invoke-Checked -FilePath docker -Arguments @(
-        "run", "--rm", "--network", $script:BetaNetwork,
-        "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
+        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
+        "--mount", $copyCaMount,
+        "--env", "BAO_ADDR=https://localhost:8200",
+        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
         "--env", "BAO_TOKEN=$copyBaoToken",
         "--mount", "type=bind,src=$((Resolve-Path (Join-Path $script:RepoRoot 'docker/openbao-init.sh')).Path),dst=/scripts/openbao-init.sh,readonly",
-        "--entrypoint", "/bin/sh", "quay.io/openbao/openbao:2", "/scripts/openbao-init.sh"
+        "--entrypoint", "/bin/sh", $copyBaoImage, "/scripts/openbao-init.sh"
     )
-    $copyNotificationToken = & docker run --rm --network $script:BetaNetwork `
-        --env "BAO_ADDR=http://${copyOpenBaoContainer}:8200" --env "BAO_TOKEN=$copyBaoToken" `
-        quay.io/openbao/openbao:2 bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
+    $copyNotificationToken = & docker run --rm --network "container:$copyOpenBaoContainer" `
+        --mount $copyCaMount `
+        --env "BAO_ADDR=https://localhost:8200" --env "BAO_CACERT=/bao-public-ca/ca.crt" --env "BAO_TOKEN=$copyBaoToken" `
+        $copyBaoImage bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
     if ($LASTEXITCODE -ne 0 -or -not $copyNotificationToken) { throw "Rehearsal Notification token creation failed" }
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "psql", "-U", "postgres", "-d", "postgres", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE marty LOGIN PASSWORD '$copyPassword';")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "createdb", "-U", "postgres", "-O", "marty", "marty")
@@ -1377,12 +1414,14 @@ try {
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
     $rehearsalArguments = @(
-        "run", "--rm", "--network", $script:BetaNetwork,
+        "run", "--rm", "--network", "container:$copyOpenBaoContainer",
+        "--mount", $copyCaMount,
         "--env", "DATABASE_URL=$copyUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
         "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
-        "--env", "BAO_ADDR=http://${copyOpenBaoContainer}:8200",
+        "--env", "BAO_ADDR=https://localhost:8200",
+        "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
         "--env", "BAO_TOKEN=$copyBaoToken",
         "--env", "NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken",
         "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
@@ -1390,7 +1429,7 @@ try {
     )
     $rehearsalArguments += @($migrationImage, "/usr/local/bin/marty-migration-bootstrap")
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
-    $verifyArguments = @("run", "--rm", "--network", $script:BetaNetwork, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
+    $verifyArguments = @("run", "--rm", "--network", "container:$copyOpenBaoContainer", "--mount", $copyCaMount, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", "--env", "BAO_ADDR=https://localhost:8200", "--env", "BAO_CACERT=/bao-public-ca/ca.crt", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
     $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
     $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
@@ -1539,53 +1578,35 @@ try {
         -LogPath (Join-Path $logsDir "openbao-init-live.log") `
         -FailureMessage "Beta OpenBao reconciliation failed"
 
-    $liveNotificationToken = & docker run --rm --network $script:BetaNetwork `
-        --env "BAO_ADDR=http://openbao:8200" --env "BAO_TOKEN=$baoDevRootToken" `
-        quay.io/openbao/openbao:2 bao token create -policy=notification-webhook-service -no-default-policy -orphan -ttl=2h -renewable=false -field=token
-    if ($LASTEXITCODE -ne 0 -or -not $liveNotificationToken) { throw "Live Notification token creation failed" }
-
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
-    $previousBaoToken = $env:BAO_TOKEN
-    try {
-        $env:BAO_TOKEN = $baoDevRootToken
-        $migrationArguments = @(
-            "run", "--rm", "--network", $script:BetaNetwork,
-            "--env", "DATABASE_URL=postgresql://marty:${martyDbPassword}@postgres:5432/marty",
-            "--env", "PUBLIC_API_URL=$BetaOrigin",
-            "--env", "MARTY_MIGRATION_PROFILE=beta",
-            "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
-            "--env", "BAO_ADDR=http://openbao:8200",
-            "--env", "BAO_TOKEN",
-            "--env", "NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken",
-            "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
-            "--env", "MARTY_ORG_ID=$PilotOrganizationId"
-        )
-        $migrationArguments += @($migrationImage, "/usr/local/bin/marty-migration-bootstrap")
-        $liveMutationStarted = $true
-        Invoke-DockerLogged -Arguments $migrationArguments -LogPath (Join-Path $logsDir "migration-live.log") -FailureMessage "Live migration failed"
-        $liveIssuanceUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
-        $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations")
-        Invoke-ComposeLogged `
-            -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveIssuanceUrl", "issuance-migrations") `
-            -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
-            -FailureMessage "Live issuance migration failed"
-        Invoke-ComposeLogged `
-            -Arguments $liveIssuanceVerify `
-            -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
-            -FailureMessage "Live issuance migration verification failed"
-        Invoke-VerificationMigration -Image $verificationMigrationImage `
-            -DatabaseUrl "postgresql://marty:${martyDbPassword}@postgres:5432/marty" `
-            -LogPath (Join-Path $logsDir "verification-migration-live.log")
-    }
-    finally {
-        if ($null -eq $previousBaoToken) {
-            Remove-Item Env:\BAO_TOKEN -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:BAO_TOKEN = $previousBaoToken
-        }
-    }
+    $liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
+    $migrationArguments = @(
+        "run", "--rm", "--no-deps",
+        "--env", "DATABASE_URL=$liveDatabaseUrl",
+        "--env", "PUBLIC_API_URL=$BetaOrigin",
+        "--env", "MARTY_MIGRATION_PROFILE=beta",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
+        "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
+        "--env", "MARTY_ORG_ID=$PilotOrganizationId",
+        "db-migrate", "/usr/local/bin/marty-migration-bootstrap"
+    )
+    $liveMutationStarted = $true
+    Invoke-ComposeLogged -Arguments $migrationArguments `
+        -LogPath (Join-Path $logsDir "migration-live.log") `
+        -FailureMessage "Live migration failed"
+    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
+    Invoke-ComposeLogged `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
+        -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
+        -FailureMessage "Live issuance migration failed"
+    Invoke-ComposeLogged `
+        -Arguments $liveIssuanceVerify `
+        -LogPath (Join-Path $logsDir "issuance-migration-live-verify.log") `
+        -FailureMessage "Live issuance migration verification failed"
+    Invoke-VerificationMigration -Image $verificationMigrationImage `
+        -DatabaseUrl $liveDatabaseUrl `
+        -LogPath (Join-Path $logsDir "verification-migration-live.log")
 
     if ($EnablePortableCanvas) {
         Write-Step "Bind Canvas LTI signing to the seeded issuer DID"
