@@ -22005,3 +22005,17 @@ passed, direct Rust formatting passed, and the exact Canvas schema-contract
 test executable compiled on Windows. Live published Canvas remains a hosted
 retest. The contracts lane was still running its scoped HTTPS grant probe;
 hold the grouped UI push for its final result.
+
+Run `38767505426` completed red: 19 jobs passed (including selfhost and
+release contracts), while Keycloak baseline browser, Canvas published CA
+caller, and the shared contracts fixture failed; CI Gate reflected them.
+The contracts fixture's 404 occurred at its Transit key POST because dev
+OpenBao had no Transit mount, exactly the gap fixed locally by `0fd80e0d9`.
+The five local UI corrections through `b3af37155` were reviewed and pushed
+together to PR #1344 at exact head
+`b3af3715591972cffe3896b2c6278e50b139a6d6`; its body records the
+head, prior red evidence, focused checks and remaining qualification. The
+new [CI run `38770177194`](https://github.com/ElevenID/marty-ui/actions/runs/38770177194)
+was queued at inspection; policy passed and CodeQL/organization checks were
+live. This head requires a fresh Keycloak browser, published Canvas, and
+contracts rerun before any merge or release claim.
