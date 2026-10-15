@@ -2,11 +2,35 @@
 
 from pathlib import Path
 import sys
+from http.cookiejar import Cookie
+from urllib.request import Request
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_keycloak_remote_rs256 as probe  # noqa: E402
+
+
+def test_loopback_browser_returns_secure_cookie_only_to_owned_loopback_origin():
+    cookie = Cookie(
+        version=0, name="AUTH_SESSION_ID", value="synthetic-session",
+        port=None, port_specified=False, domain="127.0.0.1",
+        domain_specified=False, domain_initial_dot=False, path="/realms/master",
+        path_specified=True, secure=True, expires=None, discard=True,
+        comment=None, comment_url=None, rest={}, rfc2109=False,
+    )
+    jar = probe.browser_cookie_jar()
+    jar.set_cookie(cookie)
+    loopback = Request("http://127.0.0.1:8180/realms/master/login-actions/authenticate")
+    jar.add_cookie_header(loopback)
+    assert loopback.get_header("Cookie") == "AUTH_SESSION_ID=synthetic-session"
+    policy = probe.LoopbackBrowserCookiePolicy()
+    assert not policy.return_ok_secure(
+        cookie, Request("http://127.0.0.2:8180/realms/master/login-actions/authenticate")
+    )
+    assert policy.return_ok_secure(
+        cookie, Request("https://example.com/realms/master/login-actions/authenticate")
+    )
 
 
 def test_host_callback_alias_uses_exact_owned_bridge(monkeypatch):

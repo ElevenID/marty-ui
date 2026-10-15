@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import base64
 from datetime import datetime, timezone
-from http.cookiejar import CookieJar
+from http.cookiejar import CookieJar, DefaultCookiePolicy
 from html.parser import HTMLParser
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -115,6 +115,20 @@ class StopAtCallback(HTTPRedirectHandler):
             return None
         return super().redirect_request(request, fp, code, message, headers,
                                         newurl)
+
+
+class LoopbackBrowserCookiePolicy(DefaultCookiePolicy):
+    """Match browser Secure-cookie behavior on the disposable loopback origin."""
+
+    def return_ok_secure(self, cookie, request) -> bool:
+        if (cookie.secure and request.type == "http"
+                and urlparse(request.full_url).hostname == "127.0.0.1"):
+            return True
+        return super().return_ok_secure(cookie, request)
+
+
+def browser_cookie_jar() -> CookieJar:
+    return CookieJar(policy=LoopbackBrowserCookiePolicy())
 
 
 class PendingCibaDevice(BaseHTTPRequestHandler):
@@ -801,7 +815,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     ("master", "probe", jwks),
                     ("11id", "probe11", jwks_11id),
                 ):
-                    baseline_cookies = CookieJar()
+                    baseline_cookies = browser_cookie_jar()
                     baseline_browser = build_opener(
                         HTTPCookieProcessor(baseline_cookies), StopAtCallback(callback))
                     try:
@@ -817,7 +831,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         verify_jwt(baseline_tokens[field], realm_jwks,
                                    f"{prefix}-{realm}-rs256-v1",
                                    base + f"/realms/{realm}")
-                    browser_cookies = CookieJar()
+                    browser_cookies = browser_cookie_jar()
                     browser = build_opener(HTTPCookieProcessor(browser_cookies),
                                            StopAtCallback(callback))
                     def rotate_during_login() -> None:
@@ -868,7 +882,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                             verify_jwt(browser_tokens[field], realm_jwks,
                                        f"{prefix}-{realm}-rs256-v1",
                                        base + f"/realms/{realm}")
-                    fresh_cookies = CookieJar()
+                    fresh_cookies = browser_cookie_jar()
                     fresh_browser = build_opener(HTTPCookieProcessor(fresh_cookies),
                                                  StopAtCallback(callback))
                     def verify_new_cookie() -> None:
@@ -885,7 +899,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                base + f"/realms/{realm}")
                     (jwe_token_dir / f"{realm}-cookie.token").write_text(
                         "invalid-disposable-token", encoding="ascii")
-                    denied_browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                    denied_browser = build_opener(HTTPCookieProcessor(browser_cookie_jar()),
                                                   StopAtCallback(callback))
                     try:
                         browser_code(denied_browser, base, callback,
