@@ -21640,3 +21640,16 @@ compiled patched classes: their full public `javap` APIs now match. Commit
 25.0.6 and adds a Docker build-time ABI comparison against the pinned
 upstream JAR. Maven packaging passed. Runtime browser/CIBA and PostgreSQL
 custody still require the exact built image on a working Docker runner.
+
+2026-10-15 Canvas HTTPS fixture batch on PR #1344 branch, local commit
+`ff0ed2062`: the disposable plugin OpenBao now starts in dev TLS mode,
+exports only its public CA, and runs plugin/Transit setup through the
+CA-verified internal CLI. The published Canvas runner, direct sidecar probe,
+and Rust DIDComm/issuer fixtures require HTTPS and that CA; they reject the
+old HTTP shape. Rust fixture compilation, formatting, the changed container
+inspection test, and three selected published-runner contract cases passed.
+The full local Canvas acceptance target ran 130 passing tests and five
+intentional ignores, with two Kubernetes synthetic-runtime fixture failures
+requiring separate correction. Local Docker could not qualify the live plugin
+handshake, so this batch remains unpushed until grouped release-contract
+fixes and the hosted image gate are ready.
