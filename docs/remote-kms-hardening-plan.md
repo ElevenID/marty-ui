@@ -22866,3 +22866,19 @@ the stack lock, release contract, and cutover guide to unused `v1.1.248`
 Hold this local branch for the broad remaining test-fixture cleanup and local
 runtime proof before one follow-up PR; do not charge full-main CI or claim the
 release on the old `1.1.247` lock.
+
+The grouped follow-up is now UI [#1356](https://github.com/ElevenID/marty-ui/pull/1356)
+at local/pushed head `669299845`. It removes the two remaining active RSA
+TLS private-key startup fixtures and deletes their Python synthetic envelope
+service. Both packaged probes instead run the actual Rust Signing Keys image
+against disposable HTTPS OpenBao: separate non-exportable versioned P-256 TLS
+and AES-256-GCM Transit keys, scoped TLS/envelope/grant tokens, public workload
+CA, and an internal Docker network. Issuance still completes its startup
+encrypt/decrypt proof; Canvas still exercises all 16 published-schema cases.
+The obsolete beta TLS key generator removal and `v1.1.248` lock/guide are in
+the same PR. Local Docker execution passed packaged Issuance startup and all
+16 Canvas cases with locally built Issuance/Signing Keys images; 308 focused
+pytest cases passed with two skips, Ruff, Bash syntax and diff checks passed.
+The temporary test OpenBao container owns only its bootstrap listener key;
+no workload TLS private-key file is generated or mounted. The installed
+Keycloak databases and exact `v1.1.248` release remain unqualified.
