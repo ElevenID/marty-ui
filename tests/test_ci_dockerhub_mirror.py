@@ -231,6 +231,7 @@ def test_image_smokes_use_the_same_pinned_cache_fallback() -> None:
     expected = {
         "scripts/smoke-issuance-image.sh": (
             "postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f",
+            "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
         ),
         "scripts/smoke-verification-image.sh": (
             "postgres:15-alpine@sha256:3d0f7584ed7d04e27fa050d6683a74746608faf21f202be78460d679cc56461f",

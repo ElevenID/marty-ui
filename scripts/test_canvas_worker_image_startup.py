@@ -2,14 +2,18 @@
 
 import json
 import os
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import re
+import secrets
+import shutil
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import time
 
 from test_canvas_worker_image_entrypoint import docker, owned_container
+from with_disposable_event_stream_kms import execute as with_disposable_tls_kms
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +28,7 @@ SECRETS = {
     "MARTY_DB_PASSWORD": PASSWORD,
 }
 HARDENED = ("--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges")
+OPENBAO_IMAGE = "quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878"
 
 
 def contract(name):
@@ -32,6 +37,93 @@ def contract(name):
 
 def mount(path, destination):
     return ("--mount", f"type=bind,source={path},target={destination},readonly")
+
+
+def selected_pinned_dockerhub_image(reference):
+    if os.name == "nt":
+        # Windows Python cannot pass a Win32 path as a script argument to WSL bash.
+        try:
+            docker("pull", reference, timeout=120)
+            return reference
+        except subprocess.CalledProcessError:
+            mirror = f"mirror.gcr.io/library/{reference}"
+            docker("pull", mirror, timeout=120)
+            return mirror
+    return subprocess.run(
+        ["bash", str(ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh"), reference],
+        check=True, capture_output=True, text=True, timeout=120,
+    ).stdout.strip()
+
+
+@contextmanager
+def owned_network():
+    name = "canvas-worker-kms-" + secrets.token_hex(8)
+    bao = os.environ["MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER"]
+    docker("network", "create", "--internal", name)
+    try:
+        docker("network", "connect", "--alias", "synthetic-secret-service", name, bao)
+        yield name
+    finally:
+        subprocess.run(["docker", "network", "disconnect", "--force", name, bao],
+                       capture_output=True, check=False, timeout=20)
+        subprocess.run(["docker", "network", "rm", name],
+                       capture_output=True, check=False, timeout=20)
+
+
+def start_keyless_signer(stack, network, image):
+    redis_image = selected_pinned_dockerhub_image(
+        "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99"
+    )
+    redis = stack.enter_context(owned_container(
+        "--pull=never", "--network", network, "--network-alias", "signing-redis",
+        redis_image,
+    ))
+    docker("start", redis)
+    env = {
+        "SIGNING_KEYS_INTERNAL_API_KEY": SECRETS["SIGNING_KEYS_INTERNAL_API_KEY"],
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY": "synthetic-service-sign-gateway-key-32-chars",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY": SECRETS["SIGNING_KEYS_ISSUER_SIGN_KEY"],
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY": SECRETS["SIGNING_KEYS_INTEGRATION_SECRET_KEY"],
+        "SIGNING_KEYS_REDIS_URL": "redis://signing-redis:6379/2",
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": "/verification/grant-token",
+        "ISSUER_BASE_URL": "https://issuer.example",
+        "BAO_ADDR": "https://127.0.0.1:8200",
+        "BAO_CACERT": "/verification/bao-ca.crt",
+        "BAO_TOKEN_FILE": "/verification/envelope-token",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": "/verification/tls.crt",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR": "https://127.0.0.1:8200",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": "/verification/bao-ca.crt",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE": "/verification/tls-token",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME": os.environ["MARTY_TEST_SIGNING_KEYS_TLS_KMS_KEY_NAME"],
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION": "1",
+    }
+    mounts = (
+        ("MARTY_TEST_SIGNING_KEYS_TLS_CERT", "/verification/tls.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_CA", "/verification/workload-ca.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_KMS_CA", "/verification/bao-ca.crt"),
+        ("MARTY_TEST_SIGNING_KEYS_TLS_KMS_TOKEN_FILE", "/verification/tls-token"),
+        ("MARTY_TEST_SIGNING_KEYS_ENVELOPE_TOKEN_FILE", "/verification/envelope-token"),
+        ("MARTY_TEST_SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE", "/verification/grant-token"),
+    )
+    signer = stack.enter_context(owned_container(
+        "--pull=never", "--network", f"container:{os.environ['MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER']}",
+        *HARDENED, *environment_arguments(env),
+        *(part for source, target in mounts for part in mount(Path(os.environ[source]), target)),
+        image,
+    ))
+    docker("start", signer)
+
+    def remote_ready():
+        assert running(signer), f"Rust Signing Keys exited: {docker('logs', signer)}"
+        try:
+            docker("exec", signer, "curl", "--fail", "--silent",
+                   "--cacert", "/verification/workload-ca.crt",
+                   "https://localhost:8018/health", timeout=5)
+            return True
+        except subprocess.CalledProcessError:
+            return False
+
+    wait_for(remote_ready, "keyless Rust Signing Keys integration-secret service", 30)
 
 
 def environment_arguments(environment):
@@ -86,12 +178,12 @@ def configuration(case, mode):
         "CANVAS_SYNC_WORKER_ID": worker_id,
         "CANVAS_SYNC_WORKER_POLL_SECONDS": "60",
         "CANVAS_PILOT_ORGANIZATION_IDS": "bootstrap-org",
-        "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:8017/internal/signing-keys",
+        "SIGNING_KEYS_INTERNAL_URL": "http://synthetic-secret-service:8017/internal/signing-keys",
         # Startup must exercise the managed grant path. This idle-only probe
         # has no mint authority: an unexpected sign cannot read this file.
         "BAO_ADDR": "https://127.0.0.1:1",
         "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE": "/nonexistent/canvas-worker-image-grant",
-        "INTEGRATION_SECRET_KMS_URL": "https://127.0.0.1:8017/internal",
+        "INTEGRATION_SECRET_KMS_URL": "https://synthetic-secret-service:8018/internal",
         "INTEGRATION_SECRET_KMS_CA_FILE": "/synthetic-secrets/ca.crt",
         **case["environment"],
     }
@@ -177,7 +269,7 @@ def exercise(image, postgres, directory, case, mode):
         print(f"Packaged worker startup {mode['name']}/{case['name']} passed")
 
 
-def run(image):
+def run(image, signing_image):
     spec = contract("canvas-worker-image-startup-scenarios.json")
     pins = contract(spec["schema_reference"])
     cases = contract(spec["startup_scenarios"])["cases"]
@@ -186,22 +278,14 @@ def run(image):
     for pin in (pins["observed_image"], pins["observed_postgres_image"]):
         assert re.fullmatch(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}", pin)
     docker("pull", pins["observed_image"], timeout=120)
-    selected_postgres = subprocess.run(
-        [
-            "bash",
-            str(ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh"),
-            pins["observed_postgres_image"],
-        ],
-        check=True,
-        stdout=subprocess.PIPE,
-        text=True,
-        timeout=120,
-    ).stdout.strip()
+    selected_postgres = selected_pinned_dockerhub_image(
+        pins["observed_postgres_image"]
+    )
     assert selected_postgres in {
         pins["observed_postgres_image"],
         f"mirror.gcr.io/library/{pins['observed_postgres_image']}",
     }
-    with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary:
+    with TemporaryDirectory(prefix="canvas-worker-image-startup-") as temporary, owned_network() as network:
         temporary_root = Path(temporary).resolve()
         temporary_root.chmod(0o755)
         directory = temporary_root / "worker-secrets"
@@ -210,55 +294,12 @@ def run(image):
             path = directory / name
             path.write_text(value + "\r\n", encoding="utf-8", newline="")
             path.chmod(0o444)
-        tls_directory = temporary_root / "tls-server"
-        tls_directory.mkdir(mode=0o755)
-        openssl_config = tls_directory / "openssl.cnf"
-        openssl_config.write_text(
-            "[req]\ndistinguished_name=req_distinguished_name\n"
-            "[req_distinguished_name]\n", encoding="ascii",
-        )
-        for arguments in (
-            (
-                "req", "-x509", "-newkey", "rsa:2048", "-sha256", "-days", "1",
-                "-nodes", "-subj", "/CN=Disposable Canvas Smoke CA",
-                "-addext", "basicConstraints=critical,CA:TRUE",
-                "-addext", "keyUsage=critical,keyCertSign,cRLSign",
-                "-keyout", str(tls_directory / "ca.key"),
-                "-out", str(directory / "ca.crt"),
-            ),
-            (
-                "req", "-newkey", "rsa:2048", "-sha256", "-nodes",
-                "-subj", "/CN=127.0.0.1",
-                "-keyout", str(tls_directory / "tls.key"),
-                "-out", str(tls_directory / "tls.csr"),
-            ),
-            (
-                "x509", "-req", "-in", str(tls_directory / "tls.csr"),
-                "-CA", str(directory / "ca.crt"),
-                "-CAkey", str(tls_directory / "ca.key"), "-CAcreateserial",
-                "-out", str(tls_directory / "tls.crt"), "-days", "1", "-sha256",
-                "-extfile", str(tls_directory / "tls.ext"),
-            ),
-        ):
-            if arguments[0] == "x509":
-                (tls_directory / "tls.ext").write_text(
-                    "basicConstraints=critical,CA:FALSE\n"
-                    "keyUsage=critical,digitalSignature,keyEncipherment\n"
-                    "extendedKeyUsage=serverAuth\nsubjectAltName=IP:127.0.0.1\n",
-                    encoding="ascii",
-                )
-            subprocess.run(
-                ("openssl", *arguments), check=True,
-                env={**os.environ, "OPENSSL_CONF": str(openssl_config)},
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
+        shutil.copyfile(os.environ["MARTY_TEST_SIGNING_KEYS_TLS_CA"], directory / "ca.crt")
         (directory / "ca.crt").chmod(0o444)
-        (tls_directory / "tls.key").chmod(0o444)
-        (tls_directory / "tls.crt").chmod(0o444)
         with owned_container(
             "--pull=never",
             "--network",
-            "none",
+            network,
             "--tmpfs",
             "/var/lib/postgresql/data:rw",
             "--tmpfs",
@@ -312,54 +353,20 @@ def run(image):
                 assert report["status"] == "passed"
                 assert report["migration_revisions"] == pins["migration_revisions"]
                 assert report["worker_sha256"] == pins["observed_source_sha256"]
-            with owned_container(
-                "--pull=never",
-                "--network",
-                f"container:{postgres}",
-                *HARDENED,
-                "--env",
-                f"SYNTHETIC_API_KEY={SECRETS['SIGNING_KEYS_INTEGRATION_SECRET_KEY']}",
-                "--env",
-                "SYNTHETIC_TLS_CERT_FILE=/verification/tls/tls.crt",
-                "--env",
-                "SYNTHETIC_TLS_KEY_FILE=/verification/tls/tls.key",
-                *mount(tls_directory / "tls.crt", "/verification/tls/tls.crt"),
-                *mount(tls_directory / "tls.key", "/verification/tls/tls.key"),
-                *mount(
-                    ROOT / "scripts/synthetic_integration_secret_service.py",
-                    "/verification/synthetic_integration_secret_service.py",
-                ),
-                "--entrypoint",
-                "python",
-                pins["observed_image"],
-                "/verification/synthetic_integration_secret_service.py",
-            ) as secret_service:
-                docker("start", secret_service)
-                def remote_ready():
-                    assert running(secret_service), "Remote secret service exited"
-                    try:
-                        docker(
-                            "exec",
-                            secret_service,
-                            "python",
-                            "-c",
-                            'import socket; socket.create_connection(("127.0.0.1", 8017), 1).close()',
-                            timeout=5,
-                        )
-                        return True
-                    except subprocess.CalledProcessError:
-                        return False
-
-                wait_for(
-                    remote_ready,
-                    "synthetic remote secret service",
-                )
+            with ExitStack() as stack:
+                start_keyless_signer(stack, network, signing_image)
                 for mode in spec["modes"]:
                     for case in cases:
                         exercise(image, postgres, directory, case, mode)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        raise SystemExit("Expected the exact locally built issuance image")
-    run(sys.argv[1])
+    if len(sys.argv) not in (2, 3):
+        raise SystemExit("Expected the exact locally built issuance image and optional Signing Keys image")
+    signing_image = sys.argv[2] if len(sys.argv) == 3 else "marty-signing-keys:ci"
+    if "MARTY_TEST_SIGNING_KEYS_BAO_CONTAINER" not in os.environ:
+        raise SystemExit(with_disposable_tls_kms(
+            OPENBAO_IMAGE, [sys.executable, str(Path(__file__).resolve()), sys.argv[1], signing_image],
+            profile="signing-keys-image",
+        ))
+    run(sys.argv[1], signing_image)
