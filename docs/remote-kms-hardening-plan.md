@@ -22102,3 +22102,15 @@ preflight suite was still running at inspection; no pass is claimed. Merge
 commit `fb28cf60f556f68dacb41227ebdd65e3d4a3cae9` is pushed on PR #1344;
 GitHub reports it mergeable, with [exact-head CI run `38776076785`](https://github.com/ElevenID/marty-ui/actions/runs/38776076785)
 in progress. Do not merge or publish until this head qualifies.
+
+K11 OIDF edge implementation audit while the exact-head CI runs: the existing
+Rust `marty-passport-keyless-edge` already constructs its TLS server identity
+from `OpenBaoTlsIdentityFiles` and `keyless_https_server_config`; reuse that
+remote-signing boundary for the OIDF listener. Its current `reqwest` proxy
+buffers request/response bodies to 32 MiB and strips `Upgrade`, so copying
+the whole proxy would lose OIDF's Gateway WebSocket behavior and streaming.
+The replacement must route `/realms/` to Keycloak, the enumerated UI paths to
+UI, and the rest to Gateway while preserving the public Host and forwarding
+headers; it needs a streaming HTTP/1.1 upgrade-capable path and regression
+tests against the present Nginx route table before removing `tls.key` and its
+generator. This is source-design evidence, not an implemented OIDF edge.
