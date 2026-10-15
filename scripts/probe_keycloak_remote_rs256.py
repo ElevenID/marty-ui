@@ -72,20 +72,23 @@ def wait_for_keycloak(base: str, container: str, seconds: int = 35) -> None:
 
 
 def database_key_counts(container: str) -> tuple[int, int]:
-    run("docker", "exec", container, "/bin/sh", "-c",
-        "cp /opt/keycloak/data/h2/keycloakdb.mv.db /tmp/kms-probe.mv.db")
     output = run(
-        "docker", "exec", container, "java", "-cp",
-        "/opt/keycloak/lib/lib/main/com.h2database.h2-2.2.224.jar",
-        "org.h2.tools.Shell", "-url", "jdbc:h2:file:/tmp/kms-probe",
-        "-user", "sa", "-password", "password", "-sql",
-        "SELECT NAME, COUNT(*) AS N FROM COMPONENT_CONFIG "
-        "WHERE NAME IN ('privateKey','secret') GROUP BY NAME",
+        "docker", "exec", container, "psql", "-U", "keycloak", "-d", "keycloak",
+        "-AtF", "|", "-c",
+        "SELECT cc.name, count(*) FROM component_config AS cc "
+        "JOIN component AS c ON c.id = cc.component_id "
+        "WHERE c.provider_type = 'org.keycloak.keys.KeyProvider' "
+        "AND cc.name IN ('privateKey','secret') GROUP BY cc.name",
     )
     counts = {name: int(value) for name, value in (
-        line.split("|") for line in output.splitlines() if "|" in line
-        and not line.startswith("NAME"))}
+        line.split("|") for line in output.splitlines() if "|" in line)}
     return counts.get("privateKey", 0), counts.get("secret", 0)
+
+
+def verify_database_gate(container: str) -> None:
+    run("docker", "exec", "-i", container, "psql", "-v", "ON_ERROR_STOP=1",
+        "-U", "keycloak", "-d", "keycloak",
+        input_text=(ROOT / "scripts/sql/keycloak-kms-only-verify.sql").read_text())
 
 
 def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
@@ -122,10 +125,12 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
     network = "marty-keycloak-kms-net-" + suffix
     bao_name = "marty-keycloak-kms-bao-" + suffix
     kc_name = "marty-keycloak-kms-oidc-" + suffix
+    pg_name = "marty-keycloak-kms-pg-" + suffix
     prefix = "kmsprobe" + suffix
     created_network = False
     started_bao = False
     started_kc = False
+    started_pg = False
     with tempfile.TemporaryDirectory(prefix="marty-keycloak-kms-") as temporary:
         root = Path(temporary)
         ca_dir = root / "ca"
@@ -138,6 +143,23 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
         try:
             run("docker", "network", "create", network)
             created_network = True
+            run("docker", "run", "-d", "--name", pg_name,
+                "--network", network, "--network-alias", "postgres",
+                "-e", "POSTGRES_USER=keycloak",
+                "-e", "POSTGRES_PASSWORD=synthetic-probe-only",
+                "-e", "POSTGRES_DB=keycloak",
+                "postgres:15-alpine")
+            started_pg = True
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                ready = subprocess.run(["docker", "exec", pg_name, "pg_isready",
+                                        "-U", "keycloak", "-d", "keycloak"],
+                                       capture_output=True, timeout=5)
+                if ready.returncode == 0:
+                    break
+                time.sleep(0.3)
+            else:
+                raise RuntimeError("Disposable Keycloak PostgreSQL did not start")
             run(
                 "docker", "run", "-d", "--name", bao_name,
                 "--network", network, "--network-alias", "openbao",
@@ -233,6 +255,10 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 "--mount", f"type=bind,src={cert_dir},dst=/run/kms/certs,readonly",
                 "-e", "KEYCLOAK_ADMIN=probe",
                 "-e", "KEYCLOAK_ADMIN_PASSWORD=synthetic-probe-only",
+                "-e", "KC_DB=postgres",
+                "-e", "KC_DB_URL=jdbc:postgresql://postgres:5432/keycloak",
+                "-e", "KC_DB_USERNAME=keycloak",
+                "-e", "KC_DB_PASSWORD=synthetic-probe-only",
                 "-e", "BAO_ADDR=https://openbao:8200",
                 "-e", "BAO_CACERT=/run/kms/ca.crt",
                 "-e", "BAO_TOKEN_FILE=/run/kms/token",
@@ -245,7 +271,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
             port = run("docker", "port", kc_name, "8080/tcp").rsplit(":", 1)[-1]
             base = f"http://127.0.0.1:{port}"
             wait_for_keycloak(base, kc_name)
-            if database_key_counts(kc_name) != (0, 0):
+            if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("Keycloak bootstrap stored private key material")
             try:
                 master_tokens = http_json(base + "/realms/master/protocol/openid-connect/token", {
@@ -279,7 +305,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 "credentials": [{"type": "password", "value": "synthetic-probe-only",
                                  "temporary": False}],
             })
-            if database_key_counts(kc_name) != (0, 0):
+            if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("11id realm creation stored private key material")
             try:
                 realm_tokens = http_json(base + "/realms/11id/protocol/openid-connect/token", {
@@ -318,8 +344,9 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                 verify_jwt(repeated["access_token"], jwks_for_realm,
                            f"{prefix}-{realm}-rs256-v1", base + f"/realms/{realm}")
                 refreshed_tokens[realm] = repeated
-            if database_key_counts(kc_name) != (0, 0):
+            if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("Keycloak token issuance stored private key material")
+            verify_database_gate(pg_name)
             scoped_token.write_text("invalid-disposable-token", encoding="ascii")
             for realm, username in (
                 ("master", "probe"),
@@ -349,14 +376,17 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                             ) from error
                     else:
                         raise RuntimeError(f"{realm} issued a token without its remote signer")
-            if database_key_counts(kc_name) != (0, 0):
+            if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
-            print("Remote RS256 master/11id token/refresh/JWKS, KMS-loss denial, and zero-private-row probe passed")
+            verify_database_gate(pg_name)
+            print("Remote RS256 master/11id token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
         finally:
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)
             if started_bao:
                 subprocess.run(["docker", "rm", "-f", bao_name], capture_output=True)
+            if started_pg:
+                subprocess.run(["docker", "rm", "-f", pg_name], capture_output=True)
             if created_network:
                 subprocess.run(["docker", "network", "rm", network], capture_output=True)
 
