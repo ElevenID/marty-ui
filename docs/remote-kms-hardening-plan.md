@@ -21151,3 +21151,17 @@ closes the two-realm *remote signing proof* only; it uses disposable H2
 and direct grant. RSA-OAEP/AES, browser login and session flows, key
 rotation, other provider paths, PostgreSQL, shipping-image integration,
 and exact installed full-stack acceptance remain.
+
+2026-10-15 K12 PostgreSQL gate alignment, grouped UI commit `ec571c91b`:
+the staged read-only `scripts/sql/keycloak-kms-only-verify.sql` now
+requires exactly one of each Keycloak 25 built-in key component ID
+(`rsa-generated`, `rsa-enc-generated`, `hmac-generated`, `aes-generated`)
+in every realm, rejects any other KeyProvider ID or duplicate, and still
+rejects all `privateKey` and `secret` configuration rows. These IDs are
+accepted only with separate attestation of the exact image and higher-order
+Marty factory override JAR: a database row cannot identify the Java code
+behind a provider ID. A disposable PostgreSQL 15 two-realm fixture passed;
+adding a synthetic `privateKey` row made it fail. Both currently running
+self-host and beta Keycloak databases failed with four private-key and four
+generated-secret rows each. The gate is aligned for a future clean install;
+it does not clear or migrate those databases or prove the deployed image.
