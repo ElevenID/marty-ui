@@ -287,7 +287,8 @@ jobs:
           export SELFHOST_IMAGE_TAG="$VERSION"
           # Source-shape preflight runs before the digest build. The prepared
           # lock later binds the real image to the qualified transaction.
-          export MARTY_KEYCLOAK_KMS_IMAGE="$KEYCLOAK_IMAGE@sha256:$(printf '0%.0s' {1..64})"
+          MARTY_KEYCLOAK_KMS_IMAGE="$KEYCLOAK_IMAGE@sha256:$(printf '0%.0s' {1..64})"
+          export MARTY_KEYCLOAK_KMS_IMAGE
           docker compose --profile '*' --env-file .env.selfhost.production.example \
             -f docker-compose.selfhost.prod.yml \
             -f docker-compose.selfhost.bundle.override.yml \
@@ -1551,7 +1552,8 @@ jobs:
           ' > external-services.json
           export SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui
           export SELFHOST_IMAGE_TAG="$VERSION"
-          export MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.images.keycloak | .uri + "@" + .digest' validated-transaction.json)"
+          MARTY_KEYCLOAK_KMS_IMAGE="$(jq -er '.images.keycloak | .uri + "@" + .digest' validated-transaction.json)"
+          export MARTY_KEYCLOAK_KMS_IMAGE
           docker compose --profile '*' --env-file .env.selfhost.production.example \
             -f docker-compose.selfhost.prod.yml \
             -f docker-compose.selfhost.bundle.override.yml \

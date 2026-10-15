@@ -1,5 +1,6 @@
 package dev.marty.keycloak.kms;
 
+import java.util.Set;
 import org.keycloak.common.VerificationException;
 import org.keycloak.crypto.KeyUse;
 import org.keycloak.crypto.KeyWrapper;
@@ -21,6 +22,11 @@ public final class RemoteHs512SignatureProviderFactory implements SignatureProvi
     @Override
     public int order() {
         return 1;
+    }
+
+    @Override
+    public Set<String> getJwkPrivateKeyClaims() {
+        return SignatureProviderFactory.OCT_PRIVATE_JWK_CLAIMS;
     }
 
     @Override

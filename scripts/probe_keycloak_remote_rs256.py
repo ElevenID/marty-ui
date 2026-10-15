@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Disposable Keycloak 25/OpenBao RS256 probe; never prints tokens or keys."""
+"""Disposable pinned Keycloak/OpenBao RS256 probe; never prints tokens or keys."""
 
 from __future__ import annotations
 
@@ -230,7 +230,7 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
 
 def probe(keycloak_image: str, openbao_image: str, jar: Path,
           require_browser: bool = False) -> None:
-    if not jar.is_file():
+    if not require_browser and not jar.is_file():
         raise RuntimeError("Build keycloak/openbao-provider with Maven first")
     suffix = secrets.token_hex(5)
     network = "marty-keycloak-kms-net-" + suffix
@@ -818,7 +818,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--keycloak-image", default="quay.io/keycloak/keycloak:25.0")
+    parser.add_argument("--keycloak-image", default="quay.io/keycloak/keycloak:26.8.0")
     parser.add_argument("--openbao-image", default="quay.io/openbao/openbao:2")
     parser.add_argument("--jar", type=Path,
                         default=ROOT / "keycloak/openbao-provider/target/keycloak-openbao-provider-0.0.0-probe.jar")

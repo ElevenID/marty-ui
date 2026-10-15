@@ -6,7 +6,7 @@ creation and rotation; file-backed OpenBao storage is rejected. The host
 application receives public references or completed cryptographic results,
 never private key material.
 
-The Keycloak direct-JWE API is staged for a pinned Keycloak 25.0.6 source
+The Keycloak direct-JWE API is staged for a pinned Keycloak 26.8.0 source
 change. Mount the plugin at `didcomm` and use these paths:
 
 | Operation | Path | Request | Response |
@@ -31,7 +31,7 @@ versioned encode/decode paths. Key creation and rotation require separate
 privileges. The disposable live probe verifies this policy split.
 
 The API and local OpenBao proof do **not** make Keycloak KMS-only yet.
-Keycloak 25.0.6's `RestartLoginCookie` and CIBA request-ID paths call a
+Keycloak 26.8.0's `RestartLoginCookie` and CIBA request-ID paths call a
 direct JWE helper that requires encoded local keys. A pinned source-built
 Keycloak change must call these remote endpoints, preserve login/session,
 CIBA, rotation and outage behavior, and pass the PostgreSQL custody gate

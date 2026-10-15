@@ -1,4 +1,4 @@
-﻿# Keycloak 25.0.6 remote KMS integration
+﻿# Keycloak 26.8.0 remote KMS integration
 
 This pinned, unshipped Keycloak build removes generated realm private-key and
 secret custody. Four higher-order `keys` factories keep Keycloak's built-in
@@ -6,7 +6,7 @@ provider IDs without creating local material. RS256 and HS512 use
 non-exportable OpenBao Transit keys. The RSA-OAEP and generic AES providers
 still fail closed; their dependent features remain to be qualified.
 
-Keycloak 25.0.6's `RestartLoginCookie` and CIBA request-ID classes directly
+The pinned Keycloak `RestartLoginCookie` and CIBA request-ID paths directly
 request `SecretKey` objects and call `TokenUtil.jweDirectEncode`, which
 requires `Key.getEncoded()`. A provider SPI alone cannot make those calls
 remote. This module includes the two upstream Apache-2.0 source classes,

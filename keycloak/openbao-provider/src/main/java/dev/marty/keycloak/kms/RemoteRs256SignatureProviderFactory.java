@@ -2,6 +2,7 @@ package dev.marty.keycloak.kms;
 
 import java.security.PublicKey;
 import java.util.Arrays;
+import java.util.Set;
 import org.keycloak.common.VerificationException;
 import org.keycloak.crypto.AsymmetricSignatureProvider;
 import org.keycloak.crypto.KeyUse;
@@ -24,6 +25,11 @@ public final class RemoteRs256SignatureProviderFactory implements SignatureProvi
     @Override
     public int order() {
         return 1;
+    }
+
+    @Override
+    public Set<String> getJwkPrivateKeyClaims() {
+        return SignatureProviderFactory.RSA_PRIVATE_JWK_CLAIMS;
     }
 
     @Override
