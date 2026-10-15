@@ -14,6 +14,8 @@ import subprocess
 import pytest
 import yaml
 
+from scripts.check_beta_keycloak_kms import validate_model as validate_keycloak_kms
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = runpy.run_path(str(ROOT / "scripts/validate_beta_passport_configuration.py"))
@@ -29,10 +31,14 @@ SIGNING = "ordinary-signing-secret-00000001"
 
 
 def model(tmp_path: Path) -> dict:
-    def grant_volumes(*names: str) -> list[dict]:
-        return [{"type": "volume", "source": f"openbao_{name}_grant",
-                 "target": f"/bao/{name.replace('_', '-')}-grant",
-                 "read_only": True, "volume": {}} for name in names]
+    def grant_volumes(*names: str, token: str | None = None) -> list[dict]:
+        mounts = [("openbao_public_ca", "/bao/public-ca")]
+        if token:
+            mounts.append((f"openbao_{token}_token", f"/bao/{token.replace('_', '-')}-token"))
+        mounts.extend((f"openbao_{name}_grant", f"/bao/{name.replace('_', '-')}-grant")
+                      for name in names)
+        return [{"type": "volume", "source": source, "target": target,
+                 "read_only": True, "volume": {}} for source, target in mounts]
 
     secret_root = tmp_path / "elevenid-beta-passport-physical"
     secret_root.mkdir()
@@ -40,11 +46,13 @@ def model(tmp_path: Path) -> dict:
         "passport_physical_provider_api_key",
         "passport_callback_signer_api_key", "passport_callback_signer_bao_token",
         "marty_db_password",
-        "flow_workload_client_cert", "flow_workload_client_key",
-        "flow_workload_server_cert", "flow_workload_server_key",
-        "workload_identity_ca_cert",
+        "flow_workload_client_cert", "flow_client_tls_kms_token",
+        "flow_workload_server_cert", "flow_server_tls_kms_token",
+        "openbao_tls_ca_cert", "workload_identity_ca_cert",
+        "gateway_workload_client_cert", "gateway_tls_kms_token",
+        "issuance_workload_server_cert", "issuance_tls_kms_token",
         "dev_integration_secret_ca", "dev_integration_secret_server_cert",
-        "dev_integration_secret_server_key",
+        "signing_keys_tls_kms_token",
     )
     secrets = {}
     for index, name in enumerate(secret_names):
@@ -53,7 +61,7 @@ def model(tmp_path: Path) -> dict:
         path = parent / name
         path.write_text("beta-physical-secret-" + str(index) * 40, encoding="utf-8")
         secrets[name] = {"file": str(path)}
-    return {"name": "elevenid-beta", "secrets": secrets,
+    result = {"name": "elevenid-beta", "secrets": secrets,
             "volumes": {f"openbao_{name}_grant": {
                 "name": f"elevenid-beta_openbao_{name}_grant"} for name in (
                 "gateway", "flow", "verify", "issuance_credential",
@@ -65,6 +73,8 @@ def model(tmp_path: Path) -> dict:
                     "ipam": {}},
             }, "services": {
         "gateway": {"networks": {"marty-network": {}},
+            "secrets": ["workload_identity_ca_cert", "gateway_workload_client_cert",
+                        "gateway_tls_kms_token", "openbao_tls_ca_cert"],
             "volumes": grant_volumes("gateway"), "environment": {
             "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
@@ -77,9 +87,9 @@ def model(tmp_path: Path) -> dict:
         }},
         "flow": {"networks": {"marty-network": {}},
             "volumes": grant_volumes("flow"), "secrets": [
-            "flow_workload_client_cert", "flow_workload_client_key",
-            "flow_workload_server_cert", "flow_workload_server_key",
-            "workload_identity_ca_cert"], "environment": {
+            "flow_workload_client_cert", "flow_client_tls_kms_token",
+            "flow_workload_server_cert", "flow_server_tls_kms_token",
+            "openbao_tls_ca_cert", "workload_identity_ca_cert"], "environment": {
             "PASSPORT_NATIVE_FLOW_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
             "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
@@ -87,7 +97,8 @@ def model(tmp_path: Path) -> dict:
         }},
         "issuance-native": {"networks": {"marty-network": {}},
             "volumes": grant_volumes("issuance_credential", "issuance_canvas",
-                                     "issuance_readiness", "issuance_passport"),
+                                     "issuance_readiness", "issuance_passport",
+                                     token="didcomm_issuance"),
             "environment": {
             "PASSPORT_NATIVE_HTTP_ENABLED": "true",
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
@@ -105,9 +116,11 @@ def model(tmp_path: Path) -> dict:
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
         }, "secrets": ["passport_physical_provider_api_key",
-                        "dev_integration_secret_ca"]},
+                        "dev_integration_secret_ca", "workload_identity_ca_cert",
+                        "issuance_workload_server_cert", "issuance_tls_kms_token",
+                        "openbao_tls_ca_cert"]},
         "signing-keys": {"networks": {"marty-network": {}},
-            "volumes": grant_volumes("verify"), "environment": {
+            "volumes": grant_volumes("verify", token="signing_keys"), "environment": {
             "ENVIRONMENT": "beta",
             "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
             "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY": DSC,
@@ -115,10 +128,18 @@ def model(tmp_path: Path) -> dict:
             "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING,
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
                 "/run/secrets/dev_integration_secret_server_cert",
-            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
-                "/run/secrets/dev_integration_secret_server_key",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR":
+                "https://openbao.example.invalid:8200",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE":
+                "/run/secrets/openbao_tls_ca_cert",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE":
+                "/run/secrets/signing_keys_tls_kms_token",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME":
+                "workload-tls-signing-keys-server",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION": "1",
         }, "secrets": ["dev_integration_secret_server_cert",
-                       "dev_integration_secret_server_key"]},
+                       "dev_integration_secret_ca", "openbao_tls_ca_cert",
+                       "signing_keys_tls_kms_token"]},
         "openbao": {"networks": {"marty-network": {},
                                   "passport-provider-signing": {}}},
         "passport-callback-signer-supported": {"image": IMAGE,
@@ -131,9 +152,11 @@ def model(tmp_path: Path) -> dict:
                     "/run/secrets/passport_callback_signer_api_key",
                 "PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE":
                     "/run/secrets/passport_callback_signer_bao_token",
-                "BAO_ADDR": "http://openbao:8200",
+                "BAO_ADDR": "https://openbao:8200",
+                "BAO_CACERT": "/run/secrets/openbao_tls_ca_cert",
             }, "secrets": ["passport_callback_signer_api_key",
-                            "passport_callback_signer_bao_token"]},
+                            "passport_callback_signer_bao_token",
+                            "openbao_tls_ca_cert"]},
         "passport-provider-ingress": {"image": IMAGE,
             "networks": {"marty-network": {}, "passport-provider-signing": {}},
             "environment": {
@@ -149,6 +172,10 @@ def model(tmp_path: Path) -> dict:
             }, "secrets": ["passport_callback_signer_api_key",
                             "marty_db_password"]},
     }}
+    for name in ("openbao_public_ca", "openbao_didcomm_issuance_token",
+                 "openbao_signing_keys_token"):
+        result["volumes"][name] = {"name": f"elevenid-beta_{name}"}
+    return result
 
 
 def validate(candidate: dict) -> None:
@@ -274,6 +301,12 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
         PERSONALIZATION_BUREAU_API_KEY="raw-secret"),
     lambda candidate: candidate["services"]["passport-callback-signer-supported"][
         "environment"].update(BAO_TOKEN="dev-root-token"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].update(BAO_ADDR="http://openbao:8200"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].pop("BAO_CACERT"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "secrets"].remove("openbao_tls_ca_cert"),
     lambda candidate: candidate["services"]["passport-provider-ingress"]["environment"].update(
         PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="other-profile"),
     lambda candidate: candidate["services"]["passport-provider-ingress"].update(
@@ -407,6 +440,10 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "MARTY_NETWORK_NAME": "elevenid-beta-network",
         "MARTY_DB_PASSWORD": "beta-physical-secret-" + "3" * 40,
         "MARTY_SERVICES_IMAGE": IMAGE,
+        "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "c" * 64,
+        "KEYCLOAK_KMS_IMAGE_DIGEST": "sha256:" + "c" * 64,
+        "KEYCLOAK_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "KEYCLOAK_KMS_KEY_VERSION": "1",
         "MARTY_ISSUANCE_IMAGE": IMAGE,
         "MARTY_DOCS_IMAGE": "sha256:" + "a" * 64,
         "GRPC_SERVICE_TOKEN": GRPC,
@@ -425,28 +462,100 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "MARTY_ISO18013_URI",
     )
     required_names = (
-        "FLOW_WEBHOOK_SECRET", "FLOW_WORKLOAD_SERVER_KEY_FILE",
-        "VERIFICATION_WORKLOAD_CLIENT_KEY_FILE", "ISSUANCE_API_KEY",
-        "FLOW_APPLICATION_EVENT_HMAC_KEY", "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+        "FLOW_WEBHOOK_SECRET", "FLOW_SERVER_TLS_KMS_TOKEN_FILE",
+        "VERIFICATION_TLS_KMS_TOKEN_FILE", "ISSUANCE_API_KEY",
+        "FLOW_APPLICATION_EVENT_HMAC_KEY",
         "REDIS_PASSWORD", "FLOW_WORKLOAD_CLIENT_CERT_FILE", "PUBLIC_DOMAIN",
-        "PP_WORKLOAD_SERVER_KEY_FILE", "VERIFICATION_GOVERNANCE_JSON",
+        "PP_TLS_KMS_TOKEN_FILE", "OPENBAO_TLS_CA_CERT_FILE", "VERIFICATION_GOVERNANCE_JSON",
         "PUBLIC_API_URL", "PP_WORKLOAD_SERVER_CERT_FILE",
-        "APPLICANT_WORKLOAD_CLIENT_CERT_FILE", "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
-        "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE", "MARTY_ORG_ID",
+        "MARTY_ORG_ID",
         "MARTY_ISSUER_DID", "FLOW_WORKLOAD_SERVER_CERT_FILE",
         "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
-        "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
-        "APPLICANT_WORKLOAD_CLIENT_KEY_FILE", "FLOW_WORKLOAD_CLIENT_KEY_FILE",
-        "AUTH_WORKLOAD_CLIENT_KEY_FILE", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
+        "FLOW_CLIENT_TLS_KMS_TOKEN_FILE",
+        "AUTH_TLS_KMS_TOKEN_FILE", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
         "AUTH_WORKLOAD_CLIENT_CERT_FILE",
+        "AUTH_WORKLOAD_SERVER_CERT_FILE", "AUTH_SERVER_TLS_KMS_TOKEN_FILE",
+        "GATEWAY_WORKLOAD_CLIENT_CERT_FILE", "GATEWAY_TLS_KMS_TOKEN_FILE",
+        "ISSUANCE_WORKLOAD_SERVER_CERT_FILE", "ISSUANCE_TLS_KMS_TOKEN_FILE",
+        "ENVOY_ISSUANCE_CLIENT_CERT_FILE", "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
+        "DEV_INTEGRATION_SECRET_CA_FILE",
+        "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+        "SIGNING_KEYS_TLS_KMS_TOKEN_FILE",
+        "ORG_WORKLOAD_SERVER_CERT_FILE", "ORG_TLS_KMS_TOKEN_FILE",
+        "ES_WORKLOAD_SERVER_CERT_FILE", "ES_TLS_KMS_TOKEN_FILE",
+        "RP_WORKLOAD_SERVER_CERT_FILE", "RP_TLS_KMS_TOKEN_FILE",
+        "CT_WORKLOAD_SERVER_CERT_FILE", "CT_TLS_KMS_TOKEN_FILE",
+        "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+        "COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE",
+        "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+        "DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE",
+        "KEYCLOAK_SIGNING_KMS_TOKEN_FILE", "KEYCLOAK_MASTER_RS256_CERT_FILE",
+        "KEYCLOAK_11ID_RS256_CERT_FILE", "KEYCLOAK_MASTER_COOKIE_TOKEN_FILE",
+        "KEYCLOAK_MASTER_CIBA_TOKEN_FILE", "KEYCLOAK_11ID_COOKIE_TOKEN_FILE",
+        "KEYCLOAK_11ID_CIBA_TOKEN_FILE",
         "TOKEN_HMAC_KEY", "CORS_ORIGINS",
     )
     env.update({name: "sha256:" + "a" * 64 for name in digest_names})
     env.update({name: "synthetic-value" for name in (*uri_names, *required_names)})
+    env.update({
+        "PP_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "PP_TLS_KMS_KEY_NAME": "workload-tls-presentation-policy-server",
+        "PP_TLS_KMS_KEY_VERSION": "1",
+        "AUTH_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "AUTH_TLS_KMS_KEY_NAME": "workload-tls-auth-client",
+        "AUTH_TLS_KMS_KEY_VERSION": "1",
+        "AUTH_SERVER_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "AUTH_SERVER_TLS_KMS_KEY_NAME": "workload-tls-auth-server",
+        "AUTH_SERVER_TLS_KMS_KEY_VERSION": "1",
+        "GATEWAY_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "GATEWAY_TLS_KMS_KEY_NAME": "workload-tls-gateway-auth-client",
+        "GATEWAY_TLS_KMS_KEY_VERSION": "1",
+        "ISSUANCE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "ISSUANCE_TLS_KMS_KEY_NAME": "workload-tls-issuance-server",
+        "ISSUANCE_TLS_KMS_KEY_VERSION": "1",
+        "ENVOY_ISSUANCE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "ENVOY_ISSUANCE_TLS_KMS_KEY_NAME": "workload-tls-envoy-issuance-client",
+        "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION": "1",
+        "VERIFICATION_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "VERIFICATION_TLS_KMS_KEY_NAME": "workload-tls-verification-client",
+        "VERIFICATION_TLS_KMS_KEY_VERSION": "1",
+        "FLOW_CLIENT_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "FLOW_CLIENT_TLS_KMS_KEY_NAME": "workload-tls-flow-client",
+        "FLOW_CLIENT_TLS_KMS_KEY_VERSION": "1",
+        "FLOW_SERVER_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "FLOW_SERVER_TLS_KMS_KEY_NAME": "workload-tls-flow-server",
+        "FLOW_SERVER_TLS_KMS_KEY_VERSION": "1",
+        "SIGNING_KEYS_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "SIGNING_KEYS_TLS_KMS_KEY_NAME": "workload-tls-signing-keys-server",
+        "SIGNING_KEYS_TLS_KMS_KEY_VERSION": "1",
+        "ORG_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "ORG_TLS_KMS_KEY_NAME": "workload-tls-organization-server",
+        "ORG_TLS_KMS_KEY_VERSION": "1",
+        "ES_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "ES_TLS_KMS_KEY_NAME": "workload-tls-event-stream-server",
+        "ES_TLS_KMS_KEY_VERSION": "1",
+        "RP_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "RP_TLS_KMS_KEY_NAME": "workload-tls-revocation-profile-server",
+        "RP_TLS_KMS_KEY_VERSION": "1",
+        "CT_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "CT_TLS_KMS_KEY_NAME": "workload-tls-credential-template-server",
+        "CT_TLS_KMS_KEY_VERSION": "1",
+        "COMPLIANCE_PROFILE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME": "workload-tls-compliance-profile-client",
+        "COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION": "1",
+        "DEPLOYMENT_PROFILE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME": "workload-tls-deployment-profile-client",
+        "DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION": "1",
+    })
     synthetic_file = tmp_path / "synthetic-workload-file"
     synthetic_file.write_text("synthetic-workload-value", encoding="utf-8")
     env.update({name: str(synthetic_file) for name in required_names
                 if name.endswith("_FILE")})
+    for name in required_names:
+        if name.startswith("KEYCLOAK_") and name.endswith("_FILE"):
+            path = tmp_path / name.lower()
+            path.write_text(f"synthetic-distinct-{name}", encoding="utf-8")
+            env[name] = str(path)
     files = [
         "docker-compose.base.yml", "docker-compose.beta.yml",
         "docker-compose.profile.dev.yml", "docker-compose.profile.tunnel.yml",
@@ -461,6 +570,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
                             timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     rendered = json.loads(result.stdout)
+    validate_keycloak_kms(rendered)
     registry = {"schema": "marty.passport-beta-physical-provider-allowlist/v1",
                 "status": "approved", "providers": [{
                     "endpoint": env["PASSPORT_PHYSICAL_PROVIDER_URL"],

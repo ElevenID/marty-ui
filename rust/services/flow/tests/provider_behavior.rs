@@ -2,12 +2,10 @@ use std::{collections::BTreeMap, collections::BTreeSet, path::PathBuf, sync::Arc
 
 use async_trait::async_trait;
 use marty_flow::{
-    FlowGrpcChannelFactories, FlowProviderRegistry, FlowServiceConfig, SigningIdentity,
-    REQUIRED_FLOW_PROVIDERS,
+    FlowGrpcChannelFactories, FlowProviderRegistry, FlowServiceConfig, FlowWorkloadChannelFactory,
+    SigningIdentity, REQUIRED_FLOW_PROVIDERS,
 };
-use mmf_platform::{
-    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-};
+use mmf_platform::{GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial};
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -252,10 +250,10 @@ async fn flow_grpc_clients_consume_only_the_shared_mmf_channel_factory() {
     }
 
     let clients = marty_flow::FlowGrpcChannelFactories {
-        organization: factory("http://organization:50051"),
-        credential_template: factory("http://credential-template:50052"),
-        presentation_policy: factory("http://presentation-policy:50053"),
-        issuance: factory("http://issuance:50054"),
+        organization: factory("http://organization:50051").into(),
+        credential_template: factory("http://credential-template:50052").into(),
+        presentation_policy: factory("http://presentation-policy:50053").into(),
+        issuance: factory("http://issuance:50054").into(),
     }
     .connect_lazy()
     .unwrap();
@@ -263,39 +261,7 @@ async fn flow_grpc_clients_consume_only_the_shared_mmf_channel_factory() {
 }
 
 #[test]
-fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
-    let directory = std::env::temp_dir().join(format!("flow-grpc-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&directory).unwrap();
-    let ca = directory.join("ca.pem");
-    let certificate = directory.join("client.pem");
-    let key = directory.join("client-key.pem");
-    let server_certificate = directory.join("server.pem");
-    let server_key = directory.join("server-key.pem");
-    std::fs::write(
-        &ca,
-        "-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &certificate,
-        "-----BEGIN CERTIFICATE-----\nCLIENT\n-----END CERTIFICATE-----\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &key,
-        "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &server_certificate,
-        "-----BEGIN CERTIFICATE-----\nSERVER\n-----END CERTIFICATE-----\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &server_key,
-        "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n",
-    )
-    .unwrap();
+fn configured_factories_apply_workload_mtls_to_policy_and_issuance() {
     let config = FlowServiceConfig::from_values([
         ("ENVIRONMENT".into(), "beta".into()),
         ("PUBLIC_BASE_URL".into(), "https://issuer.example".into()),
@@ -305,10 +271,19 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         ),
         ("DATABASE_URL".into(), "postgresql://db/flow".into()),
         ("REDIS_URL".into(), "redis://redis".into()),
-        ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
-        ("CT_GRPC_TARGET".into(), "credential-template:9003".into()),
-        ("PP_GRPC_TARGET".into(), "presentation-policy:9009".into()),
-        ("ISSUANCE_GRPC_TARGET".into(), "issuance:9005".into()),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        (
+            "CT_GRPC_TARGET".into(),
+            "https://credential-template:9003".into(),
+        ),
+        (
+            "PP_GRPC_TARGET".into(),
+            "https://presentation-policy:9009".into(),
+        ),
+        (
+            "ISSUANCE_GRPC_TARGET".into(),
+            "https://issuance-native:9005".into(),
+        ),
         (
             "SIGNING_KEYS_INTERNAL_URL".into(),
             "http://gateway:8000".into(),
@@ -336,48 +311,71 @@ fn configured_factories_apply_workload_mtls_only_to_the_policy_provider() {
         ("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(32)),
         ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
-        ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+        ("GRPC_INSECURE_ALLOWED".into(), "false".into()),
+        ("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into()),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "server.pem".into()),
+        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "workload-ca.pem".into()),
         (
-            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
-            certificate.to_string_lossy().into_owned(),
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR".into(),
+            "https://bao:8200".into(),
         ),
         (
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
-            key.to_string_lossy().into_owned(),
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT".into(),
+            "bao-ca.pem".into(),
         ),
         (
-            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
-            server_certificate.to_string_lossy().into_owned(),
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE".into(),
+            "client-token".into(),
         ),
         (
-            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
-            server_key.to_string_lossy().into_owned(),
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME".into(),
+            "flow-client".into(),
         ),
         (
-            "GRPC_WORKLOAD_TLS_CA_CERT".into(),
-            ca.to_string_lossy().into_owned(),
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "bao-ca.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "server-token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "flow-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
         ),
     ])
     .unwrap();
     let factories = FlowGrpcChannelFactories::from_config(&config).unwrap();
-    assert_eq!(
-        factories.presentation_policy.config().security,
-        GrpcTransportSecurity::MutualTls
-    );
-    assert_eq!(
-        factories.presentation_policy.config().trust,
-        GrpcTrustMode::CustomCa
-    );
-    assert_eq!(
-        factories.presentation_policy.config().target,
-        "https://presentation-policy:9009"
-    );
-    for factory in [
-        &factories.organization,
-        &factories.credential_template,
-        &factories.issuance,
-    ] {
-        assert_eq!(factory.config().security, GrpcTransportSecurity::Plaintext);
-    }
-    std::fs::remove_dir_all(directory).unwrap();
+    assert!(matches!(
+        factories.presentation_policy,
+        FlowWorkloadChannelFactory::Keyless { ref target, .. }
+            if target == "https://presentation-policy:9009"
+    ));
+    assert!(matches!(
+        factories.organization,
+        FlowWorkloadChannelFactory::ServerTls { ref target, .. }
+            if target == "https://organization:9002"
+    ));
+    assert!(matches!(
+        factories.credential_template,
+        FlowWorkloadChannelFactory::ServerTls { ref target, .. }
+            if target == "https://credential-template:9003"
+    ));
+    assert!(matches!(
+        factories.issuance,
+        FlowWorkloadChannelFactory::Keyless { ref target, .. }
+            if target == "https://issuance-native:9005"
+    ));
 }

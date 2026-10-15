@@ -36,9 +36,30 @@ fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
     production.extend([
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        ("ORG_GRPC_CA_CERT".into(), "/ca.pem".into()),
         ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
-        ("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into()),
         ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "/bao-ca.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "/token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "policy-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
     ]);
     let config = PresentationPolicyServiceConfig::from_values(production).unwrap();
     assert_eq!(
@@ -69,7 +90,9 @@ fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
 
 #[test]
 fn deployed_configuration_requires_secrets_and_complete_mtls() {
-    let beta = values("beta");
+    let mut beta = values("beta");
+    beta.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+    beta.insert("ORG_GRPC_CA_CERT".into(), "/ca.pem".into());
     assert_eq!(
         PresentationPolicyServiceConfig::from_values(beta).unwrap_err(),
         PresentationPolicyConfigError::Missing {
@@ -80,6 +103,20 @@ fn deployed_configuration_requires_secrets_and_complete_mtls() {
     let mut configured = values("beta");
     configured.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
     configured.insert("ISSUANCE_API_KEY".into(), "i".repeat(32));
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
+        PresentationPolicyConfigError::Missing {
+            name: "ORG_GRPC_CA_CERT"
+        }
+    );
+    configured.insert("ORG_GRPC_CA_CERT".into(), "/ca.pem".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
+        PresentationPolicyConfigError::Invalid {
+            name: "ORG_GRPC_TARGET"
+        }
+    );
+    configured.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
     assert_eq!(
         PresentationPolicyServiceConfig::from_values(configured.clone()).unwrap_err(),
         PresentationPolicyConfigError::Missing {
@@ -101,15 +138,48 @@ fn deployed_configuration_supports_dynamic_issuers_without_static_scope() {
     configured.extend([
         ("GRPC_SERVICE_TOKEN".into(), "s".repeat(32)),
         ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
+        ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+        ("ORG_GRPC_CA_CERT".into(), "/ca.pem".into()),
         ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "/cert.pem".into()),
-        ("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into()),
         ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/ca.pem".into()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+            "/bao-ca.pem".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+            "/token".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+            "policy-server".into(),
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+            "1".into(),
+        ),
     ]);
 
     let config = PresentationPolicyServiceConfig::from_values(configured).unwrap();
     assert_eq!(
         config.credential_status_url_template,
         "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
+    );
+}
+
+#[test]
+fn retired_server_private_key_file_is_rejected() {
+    let mut configured = values("development");
+    configured.insert("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "/key.pem".into());
+    assert_eq!(
+        PresentationPolicyServiceConfig::from_values(configured),
+        Err(PresentationPolicyConfigError::Invalid {
+            name: "GRPC_WORKLOAD_TLS_SERVER_KEY"
+        })
     );
 }
 

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/canvas-acceptance", "crates/canvas-demo-seed", "crates/canvas-sandbox", "crates/canvas-worker-acceptance", "crates/demo-vendor-seed", "crates/deployment-catalog", "crates/flow-acceptance", "crates/holder-key-reference", "crates/key-material-policy", "crates/oid4vp-contract", "crates/passport-auth", "crates/platform-clock", "crates/release-evidence", "crates/response-compat", "crates/schema-startup", "crates/service-acceptance", "crates/selfhost-acceptance", "crates/selfhost-bundle", "crates/signing-grant", "crates/spruce-metadata-probe", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
+members = ["crates/canvas-acceptance", "crates/canvas-demo-seed", "crates/canvas-sandbox", "crates/canvas-worker-acceptance", "crates/demo-vendor-seed", "crates/deployment-catalog", "crates/flow-acceptance", "crates/holder-key-reference", "crates/key-material-policy", "crates/keyless-grpc-bridge", "crates/oid4vp-contract", "crates/openbao-http", "crates/passport-auth", "crates/passport-keyless-edge", "crates/platform-clock", "crates/release-evidence", "crates/response-compat", "crates/schema-startup", "crates/service-acceptance", "crates/selfhost-acceptance", "crates/selfhost-bundle", "crates/signing-grant", "crates/spruce-metadata-probe", "services/applicant", "services/auth", "services/compliance-profile", "services/credential-template", "services/device-registration", "services/event-stream", "services/flow", "services/gateway", "services/issuance", "services/notification", "services/organization", "services/presentation-policy", "services/revocation-profile", "services/signing-keys", "services/trust-profile", "services/verification"]
 resolver = "2"
 
 [workspace.package]
@@ -46,15 +46,15 @@ marty-oid4vci = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-c
 marty-verification = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "f0819fa", default-features = false, features = ["kms-only"] }
 marty-canonical-digest = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "f0819fa" }
 marty-status = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "f0819fa" }
-mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8", default-features = false, features = ["cedar", "redis"] }
-mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8", features = ["postgres"] }
-mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
-mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "c55d323e6aa64cad4f49308792f1d21eaab0ebc8" }
+mmf-config = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-platform = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-core = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-data = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-runtime = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-security = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896", default-features = false, features = ["cedar", "redis"] }
+mmf-messaging = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896", features = ["postgres"] }
+mmf-push = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
+mmf-workflow = { git = "https://github.com/ElevenID/marty-microservices-framework", rev = "aa1f208335df6aa955b669511180dee6555d1896" }
 prost = "0.14"
 protoc-bin-vendored = "3"
 rand = "0.9"

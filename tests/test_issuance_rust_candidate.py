@@ -135,7 +135,8 @@ def test_issuance_executable_smoke_uses_an_isolated_migrated_database() -> None:
         "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/"
         "marty_issuance_executable_smoke_test"
     ) in workflow
-    assert executable.count('.env("DATABASE_URL", &database_url)') == 5
+    assert executable.count('.env("DATABASE_URL", &database_url)') == 6
+    assert "executable_serves_issuance_rpc_with_remote_key_mutual_tls" in executable
     assert "ISSUANCE_EXECUTABLE_SMOKE_DATABASE_URL" in executable
     assert "skipping executable smoke test" in executable
 
@@ -1036,9 +1037,13 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         "CANVAS_MIRROR_WORKER_RETRY_FAILED",
         "CANVAS_MIRROR_WORKER_RUN_ON_STARTUP",
         "CANVAS_PORTABLE_INTEGRATION_ENABLED",
-            "GRPC_INSECURE_ALLOWED",
-            "GRPC_TLS_CLIENT_CERT",
-            "GRPC_TLS_CLIENT_KEY",
+        "GRPC_INSECURE_ALLOWED",
+        "GRPC_TLS_CLIENT_CERT",
+        "GRPC_TLS_CLIENT_KMS_ADDR",
+        "GRPC_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_TLS_CLIENT_KMS_KEY_VERSION",
+        "GRPC_TLS_CLIENT_KMS_TOKEN_FILE",
     ]
     frozen_environment_variables = set(
         surface["configuration"]["environment_variables"]

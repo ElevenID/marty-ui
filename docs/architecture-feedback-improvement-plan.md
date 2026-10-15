@@ -4356,19 +4356,25 @@ compile boundary. The published-worker group took about 501 seconds within
 the concurrent database phase; changing its real-time lifecycle intervals
 without separate evidence would risk test guarantees.
 
-October 15 A0 guard closure: [#1354](https://github.com/ElevenID/marty-ui/pull/1354)
-applied the positive test-summary guard to the Signing Keys private-material
-library case and five-case passport reconciliation group. Independent review,
-exact-head CI, and [protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38811347250)
-passed; it merged as `f39b0e6ea`. The selected cases and backing services did
-not change. This prevents zero-selected false greens, not a speedup.
+October 15 A0 follow-up: [#1354](https://github.com/ElevenID/marty-ui/pull/1354)
+reused the positive-summary guard for the Signing Keys private-material case
+and five-case passport reconciliation group in their existing contracts-lane
+steps. Case filters, backing services, and protected gates were unchanged.
+Independent review, 171 focused local policy tests, exact-head CI with both
+positive execution rows, and [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38811347250) passed;
+#1354 merged as `f39b0e6ea`. This closes those two false-green paths, not the
+full A0 obligation inventory, and claims no speedup.
 
 The remaining direct Flow PostgreSQL contract executable also ran without a
-positive test-summary guard. The next A0 slice wraps its existing invocation
-in the same guard, retaining its serial position after the workspace suite,
-database URL, complete unfiltered case selection, and protected gates. Local
-policy tests and exact-head CI must confirm the change before merge. This is
-another coverage-integrity fix, not a measured speedup.
+positive test-summary guard. [#1355](https://github.com/ElevenID/marty-ui/pull/1355)
+wraps its existing invocation in the same guard, retaining its serial position
+after the workspace suite, database URL, complete unfiltered case selection,
+and protected gates. Twenty-three focused post-merge local tests, Ruff, and independent
+review passed. Exact-head [CI](https://github.com/ElevenID/marty-ui/actions/runs/38818521929)
+recorded one passing Flow PostgreSQL test and the positive execution marker;
+protected combined-head CI remains required before merge. This is another
+coverage-integrity fix, not a measured speedup.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.

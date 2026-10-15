@@ -25,6 +25,7 @@ env:
   SERVICES_IMAGE: ghcr.io/elevenid/marty-ui-oss/services
   MIGRATIONS_IMAGE: ghcr.io/elevenid/marty-ui-oss/migrations
   OPENBAO_DIDCOMM_IMAGE: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm
+  KEYCLOAK_IMAGE: ghcr.io/elevenid/marty-ui-oss/keycloak
 
 jobs:
   release-environment-preflight:
@@ -117,6 +118,7 @@ jobs:
           --image "$SERVICES_IMAGE"
           --image "$MIGRATIONS_IMAGE"
           --image "$OPENBAO_DIDCOMM_IMAGE"
+          --image "$KEYCLOAK_IMAGE"
 
       - name: Create the durable digest-first release claim
         env:
@@ -134,12 +136,14 @@ jobs:
           --image "services=$SERVICES_IMAGE"
           --image "migrations=$MIGRATIONS_IMAGE"
           --image "openbao_didcomm=$OPENBAO_DIDCOMM_IMAGE"
+          --image "keycloak=$KEYCLOAK_IMAGE"
           --tag-absent
           --release-absent
           --version-tag-absent ui=true
           --version-tag-absent services=true
           --version-tag-absent migrations=true
           --version-tag-absent openbao_didcomm=true
+          --version-tag-absent keycloak=true
           --output release-transaction.json
 
       - name: Upload immutable no-write release claim

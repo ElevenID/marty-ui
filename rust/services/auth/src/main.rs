@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc};
 
 use axum::middleware;
 use marty_auth::{
@@ -17,6 +17,7 @@ use marty_auth::{
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
@@ -60,11 +61,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
-    let auth_server = AuthServiceServer::new(AuthGrpcService::new(components.application));
-    let mut grpc_builder = Server::builder();
-    if let Some(tls) = workload_server_tls(&config)? {
-        grpc_builder = grpc_builder.tls_config(tls.server_tls_config())?;
-    }
+    let auth_server = AuthServiceServer::new(AuthGrpcService::new(
+        components.application,
+        Some(config.grpc_service_token.clone()),
+        matches!(config.environment.as_str(), "production" | "beta"),
+    )?);
+    let tls_acceptor = workload_server_tls(&config).await?;
 
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
     let mut http_shutdown = listener_shutdown_rx.clone();
@@ -72,12 +74,31 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let http = http.with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = grpc_builder
+    let router = Server::builder()
         .add_service(health_service)
-        .add_service(auth_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+        .add_service(auth_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                let acceptor = acceptor.clone();
+                async move {
+                    match connection {
+                        Ok(stream) => acceptor.accept(stream).await,
+                        Err(error) => Err(error),
+                    }
+                }
+            });
+            Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
+                wait_for_shutdown(&mut grpc_shutdown).await;
+            }))
+        } else {
+            Box::pin(
+                router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
 
     let (worker_shutdown_tx, worker_shutdown_rx) = watch::channel(false);
     let outbox_worker = tokio::spawn(run_outbox_dispatcher(

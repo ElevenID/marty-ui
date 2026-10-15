@@ -2,7 +2,7 @@ name: marty-selfhost-prod
 
 x-runtime-env: &runtime-env
   ENVIRONMENT: production
-  GRPC_INSECURE_ALLOWED: ${GRPC_INSECURE_ALLOWED:-true}
+  GRPC_INSECURE_ALLOWED: "false"
   MARTY_ORG_ID: ${MARTY_ORG_ID:-00000000-0000-0000-0000-000000000001}
   MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
   MARTY_ORG_DOMAIN: ${MARTY_ORG_DOMAIN:-marty.localhost}
@@ -12,7 +12,7 @@ x-runtime-env: &runtime-env
   ISSUER_BASE_URL: ${ISSUER_BASE_URL:-https://localhost}
   MARTY_ISSUER_BASE_URL: ${MARTY_ISSUER_BASE_URL:-https://localhost}
   ORGANIZATION_CREATION_ENABLED: ${ORGANIZATION_CREATION_ENABLED:-false}
-  ES_GRPC_TARGET: event-stream:9015
+  ES_GRPC_TARGET: https://event-stream:9015
 
 x-database-url-template: &database-url-template postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
 x-database-url-sync-template: &database-url-sync-template postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty
@@ -38,8 +38,10 @@ x-issuance-application-env: &issuance-application-env
   CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS: ${CANVAS_ISSUANCE_EVIDENCE_MAX_AGE_SECONDS:-900}
   ISSUANCE_OFFER_TTL_MINUTES: ${ISSUANCE_OFFER_TTL_MINUTES:-10080}
   ISSUANCE_AUTH_SESSION_TTL_MINUTES: ${ISSUANCE_AUTH_SESSION_TTL_MINUTES:-60}
-  ORG_GRPC_TARGET: organization:9002
-  CT_GRPC_TARGET: credential-template:9003
+  ORG_GRPC_TARGET: https://organization:9002
+  CT_GRPC_TARGET: https://credential-template:9003
+  RP_GRPC_TARGET: https://revocation-profile:9013
+  GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
   CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
   REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
   MARTY_DEFAULT_REVOCATION_PROFILE_ID: ${MARTY_DEFAULT_REVOCATION_PROFILE_ID:-70000000-0000-0000-0000-000000000001}
@@ -50,6 +52,7 @@ x-issuance-application-env: &issuance-application-env
   SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
   SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
   BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Issuance signing grants}
+  BAO_CACERT: /run/secrets/openbao_tls_ca_cert
   ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_credential_token
   ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_canvas_token
   ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_readiness_token
@@ -114,7 +117,7 @@ services:
     restart: unless-stopped
 
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
     entrypoint: ["/bin/sh", "/scripts/keycloak-selfhost-start.sh"]
     command:
       - start
@@ -145,12 +148,34 @@ services:
       GOOGLE_CLIENT_ID_FILE: /run/secrets/google_client_id
       GOOGLE_CLIENT_SECRET_FILE: /run/secrets/google_client_secret
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
+      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:?KEYCLOAK_KMS_ADDR must identify HTTPS OpenBao for Keycloak}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
+      BAO_TOKEN_FILE: /run/secrets/keycloak_signing_kms_token
+      MARTY_KEYCLOAK_RS256_CERT_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_TOKEN_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_MOUNT: didcomm
+      MARTY_KEYCLOAK_KMS_KEY_PREFIX: keycloak
+      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:?KEYCLOAK_KMS_KEY_VERSION must pin the remote signing key version}
     secrets:
       - keycloak_admin_password
       - keycloak_db_password
       - google_client_id
       - google_client_secret
       - marty_api_client_secret
+      - openbao_tls_ca_cert
+      - keycloak_signing_kms_token
+      - source: keycloak_master_rs256_cert
+        target: /run/secrets/keycloak-master-rs256.crt
+      - source: keycloak_11id_rs256_cert
+        target: /run/secrets/keycloak-11id-rs256.crt
+      - source: keycloak_master_cookie_token
+        target: /run/secrets/master-cookie.token
+      - source: keycloak_master_ciba_token
+        target: /run/secrets/master-ciba.token
+      - source: keycloak_11id_cookie_token
+        target: /run/secrets/11id-cookie.token
+      - source: keycloak_11id_ciba_token
+        target: /run/secrets/11id-ciba.token
     depends_on:
       postgres:
         condition: service_healthy
@@ -168,7 +193,7 @@ services:
     restart: unless-stopped
 
   keycloak-configurator:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ${MARTY_KEYCLOAK_KMS_IMAGE:?MARTY_KEYCLOAK_KMS_IMAGE must pin the remote-key image by digest}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
     environment:
       KC_URL: http://keycloak:8080
@@ -259,11 +284,14 @@ services:
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_bootstrap_token
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
     secrets:
       - marty_db_password
       - openbao_bootstrap_token
       - notification_openbao_token
+      - openbao_tls_ca_cert
     depends_on:
       revocation-profile-migrate:
         condition: service_completed_successfully
@@ -339,13 +367,25 @@ services:
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       CORS_ORIGINS: ${CORS_ORIGINS:?CORS_ORIGINS must be set}
-      AUTH_GRPC_TARGET: auth:9001
-      ORG_GRPC_TARGET: organization:9002
-      ES_GRPC_TARGET: event-stream:9015
+      AUTH_GRPC_TARGET: https://auth:9001
+      GRPC_INSECURE_ALLOWED: "false"
+      GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/gateway_workload_client_cert
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${GATEWAY_TLS_KMS_ADDR:?GATEWAY_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/gateway_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${GATEWAY_TLS_KMS_KEY_NAME:?GATEWAY_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${GATEWAY_TLS_KMS_KEY_VERSION:?GATEWAY_TLS_KMS_KEY_VERSION must be set}
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-300}
       BAO_ADDR: ${BAO_ADDR:-}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
@@ -360,6 +400,10 @@ services:
       - signing_keys_issuer_sign_key
       - grpc_service_token
       - device_registration_gateway_key
+      - workload_identity_ca_cert
+      - gateway_workload_client_cert
+      - gateway_tls_kms_token
+      - openbao_tls_ca_cert
     ports:
       - "127.0.0.1:${SELFHOST_GATEWAY_HOST_PORT:-18000}:8000"
     depends_on:
@@ -442,11 +486,22 @@ services:
       CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_DEEP_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE: ${CREDENTIAL_LOGIN_SPRUCEKIT_IOS_UNIVERSAL_LINK_TEMPLATE:-}
       CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE: ${CREDENTIAL_LOGIN_SPRUCEKIT_ANDROID_PACKAGE:-}
-      ORG_GRPC_TARGET: organization:9002
-      FLOW_GRPC_TARGET: flow:9011
+      ORG_GRPC_TARGET: https://organization:9002
+      FLOW_GRPC_TARGET: https://flow:9011
+      ES_GRPC_TARGET: https://event-stream:9015
       AUTH_GRPC_PORT: "9001"
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${AUTH_TLS_KMS_ADDR:?AUTH_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${AUTH_TLS_KMS_KEY_NAME:?AUTH_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${AUTH_TLS_KMS_KEY_VERSION:?AUTH_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/auth_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${AUTH_SERVER_TLS_KMS_ADDR:?AUTH_SERVER_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/auth_server_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${AUTH_SERVER_TLS_KMS_KEY_NAME:?AUTH_SERVER_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${AUTH_SERVER_TLS_KMS_KEY_VERSION:?AUTH_SERVER_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
     secrets:
@@ -454,7 +509,10 @@ services:
       - marty_db_password
       - grpc_service_token
       - auth_workload_client_cert
-      - auth_workload_client_key
+      - openbao_tls_ca_cert
+      - auth_tls_kms_token
+      - auth_workload_server_cert
+      - auth_server_tls_kms_token
       - workload_identity_ca_cert
       - flow_webhook_secret
     depends_on:
@@ -488,11 +546,22 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       ORG_GRPC_PORT: "9002"
-      ES_GRPC_TARGET: event-stream:9015
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/org_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ORG_TLS_KMS_ADDR:?ORG_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/org_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ORG_TLS_KMS_KEY_NAME:?ORG_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ORG_TLS_KMS_KEY_VERSION:?ORG_TLS_KMS_KEY_VERSION must be set}
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       MARTY_ORG_ADMIN_EMAIL: ${MARTY_ORG_ADMIN_EMAIL:-}
     secrets:
       - marty_db_password
       - grpc_service_token
+      - org_workload_server_cert
+      - openbao_tls_ca_cert
+      - org_tls_kms_token
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -517,7 +586,16 @@ services:
       CREDENTIAL_TEMPLATE_SERVICE_PORT: "8003"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      RP_GRPC_TARGET: https://revocation-profile:9013
+      RP_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/ct_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${CT_TLS_KMS_ADDR:?CT_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/ct_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${CT_TLS_KMS_KEY_NAME:?CT_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${CT_TLS_KMS_KEY_VERSION:?CT_TLS_KMS_KEY_VERSION must be set}
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       CT_GRPC_PORT: "9003"
@@ -525,6 +603,10 @@ services:
       - marty_db_password
       - issuance_api_key
       - grpc_service_token
+      - workload_identity_ca_cert
+      - ct_workload_server_cert
+      - openbao_tls_ca_cert
+      - ct_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -548,7 +630,8 @@ services:
       TRUST_PROFILE_SERVICE_PORT: "8004"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       DID_RESOLUTION_BASE_URL: http://gateway:8000
       DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
@@ -556,6 +639,7 @@ services:
       - marty_db_password
       - grpc_service_token
       - issuance_api_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -579,6 +663,7 @@ services:
       SERVICE_NAME: issuance_native
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_SCHEMA_STARTUP_MODE: validate
+      ISSUANCE_GRPC_ENABLED: "false"
       CANVAS_MIRROR_WORKER_ENABLED: "false"
       CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS: ${CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS:-}
       CANVAS_LTI_TOOL_ACTIVE_KID: ${CANVAS_LTI_TOOL_ACTIVE_KID:-}
@@ -590,6 +675,7 @@ services:
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
       DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      DIDCOMM_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
@@ -603,6 +689,7 @@ services:
       - canvas_credentials_shared_secret
       - grpc_service_token
       - didcomm_issuance_openbao_token
+      - openbao_tls_ca_cert
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
       - sign_grant_mint_issuance_readiness_token
@@ -638,13 +725,21 @@ services:
       SERVICE_NAME: issuance_native
       DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}
       DIDCOMM_KMS_TOKEN_FILE: /run/secrets/didcomm_issuance_openbao_token
+      DIDCOMM_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
       INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
       INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUANCE_GRPC_ENABLED: "true"
-      RP_GRPC_TARGET: revocation-profile:9013
+      RP_GRPC_TARGET: https://revocation-profile:9013
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/issuance_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       CANVAS_MIRROR_WORKER_ENABLED: ${CANVAS_MIRROR_WORKER_ENABLED:-false}
       CANVAS_MIRROR_WORKER_ORGANIZATION_ID: ${CANVAS_MIRROR_WORKER_ORGANIZATION_ID:-}
       CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS: ${CANVAS_MIRROR_PUBLISH_INTERVAL_SECONDS:-300}
@@ -680,6 +775,9 @@ services:
       - sign_grant_mint_issuance_readiness_token
       - sign_grant_mint_issuance_passport_token
       - workload_identity_ca_cert
+      - issuance_workload_server_cert
+      - openbao_tls_ca_cert
+      - issuance_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -713,6 +811,7 @@ services:
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE: /run/secrets/signing_keys_integration_secret_key
       BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Canvas signing grants}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_issuance_canvas_token
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
@@ -742,6 +841,7 @@ services:
       - signing_keys_integration_secret_key
       - token_hmac_key
       - sign_grant_mint_issuance_canvas_token
+      - openbao_tls_ca_cert
       - workload_identity_ca_cert
     depends_on:
       db-migrate:
@@ -770,20 +870,15 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
-      ORG_GRPC_TARGET: organization:9002
-      FLOW_GRPC_TARGET: flow:9011
-      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/applicant_workload_client_key
-      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_APPLICATION_EVENT_HMAC_KEY_FILE: /run/secrets/flow_application_event_hmac_key
     secrets:
       - marty_db_password
       - grpc_service_token
-      - applicant_workload_client_cert
-      - applicant_workload_client_key
-      - workload_identity_ca_cert
       - notification_applicant_event_token
       - flow_application_event_hmac_key
+      - workload_identity_ca_cert
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/applicant
@@ -820,6 +915,7 @@ services:
       NOTIFICATION_APPLICANT_EVENT_TOKEN_FILE: /run/secrets/notification_applicant_event_token
       BAO_ADDR: ${BAO_ADDR:-}
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
     secrets:
       - marty_db_password
       - grpc_service_token
@@ -827,6 +923,7 @@ services:
       - notification_webhook_secret
       - notification_applicant_event_token
       - notification_openbao_token
+      - openbao_tls_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -847,20 +944,26 @@ services:
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       <<: *runtime-env
+      GRPC_INSECURE_ALLOWED: "false"
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       COMPLIANCE_PROFILE_SERVICE_PORT: "8008"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/compliance_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${COMPLIANCE_PROFILE_TLS_KMS_ADDR:?COMPLIANCE_PROFILE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/compliance_profile_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME:?COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION:?COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       RUST_LOG: ${COMPLIANCE_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
       - compliance_profile_workload_client_cert
-      - compliance_profile_workload_client_key
+      - openbao_tls_ca_cert
+      - compliance_profile_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
       db-migrate:
@@ -882,12 +985,17 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${PP_TLS_KMS_ADDR:?PP_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PP_TLS_KMS_KEY_NAME:?PP_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${PP_TLS_KMS_KEY_VERSION:?PP_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       PRESENTATION_POLICY_SERVICE_PORT: "8009"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       PP_GRPC_PORT: "9009"
       DID_RESOLUTION_BASE_URL: http://gateway:8000
       DID_PUBLIC_FALLBACK_ENABLED: ${DID_PUBLIC_FALLBACK_ENABLED:-false}
@@ -901,7 +1009,8 @@ services:
       - marty_db_password
       - grpc_service_token
       - pp_workload_server_cert
-      - pp_workload_server_key
+      - openbao_tls_ca_cert
+      - pp_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
       db-migrate:
@@ -923,20 +1032,26 @@ services:
         MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
     environment:
       <<: *runtime-env
+      GRPC_INSECURE_ALLOWED: "false"
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       DEPLOYMENT_PROFILE_SERVICE_PORT: "8010"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/deployment_profile_workload_client_key
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${DEPLOYMENT_PROFILE_TLS_KMS_ADDR:?DEPLOYMENT_PROFILE_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/deployment_profile_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       RUST_LOG: ${DEPLOYMENT_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
       - deployment_profile_workload_client_cert
-      - deployment_profile_workload_client_key
+      - openbao_tls_ca_cert
+      - deployment_profile_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
       db-migrate:
@@ -958,7 +1073,11 @@ services:
       <<: *runtime-env
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/signing_keys_workload_server_key
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: ${SIGNING_KEYS_TLS_KMS_ADDR:?SIGNING_KEYS_TLS_KMS_ADDR must be a trusted HTTPS OpenBao origin}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: /run/secrets/signing_keys_tls_kms_token
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: ${SIGNING_KEYS_TLS_KMS_KEY_NAME:?SIGNING_KEYS_TLS_KMS_KEY_NAME must identify the non-exportable TLS signer}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: ${SIGNING_KEYS_TLS_KMS_KEY_VERSION:?SIGNING_KEYS_TLS_KMS_KEY_VERSION must pin the TLS signer version}
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE: /run/secrets/signing_keys_service_sign_gateway_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
@@ -968,6 +1087,7 @@ services:
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       HAIP_KMS_TOKEN_FILE: /run/secrets/haip_kms_token
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /run/secrets/sign_grant_verify_token
       RUST_LOG: info
@@ -981,16 +1101,18 @@ services:
       - haip_kms_token
       - sign_grant_verify_token
       - signing_keys_workload_server_cert
-      - signing_keys_workload_server_key
+      - workload_identity_ca_cert
+      - openbao_tls_ca_cert
+      - signing_keys_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8017/health >/dev/null && curl -fsS --cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health >/dev/null"]
       interval: 10s
-      timeout: 5s
+      timeout: 8s
       retries: 3
     restart: unless-stopped
 
@@ -1002,20 +1124,29 @@ services:
         SERVICE_NAME: flow
     environment:
       <<: *runtime-env
+      GRPC_INSECURE_ALLOWED: "false"
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:?FLOW_CLIENT_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:?FLOW_CLIENT_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:?FLOW_CLIENT_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${FLOW_SERVER_TLS_KMS_ADDR:?FLOW_SERVER_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${FLOW_SERVER_TLS_KMS_KEY_NAME:?FLOW_SERVER_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:?FLOW_SERVER_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       FLOW_SERVICE_PORT: "8011"
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
-      ORG_GRPC_TARGET: organization:9002
-      PP_GRPC_TARGET: presentation-policy:9009
-      CT_GRPC_TARGET: credential-template:9003
-      ISSUANCE_GRPC_TARGET: issuance-native:9005
+      ORG_GRPC_TARGET: https://organization:9002
+      PP_GRPC_TARGET: https://presentation-policy:9009
+      CT_GRPC_TARGET: https://credential-template:9003
+      ISSUANCE_GRPC_TARGET: https://issuance-native:9005
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
@@ -1026,6 +1157,7 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key
       SIGNING_KEYS_ISSUER_SIGN_KEY_FILE: /run/secrets/signing_keys_issuer_sign_key
       BAO_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for Flow signing grants}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /run/secrets/sign_grant_mint_flow_wallet_token
       CREDENTIAL_TEMPLATE_SERVICE_URL: http://credential-template:8003
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
@@ -1043,9 +1175,10 @@ services:
       - marty_db_password
       - grpc_service_token
       - flow_workload_client_cert
-      - flow_workload_client_key
+      - openbao_tls_ca_cert
+      - flow_client_tls_kms_token
       - flow_workload_server_cert
-      - flow_workload_server_key
+      - flow_server_tls_kms_token
       - workload_identity_ca_cert
       - flow_webhook_secret
       - flow_application_event_hmac_key
@@ -1080,12 +1213,16 @@ services:
       <<: *runtime-env
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${VERIFICATION_TLS_KMS_ADDR:?VERIFICATION_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${VERIFICATION_TLS_KMS_KEY_NAME:?VERIFICATION_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${VERIFICATION_TLS_KMS_KEY_VERSION:?VERIFICATION_TLS_KMS_KEY_VERSION must be set}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       VERIFICATION_SERVICE_PORT: "8012"
-      ORG_GRPC_TARGET: organization:9002
-      CT_GRPC_TARGET: credential-template:9003
-      PP_GRPC_TARGET: presentation-policy:9009
+      ORG_GRPC_TARGET: https://organization:9002
+      CT_GRPC_TARGET: https://credential-template:9003
+      PP_GRPC_TARGET: https://presentation-policy:9009
       VERIF_GRPC_PORT: "9017"
       # The inbound proto carries no authenticated tenant principal and has no
       # production callers. Keep this ingress closed until that contract exists.
@@ -1095,7 +1232,8 @@ services:
     secrets:
       - grpc_service_token
       - verification_workload_client_cert
-      - verification_workload_client_key
+      - openbao_tls_ca_cert
+      - verification_tls_kms_token
       - workload_identity_ca_cert
     depends_on:
       credential-template:
@@ -1125,13 +1263,24 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       REDIS_URL: redis://redis:6379/4
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/rp_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${RP_TLS_KMS_ADDR:?RP_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/rp_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${RP_TLS_KMS_KEY_NAME:?RP_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${RP_TLS_KMS_KEY_VERSION:?RP_TLS_KMS_KEY_VERSION must be set}
       RP_GRPC_ENABLED: "true"
       RP_GRPC_PORT: "9013"
       RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
     secrets:
       - marty_db_password
       - grpc_service_token
+      - workload_identity_ca_cert
+      - rp_workload_server_cert
+      - openbao_tls_ca_cert
+      - rp_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1161,12 +1310,14 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       REDIS_URL: redis://redis:6379/5
-      ORG_GRPC_TARGET: organization:9002
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
       - marty_db_password
       - grpc_service_token
       - device_registration_gateway_key
       - device_registration_signing_keys_key
+      - workload_identity_ca_cert
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1190,8 +1341,17 @@ services:
       GRPC_SERVICE_TOKEN_FILE: /run/secrets/grpc_service_token
       EVENT_STREAM_GRPC_ENABLED: "true"
       EVENT_STREAM_GRPC_PORT: "9015"
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/es_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ES_TLS_KMS_ADDR:?ES_TLS_KMS_ADDR must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/es_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ES_TLS_KMS_KEY_NAME:?ES_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ES_TLS_KMS_KEY_VERSION:?ES_TLS_KMS_KEY_VERSION must be set}
     secrets:
       - grpc_service_token
+      - es_workload_server_cert
+      - openbao_tls_ca_cert
+      - es_tls_kms_token
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8015/health"]
       interval: 30s
@@ -1323,6 +1483,20 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/postgres_password
   keycloak_db_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_db_password
+  keycloak_signing_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_signing_kms_token
+  keycloak_master_rs256_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_master_rs256_cert
+  keycloak_11id_rs256_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_11id_rs256_cert
+  keycloak_master_cookie_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_master_cookie_token
+  keycloak_master_ciba_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_master_ciba_token
+  keycloak_11id_cookie_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_11id_cookie_token
+  keycloak_11id_ciba_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/keycloak_11id_ciba_token
   marty_db_password:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/marty_db_password
   keycloak_admin_password:
@@ -1349,42 +1523,64 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_applicant_event_token
   workload_identity_ca_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/workload_identity_ca_cert
+  org_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/org_workload_server_cert
+  org_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/org_tls_kms_token
+  es_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/es_workload_server_cert
+  es_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/es_tls_kms_token
+  rp_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/rp_workload_server_cert
+  rp_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/rp_tls_kms_token
+  ct_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/ct_workload_server_cert
+  ct_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/ct_tls_kms_token
   signing_keys_workload_server_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_cert
-  signing_keys_workload_server_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_workload_server_key
   pp_workload_server_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_cert
-  pp_workload_server_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_key
+  pp_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_tls_kms_token
   flow_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_cert
-  flow_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_key
+  flow_client_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_client_tls_kms_token
   flow_workload_server_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_server_cert
-  flow_workload_server_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_server_key
+  flow_server_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_server_tls_kms_token
   auth_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_workload_client_cert
-  auth_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_workload_client_key
-  applicant_workload_client_cert:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/applicant_workload_client_cert
-  applicant_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/applicant_workload_client_key
+  auth_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_tls_kms_token
+  auth_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_workload_server_cert
+  auth_server_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/auth_server_tls_kms_token
+  gateway_workload_client_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/gateway_workload_client_cert
+  gateway_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/gateway_tls_kms_token
+  issuance_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_workload_server_cert
+  issuance_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/issuance_tls_kms_token
   verification_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_cert
-  verification_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_workload_client_key
+  verification_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/verification_tls_kms_token
   deployment_profile_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_cert
-  deployment_profile_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_workload_client_key
+  deployment_profile_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/deployment_profile_tls_kms_token
   compliance_profile_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_cert
-  compliance_profile_workload_client_key:
-    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_workload_client_key
+  compliance_profile_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/compliance_profile_tls_kms_token
   flow_webhook_secret:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_webhook_secret
   flow_application_event_hmac_key:
@@ -1399,6 +1595,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_bootstrap_token
   signing_keys_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_openbao_token
+  openbao_tls_ca_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/openbao_tls_ca_cert
+  signing_keys_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/signing_keys_tls_kms_token
   didcomm_issuance_openbao_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/didcomm_issuance_openbao_token
   haip_kms_token:

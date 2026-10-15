@@ -72,8 +72,10 @@ def compose_command(
     command = ["docker", "compose", "--project-name", validate_project(project)]
     files = [*BASE_FILES]
     if use_ghcr:
-        files.insert(1, GHCR_FILE)
-        files.insert(2, IMMUTABLE_INFRA_FILE)
+        # The released image overlay must follow the OIDF source-build
+        # definition so its build reset also applies to the keyless edge.
+        files.insert(2, GHCR_FILE)
+        files.insert(3, IMMUTABLE_INFRA_FILE)
     else:
         # The base stack defines the source-built Rust services. The UI is
         # deliberately supplied by a mode-specific profile because released

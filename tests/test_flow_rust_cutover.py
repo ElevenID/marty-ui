@@ -50,13 +50,14 @@ def test_compose_preserves_development_and_beta_features() -> None:
 
     assert f'ENVIRONMENT: {contract["development_environment"]}' in flow_base
     assert f'ENVIRONMENT: {contract["deployed_environment"]}' in flow_beta
-    assert 'GRPC_INSECURE_ALLOWED: "true"' in flow_beta
+    assert 'GRPC_INSECURE_ALLOWED: "false"' in flow_beta
+    assert "PP_GRPC_TARGET: https://presentation-policy:9009" in flow_beta
     assert "FLOW_WEBHOOK_SECRET must be set for beta" in flow_beta
     assert "FLOW_APPLICATION_EVENT_HMAC_KEY must be set for beta" in flow_beta
     assert "flow_workload_client_cert" in flow_beta
     assert "flow_workload_server_cert" in flow_beta
     assert "auth_workload_client_cert" in beta
-    assert "applicant_workload_client_cert" in beta
+    assert "applicant_workload_client_cert" not in beta
     assert "pp_workload_server_cert" in beta
     assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_base
 
@@ -64,6 +65,7 @@ def test_compose_preserves_development_and_beta_features() -> None:
     flow_selfhost = selfhost.split("\n  flow:\n", maxsplit=1)[1].split(
         "\n  verification:\n", maxsplit=1
     )[0]
+    assert "PP_GRPC_TARGET: https://presentation-policy:9009" in flow_selfhost
     assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_selfhost
 
 

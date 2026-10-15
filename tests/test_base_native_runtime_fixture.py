@@ -42,11 +42,14 @@ def test_owned_canvas_release_policy_imports_from_copied_source_assets(tmp_path)
 
 @pytest.fixture
 def spec(tmp_path):
-    (tmp_path / "ca.pem").write_text("synthetic stat-only CA control")
+    (tmp_path / "ca.pem").write_text(
+        "-----BEGIN CERTIFICATE-----\nsynthetic stat-only CA control\n-----END CERTIFICATE-----\n"
+    )
     (tmp_path / "didcomm-encryption-policy.json").write_text(
         "synthetic stat-only policy control"
     )
     (tmp_path / "openbao-token").write_text("synthetic stat-only token control")
+    (tmp_path / "grpc-tls-token").write_text("synthetic scoped token")
     return {
         "inputs": dict.fromkeys(FIXTURE["INPUT_KEYS"], "synthetic"),
         "http_port": 28105,
@@ -55,10 +58,16 @@ def spec(tmp_path):
         "database_url": "postgresql://synthetic:owned@127.0.0.1:25432/owned",
         "redis_url": "redis://127.0.0.1:26379",
         "peer_origin": "http://127.0.0.1:28500",
+        "grpc_peer_origin": "https://127.0.0.1:28502",
+        "grpc_ca_file": str(tmp_path / "ca.pem"),
+        "grpc_tls_certificate_file": str(tmp_path / "ca.pem"),
+        "grpc_tls_token_file": str(tmp_path / "grpc-tls-token"),
+        "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
         "legacy_origin": "http://127.0.0.1:28501",
         "ca_file": str(tmp_path / "ca.pem"),
         "policy_directory": str(tmp_path),
-        "kms_url": "http://127.0.0.1:28200",
+        "kms_url": "https://127.0.0.1:28200",
+        "kms_ca_file": str(tmp_path / "ca.pem"),
         "kms_token_file": str(tmp_path / "openbao-token"),
         "integration_secret_kms_url": "https://127.0.0.1:28201/internal",
         "integration_secret_kms_ca_file": str(tmp_path / "ca.pem"),
@@ -83,14 +92,24 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("redis_url", "redis://production.example:6379"),
         ("peer_origin", "http://user:password@127.0.0.1:28500"),
         ("legacy_origin", "http://127.0.0.1:28500"),
+        ("grpc_peer_origin", "http://127.0.0.1:28502"),
+        ("grpc_ca_file", "absent"),
+        ("grpc_tls_certificate_file", "absent"),
+        ("grpc_tls_token_file", "absent"),
+        ("grpc_tls_key_name", "wrong-key"),
         ("ca_file", "absent"),
         ("policy_directory", "relative"),
         ("kms_url", "http://production.example:8200"),
+        ("kms_url", "http://127.0.0.1:28200"),
         ("kms_url", "http://user:password@127.0.0.1:28200"),
+        ("kms_ca_file", "absent"),
         ("kms_token_file", "absent"),
         ("integration_secret_kms_url", "http://127.0.0.1:28201/internal"),
         ("integration_secret_kms_url", "https://production.example:8018/internal"),
-        ("integration_secret_kms_url", "https://user:password@127.0.0.1:28201/internal"),
+        (
+            "integration_secret_kms_url",
+            "https://user:password@127.0.0.1:28201/internal",
+        ),
         ("integration_secret_kms_ca_file", "absent"),
     ],
 )
@@ -173,12 +192,9 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose is unavailable")
     gate = FIXTURE["GATE"]
-    required = {
-        key: "synthetic-required-artifact"
-        for key in re.findall(
-            r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
-        )
-    }
+    required = gate["required_compose_inputs"](
+        "docker-compose.base.yml", gate["PROFILE"]
+    )
     inputs = {**required, **spec["inputs"]}
     directory = Path(spec["policy_directory"])
     (directory / "images.env").write_text(
@@ -207,9 +223,13 @@ def test_actual_authcrypt_render_binds_owned_kms_address_and_token_file(spec):
     rendered = FIXTURE["render"](spec, ["docker", "compose"])
     native = rendered["native_environment"]
     assert native["DIDCOMM_KMS_ADDR"] == spec["kms_url"]
+    assert native["DIDCOMM_KMS_CA_CERT_FILE"] == spec["kms_ca_file"]
     assert native["DIDCOMM_KMS_TOKEN_FILE"] == spec["kms_token_file"]
     assert native["INTEGRATION_SECRET_KMS_URL"] == spec["integration_secret_kms_url"]
-    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == spec["integration_secret_kms_ca_file"]
+    assert (
+        native["INTEGRATION_SECRET_KMS_CA_FILE"]
+        == spec["integration_secret_kms_ca_file"]
+    )
     assert native["DIDCOMM_ENCRYPTION_POLICY_FILE"] == str(
         Path(spec["policy_directory"]) / "didcomm-encryption-policy.json"
     )
@@ -238,8 +258,13 @@ RUNTIME_GATES = {
 def runtime_registration(script, source, name):
     line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(line) == 1
+    attribute = (
+        r'#\[tokio::test\(flavor = "multi_thread"\)\]'
+        if name != "base_profile_gateway_composition_isolated"
+        else r"#\[tokio::test\]"
+    )
     match = re.search(
-        rf"#\[tokio::test\]\s*async fn {name}\(\) \{{(.*?)^\}}",
+        rf"{attribute}\s*async fn {name}\(\) \{{(.*?)^\}}",
         source,
         re.MULTILINE | re.DOTALL,
     )
@@ -335,7 +360,7 @@ def runtime_ci(workflow):
         "test -x rust/target/debug/marty-gateway",
         "test -x rust/target/debug/marty-flow",
         'redis_image="$(bash scripts/ci/pull-pinned-dockerhub-image.sh \\',
-        "  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)\"",
+        '  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)"',
         'docker tag "$redis_image" redis:7-alpine',
         "# Resolve the actual source Dockerfile build to a local immutable ID.",
         "# This is runtime identity evidence, not release provenance.",

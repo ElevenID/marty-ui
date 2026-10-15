@@ -166,7 +166,8 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                    project: str) -> None:
     """Fail before startup if Compose can escape the disposable dependency set."""
     require(isinstance(model, dict)
-            and set(model) == {"name", "services", "networks", "secrets", "configs"}
+            and set(model) == {"name", "services", "networks", "volumes",
+                               "secrets", "configs"}
             and model["name"] == project
             and set(model.get("services", {})) ==
             {"postgres", "redis", "openbao", "db-migrate", "native-schema-migrate"},
@@ -176,10 +177,11 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
         "postgres": {"command", "entrypoint", "environment", "healthcheck",
                      "image", "networks", "secrets"},
         "redis": {"command", "entrypoint", "healthcheck", "image", "networks"},
-        "openbao": {"command", "configs", "entrypoint", "healthcheck",
-                    "image", "networks", "secrets"},
+        "openbao": {"command", "configs", "entrypoint", "environment",
+                    "healthcheck", "hostname", "image", "networks", "secrets",
+                    "tmpfs", "volumes"},
         "db-migrate": {"command", "depends_on", "entrypoint", "environment",
-                       "image", "networks", "restart", "secrets"},
+                       "image", "networks", "restart", "secrets", "volumes"},
         "native-schema-migrate": {"command", "depends_on", "entrypoint", "environment",
                                   "image", "networks", "restart", "secrets"},
     }
@@ -210,9 +212,16 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and services["openbao"]["command"] is None
             and services["openbao"]["entrypoint"] == [
                 "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"]
+            and services["openbao"]["hostname"] == "openbao"
+            and services["openbao"]["environment"] == {
+                "PASSPORT_BAO_TLS_MODE": "required"}
             and services["openbao"]["healthcheck"] == {
-                "test": ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"],
+                "test": ["CMD-SHELL", "BAO_CACERT=/bao/public-ca/ca.crt bao status -address=https://127.0.0.1:8200 >/dev/null"],
                 "interval": "2s", "retries": 30}
+            and services["openbao"]["tmpfs"] == ["/tmp/bao-tls:rw,mode=1777"]
+            and services["openbao"]["volumes"] == [{
+                "type": "volume", "source": "openbao_public_ca",
+                "target": "/bao/public-ca", "volume": {}}]
             and services["openbao"]["secrets"] == [{
                 "source": "bao_root_token", "target": "/run/secrets/bao_root_token"}]
             and services["openbao"]["configs"] == [{
@@ -226,7 +235,8 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                 "MARTY_ORG_ADMIN_EMAIL", "MARTY_ORG_ID", "MARTY_ORG_SLUG",
                 "MARTY_MIGRATION_PROFILE", "MARTY_KMS_BOOTSTRAP_ENABLED",
                 "REDIS_URL", "REDIS_DB_GATEWAY", "BAO_ADDR", "BAO_TOKEN_FILE",
-                "NOTIFICATION_OPENBAO_TOKEN_FILE", "PUBLIC_DOMAIN",
+                "BAO_CACERT", "NOTIFICATION_OPENBAO_TOKEN_FILE",
+                "NOTIFICATION_OPENBAO_CA_CERT_FILE", "PUBLIC_DOMAIN",
                 "PUBLIC_API_URL", "ISSUER_BASE_URL"}
             and env.get("ENVIRONMENT") == "production"
             and env.get("MARTY_MIGRATION_PROFILE") == "selfhost-production"
@@ -236,7 +246,10 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
             and env.get("BAO_TOKEN_FILE") == "/run/secrets/bao_root_token"
             and env.get("NOTIFICATION_OPENBAO_TOKEN_FILE") ==
             "/run/secrets/notification_openbao_token"
-            and env.get("BAO_ADDR") == "http://openbao:8200"
+            and env.get("NOTIFICATION_OPENBAO_CA_CERT_FILE") ==
+            "/bao/public-ca/ca.crt"
+            and env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and env.get("BAO_ADDR") == "https://openbao:8200"
             and env.get("DATABASE_URL_TEMPLATE") ==
             "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty"
             and env.get("REDIS_URL") == "redis://redis:6379"
@@ -256,6 +269,10 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
                  "target": "/run/secrets/bao_root_token"},
                 {"source": "notification_openbao_token",
                  "target": "/run/secrets/notification_openbao_token"}]
+            and migration.get("volumes") == [{
+                "type": "volume", "source": "openbao_public_ca",
+                "target": "/bao/public-ca", "read_only": True,
+                "volume": {}}]
             and migration.get("depends_on") == {
                 name: {"condition": "service_healthy", "required": True}
                 for name in ("postgres", "redis", "openbao")},
@@ -277,6 +294,9 @@ def validate_model(model: dict, images: dict[str, str], secret_dir: Path,
     require(model.get("networks") == {"private": {
                 "name": f"{project}_private", "ipam": {}, "internal": True}},
             "Disposable network is not internal")
+    require(model.get("volumes") == {"openbao_public_ca": {
+                "name": f"{project}_openbao_public_ca"}},
+            "Disposable public CA volume is not project-owned")
     secret_paths = model.get("secrets", {})
     require(set(secret_paths) == {"marty_db_password", "bao_root_token",
                                   "notification_openbao_token"}
@@ -491,7 +511,9 @@ def qualify(images: dict[str, str], *,
                 require(redis == "1", "KMS registry was not seeded in Redis")
                 transit = _checked(run([
                     *compose, "exec", "-T", "openbao", "sh", "-c",
-                    "BAO_ADDR=http://127.0.0.1:8200; export BAO_ADDR; "
+                    "BAO_ADDR=https://127.0.0.1:8200; "
+                    "BAO_CACERT=/bao/public-ca/ca.crt; "
+                    "export BAO_ADDR BAO_CACERT; "
                     "BAO_TOKEN=$(cat /run/secrets/bao_root_token); export BAO_TOKEN; "
                     "bao read -field=type "
                     "transit/keys/notification-webhook-envelope-marty-aes256 && "

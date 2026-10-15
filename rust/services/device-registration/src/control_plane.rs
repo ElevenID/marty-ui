@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use std::time::Duration;
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
+use std::{path::Path, time::Duration};
 use tonic::{
     metadata::AsciiMetadataValue,
     transport::{Channel, Endpoint},
@@ -76,6 +79,59 @@ impl OrganizationMembershipClient {
         })
     }
 
+    pub async fn connect_with_ca(
+        target: &str,
+        ca_certificate: &Path,
+        service_token: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, DeviceError> {
+        if !target.starts_with("https://") || timeout.is_zero() {
+            return Err(DeviceError::AuthorizationUnavailable);
+        }
+        let token = service_token
+            .map(str::parse)
+            .transpose()
+            .map_err(|_| DeviceError::AuthorizationUnavailable)?;
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: target.into(),
+                security: GrpcTransportSecurity::ServerTls,
+                trust: GrpcTrustMode::CustomCa,
+                connect_timeout_ms: timeout.as_millis() as u64,
+                request_timeout_ms: timeout.as_millis() as u64,
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::from_ca_pem_file(Some(ca_certificate))
+                .map_err(|_| DeviceError::AuthorizationUnavailable)?,
+        )
+        .map_err(|_| DeviceError::AuthorizationUnavailable)?
+        .connect()
+        .await
+        .map_err(|_| DeviceError::AuthorizationUnavailable)?;
+        let client = Self {
+            client: OrganizationServiceClient::new(channel),
+            token,
+            timeout,
+        };
+        client.check_health().await?;
+        Ok(client)
+    }
+
+    pub async fn check_health(&self) -> Result<(), DeviceError> {
+        let mut client = self.client.clone();
+        match client
+            .get_member(self.request(GetMemberRequest {
+                organization_id: "00000000-0000-0000-0000-000000000000".into(),
+                user_id: "device-registration-native-health".into(),
+            }))
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => Ok(()),
+            Err(_) => Err(DeviceError::AuthorizationUnavailable),
+        }
+    }
+
     fn request<T>(&self, value: T) -> Request<T> {
         let mut request = Request::new(value);
         request.set_timeout(self.timeout);
@@ -130,5 +186,29 @@ impl MembershipAuthorizer for OrganizationMembershipClient {
             ));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn ca_verified_organization_channel_rejects_plaintext_and_zero_timeout() {
+        for (target, timeout) in [
+            ("http://organization:9002", Duration::from_secs(1)),
+            ("https://organization:9002", Duration::ZERO),
+        ] {
+            assert!(matches!(
+                OrganizationMembershipClient::connect_with_ca(
+                    target,
+                    Path::new("unused-public-ca.pem"),
+                    None,
+                    timeout,
+                )
+                .await,
+                Err(DeviceError::AuthorizationUnavailable)
+            ));
+        }
     }
 }

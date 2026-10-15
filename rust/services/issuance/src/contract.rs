@@ -2051,7 +2051,11 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                     "CANVAS_PORTABLE_INTEGRATION_ENABLED",
                     "GRPC_INSECURE_ALLOWED",
                     "GRPC_TLS_CLIENT_CERT",
-                    "GRPC_TLS_CLIENT_KEY",
+                    "GRPC_TLS_CLIENT_KMS_ADDR",
+                    "GRPC_TLS_CLIENT_KMS_CA_CERT",
+                    "GRPC_TLS_CLIENT_KMS_KEY_NAME",
+                    "GRPC_TLS_CLIENT_KMS_KEY_VERSION",
+                    "GRPC_TLS_CLIENT_KMS_TOKEN_FILE",
                 ]
             && coverage
                 .native_environment_variables

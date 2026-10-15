@@ -5,7 +5,7 @@ use mmf_platform::{GrpcTransportSecurity, GrpcTrustMode};
 use serde_json::Value;
 
 fn baseline(environment: &str) -> BTreeMap<String, String> {
-    BTreeMap::from([
+    let mut values = BTreeMap::from([
         ("ENVIRONMENT".into(), environment.into()),
         ("KEYCLOAK_REALM".into(), "marty".into()),
         ("DATABASE_URL".into(), "postgresql://db/auth".into()),
@@ -23,8 +23,48 @@ fn baseline(environment: &str) -> BTreeMap<String, String> {
         ),
         ("FLOW_WEBHOOK_SECRET".into(), "s".repeat(32)),
         ("GRPC_SERVICE_TOKEN".into(), "g".repeat(32)),
-        ("ALLOW_PLAINTEXT_GRPC".into(), "true".into()),
-    ])
+        ("ALLOW_PLAINTEXT_GRPC".into(), "false".into()),
+    ]);
+    if environment == "beta" {
+        values.extend(remote_tls_values());
+        values.insert("FLOW_GRPC_TARGET".into(), "https://flow:9011".into());
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        values.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+    }
+    values
+}
+
+fn remote_tls_values() -> Vec<(String, String)> {
+    [
+        ("GRPC_WORKLOAD_TLS_CA_CERT", "/secrets/ca.pem"),
+        ("GRPC_WORKLOAD_TLS_CLIENT_CERT", "/secrets/client.pem"),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR", "https://bao:8200"),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+            "/secrets/bao-ca.pem",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+            "/secrets/client-token",
+        ),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME", "auth-client"),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+        ("GRPC_WORKLOAD_TLS_SERVER_CERT", "/secrets/server.pem"),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "https://bao:8200"),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "/secrets/bao-ca.pem",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            "/secrets/server-token",
+        ),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME", "auth-server"),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.into(), value.into()))
+    .collect()
 }
 
 fn contract() -> Value {
@@ -39,9 +79,9 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
     let config = AuthServiceConfig::from_values(baseline("beta")).unwrap();
     assert_eq!(config.http_addr.to_string(), "0.0.0.0:8001");
     assert_eq!(config.grpc_addr.to_string(), "0.0.0.0:9001");
-    assert_eq!(config.flow_grpc_target, "http://flow:9011");
-    assert_eq!(config.organization_grpc_target, "http://organization:9002");
-    assert_eq!(config.event_stream_grpc_target, "http://event-stream:9015");
+    assert_eq!(config.flow_grpc_target, "https://flow:9011");
+    assert_eq!(config.organization_grpc_target, "https://organization:9002");
+    assert_eq!(config.event_stream_grpc_target, "https://event-stream:9015");
     assert_eq!(config.grpc_service_token, "g".repeat(32));
     assert_eq!(
         config.issuance_native_service_url,
@@ -60,25 +100,10 @@ fn complete_beta_configuration_is_normalized_without_hidden_fallbacks() {
 fn issuance_http_owner_prefers_native_and_preserves_legacy_production() {
     let mut production = baseline("production");
     production.insert("ISSUANCE_SERVICE_URL".into(), "http://issuance:8005".into());
-    production.extend([
-        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
-            "/secrets/client.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
-            "/secrets/client-key.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
-            "/secrets/server.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
-            "/secrets/server-key.pem".into(),
-        ),
-    ]);
+    production.insert("FLOW_GRPC_TARGET".into(), "https://flow:9011".into());
+    production.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+    production.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+    production.extend(remote_tls_values());
     let config = AuthServiceConfig::from_values(production).unwrap();
     assert_eq!(config.issuance_native_service_url, "http://issuance:8005");
 
@@ -131,47 +156,36 @@ fn required_settings_secrets_and_production_transport_fail_closed() {
     production.insert("FLOW_GRPC_TARGET".into(), "https://flow:9011".into());
     production.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
     production.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
-    production.extend([
-        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
-            "/secrets/client.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
-            "/secrets/client-key.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_SERVER_CERT".into(),
-            "/secrets/server.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_SERVER_KEY".into(),
-            "/secrets/server-key.pem".into(),
-        ),
-    ]);
+    production.extend(remote_tls_values());
     assert!(AuthServiceConfig::from_values(production).is_ok());
 
     let mut partial = baseline("beta");
-    partial.insert(
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
-        "/secrets/client.pem".into(),
-    );
+    partial.remove("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE");
     assert!(AuthServiceConfig::from_values(partial).is_err());
 
     let mut outbound_only = baseline("beta");
-    outbound_only.extend([
-        ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "/secrets/ca.pem".into()),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_CERT".into(),
-            "/secrets/client.pem".into(),
-        ),
-        (
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY".into(),
-            "/secrets/client-key.pem".into(),
-        ),
-    ]);
+    outbound_only.retain(|name, _| !name.starts_with("GRPC_WORKLOAD_TLS_"));
+    outbound_only.extend(remote_tls_values().into_iter().filter(|(name, _)| {
+        name == "GRPC_WORKLOAD_TLS_CA_CERT" || name.starts_with("GRPC_WORKLOAD_TLS_CLIENT_")
+    }));
+    assert!(AuthServiceConfig::from_values(outbound_only.clone()).is_err());
+    for (name, value) in remote_tls_values() {
+        outbound_only.insert(name, value);
+    }
     assert!(AuthServiceConfig::from_values(outbound_only).is_ok());
+}
+
+#[test]
+fn retired_tls_private_key_files_are_rejected() {
+    for name in [
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    ] {
+        let mut values = baseline("production");
+        values.extend(remote_tls_values());
+        values.insert(name.into(), "/secrets/retired-key".into());
+        assert!(AuthServiceConfig::from_values(values).is_err(), "{name}");
+    }
 }
 
 #[test]
@@ -218,15 +232,14 @@ fn unauthenticated_rate_limit_paths_match_the_language_neutral_contract() {
 
 #[test]
 fn outbound_grpc_security_is_selected_by_the_shared_mmf_factory() {
-    let plaintext = marty_auth::workload_channel_factory("http://flow:9011", None).unwrap();
+    let plaintext = marty_auth::workload_channel_factory("http://flow:9011").unwrap();
     assert_eq!(
         plaintext.config().security,
         GrpcTransportSecurity::Plaintext
     );
     assert_eq!(plaintext.config().trust, GrpcTrustMode::NativeRoots);
 
-    let server_tls =
-        marty_auth::workload_channel_factory("https://flow.example:9011", None).unwrap();
+    let server_tls = marty_auth::workload_channel_factory("https://flow.example:9011").unwrap();
     assert_eq!(
         server_tls.config().security,
         GrpcTransportSecurity::ServerTls

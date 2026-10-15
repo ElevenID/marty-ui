@@ -31,13 +31,31 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_INSECURE_ALLOWED: "true"
+      GRPC_INSECURE_ALLOWED: "false"
+      GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      AUTH_GRPC_TARGET: https://auth:9001
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/gateway_workload_client_cert
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${GATEWAY_TLS_KMS_ADDR:?GATEWAY_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/gateway_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${GATEWAY_TLS_KMS_KEY_NAME:?GATEWAY_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${GATEWAY_TLS_KMS_KEY_VERSION:?GATEWAY_TLS_KMS_KEY_VERSION must be set for beta}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
       DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:?DEVICE_REGISTRATION_GATEWAY_KEY must be set for beta}
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       GATEWAY_REQUIRED_READY_SERVICES: auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
+    secrets:
+      - workload_identity_ca_cert
+      - gateway_workload_client_cert
+      - openbao_tls_ca_cert
+      - gateway_tls_kms_token
     depends_on:
       issuance-native:
         condition: service_healthy
@@ -46,16 +64,32 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      ALLOW_PLAINTEXT_GRPC: "true"
+      ALLOW_PLAINTEXT_GRPC: "false"
+      FLOW_GRPC_TARGET: https://flow:9011
+      ORG_GRPC_TARGET: https://organization:9002
+      ES_GRPC_TARGET: https://event-stream:9015
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/0
       CREDENTIAL_LOGIN_ORGANIZATION_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       CREDENTIAL_LOGIN_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${AUTH_TLS_KMS_ADDR:?AUTH_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${AUTH_TLS_KMS_KEY_NAME:?AUTH_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${AUTH_TLS_KMS_KEY_VERSION:?AUTH_TLS_KMS_KEY_VERSION must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/auth_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${AUTH_SERVER_TLS_KMS_ADDR:?AUTH_SERVER_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/auth_server_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${AUTH_SERVER_TLS_KMS_KEY_NAME:?AUTH_SERVER_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${AUTH_SERVER_TLS_KMS_KEY_VERSION:?AUTH_SERVER_TLS_KMS_KEY_VERSION must be set for beta}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
       - auth_workload_client_cert
-      - auth_workload_client_key
+      - openbao_tls_ca_cert
+      - auth_tls_kms_token
+      - auth_workload_server_cert
+      - auth_server_tls_kms_token
       - workload_identity_ca_cert
 
   organization:
@@ -63,6 +97,19 @@ services:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/org_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ORG_TLS_KMS_ADDR:?ORG_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/org_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ORG_TLS_KMS_KEY_NAME:?ORG_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ORG_TLS_KMS_KEY_VERSION:?ORG_TLS_KMS_KEY_VERSION must be set for beta}
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - workload_identity_ca_cert
+      - org_workload_server_cert
+      - openbao_tls_ca_cert
+      - org_tls_kms_token
 
   credential-template:
     environment:
@@ -71,76 +118,135 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
       MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       MARTY_MIGRATION_PROFILE: beta
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      RP_GRPC_TARGET: https://revocation-profile:9013
+      RP_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/ct_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${CT_TLS_KMS_ADDR:?CT_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/ct_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${CT_TLS_KMS_KEY_NAME:?CT_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${CT_TLS_KMS_KEY_VERSION:?CT_TLS_KMS_KEY_VERSION must be set for beta}
+    secrets:
+      - workload_identity_ca_cert
+      - ct_workload_server_cert
+      - openbao_tls_ca_cert
+      - ct_tls_kms_token
 
   trust-profile:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
       MARTY_ORG_ID: ${MARTY_ORG_ID:?MARTY_ORG_ID must be set for beta}
       MARTY_ISSUER_DID: ${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
       PUBLIC_API_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
+    secrets:
+      - workload_identity_ca_cert
 
   applicant:
     environment:
       <<: *beta-grpc-service-auth
-      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/applicant_workload_client_key
-      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      ENVIRONMENT: beta
+      ES_GRPC_TARGET: https://event-stream:9015
+      ES_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
-      - applicant_workload_client_cert
-      - applicant_workload_client_key
       - workload_identity_ca_cert
 
   notification:
     environment:
       <<: *beta-grpc-service-auth
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+    secrets:
+      - openbao_tls_ca_cert
 
   compliance-profile:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_INSECURE_ALLOWED: "true"
+      GRPC_INSECURE_ALLOWED: "false"
+      ORG_GRPC_TARGET: https://organization:9002
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/compliance_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${COMPLIANCE_PROFILE_TLS_KMS_ADDR:?COMPLIANCE_PROFILE_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/compliance_profile_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME:?COMPLIANCE_PROFILE_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION:?COMPLIANCE_PROFILE_TLS_KMS_KEY_VERSION must be set for beta}
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - compliance_profile_workload_client_cert
+      - openbao_tls_ca_cert
+      - compliance_profile_tls_kms_token
+      - workload_identity_ca_cert
 
   presentation-policy:
     environment:
       <<: *beta-grpc-service-auth
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       # This is the five-field internal status contract. The public
       # /v1/issued-credentials lifecycle wrappers retain their full-record
       # response on the legacy service until that distinct DTO is native.
       MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "http://issuance-native:8005/v1/issuance/credentials/{credential_id}/status"
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${PP_TLS_KMS_ADDR:?PP_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PP_TLS_KMS_KEY_NAME:?PP_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${PP_TLS_KMS_KEY_VERSION:?PP_TLS_KMS_KEY_VERSION must be set for beta}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
     depends_on:
       issuance-native:
         condition: service_healthy
     secrets:
       - pp_workload_server_cert
-      - pp_workload_server_key
+      - openbao_tls_ca_cert
+      - pp_tls_kms_token
       - workload_identity_ca_cert
 
   deployment-profile:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_INSECURE_ALLOWED: "true"
+      GRPC_INSECURE_ALLOWED: "false"
+      ORG_GRPC_TARGET: https://organization:9002
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/deployment_profile_workload_client_cert
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${DEPLOYMENT_PROFILE_TLS_KMS_ADDR:?DEPLOYMENT_PROFILE_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/deployment_profile_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION:?DEPLOYMENT_PROFILE_TLS_KMS_KEY_VERSION must be set for beta}
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - deployment_profile_workload_client_cert
+      - openbao_tls_ca_cert
+      - deployment_profile_tls_kms_token
+      - workload_identity_ca_cert
 
   signing-keys:
     environment:
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:?DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be set for beta}
       SIGNING_KEYS_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/2
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set for beta}
+    secrets:
+      - openbao_tls_ca_cert
 
   flow:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
-      GRPC_INSECURE_ALLOWED: "true"
+      GRPC_INSECURE_ALLOWED: "false"
+      ORG_GRPC_TARGET: https://organization:9002
+      CT_GRPC_TARGET: https://credential-template:9003
+      PP_GRPC_TARGET: https://presentation-policy:9009
       # Only the qualified initiation RPC consumer moves; physical-document
       # HTTP operations retain the legacy ISSUANCE_SERVICE_URL from base.
-      ISSUANCE_GRPC_TARGET: issuance-native:9005
+      ISSUANCE_GRPC_TARGET: https://issuance-native:9005
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:?PUBLIC_API_URL must be set for beta}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:?ISSUANCE_API_KEY must be set for beta}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:?SIGNING_KEYS_INTERNAL_API_KEY must be set for beta}
@@ -148,15 +254,24 @@ services:
       FLOW_APPLICATION_EVENT_HMAC_KEY: ${FLOW_APPLICATION_EVENT_HMAC_KEY:?FLOW_APPLICATION_EVENT_HMAC_KEY must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:?FLOW_CLIENT_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:?FLOW_CLIENT_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:?FLOW_CLIENT_TLS_KMS_KEY_VERSION must be set for beta}
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${FLOW_SERVER_TLS_KMS_ADDR:?FLOW_SERVER_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${FLOW_SERVER_TLS_KMS_KEY_NAME:?FLOW_SERVER_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${FLOW_SERVER_TLS_KMS_KEY_VERSION:?FLOW_SERVER_TLS_KMS_KEY_VERSION must be set for beta}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
       - flow_workload_client_cert
-      - flow_workload_client_key
+      - openbao_tls_ca_cert
+      - flow_client_tls_kms_token
       - flow_workload_server_cert
-      - flow_workload_server_key
+      - flow_server_tls_kms_token
       - workload_identity_ca_cert
 
   revocation-profile:
@@ -167,24 +282,59 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/4
       RP_GRPC_ENABLED: "true"
       RUST_LOG: ${REVOCATION_PROFILE_RUST_LOG:-info}
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/rp_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${RP_TLS_KMS_ADDR:?RP_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/rp_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${RP_TLS_KMS_KEY_NAME:?RP_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${RP_TLS_KMS_KEY_VERSION:?RP_TLS_KMS_KEY_VERSION must be set for beta}
+    secrets:
+      - workload_identity_ca_cert
+      - rp_workload_server_cert
+      - openbao_tls_ca_cert
+      - rp_tls_kms_token
 
   device-registration:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      ORG_GRPC_TARGET: https://organization:9002
+      ORG_GRPC_CA_CERT: /run/secrets/workload_identity_ca_cert
       DEVICE_REGISTRATION_GATEWAY_KEY: ${DEVICE_REGISTRATION_GATEWAY_KEY:?DEVICE_REGISTRATION_GATEWAY_KEY must be set for beta}
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:?DEVICE_REGISTRATION_SIGNING_KEYS_KEY must be set for beta}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/5
+    secrets:
+      - workload_identity_ca_cert
 
   event-stream:
     environment:
       <<: *beta-grpc-service-auth
+      ENVIRONMENT: beta
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/es_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ES_TLS_KMS_ADDR:?ES_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/es_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ES_TLS_KMS_KEY_NAME:?ES_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ES_TLS_KMS_KEY_VERSION:?ES_TLS_KMS_KEY_VERSION must be set for beta}
+    secrets:
+      - es_workload_server_cert
+      - openbao_tls_ca_cert
+      - es_tls_kms_token
 
   issuance:
     environment:
       <<: *beta-grpc-service-auth
       DIDCOMM_DELIVERY_OWNER: native
+      ISSUANCE_GRPC_ENABLED: "false"
+      ORG_GRPC_TARGET: https://organization:9002
+      CT_GRPC_TARGET: https://credential-template:9003
+      RP_GRPC_TARGET: https://revocation-profile:9013
+      GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
+    secrets:
+      - workload_identity_ca_cert
     depends_on:
       issuance-native:
         condition: service_healthy
@@ -192,15 +342,29 @@ services:
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8005/ready"]
 
-  # Only operations enumerated by contracts/issuance-native-coverage.json are
-  # sent here. The Python issuance service remains the owner for every unmigrated
-  # HTTP route; its two DIDComm entrypoints delegate to this owner without a
-  # runtime fallback. Flow selects only its qualified initiation RPC; the shared
-  # legacy gRPC service/Envoy alias remains unchanged.
+  # The issuance HTTP alias runs the native Rust binary with its gRPC listener
+  # disabled. Issuance-native owns the KMS-backed gRPC endpoint used by Flow.
   issuance-native:
     extends:
       file: docker-compose.service.issuance-native.yml
       service: issuance-native
+    environment:
+      ORG_GRPC_TARGET: https://organization:9002
+      CT_GRPC_TARGET: https://credential-template:9003
+      RP_GRPC_TARGET: https://revocation-profile:9013
+      GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/issuance_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set for beta}
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+    secrets:
+      - workload_identity_ca_cert
+      - issuance_workload_server_cert
+      - openbao_tls_ca_cert
+      - issuance_tls_kms_token
 
   canvas-sync-worker:
     environment:
@@ -210,6 +374,9 @@ services:
     environment:
       <<: *beta-grpc-service-auth
       ENVIRONMENT: beta
+      ORG_GRPC_TARGET: https://organization:9002
+      CT_GRPC_TARGET: https://credential-template:9003
+      PP_GRPC_TARGET: https://presentation-policy:9009
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/3
       VERIFICATION_CREDENTIALS_COMPAT_ENABLED: "true"
       VERIFICATION_GOVERNANCE_JSON: ${VERIFICATION_GOVERNANCE_JSON:?VERIFICATION_GOVERNANCE_JSON must be set for beta verification compatibility}
@@ -217,45 +384,76 @@ services:
       DID_WEB_ALLOWED_HOSTS: ${DID_WEB_ALLOWED_HOSTS:-}
       VERIF_GRPC_ENABLED: "false"
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/verification_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key
+      GRPC_WORKLOAD_TLS_KMS_ADDR: ${VERIFICATION_TLS_KMS_ADDR:?VERIFICATION_TLS_KMS_ADDR must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token
+      GRPC_WORKLOAD_TLS_KMS_KEY_NAME: ${VERIFICATION_TLS_KMS_KEY_NAME:?VERIFICATION_TLS_KMS_KEY_NAME must be set for beta}
+      GRPC_WORKLOAD_TLS_KMS_KEY_VERSION: ${VERIFICATION_TLS_KMS_KEY_VERSION:?VERIFICATION_TLS_KMS_KEY_VERSION must be set for beta}
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
       - verification_workload_client_cert
-      - verification_workload_client_key
+      - openbao_tls_ca_cert
+      - verification_tls_kms_token
       - workload_identity_ca_cert
 
 secrets:
   workload_identity_ca_cert:
     file: ${MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE:?MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE must be set for beta}
+  org_workload_server_cert:
+    file: ${ORG_WORKLOAD_SERVER_CERT_FILE:?ORG_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  org_tls_kms_token:
+    file: ${ORG_TLS_KMS_TOKEN_FILE:?ORG_TLS_KMS_TOKEN_FILE must be set for beta}
+  es_workload_server_cert:
+    file: ${ES_WORKLOAD_SERVER_CERT_FILE:?ES_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  es_tls_kms_token:
+    file: ${ES_TLS_KMS_TOKEN_FILE:?ES_TLS_KMS_TOKEN_FILE must be set for beta}
+  rp_workload_server_cert:
+    file: ${RP_WORKLOAD_SERVER_CERT_FILE:?RP_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  rp_tls_kms_token:
+    file: ${RP_TLS_KMS_TOKEN_FILE:?RP_TLS_KMS_TOKEN_FILE must be set for beta}
+  ct_workload_server_cert:
+    file: ${CT_WORKLOAD_SERVER_CERT_FILE:?CT_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  ct_tls_kms_token:
+    file: ${CT_TLS_KMS_TOKEN_FILE:?CT_TLS_KMS_TOKEN_FILE must be set for beta}
   pp_workload_server_cert:
     file: ${PP_WORKLOAD_SERVER_CERT_FILE:?PP_WORKLOAD_SERVER_CERT_FILE must be set for beta}
-  pp_workload_server_key:
-    file: ${PP_WORKLOAD_SERVER_KEY_FILE:?PP_WORKLOAD_SERVER_KEY_FILE must be set for beta}
+  openbao_tls_ca_cert:
+    file: ${OPENBAO_TLS_CA_CERT_FILE:?OPENBAO_TLS_CA_CERT_FILE must be set for beta}
+  pp_tls_kms_token:
+    file: ${PP_TLS_KMS_TOKEN_FILE:?PP_TLS_KMS_TOKEN_FILE must be set for beta}
   flow_workload_client_cert:
     file: ${FLOW_WORKLOAD_CLIENT_CERT_FILE:?FLOW_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  flow_workload_client_key:
-    file: ${FLOW_WORKLOAD_CLIENT_KEY_FILE:?FLOW_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  flow_client_tls_kms_token:
+    file: ${FLOW_CLIENT_TLS_KMS_TOKEN_FILE:?FLOW_CLIENT_TLS_KMS_TOKEN_FILE must be set for beta}
   flow_workload_server_cert:
     file: ${FLOW_WORKLOAD_SERVER_CERT_FILE:?FLOW_WORKLOAD_SERVER_CERT_FILE must be set for beta}
-  flow_workload_server_key:
-    file: ${FLOW_WORKLOAD_SERVER_KEY_FILE:?FLOW_WORKLOAD_SERVER_KEY_FILE must be set for beta}
+  flow_server_tls_kms_token:
+    file: ${FLOW_SERVER_TLS_KMS_TOKEN_FILE:?FLOW_SERVER_TLS_KMS_TOKEN_FILE must be set for beta}
   auth_workload_client_cert:
     file: ${AUTH_WORKLOAD_CLIENT_CERT_FILE:?AUTH_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  auth_workload_client_key:
-    file: ${AUTH_WORKLOAD_CLIENT_KEY_FILE:?AUTH_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
-  applicant_workload_client_cert:
-    file: ${APPLICANT_WORKLOAD_CLIENT_CERT_FILE:?APPLICANT_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  applicant_workload_client_key:
-    file: ${APPLICANT_WORKLOAD_CLIENT_KEY_FILE:?APPLICANT_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  auth_tls_kms_token:
+    file: ${AUTH_TLS_KMS_TOKEN_FILE:?AUTH_TLS_KMS_TOKEN_FILE must be set for beta}
+  auth_workload_server_cert:
+    file: ${AUTH_WORKLOAD_SERVER_CERT_FILE:?AUTH_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  auth_server_tls_kms_token:
+    file: ${AUTH_SERVER_TLS_KMS_TOKEN_FILE:?AUTH_SERVER_TLS_KMS_TOKEN_FILE must be set for beta}
+  gateway_workload_client_cert:
+    file: ${GATEWAY_WORKLOAD_CLIENT_CERT_FILE:?GATEWAY_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  gateway_tls_kms_token:
+    file: ${GATEWAY_TLS_KMS_TOKEN_FILE:?GATEWAY_TLS_KMS_TOKEN_FILE must be set for beta}
+  issuance_workload_server_cert:
+    file: ${ISSUANCE_WORKLOAD_SERVER_CERT_FILE:?ISSUANCE_WORKLOAD_SERVER_CERT_FILE must be set for beta}
+  issuance_tls_kms_token:
+    file: ${ISSUANCE_TLS_KMS_TOKEN_FILE:?ISSUANCE_TLS_KMS_TOKEN_FILE must be set for beta}
   verification_workload_client_cert:
     file: ${VERIFICATION_WORKLOAD_CLIENT_CERT_FILE:?VERIFICATION_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  verification_workload_client_key:
-    file: ${VERIFICATION_WORKLOAD_CLIENT_KEY_FILE:?VERIFICATION_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
-  deployment_profile_workload_client_cert:
-    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  deployment_profile_workload_client_key:
-    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  verification_tls_kms_token:
+    file: ${VERIFICATION_TLS_KMS_TOKEN_FILE:?VERIFICATION_TLS_KMS_TOKEN_FILE must be set for beta}
   compliance_profile_workload_client_cert:
     file: ${COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
-  compliance_profile_workload_client_key:
-    file: ${COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE:?COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE must be set for beta}
+  compliance_profile_tls_kms_token:
+    file: ${COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE:?COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE must be set for beta}
+  deployment_profile_workload_client_cert:
+    file: ${DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE:?DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE must be set for beta}
+  deployment_profile_tls_kms_token:
+    file: ${DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE:?DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE must be set for beta}

@@ -22,7 +22,7 @@ from scripts.check_passport_supported_rust_model import (
     DISPOSABLE_SERVICES, render_model, validate_planned_model,
 )
 from scripts.passport_supported_infra_images import qualified_images
-from scripts.stage_passport_disposable_tls import TLS_FILES, stage_tls
+from scripts.passport_remote_tls import PUBLIC_TLS_FILES, TLS_PREFIXES, accept_remote_tls
 from scripts.passport_supported_provisioning_producer import (
     INFRA_WORKFLOW_REF, ProducerError, WORKFLOW_REF, collect_record, destroy_disposable_project,
     destroy_partial_disposable_project,
@@ -51,30 +51,75 @@ ENV = {
 }
 
 
-def test_disposable_tls_identities_are_ca_bound_and_short_lived(tmp_path: Path) -> None:
-    stage_tls(tmp_path)
-    assert {path.name for path in tmp_path.iterdir()} == TLS_FILES
-    ca = tmp_path / "workload_identity_ca_cert"
-    for certificate, verification in (
-        ("passport_edge_tls_cert", ["-verify_hostname", "localhost"]),
-        ("flow_workload_server_cert", ["-verify_hostname", "flow"]),
-        ("pp_workload_server_cert", ["-verify_hostname", "presentation-policy"]),
-        ("flow_workload_client_cert", ["-purpose", "sslclient"]),
-    ):
-        result = subprocess.run(
-            ["openssl", "verify", "-CAfile", str(ca), *verification,
-             str(tmp_path / certificate)], capture_output=True, text=True, check=False,
-        )
-        assert result.returncode == 0, result.stderr
-    for certificate in ("passport_edge_tls_cert", "flow_workload_client_cert"):
-        result = subprocess.run(
-            ["openssl", "x509", "-in", str(tmp_path / certificate),
-             "-noout", "-dates", "-ext", "subjectAltName"],
-            capture_output=True, text=True, check=True,
-        )
-        assert "notAfter=" in result.stdout
-        assert ("DNS:localhost" if certificate == "passport_edge_tls_cert"
-                else "URI:spiffe://marty.internal/service/flow") in result.stdout
+def test_protected_producer_rejects_local_tls_custody_before_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    plan = {
+        "surface": "base", "project": PROJECT,
+        "services_reference": SERVICES, "owner_labels": LABELS,
+        "expires_at": (NOW + timedelta(minutes=30)).isoformat(),
+    }
+    monkeypatch.setattr(producer, "verify_plan_release", lambda *args, **kwargs: plan)
+    monkeypatch.setattr(
+        producer, "preflight_attested_plan",
+        lambda *args, **kwargs: {"status": "blocked", "model": {"model_safe": True}},
+    )
+    monkeypatch.setattr(
+        producer, "render_model",
+        lambda *args, **kwargs: {
+            "services": {"signing-keys": {"environment": {
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": "/run/secrets/tls.key",
+            }, "secrets": [{"source": "signing_keys_workload_server_key"}]}},
+            "secrets": {"signing_keys_workload_server_key": {}},
+        },
+    )
+    args = (tmp_path / "plan", tmp_path / "manifest", "123456", ENV,
+            tmp_path / "env", tmp_path)
+    with pytest.raises(producer.ModelPreflightError, match="Keyless TLS custody"):
+        producer.verify_pre_mutation(*args, now=NOW, workflow_ref=WORKFLOW_REF)
+    assert producer.verify_pre_mutation(
+        *args, now=NOW, workflow_ref=INFRA_WORKFLOW_REF
+    ) is plan
+
+
+def test_disposable_tls_accepts_only_public_certificates_and_scoped_tokens(tmp_path: Path) -> None:
+    output = tmp_path / "tls-output"
+    output.mkdir(mode=0o700)
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    certificate = (Path(__file__).parents[1] / "rust/services/signing-keys/tests/fixtures"
+                   / "public_certificates/root-ca.pem").read_text(encoding="ascii")
+    for name in PUBLIC_TLS_FILES:
+        value = certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct-token"
+        (output / name).write_text(value, encoding="ascii")
+    accept_remote_tls(output, secret_dir, "root-token-must-not-be-reused")
+    assert {path.name for path in secret_dir.iterdir()} == PUBLIC_TLS_FILES
+    assert not any("PRIVATE KEY" in path.read_text(encoding="ascii")
+                   for path in secret_dir.iterdir())
+    assert len({(secret_dir / f"{prefix}_kms_token").read_text(encoding="ascii")
+                for prefix in TLS_PREFIXES}) == len(TLS_PREFIXES)
+
+
+@pytest.mark.parametrize("invalid_name,invalid_value", [
+    ("passport_edge_tls_cert", "-----BEGIN PRIVATE KEY-----\nforbidden\n"),
+    ("flow_workload_client_kms_token", "root-token-must-not-be-reused"),
+])
+def test_disposable_tls_rejects_private_material_before_moving_files(
+    tmp_path: Path, invalid_name: str, invalid_value: str,
+) -> None:
+    output = tmp_path / "tls-output"
+    output.mkdir(mode=0o700)
+    secret_dir = tmp_path / "secrets"
+    secret_dir.mkdir()
+    certificate = (Path(__file__).parents[1] / "rust/services/signing-keys/tests/fixtures"
+                   / "public_certificates/root-ca.pem").read_text(encoding="ascii")
+    for name in PUBLIC_TLS_FILES:
+        value = certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct-token"
+        (output / name).write_text(value, encoding="ascii")
+    (output / invalid_name).write_text(invalid_value, encoding="ascii")
+    with pytest.raises(ValueError, match="private material|token is invalid"):
+        accept_remote_tls(output, secret_dir, "root-token-must-not-be-reused")
+    assert list(secret_dir.iterdir()) == []
 
 
 def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
@@ -87,7 +132,7 @@ def source_plan(tmp_path: Path) -> tuple[Path, Path, dict]:
         "migrations_reference": "migrations@sha256:" + "c" * 64,
         "infra_images": {"postgres": "postgres@sha256:" + "e" * 64,
                          "openbao": "openbao@sha256:" + "f" * 64,
-                         "edge": "nginx@sha256:" + "1" * 64},
+                         "redis": "redis@sha256:" + "1" * 64},
     }
     plan = {
         "schema": "marty.passport-supported-provisioning-plan/v1",
@@ -184,7 +229,7 @@ def test_disposable_inputs_are_fresh_private_and_plan_bound() -> None:
             "passport_beta_reconciliation_operator_token",
             "bureau_database_url", "token_hmac_key",
             "flow_webhook_secret", "flow_application_event_hmac_key",
-        } | TLS_FILES
+        }
         assert len((secret_dir / "bao_root_token").read_text(encoding="ascii")) == 64
         ceremony_keys = [(secret_dir / name).read_text(encoding="ascii") for name in (
             "dsc_issue_gateway_key", "csca_issue_gateway_key")]
@@ -849,7 +894,9 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
     networks = {project + "_private": private,
                 project + secondary_suffix: secondary}
     volumes = ([project + "_openbao_data", project + "_openbao_file",
-                project + "_openbao_logs"] if service == "openbao" else [])
+                project + "_openbao_logs", project + "_openbao_public_ca"]
+               if service == "openbao" else
+               [project + "_openbao_public_ca"] if service == "edge" else [])
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     mounts = [
         {"Type": kind, "Source": source, "Name": source if kind == "volume" else None,
@@ -869,7 +916,7 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
             return json.dumps([{
                 "Id": container, "Name": f"/{project}-{service}-1",
                 "Config": {"Image": (plan["infra_images"][service]
-                                     if service in {"openbao", "edge"}
+                                     if service == "openbao"
                                      else plan["services_reference"]),
                            "Labels": {**labels, "com.docker.compose.service": service}},
                 "HostConfig": {"NetworkMode": state["mode"]},
@@ -908,7 +955,8 @@ def test_partial_teardown_accepts_either_owned_dual_network_primary(
         *arguments, inspector, executor, **gates)
     assert [call[:2] for call in calls] == ([
         ["container", "rm"], ["network", "rm"], ["volume", "rm"]]
-        if service == "openbao" else [["container", "rm"], ["network", "rm"]])
+        if service in {"openbao", "edge"} else
+        [["container", "rm"], ["network", "rm"]])
 
     present.update(containers=True, networks=True, volumes=True)
     calls.clear()
@@ -973,6 +1021,7 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
     container = "1" * 64
     network = "2" * 64
     network_name = project + "_private"
+    volume = project + "_openbao_public_ca"
     root = Path(tempfile.gettempdir()) / project
     source = Path(__file__).resolve().parents[1]
     labels = {**plan["owner_labels"], "com.docker.compose.project": project,
@@ -988,7 +1037,9 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
             (source / "docker/openbao-init.sh", "/scripts/openbao-init.sh", False),
         )
     ]
-    present = {"container": True, "network": True}
+    mounts.append({"Type": "volume", "Name": volume,
+                   "Destination": "/bao/public-ca", "RW": False})
+    present = {"container": True, "network": True, "volume": True}
     state = {"image": plan["infra_images"]["openbao"],
              "name": f"/{project}-passport-openbao-bootstrap-1",
              "mounts": mounts, "attachments": {network_name: {"NetworkID": network}}}
@@ -1006,12 +1057,16 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
             return json.dumps([{"Id": network, "Name": network_name,
                                 "Driver": "bridge", "Internal": True,
                                 "Containers": {container: {}}, "Labels": labels}])
+        if args[:2] == ["volume", "inspect"]:
+            assert args[2] == volume
+            return json.dumps([{"Name": volume, "Driver": "local",
+                                "Options": {}, "Labels": labels}])
         if args[0] == "ps":
             return container if present["container"] else ""
         if args[:2] == ["network", "ls"]:
             return network if present["network"] else ""
         if args[:2] == ["volume", "ls"]:
-            return ""
+            return volume if present["volume"] else ""
         raise AssertionError(args)
 
     def executor(args: list[str], output: object) -> bool:
@@ -1020,6 +1075,8 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
             present["container"] = False
         elif args[:2] == ["network", "rm"]:
             present["network"] = False
+        elif args[:2] == ["volume", "rm"]:
+            present["volume"] = False
         return True
 
     for field, bad in (
@@ -1040,6 +1097,7 @@ def test_partial_teardown_recognizes_interrupted_openbao_bootstrap(
     assert calls == [
         ["container", "rm", "-f", container],
         ["network", "rm", network],
+        ["volume", "rm", volume],
     ]
 
 
@@ -1067,6 +1125,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
     project = plan["project"]
     parent_service = ("signing-keys" if helper_service ==
                       "passport-certificate-bootstrap" else "passport-beta-bureau")
+    volume = (project + "_openbao_public_ca"
+              if parent_service == "signing-keys" else None)
     parent, helper, network = "1" * 64, "2" * 64, "3" * 64
     network_name = project + "_private"
     callback_network = "4" * 64
@@ -1076,7 +1136,9 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         parent_networks[callback_name] = {"NetworkID": callback_network}
     labels = {**plan["owner_labels"], "com.docker.compose.project": project}
     signer_mounts = [
-        {"Type": kind, "Source": source, "Destination": destination, "RW": writable}
+        {"Type": kind, "Source": source,
+         **({"Name": source} if kind == "volume" else {}),
+         "Destination": destination, "RW": writable}
         for kind, source, destination, writable in _expected_mounts(
             parent_service, project, Path(tempfile.gettempdir()) / project,
             plan["surface"], ceremony=ceremony)
@@ -1089,7 +1151,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         "attachments": {},
         "mounts": [],
     }
-    present = {"containers": True, "network": True}
+    present = {"containers": True, "network": True, "volume": True}
     calls: list[list[str]] = []
 
     def inspector(args: list[str]) -> str:
@@ -1124,6 +1186,10 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                 "Id": selected_network, "Name": selected_name, "Driver": "bridge",
                 "Internal": True, "Containers": {parent: {}}, "Labels": labels,
             }])
+        if args[:2] == ["volume", "inspect"]:
+            assert args[2] == volume
+            return json.dumps([{"Name": volume, "Driver": "local",
+                                "Options": {}, "Labels": labels}])
         if args[0] == "ps":
             return f"{parent}\n{helper}" if present["containers"] else ""
         if args[:2] == ["network", "ls"]:
@@ -1131,7 +1197,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
                              if parent_service == "passport-beta-bureau" else [network])
                     if present["network"] else "")
         if args[:2] == ["volume", "ls"]:
-            return ""
+            return volume if volume and present["volume"] else ""
         raise AssertionError(args)
 
     def executor(args: list[str], output: object) -> bool:
@@ -1140,6 +1206,8 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
             present["containers"] = False
         elif args[:2] == ["network", "rm"]:
             present["network"] = False
+        elif args[:2] == ["volume", "rm"]:
+            present["volume"] = False
         return True
 
     for field, bad in (
@@ -1176,6 +1244,7 @@ def test_partial_teardown_recognizes_interrupted_certificate_helper(
         ["container", "rm", "-f", parent, helper],
         ["network", "rm", *([network, callback_network]
                             if parent_service == "passport-beta-bureau" else [network])],
+        *([ ["volume", "rm", volume] ] if volume else []),
     ]
 
 

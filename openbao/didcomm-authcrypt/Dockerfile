@@ -6,6 +6,8 @@ RUN go mod download
 COPY openbao/didcomm-authcrypt/ ./
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./...
 RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/openbao-didcomm-authcrypt ./cmd/openbao-didcomm-authcrypt
+RUN CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags='-s -w' -o /out/selfhost-tls-init ./cmd/selfhost-tls-init
 
 FROM quay.io/openbao/openbao:2.5.5@sha256:6150c4a6b62067db6141c8da7a6a6b5763f4f47c315343d0c848b40fecdfd452
 COPY --from=build --chmod=0555 /out/openbao-didcomm-authcrypt /plugins/openbao-didcomm-authcrypt
+COPY --from=build --chmod=0555 /out/selfhost-tls-init /usr/local/bin/selfhost-tls-init

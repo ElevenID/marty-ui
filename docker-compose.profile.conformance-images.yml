@@ -12,10 +12,10 @@ services:
     image: redis@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     pull_policy: always
   keycloak:
-    image: quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     pull_policy: always
   keycloak-configurator:
-    image: quay.io/keycloak/keycloak@sha256:82c5b7a110456dbd42b86ea572e728878549954cc8bd03cd65410d75328095d2
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     pull_policy: always
   mailpit:
     image: axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a

@@ -6,7 +6,10 @@ use crate::{
     },
 };
 use async_trait::async_trait;
-use std::{sync::Arc, time::Duration};
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
+use std::{path::Path, sync::Arc, time::Duration};
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Code, Request};
 
 const SERVICE_TOKEN_HEADER: &str = "x-service-token";
@@ -38,11 +41,46 @@ impl OrganizationAuthorization {
             .connect_timeout(Duration::from_secs(5))
             .timeout(Duration::from_secs(5))
             .connect_lazy();
-        Ok(Self {
+        Ok(Self::from_channel(channel, service_token))
+    }
+
+    pub async fn connect_with_ca(
+        target: &str,
+        ca_certificate: &Path,
+        service_token: Option<String>,
+    ) -> Result<Self, AuthorizationError> {
+        if !target.starts_with("https://") {
+            return Err(AuthorizationError::Unavailable(
+                "Organization gRPC target must use HTTPS".into(),
+            ));
+        }
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: target.into(),
+                security: GrpcTransportSecurity::ServerTls,
+                trust: GrpcTrustMode::CustomCa,
+                connect_timeout_ms: 5_000,
+                request_timeout_ms: 5_000,
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::from_ca_pem_file(Some(ca_certificate))
+                .map_err(|error| AuthorizationError::Unavailable(error.to_string()))?,
+        )
+        .map_err(|error| AuthorizationError::Unavailable(error.to_string()))?
+        .connect()
+        .await
+        .map_err(|error| AuthorizationError::Unavailable(error.to_string()))?;
+        let client = Self::from_channel(channel, service_token);
+        client.check_health().await?;
+        Ok(client)
+    }
+
+    fn from_channel(channel: Channel, service_token: Option<String>) -> Self {
+        Self {
             client: OrganizationServiceClient::new(channel),
             service_token: service_token.map(Arc::<str>::from),
             timeout: Duration::from_secs(5),
-        })
+        }
     }
 
     pub async fn check_health(&self) -> Result<(), AuthorizationError> {
@@ -141,6 +179,17 @@ fn unavailable(status: tonic::Status) -> AuthorizationError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn ca_verified_organization_client_rejects_plaintext() {
+        assert!(OrganizationAuthorization::connect_with_ca(
+            "http://organization:9002",
+            Path::new("unused-public-ca.pem"),
+            Some("s".repeat(32)),
+        )
+        .await
+        .is_err());
+    }
 
     fn membership() -> MemberResponse {
         MemberResponse {

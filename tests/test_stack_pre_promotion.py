@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = "a" * 40
 IMAGES = tuple(IMAGE_URIS[role] for role in REQUIRED_IMAGE_ROLES)
 DIGESTS = dict(zip(REQUIRED_IMAGE_ROLES,
-                   ("sha256:" + character * 64 for character in "abcd"), strict=True))
+                   ("sha256:" + character * 64 for character in "abcde"), strict=True))
 
 
 def transaction(*, promoted: list[str] | None = None, state: str | None = None) -> dict[str, object]:

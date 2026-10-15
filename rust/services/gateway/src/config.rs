@@ -100,9 +100,12 @@ pub struct GatewayConfig {
     pub production: bool,
     pub service_urls: BTreeMap<String, String>,
     pub auth_grpc_target: String,
+    pub auth_grpc_client_tls: Option<GatewayAuthClientTls>,
     pub organization_grpc_target: String,
     pub event_stream_grpc_target: String,
     pub grpc_ca_certificate: Option<PathBuf>,
+    pub organization_grpc_ca_certificate: Option<PathBuf>,
+    pub event_stream_grpc_ca_certificate: Option<PathBuf>,
     pub grpc_insecure_allowed: bool,
     pub grpc_service_token: Option<String>,
     pub device_registration_gateway_key: String,
@@ -133,6 +136,17 @@ pub struct GatewayConfig {
     pub release_identity: ReleaseIdentity,
 }
 
+#[derive(Clone, Debug)]
+pub struct GatewayAuthClientTls {
+    pub certificate: PathBuf,
+    pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
+}
+
 // Runtime credentials and connection targets must never enter diagnostic logs.
 impl fmt::Debug for GatewayConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -146,6 +160,14 @@ impl fmt::Debug for GatewayConfig {
             )
             .field("grpc_targets_configured", &true)
             .field("grpc_ca_certificate", &self.grpc_ca_certificate)
+            .field(
+                "organization_grpc_ca_certificate",
+                &self.organization_grpc_ca_certificate,
+            )
+            .field(
+                "event_stream_grpc_ca_certificate",
+                &self.event_stream_grpc_ca_certificate,
+            )
             .field("grpc_insecure_allowed", &self.grpc_insecure_allowed)
             .field(
                 "grpc_service_token_configured",
@@ -470,11 +492,14 @@ impl GatewayConfig {
         }
 
         let grpc_ca_certificate = value(values, "GRPC_TLS_CA_CERT").map(PathBuf::from);
+        let organization_grpc_ca_certificate = value(values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        let event_stream_grpc_ca_certificate = value(values, "ES_GRPC_CA_CERT").map(PathBuf::from);
         let grpc_insecure_allowed = boolean(values, "GRPC_INSECURE_ALLOWED", false)?;
-        if production && grpc_ca_certificate.is_none() && !grpc_insecure_allowed {
-            return Err(error(
-                "GRPC_TLS_CA_CERT is required outside development unless GRPC_INSECURE_ALLOWED is explicit",
-            ));
+        if production && grpc_insecure_allowed {
+            return Err(error("deployed Gateway cannot allow insecure gRPC"));
+        }
+        if production && grpc_ca_certificate.is_none() {
+            return Err(error("GRPC_TLS_CA_CERT is required outside development"));
         }
 
         let cors_origins = csv(value(values, "CORS_ORIGINS")
@@ -554,14 +579,60 @@ impl GatewayConfig {
             ));
         }
 
+        let auth_grpc_target = grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?;
+        let auth_grpc_client_tls = gateway_auth_client_tls(values, production)?;
+        if auth_grpc_client_tls.is_some() && !auth_grpc_target.starts_with("https://") {
+            return Err(error(
+                "AUTH_GRPC_TARGET must use HTTPS with the remote client identity",
+            ));
+        }
+        let organization_grpc_target = grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?;
+        if production && organization_grpc_ca_certificate.is_none() {
+            return Err(error("ORG_GRPC_CA_CERT is required outside development"));
+        }
+        if organization_grpc_ca_certificate.is_some()
+            && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ORG_GRPC_TARGET must use explicit HTTPS with ORG_GRPC_CA_CERT",
+            ));
+        }
+        let event_stream_grpc_target = grpc_target(values, "ES_GRPC_TARGET", "event-stream:9015")?;
+        if production && event_stream_grpc_ca_certificate.is_none() {
+            return Err(error("ES_GRPC_CA_CERT is required outside development"));
+        }
+        if event_stream_grpc_ca_certificate.is_some()
+            && !event_stream_grpc_target.starts_with("https://")
+        {
+            return Err(error(
+                "ES_GRPC_TARGET must use explicit HTTPS with ES_GRPC_CA_CERT",
+            ));
+        }
+        if grpc_ca_certificate.is_some()
+            && [
+                &auth_grpc_target,
+                &organization_grpc_target,
+                &event_stream_grpc_target,
+            ]
+            .iter()
+            .any(|target| !target.starts_with("https://"))
+        {
+            return Err(error(
+                "gRPC targets must use explicit HTTPS when GRPC_TLS_CA_CERT is configured",
+            ));
+        }
+
         Ok(Self {
             address: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port),
             production,
             service_urls,
-            auth_grpc_target: grpc_target(values, "AUTH_GRPC_TARGET", "localhost:9001")?,
-            organization_grpc_target: grpc_target(values, "ORG_GRPC_TARGET", "organization:9002")?,
-            event_stream_grpc_target: grpc_target(values, "ES_GRPC_TARGET", "event-stream:9015")?,
+            auth_grpc_target,
+            auth_grpc_client_tls,
+            organization_grpc_target,
+            event_stream_grpc_target,
             grpc_ca_certificate,
+            organization_grpc_ca_certificate,
+            event_stream_grpc_ca_certificate,
             grpc_insecure_allowed,
             grpc_service_token,
             device_registration_gateway_key,
@@ -719,6 +790,64 @@ fn grpc_target(
     Ok(target)
 }
 
+fn gateway_auth_client_tls(
+    values: &BTreeMap<String, String>,
+    required: bool,
+) -> Result<Option<GatewayAuthClientTls>, GatewayConfigError> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(error("GRPC_WORKLOAD_TLS_CLIENT_KEY is retired"));
+    }
+    const NAMES: [&str; 7] = [
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
+    ];
+    let configured = NAMES
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if configured == 0 && !required {
+        return Ok(None);
+    }
+    if configured != NAMES.len() {
+        return Err(error(
+            "Gateway Auth mTLS requires complete remote KMS client identity",
+        ));
+    }
+    let endpoint = value(values, NAMES[2]).unwrap_or_default();
+    let parsed =
+        url::Url::parse(&endpoint).map_err(|_| error("Gateway Auth TLS KMS origin is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(error("Gateway Auth TLS KMS origin must be HTTPS"));
+    }
+    let version = value(values, NAMES[6])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| error("Gateway Auth TLS KMS version must be positive"))?;
+    Ok(Some(GatewayAuthClientTls {
+        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(value(values, NAMES[1]).unwrap_or_default()),
+        kms_endpoint: endpoint,
+        kms_ca_certificate: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, NAMES[4]).unwrap_or_default()),
+        kms_key_name: value(values, NAMES[5]).unwrap_or_default(),
+        kms_key_version: version,
+    }))
+}
+
 fn csv(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)
@@ -788,6 +917,46 @@ fn error(message: impl Into<String>) -> GatewayConfigError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn add_remote_auth_client(values: &mut BTreeMap<String, String>) {
+        for (name, value) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_CERT", "gateway-public.pem"),
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "workload-public-ca.pem"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+                "https://bao.internal:8200",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT", "bao-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE", "scoped-token"),
+            (
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+                "gateway-auth-client",
+            ),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+    }
+
+    #[test]
+    fn deployed_auth_client_identity_rejects_private_key_files_and_invalid_kms_origin() {
+        let mut values = BTreeMap::new();
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+        add_remote_auth_client(&mut values);
+        assert!(gateway_auth_client_tls(&values, true).unwrap().is_some());
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "private.pem".into());
+        assert!(gateway_auth_client_tls(&values, true)
+            .unwrap_err()
+            .to_string()
+            .contains("retired"));
+        values.remove("GRPC_WORKLOAD_TLS_CLIENT_KEY");
+        values.insert(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR".into(),
+            "http://bao.internal:8200".into(),
+        );
+        assert!(gateway_auth_client_tls(&values, true).is_err());
+    }
 
     #[test]
     fn development_defaults_preserve_legacy_local_runtime() {
@@ -1042,6 +1211,55 @@ mod tests {
             .to_string()
             .contains("GRPC_TLS_CA_CERT"));
         values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("deployed plaintext override is retired")
+            .to_string()
+            .contains("cannot allow insecure gRPC"));
+        values.insert("GRPC_INSECURE_ALLOWED".into(), "false".into());
+        values.insert("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("remote Auth mTLS is mandatory")
+            .to_string()
+            .contains("Gateway Auth mTLS"));
+        add_remote_auth_client(&mut values);
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization CA is mandatory")
+            .to_string()
+            .contains("ORG_GRPC_CA_CERT"));
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Organization target must use HTTPS")
+            .to_string()
+            .contains("ORG_GRPC_TARGET"));
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream CA is mandatory")
+            .to_string()
+            .contains("ES_GRPC_CA_CERT"));
+        values.insert("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into());
+        assert!(GatewayConfig::from_values(&values)
+            .expect_err("Event Stream target must use HTTPS")
+            .to_string()
+            .contains("ES_GRPC_TARGET"));
+        values.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+        assert!(GatewayConfig::from_values(&values).is_ok());
+    }
+
+    #[test]
+    fn ca_verified_grpc_requires_explicit_https_targets() {
+        let mut values =
+            BTreeMap::from([("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into())]);
+        assert!(GatewayConfig::from_values(&values)
+            .unwrap_err()
+            .to_string()
+            .contains("explicit HTTPS"));
+        for (name, target) in [
+            ("AUTH_GRPC_TARGET", "https://auth:9001"),
+            ("ORG_GRPC_TARGET", "https://organization:9002"),
+            ("ES_GRPC_TARGET", "https://event-stream:9015"),
+        ] {
+            values.insert(name.into(), target.into());
+        }
         assert!(GatewayConfig::from_values(&values).is_ok());
     }
 
@@ -1063,8 +1281,14 @@ mod tests {
             ),
             ("SIGNING_KEYS_ISSUER_SIGN_KEY".into(), "e".repeat(32)),
             ("ISSUANCE_API_KEY".into(), "i".repeat(32)),
-            ("GRPC_INSECURE_ALLOWED".into(), "true".into()),
+            ("GRPC_INSECURE_ALLOWED".into(), "false".into()),
+            ("GRPC_TLS_CA_CERT".into(), "public-workload-ca.pem".into()),
+            ("ORG_GRPC_CA_CERT".into(), "public-org-ca.pem".into()),
+            ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+            ("ES_GRPC_CA_CERT".into(), "public-es-ca.pem".into()),
+            ("ES_GRPC_TARGET".into(), "https://event-stream:9015".into()),
         ]);
+        add_remote_auth_client(&mut values);
         assert!(GatewayConfig::from_values(&values)
             .unwrap_err()
             .to_string()

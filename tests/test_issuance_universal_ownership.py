@@ -57,8 +57,12 @@ def test_default_compose_selects_native_and_rust_passport_alias() -> (
         "http://issuance-native:8005"
     )
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
+    bridge = services["envoy-issuance-bridge"]
+    assert bridge["network_mode"] == "service:envoy"
+    assert bridge["environment"]["KEYLESS_BRIDGE_LISTEN"] == "127.0.0.1:19006"
+    assert bridge["environment"]["KEYLESS_BRIDGE_UPSTREAM_HOST"] == "issuance-native"
     assert services["issuance"]["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert services["issuance"]["environment"]["DIDCOMM_DELIVERY_OWNER"] == "native"
     assert services["issuance"]["entrypoint"] == ["/usr/local/bin/marty-issuance-service"]
@@ -91,8 +95,8 @@ def test_default_conformance_kubernetes_and_envoy_select_native() -> None:
     native = clusters["issuance_native_grpc"]
     endpoint = native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]
     assert endpoint["address"]["socket_address"] == {
-        "address": "issuance-native",
-        "port_value": 9005,
+        "address": "127.0.0.1",
+        "port_value": 19006,
     }
     routes = envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][
         0
@@ -165,7 +169,7 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         "credentials/{credential_id}/status}"
     )
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     for service_name in ("auth", "applicant", "presentation-policy"):
         assert "issuance-native" not in services[service_name].get("depends_on", {})

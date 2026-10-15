@@ -11,7 +11,7 @@ use marty_signing_keys::{
 async fn scoped_provider_callback_verifies_exact_body_without_key_material() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").unwrap();
     let parsed = reqwest::Url::parse(&endpoint).unwrap();
-    assert_eq!(parsed.scheme(), "http");
+    assert_eq!(parsed.scheme(), "https");
     assert_eq!(parsed.host_str(), Some("127.0.0.1"));
     let token = std::env::var("MARTY_TEST_PROVIDER_CALLBACK_TOKEN").unwrap();
     let root = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").unwrap();

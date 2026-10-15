@@ -49,13 +49,17 @@ pub async fn probe(config: &IssuanceServiceConfig) -> Result<(), String> {
         .parse::<AsciiMetadataValue>()
         .map_err(|_| "gRPC service token is invalid")?;
     let timeout = config.dependency_timeout;
-    let org = grpc_client_channel::endpoint(&config.organization_grpc_target, timeout)?;
-    let template = grpc_client_channel::endpoint(&config.credential_template_grpc_target, timeout)?;
+    let org = grpc_client_channel::channel(&config.organization_grpc_target, timeout).await?;
+    let template = grpc_client_channel::credential_template_channel(
+        &config.credential_template_grpc_target,
+        timeout,
+    )
+    .await?;
     let revocation =
-        grpc_client_channel::endpoint(&config.revocation_profile_grpc_target, timeout)?;
-    let mut org = OrganizationServiceClient::new(org.connect_lazy());
-    let mut template = CredentialTemplateServiceClient::new(template.connect_lazy());
-    let mut revocation = RevocationProfileServiceClient::new(revocation.connect_lazy());
+        grpc_client_channel::channel(&config.revocation_profile_grpc_target, timeout).await?;
+    let mut org = OrganizationServiceClient::new(org);
+    let mut template = CredentialTemplateServiceClient::new(template);
+    let mut revocation = RevocationProfileServiceClient::new(revocation);
     checked(
         org.get_organization(authenticated(
             GetOrganizationRequest {

@@ -11,7 +11,7 @@
 #
 # Usage:
 #   Inside container (KC_URL=http://keycloak:8080): called by keycloak-configurator
-#   From host (KC_URL=http://localhost:8180): called by 'make setup-keycloak'
+#   'make setup-keycloak' runs the Compose configurator with its pinned image.
 # =============================================================================
 set -euo pipefail
 

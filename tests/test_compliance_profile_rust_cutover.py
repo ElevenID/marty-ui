@@ -78,4 +78,6 @@ def test_deployed_runtime_requires_scoped_workload_identity() -> None:
             "compliance_profile_workload_client_cert" in deployment
         )
     assert 'compliance-profile:\n    environment:' in beta
-    assert 'GRPC_INSECURE_ALLOWED: "true"' in beta
+    assert 'GRPC_INSECURE_ALLOWED: "false"' in beta
+    assert "compliance_profile_workload_client_cert" in beta
+    assert "compliance_profile_tls_kms_token" in beta

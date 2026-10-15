@@ -12,6 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_selfhost_native_owner_compose.py"))
 
 
+def test_selfhost_runtime_disallows_insecure_grpc_override():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    assert model["x-runtime-env"]["GRPC_INSECURE_ALLOWED"] == "false"
+    for name, service in model["services"].items():
+        environment = service.get("environment", {})
+        if isinstance(environment, dict) and "GRPC_INSECURE_ALLOWED" in environment:
+            assert environment["GRPC_INSECURE_ALLOWED"] == "false", name
+
+
 def test_selfhost_openbao_requires_transactional_raft_storage():
     config = (ROOT / "docker/openbao-selfhost.hcl").read_text(encoding="utf-8")
     bootstrap = (ROOT / "docker/openbao-selfhost-init.sh").read_text(encoding="utf-8")
@@ -25,7 +34,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "6057f8101f9abce234b0413111c7190267c8a1b74a1569ce4a9d3f2fd52d477f"
+        == "c2127eb97ec34753a766b7afaf3eedea1dcc1c2ded9b6685d972d229739c9365"
     )
     import json
 
@@ -79,6 +88,16 @@ def test_approved_model_rejects_return_of_raw_master_key(models, fault):
             model["services"]["issuance"]["secrets"].append(
                 {"source": "integration_secret_master_key"}
             )
+    with pytest.raises(AssertionError):
+        GATE["assert_models"](approved, current)
+
+
+def test_approved_model_rejects_workload_tls_private_key_even_if_snapshotted(models):
+    approved, current = models
+    for model in (approved, current):
+        model["services"]["flow"]["environment"]["GRPC_WORKLOAD_TLS_SERVER_KEY"] = (
+            "/run/secrets/flow_workload_server_key"
+        )
     with pytest.raises(AssertionError):
         GATE["assert_models"](approved, current)
 

@@ -56,7 +56,9 @@ if (( ${#issuer_profile_contracts[@]} != 1 )); then
   exit 1
 fi
 MARTY_TEST_REDIS_URL="$signing_disposable_redis_url" \
-  run_timed issuer_profile "${issuer_profile_contracts[0]}" --ignored --test-threads=1
+  run_timed issuer_profile "${issuer_profile_contracts[0]}" \
+    redis_round_trip_preserves_profile_crud_selection_and_tenant_scope \
+    --ignored --exact --test-threads=1
 test -x target/debug/credential-template-postgres-contract
 test -x target/debug/presentation-policy-postgres-contract
 run_timed credential_template target/debug/credential-template-postgres-contract --test-threads=1

@@ -12,6 +12,7 @@ use marty_signing_keys::{
     managed_holder_key::OpenBaoManagedHolderKeys, profiles::ProfileStore, registry::RegistryStore,
     vc_api_holder_proof::OpenBaoHolderProofProvider,
 };
+use mmf_platform::{keyless_https_server_config, OpenBaoTlsIdentityFiles};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::{error, info};
@@ -130,7 +131,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clone()
         .layer(axum::middleware::from_fn(reject_integration_secret_http));
     if let Some(tls) = integration_secret_tls {
-        let tls_config = RustlsConfig::from_pem_file(&tls.cert_file, &tls.key_file).await?;
+        let identity = OpenBaoTlsIdentityFiles {
+            certificate_chain_file: tls.cert_file,
+            kms_ca_cert_file: tls.kms_ca_cert_file,
+            kms_endpoint: tls.kms_addr,
+            kms_token_file: tls.kms_token_file,
+            kms_key_name: tls.kms_key_name,
+            kms_key_version: tls.kms_key_version,
+            request_timeout: Duration::from_secs(3),
+            max_concurrent_signs: 32,
+        }
+        .connect()
+        .await?;
+        let tls_config = RustlsConfig::from_config(keyless_https_server_config(&identity)?);
         let handle = Handle::new();
         let shutdown_handle = handle.clone();
         let http_server = axum::serve(listener, http_app).with_graceful_shutdown(async move {

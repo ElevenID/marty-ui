@@ -16,6 +16,14 @@ services:
       ISSUANCE_SERVICE_PORT: "8005"
       ISSUANCE_GRPC_ENABLED: "true"
       ISSUANCE_GRPC_PORT: "9005"
+      GRPC_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/issuance_workload_server_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: ${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be HTTPS OpenBao}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/issuance_tls_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: ${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
       MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
@@ -23,7 +31,11 @@ services:
       UI_BASE_URL: ${UI_BASE_URL:-http://localhost:3000}
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      DIDCOMM_KMS_ADDR: https://openbao:8200
+      DIDCOMM_KMS_CA_CERT_FILE: /bao/public-ca/ca.crt
+      DIDCOMM_KMS_TOKEN_FILE: /bao/didcomm-issuance-token/token
       ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-credential-grant/token
       ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
       ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-readiness-grant/token
@@ -103,7 +115,13 @@ services:
       RUST_LOG: ${ISSUANCE_NATIVE_RUST_LOG:-info}
     secrets:
       - dev_integration_secret_ca
+      - workload_identity_ca_cert
+      - issuance_workload_server_cert
+      - openbao_tls_ca_cert
+      - issuance_tls_kms_token
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_didcomm_issuance_token:/bao/didcomm-issuance-token:ro
       - openbao_issuance_credential_grant:/bao/issuance-credential-grant:ro
       - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
       - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant:ro
@@ -135,7 +153,7 @@ services:
   flow:
     environment:
       <<: *native-issuance-grpc-auth
-      ISSUANCE_GRPC_TARGET: issuance-native:9005
+      ISSUANCE_GRPC_TARGET: https://issuance-native:9005
   issuance:
     environment:
       <<: *native-issuance-grpc-auth

@@ -1,7 +1,5 @@
 use axum::body::{to_bytes, Body};
 use axum::http::{Request, StatusCode};
-use axum::response::Response;
-use axum::routing::any;
 use axum::Router;
 use marty_signing_keys::documents::{
     did_storage_key, slug_storage_key, DocumentStore, LoadDidRequest,
@@ -12,7 +10,6 @@ use marty_signing_keys::profiles::{
 use marty_signing_keys::registry::RegistryStore;
 use redis::AsyncCommands;
 use serde_json::{json, Value};
-use tokio::net::TcpListener;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -145,36 +142,8 @@ async fn redis_round_trip_preserves_profile_crud_selection_and_tenant_scope() {
         .unwrap();
 }
 
-async fn transit_public_key(request: Request<Body>) -> Response {
-    let key = request.uri().path().rsplit('/').next().unwrap_or_default();
-    let material = match key {
-        "issuer-a" => "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-        "issuer-b" => "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=",
-        _ => {
-            return Response::builder()
-                .status(StatusCode::NOT_FOUND)
-                .body(Body::from(r#"{"errors":["key not found"]}"#))
-                .unwrap();
-        }
-    };
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "application/json")
-        .body(Body::from(
-            json!({
-                "data": {
-                    "latest_version": 1,
-                    "type": "ed25519",
-                    "keys": {"1": {"name": "ed25519", "public_key": material}}
-                }
-            })
-            .to_string(),
-        ))
-        .unwrap()
-}
-
 #[tokio::test]
-#[ignore = "requires MARTY_TEST_REDIS_URL"]
+#[ignore = "requires disposable Redis and HTTPS OpenBao issuer keys"]
 async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method() {
     let redis_url = disposable_backends::disposable_redis_url().await;
     let envelope = disposable_backends::disposable_openbao_envelope().await;
@@ -182,14 +151,16 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
     let organization_id = format!("rust-issuer-rebind-{suffix}");
     let slug = format!("rebind-{suffix}");
     let issuer_did = format!("did:web:issuer.example:orgs:{slug}");
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        axum::serve(listener, Router::new().fallback(any(transit_public_key)))
-            .await
-            .unwrap();
-    });
-    let endpoint = format!("http://{address}");
+    let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable HTTPS OpenBao");
+    let ca_file = std::env::var("BAO_CACERT").expect("public OpenBao CA");
+    let service_token =
+        std::env::var("MARTY_TEST_ISSUER_REBIND_TOKEN").expect("scoped issuer public-key token");
+    assert_ne!(
+        service_token,
+        std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").unwrap()
+    );
+    let issuer_a = std::env::var("MARTY_TEST_ISSUER_REBIND_KEY_A").expect("issuer key A");
+    let issuer_b = std::env::var("MARTY_TEST_ISSUER_REBIND_KEY_B").expect("issuer key B");
     let signing_service = |id: &str, key_reference: &str| {
         json!({
             "id": id,
@@ -197,9 +168,10 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
             "service_type": "custom-transit-compatible",
             "provider": "openbao",
             "endpoint": endpoint.clone(),
+            "ca_cert_file": ca_file,
             "mount": "transit",
             "auth_mode": "token",
-            "auth_reference": "test-token",
+            "auth_reference": service_token,
             "key_reference": key_reference,
             "algorithms": ["EdDSA"],
             "key_purposes": ["vc_jwt_issuer"],
@@ -222,8 +194,8 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
         Some("issuer.example".into()),
     );
     let services = vec![
-        signing_service("provider-a", "issuer-a"),
-        signing_service("provider-b", "issuer-b"),
+        signing_service("provider-a", &issuer_a),
+        signing_service("provider-b", &issuer_b),
     ];
     registry
         .save(
@@ -237,7 +209,7 @@ async fn provider_rebind_publishes_before_cutover_and_preserves_the_prior_method
         .get(marty_signing_keys::registry::storage_key(&organization_id))
         .await
         .unwrap();
-    assert!(!raw.contains("test-token"));
+    assert!(!raw.contains(&service_token));
     let persisted: Value = serde_json::from_str(&raw).unwrap();
     for service in persisted["services"].as_array().unwrap() {
         assert_eq!(service["auth_reference"], "");

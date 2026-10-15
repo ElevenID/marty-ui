@@ -14,7 +14,7 @@ use mmf_security::ApplicationEventAuthenticator;
 use reqwest::{Client, StatusCode};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
-use tonic::transport::Channel;
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Request};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -192,6 +192,7 @@ pub struct GrpcEventPublisher {
     channel: Channel,
     notification_url: Option<String>,
     notification_token: Option<String>,
+    event_stream_token: Option<String>,
     client: Client,
 }
 
@@ -200,11 +201,13 @@ impl GrpcEventPublisher {
         channel: Channel,
         notification_url: Option<String>,
         notification_token: Option<String>,
+        event_stream_token: Option<String>,
     ) -> Self {
         Self {
             channel,
             notification_url,
             notification_token,
+            event_stream_token,
             client: Client::new(),
         }
     }
@@ -277,8 +280,15 @@ impl EventPublisher for GrpcEventPublisher {
             .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
 
         let wire = event_stream_wire(event, &event.event_id);
+        let mut request = Request::new(PublishEventRequest { event: Some(wire) });
+        if let Some(token) = &self.event_stream_token {
+            let value = AsciiMetadataValue::try_from(token.as_str()).map_err(|_| {
+                ProviderError::Unavailable("event-stream service token is invalid".into())
+            })?;
+            request.metadata_mut().insert("x-service-token", value);
+        }
         let response = EventStreamServiceClient::new(self.channel.clone())
-            .publish(PublishEventRequest { event: Some(wire) })
+            .publish(request)
             .await
             .map_err(|error| ProviderError::Unavailable(error.to_string()))?
             .into_inner();

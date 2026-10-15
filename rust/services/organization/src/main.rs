@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_organization::{
     migration::{migrate_organization_schema, validate_organization_schema},
@@ -12,10 +12,12 @@ use marty_organization::{
 };
 use mmf_data::{CacheBackend, CacheConfig, RedisCache};
 use mmf_messaging::{run_outbox_dispatcher, MessageTransport};
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use mmf_security::{CedarConfig, CedarPolicyValidator, ServiceTokenAuthenticator};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -108,10 +110,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         "Organization startup state reconciled"
     );
 
-    let event_transport = Arc::new(EventStreamTransport::new(
-        &config.event_stream_target,
-        Duration::from_secs(config.event_stream_timeout_seconds),
-    ));
+    let event_transport = Arc::new(
+        EventStreamTransport::new(
+            &config.event_stream_target,
+            Duration::from_secs(config.event_stream_timeout_seconds),
+        )
+        .with_ca_certificate(config.event_stream_ca_certificate.clone())
+        .with_service_token(config.service_token.clone()),
+    );
     match event_transport.connect().await {
         Ok(()) => runtime.mark_healthy(OrganizationDependency::EventStream)?,
         Err(error) => {
@@ -156,18 +162,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let organization_server = OrganizationServiceServer::new(grpc_service);
+    let tls_acceptor = if let Some(files) = &config.grpc_server_tls {
+        Some(
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: files.certificate.clone(),
+                kms_ca_cert_file: files.kms_ca_certificate.clone(),
+                kms_endpoint: files.kms_endpoint.clone(),
+                kms_token_file: files.kms_token_file.clone(),
+                kms_key_name: files.kms_key_name.clone(),
+                kms_key_version: files.kms_key_version,
+                request_timeout: Duration::from_secs(10),
+                max_concurrent_signs: 64,
+            }
+            .grpc_acceptor_without_client_auth(64, Duration::from_secs(15))
+            .await?,
+        )
+    } else {
+        None
+    };
     let (listener_shutdown_tx, listener_shutdown_rx) = watch::channel(false);
     let mut http_shutdown = listener_shutdown_rx.clone();
     let mut grpc_shutdown = listener_shutdown_rx;
     let http = http.with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = Server::builder()
+    let grpc_router = Server::builder()
         .add_service(health_service)
-        .add_service(organization_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+        .add_service(organization_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                let acceptor = acceptor.clone();
+                async move {
+                    match connection {
+                        Ok(stream) => acceptor.accept(stream).await,
+                        Err(error) => Err(error),
+                    }
+                }
+            });
+            Box::pin(
+                grpc_router.serve_with_incoming_shutdown(incoming, async move {
+                    wait_for_shutdown(&mut grpc_shutdown).await;
+                }),
+            )
+        } else {
+            Box::pin(
+                grpc_router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
 
     runtime.activate()?;
     health_reporter

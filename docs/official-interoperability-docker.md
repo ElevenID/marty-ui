@@ -28,8 +28,23 @@ export MARTY_CONFORMANCE_REVIEWER_EMAIL=conformance.reviewer@elevenid.dev
 # Generate a new value for every disposable run; do not commit it.
 export MARTY_CONFORMANCE_REVIEWER_PASSWORD="$(openssl rand -base64 32)"
 
-# Supply immutable MARTY_*_IMAGE digests, disposable TLS material, and the
-# ordinary stack fixture configuration before starting.
+# Provision the public OIDF certificate with a CSR from a versioned,
+# non-exportable OpenBao Transit key. The certificate's public key must match
+# that key version. The Rust edge verifies this binding before it listens.
+export OIDF_TLS_CERT_DIR=/absolute/path/to/public-oidf-certificates
+# This directory contains tls.crt and root-ca.pem only; it has no tls.key.
+export OIDF_TLS_KMS_ADDR=https://kms.example.internal:8200
+export OIDF_TLS_KMS_CA_CERT_FILE=/absolute/path/to/public-openbao-ca.pem
+export OIDF_TLS_KMS_TOKEN_FILE=/absolute/path/to/scoped-oidf-sign-token
+export OIDF_TLS_KMS_KEY_NAME=marty-oidf-edge-tls
+export OIDF_TLS_KMS_KEY_VERSION=1
+
+# Supply immutable MARTY_*_IMAGE digests and the ordinary stack fixture
+# configuration before starting. OpenBao must be reachable by its HTTPS name
+# from the oidf-tls-proxy container. The scoped token may read metadata and
+# sign only the named key; it must not export, back up, or create keys.
+# The base development OpenBao listener is still HTTP and cannot serve this
+# edge; use a separately provisioned HTTPS endpoint until that graph is cut over.
 python scripts/conformance_stack.py up
 python scripts/conformance_stack.py ports
 ```

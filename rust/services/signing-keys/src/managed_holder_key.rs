@@ -31,7 +31,7 @@ pub struct OpenBaoManagedHolderKeys {
 impl OpenBaoManagedHolderKeys {
     pub fn new(endpoint: String) -> Result<Self, HolderKeyError> {
         let url = Url::parse(&endpoint).map_err(|_| HolderKeyError::Unavailable)?;
-        if !matches!(url.scheme(), "http" | "https")
+        if url.scheme() != "https"
             || !url.username().is_empty()
             || url.password().is_some()
             || url.path() != "/"
@@ -155,7 +155,8 @@ mod tests {
 
     #[tokio::test]
     async fn invalid_version_or_cross_registration_requests_fail_before_provider_access() {
-        let provider = OpenBaoManagedHolderKeys::new("http://127.0.0.1:1".into()).unwrap();
+        assert!(OpenBaoManagedHolderKeys::new("http://127.0.0.1:1".into()).is_err());
+        let provider = OpenBaoManagedHolderKeys::new("https://127.0.0.1:1".into()).unwrap();
         let reference = new_reference("org-a", "registration-a", "holder_binding").unwrap();
         let scope = || HolderKeyScope {
             organization_id: "org-a".into(),

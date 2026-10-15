@@ -179,6 +179,10 @@ def test_compose_render_is_scoped_and_rejects_root_in_migration(tmp_path):
                       "target": "/run/secrets/bao_root_token"}]),
         lambda item: item["services"]["openbao-bootstrap"].update(
             ports=["8200:8200"]),
+        lambda item: item["services"]["openbao-bootstrap"]["environment"].update(
+            BAO_ADDR="http://openbao:8200"),
+        lambda item: item["services"]["openbao-bootstrap"]["environment"].pop(
+            "BAO_CACERT"),
         lambda item: item["services"]["db-migrate"].update(platform="linux/arm64"),
         lambda item: item["services"]["openbao"].pop("platform"),
         lambda item: item["services"]["native-schema-migrate"].update(

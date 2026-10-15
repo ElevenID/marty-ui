@@ -20,6 +20,7 @@ base64.workspace = true
 chrono.workspace = true
 marty-event-stream = { path = "../event-stream" }
 mmf-security.workspace = true
+mmf-platform.workspace = true
 regex.workspace = true
 reqwest.workspace = true
 serde.workspace = true

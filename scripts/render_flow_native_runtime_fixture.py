@@ -31,13 +31,16 @@ SECRET_VALUES = {
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",
     "sign_grant_mint_flow_wallet_token": "synthetic-flow-grant-mint-capability",
+    "flow_client_tls_kms_token": "synthetic-flow-client-tls-sign-capability",
+    "flow_server_tls_kms_token": "synthetic-flow-server-tls-sign-capability",
 }
 TLS_FILES = {
     "GRPC_WORKLOAD_TLS_CLIENT_CERT": "flow_workload_client_cert",
-    "GRPC_WORKLOAD_TLS_CLIENT_KEY": "flow_workload_client_key",
+    "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "openbao_tls_ca_cert",
     "GRPC_WORKLOAD_TLS_SERVER_CERT": "flow_workload_server_cert",
-    "GRPC_WORKLOAD_TLS_SERVER_KEY": "flow_workload_server_key",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "openbao_tls_ca_cert",
     "GRPC_WORKLOAD_TLS_CA_CERT": "workload_identity_ca_cert",
+    "BAO_CACERT": "openbao_tls_ca_cert",
 }
 
 
@@ -57,36 +60,71 @@ def validate_spec(spec):
     return directory
 
 
-def mapped_environment(service, spec):
-    """Only owned listener and declared-file paths may differ from Compose."""
+def mapped_environment(service, spec, profile):
+    """Bind development admission tests to closed peers; retain deployed TLS."""
     original = service["environment"]
     environment = deepcopy(original)
     environment["ISSUANCE_GRPC_TARGET"] = {
         "issuance:9005": spec["legacy_rpc"],
         "issuance-native:9005": spec["native_rpc"],
+        "https://issuance-native:9005": (
+            spec["native_rpc"].replace("http://", "https://", 1)
+            if profile == "selfhost"
+            else spec["native_rpc"]
+        ),
     }[original["ISSUANCE_GRPC_TARGET"]]
     assert original["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     environment["ISSUANCE_SERVICE_URL"] = spec["legacy_http"]
+    if original.get("BAO_ADDR") == "https://openbao:8200":
+        # The executable grant minter requires an HTTPS KMS origin even when
+        # this admission fixture never performs a signing operation.
+        environment["BAO_ADDR"] = "https://127.0.0.1:18200"
+        environment["BAO_CACERT"] = (
+            Path(spec["directory"]) / "openbao_tls_ca_cert"
+        ).as_posix()
     declared = {item["source"] for item in service.get("secrets", [])}
     for key, value in original.items():
+        if key == "BAO_CACERT" and original.get("BAO_ADDR") == "https://openbao:8200":
+            continue
         if key.endswith("_FILE") or key in TLS_FILES:
             if not value and key == "PASSPORT_TENANT_API_KEYS_FILE":
                 continue
             if key == "FLOW_SIGN_GRANT_MINT_TOKEN_FILE":
                 if value == "/bao/flow-grant/token":
-                    assert service.get("volumes") == [{
-                        "type": "volume", "source": "openbao_flow_grant",
-                        "target": "/bao/flow-grant", "read_only": True, "volume": {},
-                    }]
+                    assert service.get("volumes") == [
+                        {
+                            "type": "volume",
+                            "source": "openbao_public_ca",
+                            "target": "/bao/public-ca",
+                            "read_only": True,
+                            "volume": {},
+                        },
+                        {
+                            "type": "volume",
+                            "source": "openbao_flow_grant",
+                            "target": "/bao/flow-grant",
+                            "read_only": True,
+                            "volume": {},
+                        },
+                    ]
                 else:
                     assert value == "/run/secrets/sign_grant_mint_flow_wallet_token"
                     assert "sign_grant_mint_flow_wallet_token" in declared
-                environment[key] = (Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token").as_posix()
+                environment[key] = (
+                    Path(spec["directory"]) / "sign_grant_mint_flow_wallet_token"
+                ).as_posix()
                 continue
             name = Path(value).name
-            assert value == f"/run/secrets/{name}" and name in declared
+            assert value == f"/run/secrets/{name}" and name in declared, (key, value)
             assert name in SECRET_VALUES or name in TLS_FILES.values()
             environment[key] = (Path(spec["directory"]) / name).as_posix()
+    if profile != "selfhost":
+        # The admission peers are intentionally plaintext and cannot exercise
+        # KMS TLS. Assert the original rendered TLS selection in the caller;
+        # only the closed development child drops TLS inputs for this journey.
+        for key in tuple(environment):
+            if key.startswith("GRPC_WORKLOAD_TLS_"):
+                del environment[key]
     assert all(isinstance(value, str) for value in environment.values())
     return environment
 
@@ -101,8 +139,11 @@ def render(spec, command):
     with tempfile.TemporaryDirectory(prefix="flow-render-model-") as temporary:
         root = Path(temporary)
         required = set()
-        for name in ("docker-compose.base.yml", SELFHOST["GATE"]["BASE"],
-                     SELFHOST["APPROVED"]):
+        for name in (
+            "docker-compose.base.yml",
+            SELFHOST["GATE"]["BASE"],
+            SELFHOST["APPROVED"],
+        ):
             required.update(
                 re.findall(r"\$\{([A-Z0-9_]+):\?", (ROOT / name).read_text())
             )
@@ -117,6 +158,13 @@ def render(spec, command):
             SELFHOST_STATE_DIR=(directory / "unused-state").as_posix(),
             SELFHOST_SECRET_DIR=directory.as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
+            BAO_ADDR="https://127.0.0.1:18200",
+            FLOW_CLIENT_TLS_KMS_ADDR="https://127.0.0.1:18200",
+            FLOW_CLIENT_TLS_KMS_KEY_NAME="synthetic-flow-client-tls",
+            FLOW_CLIENT_TLS_KMS_KEY_VERSION="1",
+            FLOW_SERVER_TLS_KMS_ADDR="https://127.0.0.1:18200",
+            FLOW_SERVER_TLS_KMS_KEY_NAME="synthetic-flow-server-tls",
+            FLOW_SERVER_TLS_KMS_KEY_VERSION="1",
         )
         (root / "images.env").write_text(
             "".join(f"{key}={value}\n" for key, value in sorted(inputs.items())),
@@ -144,19 +192,21 @@ def render(spec, command):
         models = {"base": base, "base_native": native, "selfhost": selfhost}
         result = {
             name: {
-                "environment": mapped_environment(model["services"]["flow"], spec),
+                "environment": mapped_environment(model["services"]["flow"], spec, name),
                 "original_environment": model["services"]["flow"]["environment"],
             }
             for name, model in models.items()
         }
         for name, value in SECRET_VALUES.items():
             (directory / name).write_text(value, encoding="utf-8")
-        # Existing ephemeral certificate helper, not operator credential creation.
-        fixture = runpy.run_path(str(ROOT / "scripts/test_canvas_lti_https.py"))
-        certificate, key = fixture["create_loopback_certificate"](directory)
-        for name in TLS_FILES.values():
-            source = key if name.endswith("_key") else certificate
-            (directory / name).write_bytes(source.read_bytes())
+        public_certificate = (
+            ROOT
+            / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+        ).read_bytes()
+        assert b"BEGIN CERTIFICATE" in public_certificate
+        assert b"PRIVATE KEY" not in public_certificate
+        for name in set(TLS_FILES.values()):
+            (directory / name).write_bytes(public_certificate)
         return {"schema": "marty.flow-rendered-selection/v1", "profiles": result}
 
 

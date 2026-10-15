@@ -50,6 +50,29 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: GRPC_INSECURE_ALLOWED
+            - name: GRPC_WORKLOAD_TLS_SERVER_CERT
+              value: /run/secrets/issuance-server-tls/tls.crt
+            - name: GRPC_WORKLOAD_TLS_CA_CERT
+              value: /run/secrets/issuance-server-tls/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_TLS_KMS_ADDR
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT
+              value: /run/secrets/issuance-server-kms/ca.crt
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE
+              value: /run/secrets/issuance-server-kms/token
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_TLS_KMS_KEY_NAME
+            - name: GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: ISSUANCE_TLS_KMS_KEY_VERSION
             - name: PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID
               valueFrom:
                 configMapKeyRef:
@@ -219,11 +242,13 @@ spec:
             - name: ISSUANCE_GRPC_PORT
               value: "9005"
             - name: ORG_GRPC_TARGET
-              value: organization:9002
+              value: https://organization:9002
             - name: CT_GRPC_TARGET
-              value: credential-template:9003
+              value: https://credential-template:9003
             - name: RP_GRPC_TARGET
-              value: revocation-profile:9013
+              value: https://revocation-profile:9013
+            - name: GRPC_TLS_CA_CERT
+              value: /run/secrets/integration-secret-ca/ca.crt
             - name: SIGNING_KEYS_INTERNAL_URL
               value: http://gateway:8000/internal/signing-keys
             - name: INTEGRATION_SECRET_KMS_URL
@@ -237,6 +262,8 @@ spec:
                   key: BAO_ADDR
             - name: DIDCOMM_KMS_TOKEN_FILE
               value: /run/secrets/didcomm-kms/token
+            - name: DIDCOMM_KMS_CA_CERT_FILE
+              value: /run/secrets/issuance-server-kms/ca.crt
             - name: BAO_ADDR
               valueFrom:
                 configMapKeyRef:
@@ -308,6 +335,12 @@ spec:
                   key: CANVAS_CREDENTIALS_API_TOKEN
                   optional: true
           volumeMounts:
+            - name: issuance-server-tls
+              mountPath: /run/secrets/issuance-server-tls
+              readOnly: true
+            - name: issuance-server-kms
+              mountPath: /run/secrets/issuance-server-kms
+              readOnly: true
             - name: didcomm-kms-token
               mountPath: /run/secrets/didcomm-kms
               readOnly: true
@@ -342,6 +375,12 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
       volumes:
+        - name: issuance-server-tls
+          secret:
+            secretName: issuance-server-tls
+        - name: issuance-server-kms
+          secret:
+            secretName: issuance-server-kms
         - name: didcomm-kms-token
           secret:
             secretName: marty-secrets

@@ -10,7 +10,11 @@ const DEVELOPMENT_ISSUER_SIGN_KEY: &str = "dev-signing-keys-issuer-did-sign-key"
 pub struct IntegrationSecretTls {
     pub addr: SocketAddr,
     pub cert_file: PathBuf,
-    pub key_file: PathBuf,
+    pub kms_addr: String,
+    pub kms_ca_cert_file: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -51,11 +55,24 @@ impl Config {
             return Err("SIGNING_KEYS_SERVICE_PORT must be greater than zero".into());
         }
         let tls_cert = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE");
-        let tls_key = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
+        if value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE").is_some() {
+            return Err("integration-secret TLS private-key files are not supported".into());
+        }
+        let kms_addr = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR");
+        let kms_ca = value(
+            values,
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+        );
+        let kms_token = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE");
+        let kms_key = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME");
+        let kms_version = value(
+            values,
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION",
+        );
         let tls_port = value(values, "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT");
-        let integration_secret_tls = match (tls_cert, tls_key, tls_port) {
-            (None, None, None) => None,
-            (Some(cert_file), Some(key_file), tls_port) => {
+        let integration_secret_tls = match (tls_cert, kms_addr, kms_ca, kms_token, kms_key, kms_version, tls_port) {
+            (None, None, None, None, None, None, None) => None,
+            (Some(cert_file), Some(kms_addr), Some(kms_ca), Some(kms_token), Some(kms_key), Some(kms_version), tls_port) => {
                 let tls_port = tls_port
                     .map(|value| value.parse::<u16>())
                     .transpose()
@@ -64,14 +81,23 @@ impl Config {
                 if tls_port == 0 || tls_port == port {
                     return Err("integration-secret TLS port must differ from the HTTP port".into());
                 }
+                let kms_key_version = kms_version.parse::<u32>()
+                    .map_err(|_| "integration-secret TLS KMS key version is invalid")?;
+                if kms_key_version == 0 {
+                    return Err("integration-secret TLS KMS key version must be positive".into());
+                }
                 Some(IntegrationSecretTls {
                     addr: SocketAddr::from(([0, 0, 0, 0], tls_port)),
                     cert_file: PathBuf::from(cert_file),
-                    key_file: PathBuf::from(key_file),
+                    kms_addr,
+                    kms_ca_cert_file: PathBuf::from(kms_ca),
+                    kms_token_file: PathBuf::from(kms_token),
+                    kms_key_name: kms_key,
+                    kms_key_version,
                 })
             }
             _ => {
-                return Err("integration-secret TLS requires both certificate and key files".into())
+                return Err("integration-secret TLS requires a public certificate and complete remote KMS identity".into())
             }
         };
         let release_version =
@@ -371,6 +397,28 @@ mod tests {
             "/run/secrets/signing-keys.key".into(),
         );
         assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
+        for (name, value) in [
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR",
+                "https://openbao.internal:8200",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+                "/run/secrets/openbao-ca.crt",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+                "/run/secrets/tls-signer-token",
+            ),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
+                "signing-keys-tls",
+            ),
+            ("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
         values.insert(
             "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
             "dedicated-integration-secret-key-32-chars".into(),
@@ -380,6 +428,12 @@ mod tests {
             config.integration_secret_tls.unwrap().addr.port(),
             DEFAULT_INTEGRATION_SECRET_TLS_PORT
         );
+        values.insert(
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE".into(),
+            "/run/secrets/signing-keys.key".into(),
+        );
+        assert!(Config::from_values(&values).is_err());
+        values.remove("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE");
         values.insert(
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_PORT".into(),
             DEFAULT_HTTP_PORT.to_string(),

@@ -43,10 +43,16 @@ SPEC_KEYS = frozenset(
         "database_url",
         "redis_url",
         "peer_origin",
+        "grpc_peer_origin",
+        "grpc_ca_file",
+        "grpc_tls_certificate_file",
+        "grpc_tls_token_file",
+        "grpc_tls_key_name",
         "legacy_origin",
         "ca_file",
         "policy_directory",
         "kms_url",
+        "kms_ca_file",
         "kms_token_file",
         "integration_secret_kms_url",
         "integration_secret_kms_ca_file",
@@ -86,12 +92,31 @@ def validate_spec(spec):
     assert all(type(port) is int and 0 < port < 65536 for port in ports)
     owned_url(spec["database_url"], {"postgres", "postgresql"})
     owned_url(spec["redis_url"], {"redis"})
-    owned_url(spec["kms_url"], {"http"})
+    owned_url(spec["kms_url"], {"https"})
     kms = urlsplit(spec["kms_url"])
     assert not kms.username and not kms.password and kms.path in {"", "/"}
+    kms_ca = Path(spec["kms_ca_file"])
+    assert kms_ca.is_absolute() and kms_ca.is_file()
+    kms_ca_bytes = kms_ca.read_bytes()
+    assert b"BEGIN CERTIFICATE" in kms_ca_bytes
+    assert b"PRIVATE KEY" not in kms_ca_bytes
     for name in ("peer_origin", "legacy_origin"):
         owned_url(spec[name], {"http"})
         assert not urlsplit(spec[name]).username and not urlsplit(spec[name]).password
+    owned_url(spec["grpc_peer_origin"], {"https"})
+    grpc_ca = Path(spec["grpc_ca_file"])
+    assert grpc_ca.is_absolute() and grpc_ca.is_file()
+    grpc_ca_bytes = grpc_ca.read_bytes()
+    assert b"BEGIN CERTIFICATE" in grpc_ca_bytes
+    assert b"PRIVATE KEY" not in grpc_ca_bytes
+    grpc_certificate = Path(spec["grpc_tls_certificate_file"])
+    assert grpc_certificate.is_absolute() and grpc_certificate.is_file()
+    assert b"BEGIN CERTIFICATE" in grpc_certificate.read_bytes()
+    assert b"PRIVATE KEY" not in grpc_certificate.read_bytes()
+    grpc_token = Path(spec["grpc_tls_token_file"])
+    assert grpc_token.is_absolute() and grpc_token.is_file()
+    assert grpc_token.parent.resolve() == Path(spec["policy_directory"]).resolve()
+    assert spec["grpc_tls_key_name"].startswith("canvas_grpc_tls_")
     assert spec["peer_origin"] != spec["legacy_origin"]
     directory = Path(spec["policy_directory"])
     ca = Path(spec["ca_file"])
@@ -120,15 +145,26 @@ def fixture_overlay(spec, selected):
         "DATABASE_URL": spec["database_url"],
         "ISSUANCE_SERVICE_PORT": str(spec["http_port"]),
         "ISSUANCE_GRPC_PORT": str(spec["grpc_port"]),
-        "ORG_GRPC_TARGET": spec["peer_origin"],
-        "CT_GRPC_TARGET": spec["peer_origin"],
-        "RP_GRPC_TARGET": spec["peer_origin"],
+        "BAO_ADDR": spec["kms_url"],
+        "BAO_CACERT": spec["kms_ca_file"],
+        "ORG_GRPC_TARGET": spec["grpc_peer_origin"],
+        "CT_GRPC_TARGET": spec["grpc_peer_origin"],
+        "RP_GRPC_TARGET": spec["grpc_peer_origin"],
+        "GRPC_TLS_CA_CERT": spec["grpc_ca_file"],
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": spec["grpc_tls_certificate_file"],
+        "GRPC_WORKLOAD_TLS_CA_CERT": spec["grpc_ca_file"],
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": spec["kms_url"],
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": spec["kms_ca_file"],
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": spec["grpc_tls_token_file"],
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": spec["grpc_tls_key_name"],
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": spec["peer_origin"],
         "REVOCATION_PROFILE_SERVICE_URL": spec["peer_origin"],
         "SIGNING_KEYS_INTERNAL_URL": spec["peer_origin"],
         "DIDCOMM_DID_WEB_INTERNAL_BASE_URL": spec["peer_origin"],
         "DIDCOMM_TLS_CA_FILE": spec["ca_file"],
         "DIDCOMM_KMS_ADDR": spec["kms_url"],
+        "DIDCOMM_KMS_CA_CERT_FILE": spec["kms_ca_file"],
         "DIDCOMM_KMS_TOKEN_FILE": spec["kms_token_file"],
         "INTEGRATION_SECRET_KMS_URL": spec["integration_secret_kms_url"],
         "INTEGRATION_SECRET_KMS_CA_FILE": spec["integration_secret_kms_ca_file"],
@@ -150,11 +186,23 @@ def fixture_overlay(spec, selected):
     gateway.update(
         {
             "GATEWAY_PORT": str(spec["gateway_port"]),
+            "BAO_ADDR": spec["kms_url"],
+            "BAO_CACERT": spec["kms_ca_file"],
             "ISSUANCE_SERVICE_URL": spec["legacy_origin"],
             "ISSUANCE_NATIVE_SERVICE_URL": f"http://127.0.0.1:{spec['http_port']}",
-            "AUTH_GRPC_TARGET": spec["peer_origin"],
-            "ORG_GRPC_TARGET": spec["peer_origin"],
-            "ES_GRPC_TARGET": spec["peer_origin"],
+            "AUTH_GRPC_TARGET": spec["grpc_peer_origin"],
+            "ORG_GRPC_TARGET": spec["grpc_peer_origin"],
+            "ES_GRPC_TARGET": spec["grpc_peer_origin"],
+            "GRPC_TLS_CA_CERT": spec["grpc_ca_file"],
+            "ORG_GRPC_CA_CERT": spec["grpc_ca_file"],
+            "ES_GRPC_CA_CERT": spec["grpc_ca_file"],
+            "GRPC_WORKLOAD_TLS_CA_CERT": spec["grpc_ca_file"],
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT": spec["grpc_tls_certificate_file"],
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": spec["kms_url"],
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": spec["kms_ca_file"],
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE": spec["grpc_tls_token_file"],
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME": spec["grpc_tls_key_name"],
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION": "1",
             "REDIS_URL": spec["redis_url"],
         }
     )
@@ -192,14 +240,9 @@ def render(spec, command):
         directory = Path(temporary)
         # Reuse the base gate's existing required-artifact binding. No image or
         # build is executed; all inputs remain synthetic and process-local.
-        import re
-
-        required = {
-            key: "synthetic-required-artifact"
-            for key in re.findall(
-                r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
-            )
-        }
+        required = GATE["required_compose_inputs"](
+            "docker-compose.base.yml", GATE["PROFILE"]
+        )
         required["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
             "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
         )
@@ -235,9 +278,9 @@ def render(spec, command):
         )
         if spec["authcrypt"]:
             selected_native = selected["services"]["issuance-native"]["environment"]
-            assert selected_native["DIDCOMM_KMS_ADDR"] == "http://openbao:8200"
+            assert selected_native["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
             assert selected_native["DIDCOMM_KMS_TOKEN_FILE"] == (
-                "/run/secrets/didcomm-kms/openbao-token"
+                "/bao/didcomm-issuance-token/token"
             )
         overlay = fixture_overlay(spec, selected)
         overlay_file = directory / "owned-process-addresses.json"

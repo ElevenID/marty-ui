@@ -46,6 +46,7 @@ DEDICATED_SERVICES = {
     "cloudflared-beta": "cloudflared-wrapper",
 }
 ISSUANCE_SERVICES = frozenset({"issuance", "issuance-migrations"})
+KEYCLOAK_SERVICES = frozenset({"keycloak", "keycloak-configurator"})
 MANDATORY_SHARED_SERVICES = frozenset({"gateway", *ISSUANCE_SERVICES})
 
 
@@ -165,8 +166,14 @@ def _validate_external_services(
 ) -> None:
     _require(isinstance(external_services, dict) and bool(external_services),
              "external image map is invalid")
-    _require(set(external_services) == set(services) - set(roles),
+    _require(set(external_services) == set(services) - set(roles) - KEYCLOAK_SERVICES,
              "external image map has missing or extra Compose service roles")
+    keycloak_images = {services[name].get("image") for name in KEYCLOAK_SERVICES}
+    _require(len(keycloak_images) == 1, "Keycloak services have different source images")
+    keycloak_image = keycloak_images.pop()
+    _exact_image(keycloak_image, "keycloak")
+    _require(_repository(keycloak_image) == release_transaction.IMAGE_URIS["keycloak"],
+             "Keycloak source image repository differs from release transaction")
     for name, image in external_services.items():
         source = services[name]
         _require(isinstance(source, dict) and isinstance(source.get("image"), str),
@@ -264,6 +271,10 @@ def build_lock(
             image = claim["image_uris"]["migrations"] + "@" + claim["images"]["migrations"]["digest"]
         elif role in SELFHOST_URIS:
             image = selfhost_images[role]
+        elif name in KEYCLOAK_SERVICES:
+            image = claim["image_uris"]["keycloak"] + "@" + claim["images"]["keycloak"]["digest"]
+            _require(source_image == image,
+                     "Keycloak Compose image differs from the qualified transaction")
         else:
             image = external_services[name]
         resolved[name] = _exact_image(image, name)

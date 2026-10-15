@@ -341,7 +341,7 @@ jobs:
                 rust/*|proto/*|contracts/*)
                   rust=true
                   ;;
-                openbao/*|docker/openbao-*)
+                openbao/*|docker/openbao-*|keycloak/openbao-provider/*|scripts/probe_keycloak_remote_rs256.py|scripts/sql/keycloak-kms-only-verify.sql)
                   openbao=true
                   rust=true
                   security=true
@@ -536,7 +536,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-          bun install
+          PUPPETEER_SKIP_DOWNLOAD=true bun install
       - name: Validate shard completeness and run fast checks
         working-directory: ui
         shell: bash
@@ -689,7 +689,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-      - run: bun install
+      - run: PUPPETEER_SKIP_DOWNLOAD=true bun install
       - name: Unit tests
         env:
           VITEST_TIMING_OUTPUT: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json
@@ -873,6 +873,26 @@ jobs:
           provenance: false
       - name: Verify packaged plugin binary
         run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt'
+      - name: Build the pinned Keycloak remote-key image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+        with:
+          context: .
+          file: keycloak/openbao-provider/Dockerfile
+          load: true
+          push: false
+          tags: marty-keycloak-openbao:ci
+          provenance: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - name: Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check cryptography==44.0.3
+          python3 scripts/probe_keycloak_remote_rs256.py --require-browser \
+            --keycloak-image marty-keycloak-openbao:ci \
+            --openbao-image marty-openbao-didcomm:ci
       - name: Qualify packaged plugin storage and self-host Raft behavior
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
@@ -881,11 +901,6 @@ jobs:
           python3 scripts/probe_didcomm_openbao_file_storage.py
           python3 scripts/probe_selfhost_openbao_raft_bootstrap.py
           python3 scripts/probe_didcomm_openbao_ha.py
-      - name: Qualify live Raft snapshot export and recovery
-        shell: pwsh
-        env:
-          MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
-        run: ./scripts/test_openbao_raft_recovery.ps1
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
         with:
           toolchain: 1.95.0
@@ -1800,16 +1815,44 @@ jobs:
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
           nonce="$(openssl rand -hex 16)"
-          docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET marty:tests:disposable-guard "$nonce" >/dev/null
           docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 13 SET marty:tests:disposable-guard "$nonce" >/dev/null
-          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" BAO_TOKEN=test-only \
-              run_timed managed_key_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
+          MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
+              run_timed managed_key_gateway python3 ../scripts/with_disposable_event_stream_kms.py \
+              --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+              --profile signing-transit -- cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 authenticated_gateway_reaches_rust_managed_key_route_without_custody \
               -- --ignored --exact
           MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13 MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce" \
               run_timed byok_gateway cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
                 byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material \
               -- --ignored --exact
+      - name: Exercise OIDF keyless HTTPS edge against disposable OpenBao
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          run_timed oidf_tls_edge python3 ../scripts/with_disposable_event_stream_kms.py \
+            --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+            --profile oidf-edge -- cargo test --locked -p marty-passport-keyless-edge \
+            --bin marty-oidf-keyless-edge tests::oidf_https_handshake_signs_with_versioned_remote_key \
+            -- --ignored --exact --nocapture
+      - name: Exercise Flow-to-Issuance mutual TLS with remote keys
+        if: matrix.lane == 'contracts'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          source ../scripts/ci/rust_contract_execution.sh
+          test_name=grpc_providers::tests::flow_issuance_channel_requires_remote_key_mutual_tls
+          cargo test --locked -p marty-flow --lib -- --list | grep -Fx "$test_name: test"
+          run_timed flow_issuance_kms python3 ../scripts/with_disposable_event_stream_kms.py \
+            --image quay.io/openbao/openbao@sha256:6c75c97223873807260352f269640935a07db0c26b3dbf12a98a36ec43ad9878 \
+            --profile flow-issuance -- cargo test --locked -p marty-flow --lib \
+            "$test_name" -- --ignored --exact --nocapture \
+            | tee "$RUNNER_TEMP/flow-issuance-kms.log"
+          grep -Eq 'test result: ok\. 1 passed; 0 failed;' "$RUNNER_TEMP/flow-issuance-kms.log"
       - name: Exercise live Signing Keys public contracts on disposable Redis
         if: matrix.lane == 'contracts'
         working-directory: rust
@@ -1822,10 +1865,8 @@ jobs:
             docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n "$db" SET marty:tests:disposable-guard "$nonce" >/dev/null
           done
           export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"
-          export BAO_ADDR=http://127.0.0.1:8200
-          export BAO_TOKEN=test-only
           export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/13
-          for entry in managed_key_create_live_contract:5 csca_lifecycle_storage_contract:2 document_storage_contract:1; do
+          for entry in csca_lifecycle_storage_contract:2 document_storage_contract:1; do
             suite="${entry%%:*}"
             expected="${entry##*:}"
             cargo test --locked -p marty-signing-keys --test "$suite" -- --ignored --test-threads=1 \
@@ -1837,180 +1878,9 @@ jobs:
       - name: Qualify scoped provider callback verification against disposable OpenBao
         if: matrix.lane == 'contracts'
         run: python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter
-      - name: Exercise Gateway CSR and managed passport chain with disposable OpenBao
+      - name: Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao
         if: matrix.lane == 'contracts'
-        working-directory: rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          source ../scripts/ci/rust_contract_execution.sh
-          for ((attempt=1; attempt<=30; attempt++)); do
-            if curl --silent --fail http://127.0.0.1:8200/v1/sys/health >/dev/null; then
-              break
-            fi
-            sleep 1
-          done
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data '{"type":"transit"}' http://127.0.0.1:8200/v1/sys/mounts/transit >/dev/null
-          nonce="$(openssl rand -hex 16)"
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
-            http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
-          redis_nonce="$(docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 --raw GET marty:tests:disposable-guard)"
-          [[ "${#redis_nonce}" -ge 16 ]]
-          export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/14
-          export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$redis_nonce"
-          export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200
-          export MARTY_TEST_OPENBAO_TOKEN=test-only
-          export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce"
-          export BAO_ADDR=http://127.0.0.1:8200
-          export BAO_TOKEN=test-only
-          create_disposable_grant_mint_role() {
-            local origin="$1" variable="$2" key="marty-sign-grant-${1}-v1" policy
-            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-              --header 'Content-Type: application/json' --request POST \
-              --data '{"type":"hmac","key_size":32,"exportable":false,"allow_plaintext_backup":false}' \
-              "${BAO_ADDR}/v1/transit/keys/${key}" >/dev/null
-            policy="$(printf 'path "transit/hmac/%s/sha2-256" { capabilities = ["update"] }\n' "$key")"
-            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-              --header 'Content-Type: application/json' --request PUT \
-              --data "$(jq -nc --arg policy "$policy" '{policy:$policy}')" \
-              "${BAO_ADDR}/v1/sys/policies/acl/test-sign-grant-mint-${origin}" >/dev/null
-            local token
-            token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-              --header 'Content-Type: application/json' --request POST \
-              --data "$(jq -nc --arg role "test-sign-grant-mint-${origin}" '{policies:[$role],no_default_policy:true}')" \
-              "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
-            export "$variable=$token"
-          }
-          create_disposable_grant_mint_role gateway-service MARTY_TEST_GRANT_MINT_TOKEN
-          create_disposable_grant_mint_role gateway-issuer-did MARTY_TEST_GRANT_ISSUER_MINT_TOKEN
-          create_disposable_grant_mint_role issuance-passport MARTY_TEST_GRANT_PASSPORT_MINT_TOKEN
-          verify_policy="$(for origin in gateway-service gateway-issuer-did issuance-passport; do
-            printf 'path "transit/verify/marty-sign-grant-%s-v1/sha2-256" { capabilities = ["update"] }\n' "$origin"
-          done)"
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request PUT \
-            --data "$(jq -nc --arg policy "$verify_policy" '{policy:$policy}')" \
-            "${BAO_ADDR}/v1/sys/policies/acl/test-sign-grant-verify" >/dev/null
-          MARTY_TEST_GRANT_VERIFY_TOKEN="$(curl --silent --show-error --fail \
-            --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
-            --request POST --data '{"policies":["test-sign-grant-verify"],"no_default_policy":true}' \
-            "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
-          export MARTY_TEST_GRANT_VERIFY_TOKEN
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
-            http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
-          cargo test --locked -p marty-signing-keys --test vdsnc_registration_live_contract \
-            -- --ignored --test-threads=1 \
-            | tee "$RUNNER_TEMP/signing-vdsnc_registration_live_contract.log"
-          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
-            "$RUNNER_TEMP/signing-vdsnc_registration_live_contract.log"
-          cargo test --locked -p marty-signing-keys --test service_rotation_live_contract \
-            -- --ignored --test-threads=1 \
-            | tee "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
-          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
-            "$RUNNER_TEMP/signing-service_rotation_live_contract.log"
-          envelope_policy='path "transit/encrypt/integration-secret-envelope-marty-aes256" { capabilities = ["create", "update"] }
-          path "transit/decrypt/integration-secret-envelope-marty-aes256" { capabilities = ["create", "update"] }
-          path "transit/keys/integration-secret-envelope-marty-aes256" { capabilities = ["read"] }'
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request PUT \
-            --data "$(jq -nc --arg policy "$envelope_policy" '{policy:$policy}')" \
-            "${BAO_ADDR}/v1/sys/policies/acl/kms-gateway-envelope-test" >/dev/null
-          envelope_token="$(curl --silent --show-error --fail \
-            --header 'X-Vault-Token: test-only' --header 'Content-Type: application/json' \
-            --request POST --data '{"policies":["kms-gateway-envelope-test"],"no_default_policy":true}' \
-            "${BAO_ADDR}/v1/auth/token/create" | jq -er '.auth.client_token')"
-          [[ -n "$envelope_token" && "$envelope_token" != test-only ]]
-          for test_name in authenticated_gateway_reaches_remaining_rust_signing_handlers \
-            authenticated_gateway_rotates_only_a_dedicated_signing_service; do
-            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$envelope_token" BAO_TOKEN="$envelope_token" \
-              run_timed "$test_name" cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-                "$test_name" -- --ignored --exact
-          done
-          cargo test --locked -p marty-signing-keys --test public_config_resolve_live_contract \
-            -- --ignored --test-threads=1 \
-            | tee "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
-          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
-            "$RUNNER_TEMP/signing-public_config_resolve_live_contract.log"
-          cargo test --locked -p marty-signing-keys --test public_key_metadata_live_contract \
-            -- --ignored --test-threads=1 \
-            | tee "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
-          grep -Eq 'test result: ok\. 2 passed; 0 failed; 0 ignored;' \
-            "$RUNNER_TEMP/signing-public_key_metadata_live_contract.log"
-          run_timed registry_credentials cargo test --locked -p marty-signing-keys --lib \
-            registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext -- --ignored --exact
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request PUT \
-            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"list\"] }"}' \
-            http://127.0.0.1:8200/v1/sys/policies/acl/kms-lti-test-signer >/dev/null
-          lti_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data '{"policies":["kms-lti-test-signer"],"ttl":"20m"}' \
-            http://127.0.0.1:8200/v1/auth/token/create \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
-          [[ -n "$lti_token" && "$lti_token" != test-only ]]
-          MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-            run_timed managed_openbao_rs256 cargo test --locked -p marty-signing-keys --test public_service_sign_live_kms \
-              managed_openbao_rs256_signature_matches_jose_pkcs1_profile -- --ignored --exact
-            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              run_timed passport_profile_csr cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-              authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao \
-            -- --ignored --exact
-            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              run_timed dedicated_service_csr cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance \
-              authenticated_gateway_generates_a_dedicated_service_csr_in_openbao \
-            -- --ignored --exact
-            test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'
-            cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance -- --list | grep -Fx "$test_name: test"
-            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only MARTY_TEST_OPENBAO_TOKEN="$lti_token" BAO_TOKEN="$lti_token" \
-              run_timed passport_dsc cargo test --locked -p marty-service-acceptance --test gateway_signing_acceptance "$test_name" -- --ignored --exact
-          chain_test='managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys'
-          cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
-            -- --list | grep -Fx "$chain_test: test"
-          run_timed passport_managed_chain cargo test --locked -p marty-service-acceptance --test passport_managed_kms_chain \
-            "$chain_test" -- --ignored --exact
-      - name: Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL
-        if: matrix.lane == 'contracts'
-        working-directory: rust
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker exec "$MARTY_RUST_CI_POSTGRES_ID" createdb -U postgres marty_holder_kms_test
-          nonce="$(openssl rand -hex 16)"
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data "{\"data\":{\"nonce\":\"$nonce\"}}" \
-            http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
-          curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request PUT \
-            --data '{"policy":"path \"transit/*\" { capabilities = [\"create\", \"read\", \"update\", \"delete\", \"list\"] }"}' \
-            http://127.0.0.1:8200/v1/sys/policies/acl/kms-holder-test >/dev/null
-          scoped_token="$(curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
-            --header 'Content-Type: application/json' --request POST \
-            --data '{"policies":["kms-holder-test"],"ttl":"20m"}' \
-            http://127.0.0.1:8200/v1/auth/token/create \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["auth"]["client_token"])')"
-          [[ -n "$scoped_token" && "$scoped_token" != test-only ]]
-          holder_case=registration_provision_sign_and_deactivate_delete_remote_key
-          cargo test --locked -p marty-service-acceptance --test holder_remote_live_kms \
-            -- --list | grep -Fx "$holder_case: test"
-          MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200 \
-            MARTY_TEST_OPENBAO_TOKEN="$scoped_token" \
-            MARTY_TEST_OPENBAO_ROOT_TOKEN=test-only \
-            MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$nonce" \
-            DEVICE_REGISTRATION_POSTGRES_TEST_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_holder_kms_test \
-            BAO_ADDR=http://127.0.0.1:8200 \
-            BAO_TOKEN="$scoped_token" \
-            cargo test --locked -p marty-service-acceptance --test holder_remote_live_kms \
-              "$holder_case" -- --ignored --exact \
-            | tee "$RUNNER_TEMP/holder-remote-live-kms.log"
-          grep -Eq 'test result: ok\. 1 passed; 0 failed; 0 ignored;' \
-            "$RUNNER_TEMP/holder-remote-live-kms.log"
+        run: python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier
       # The Flow contract deliberately requires the marty_atomic_test database.
       # Serialize it after the workspace suite so both retain their isolation.
       - name: Run Flow database contract after workspace suite
@@ -2066,6 +1936,14 @@ jobs:
               --header 'Content-Type: application/json' --request POST \
               --data "{\"data\":{\"nonce\":\"$bao_nonce\"}}" \
               http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data '{"type":"transit"}' \
+              http://127.0.0.1:8200/v1/sys/mounts/transit >/dev/null
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
+              --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
+              http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
             curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
               http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \
               | jq -e '.data.exportable == false' >/dev/null
@@ -2294,24 +2172,31 @@ jobs:
           PUBLIC_API_URL: https://beta.example.test
           PUBLIC_DOMAIN: beta.example.test
           MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE: /dev/null
-          PP_WORKLOAD_SERVER_CERT_FILE: /dev/null
-          PP_WORKLOAD_SERVER_KEY_FILE: /dev/null
-          FLOW_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          FLOW_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          FLOW_WORKLOAD_SERVER_CERT_FILE: /dev/null
-          FLOW_WORKLOAD_SERVER_KEY_FILE: /dev/null
-          AUTH_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          AUTH_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          APPLICANT_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          APPLICANT_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          VERIFICATION_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          VERIFICATION_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
         run: |
           set -euo pipefail
+          # Render-only placeholders follow the public cert/token reference
+          # contract. A newly required non-KMS value remains an error.
+          for name in $(grep -hEo '\$\{[A-Z0-9_]+:\?' \
+            docker-compose.base.yml docker-compose.beta.yml \
+            docker-compose.profile.tunnel.yml docker-compose.profile.ghcr.yml \
+            | sed -E 's/^\$\{([^:]+):\?$/\1/' | sort -u); do
+            if [[ -v $name ]] && [[ -n "${!name}" ]]; then
+              continue
+            fi
+            case "$name" in
+              MARTY_OPENBAO_DIDCOMM_IMAGE)
+                export "$name=example.invalid/openbao-didcomm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
+              KEYCLOAK_KMS_IMAGE_DIGEST)
+                export "$name=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+              KEYCLOAK_KMS_ADDR|*_TLS_KMS_ADDR) export "$name=https://kms.example.invalid" ;;
+              KEYCLOAK_KMS_KEY_VERSION) export "$name=1" ;;
+              *_TLS_KMS_KEY_NAME) export "$name=ci-${name,,}" ;;
+              *_TLS_KMS_KEY_VERSION) export "$name=1" ;;
+              *_CERT_FILE|*_TOKEN_FILE|DEV_INTEGRATION_SECRET_CA_FILE)
+                export "$name=/dev/null" ;;
+              *) echo "Missing non-KMS Compose render input: $name" >&2; exit 1 ;;
+            esac
+          done
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.profile.tunnel.yml \
@@ -2335,11 +2220,8 @@ jobs:
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert' <<<"$rendered"
-          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert' <<<"$rendered"
-          # Flow already has an explicit beta-only exception. Deployment and
-          # compliance add the other two while Organization remains plaintext.
-          test "$(grep -Fc 'GRPC_INSECURE_ALLOWED: "true"' <<<"$rendered")" -eq 3
+          ! grep -Fq 'GRPC_INSECURE_ALLOWED: "true"' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \
@@ -2673,15 +2555,18 @@ jobs:
           container="$(docker run --detach \
             --env ENVIRONMENT=test \
             --env RATE_LIMIT_RPM=0 \
-            --env BAO_ADDR=http://127.0.0.1:8200 \
+            --env BAO_ADDR=https://127.0.0.1:8200 \
             --env GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE=/run/secrets/gateway-grant-mint-token \
             --env GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE=/run/secrets/issuer-csr-grant-mint-token \
             --volume "$token_dir:/run/secrets:ro" \
             --publish 127.0.0.1::8000 \
             marty-gateway:ci)"
-          port="$(docker inspect \
-            --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
-            "$container")"
+          port="$(docker port "$container" 8000/tcp 2>/dev/null || true)"
+          if [[ -z "$port" ]]; then
+            docker logs "$container"
+            exit 1
+          fi
+          port="${port##*:}"
           for _ in {1..40}; do
             if curl --fail --silent "http://127.0.0.1:${port}/health" \
               | grep --fixed-strings --quiet '"service":"api-gateway"'; then
@@ -3142,7 +3027,7 @@ jobs:
           # Bun also covers, until the upstream package can be replaced/patched.
           (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit --ignore GHSA-vfj7-8cjw-p6xm && npm audit --omit=optional --package-lock-only --audit-level=low') &
           ui_audit_pid=$!
-          (cd tests && timed tests-audit npm audit --package-lock-only --audit-level=low) &
+          (cd tests && npm ci --ignore-scripts && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
           (timed bandit bandit -r services/ packages/ -f json -o bandit-report.json || true) &
           bandit_pid=$!

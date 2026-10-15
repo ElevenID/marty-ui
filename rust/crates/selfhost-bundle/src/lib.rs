@@ -361,10 +361,10 @@ fn pin_openbao_compose(source: &str, image: &str) -> Result<String> {
         .get_mut("services")
         .and_then(serde_yaml::Value::as_mapping_mut)
         .ok_or("OpenBao Compose has no services")?;
-    if services.len() != 2 {
+    if services.len() != 3 {
         return Err("OpenBao Compose service set changed".into());
     }
-    for name in ["openbao", "openbao-bootstrap"] {
+    for name in ["openbao-tls-init", "openbao", "openbao-bootstrap"] {
         let service = services
             .get_mut(serde_yaml::Value::String(name.into()))
             .and_then(serde_yaml::Value::as_mapping_mut)

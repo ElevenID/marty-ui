@@ -16,6 +16,7 @@ from tests.test_prepare_official_beta_release import (
 
 SOURCE = "1" * 40
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST
+KEYCLOAK = "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "9" * 64
 
 
 def release(tmp_path: Path) -> Path:
@@ -41,13 +42,22 @@ def test_exact_signed_rust_release_binds_kubernetes_services_image(tmp_path: Pat
         calls.append((manifest_path, images, commit))
         return True
 
-    assert validate(path, IMAGE, SOURCE, attest=attest) == IMAGE
+    assert validate(path, IMAGE, SOURCE, KEYCLOAK, attest=attest) == IMAGE
     assert calls == [(path, {
         "ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "a" * 64,
         "ghcr.io/elevenid/marty-ui-oss/services": SERVICES_DIGEST,
         "ghcr.io/elevenid/marty-ui-oss/migrations": "sha256:" + "c" * 64,
         "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm": "sha256:" + "7" * 64,
+        "ghcr.io/elevenid/marty-ui-oss/keycloak": "sha256:" + "9" * 64,
     }, SOURCE)]
+
+
+def test_rejects_stock_or_mismatched_keycloak_image(tmp_path: Path) -> None:
+    path = release(tmp_path)
+    for image in ("quay.io/keycloak/keycloak:25.0",
+                  "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "8" * 64):
+        with pytest.raises(ValueError, match="signed Rust-only"):
+            validate(path, IMAGE, SOURCE, image, attest=lambda *_: True)
 
 
 @pytest.mark.parametrize("reference", [
@@ -59,13 +69,13 @@ def test_exact_signed_rust_release_binds_kubernetes_services_image(tmp_path: Pat
 def test_unbound_or_mutable_image_is_refused(tmp_path: Path, reference: str) -> None:
     path = release(tmp_path)
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, reference, SOURCE, attest=lambda *_: True)
+        validate(path, reference, SOURCE, KEYCLOAK, attest=lambda *_: True)
 
 
 def test_signed_release_from_different_checkout_is_refused(tmp_path: Path) -> None:
     path = release(tmp_path)
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, IMAGE, "f" * 40, attest=lambda *_: True)
+        validate(path, IMAGE, "f" * 40, KEYCLOAK, attest=lambda *_: True)
 
 
 def test_legacy_issuance_or_unverified_attestation_is_refused(tmp_path: Path) -> None:
@@ -74,18 +84,18 @@ def test_legacy_issuance_or_unverified_attestation_is_refused(tmp_path: Path) ->
     manifest["components"].append(_manifest()["components"][7])
     rewrite(path, manifest)
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, IMAGE, SOURCE, attest=lambda *_: True)
+        validate(path, IMAGE, SOURCE, KEYCLOAK, attest=lambda *_: True)
 
     path = release(tmp_path)
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, IMAGE, SOURCE, attest=lambda *_: False)
+        validate(path, IMAGE, SOURCE, KEYCLOAK, attest=lambda *_: False)
 
 
 def test_mismatched_checksum_and_duplicate_json_key_are_refused(tmp_path: Path) -> None:
     path = release(tmp_path)
     (path.parent / "SHA256SUMS").write_text("0" * 64 + "  stack-manifest.json\n")
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, IMAGE, SOURCE, attest=lambda *_: True)
+        validate(path, IMAGE, SOURCE, KEYCLOAK, attest=lambda *_: True)
 
     path = release(tmp_path)
     path.write_text(path.read_text().replace(
@@ -93,4 +103,4 @@ def test_mismatched_checksum_and_duplicate_json_key_are_refused(tmp_path: Path) 
         '"schema": "marty.stack/v1", "schema": "marty.stack/v1",', 1),
         encoding="utf-8")
     with pytest.raises(ValueError, match="signed Rust-only"):
-        validate(path, IMAGE, SOURCE, attest=lambda *_: True)
+        validate(path, IMAGE, SOURCE, KEYCLOAK, attest=lambda *_: True)

@@ -30,6 +30,8 @@ mod envoy_runtime;
 mod envoy_runtime_sidecar;
 #[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
 mod issuance_named_peers;
+#[path = "support/remote_tls_peer.rs"]
+mod remote_tls_peer;
 #[path = "support/rendered_base_process.rs"]
 mod rendered_base_process;
 #[path = "support/renewal_binding_postgres.rs"]
@@ -52,7 +54,13 @@ mod runtime_failure_diagnostics;
 async fn scoped_transit_signer_verifies_without_key_read_authority() {
     let base_url = std::env::var("MARTY_CANVAS_OPENBAO_URL").unwrap();
     let root_token = std::env::var("MARTY_CANVAS_OPENBAO_ROOT_TOKEN").unwrap();
-    let signer = issuance_named_peers::RemoteIssuerSigner::create(&base_url, &root_token).await;
+    let ca_file = std::env::var("MARTY_CANVAS_OPENBAO_CA_CERT_FILE").unwrap();
+    let signer = issuance_named_peers::RemoteIssuerSigner::create(
+        &base_url,
+        &root_token,
+        std::path::Path::new(&ca_file),
+    )
+    .await;
     let payload = b"canvas managed issuer signing proof";
     let signature = ed25519_dalek::Signature::from_slice(&signer.sign(payload).await).unwrap();
     signer
@@ -112,7 +120,7 @@ async fn kubernetes_profile_gateway_composition_isolated() {
     base_runtime_container::retain_failure(result, owned.close_verified()).unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn kubernetes_profile_gateway_composition_child() {
     if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Kubernetes inner test requires the owned prepared-model namespace");
@@ -136,7 +144,7 @@ async fn kubernetes_profile_gateway_composition_child() {
     println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn kubernetes_resolved_native_profile_delivers_both_encryption_modes() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Kubernetes native-only profile requires configured owned fixtures");
@@ -205,7 +213,7 @@ async fn envoy_actual_image_validates_candidate() {
         .expect("Actual baseline/candidate Envoy image validation and cleanup");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_envoy_composition_child() {
     if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Inner Envoy composition is invoked only by the exact-owned namespace container");
@@ -255,7 +263,7 @@ async fn base_profile_gateway_composition_isolated() {
     result.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_gateway_composition_child() {
     if std::env::var("MARTY_BASE_RUNTIME_CHILD").as_deref() != Ok("1") {
         eprintln!("Inner composition is invoked only by the exact-owned namespace container");
@@ -275,7 +283,7 @@ async fn base_profile_gateway_composition_child() {
     println!("\nMARTY_BASE_COMPOSITION_COMPLETE_V1");
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn base_profile_native_renewal_uses_actual_rendered_configuration() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
         eprintln!("Rendered base native process requires the exact-owned published schema gate");

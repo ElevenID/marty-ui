@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -29,6 +29,7 @@ pub struct TrustProfileServiceConfig {
     pub database_url: String,
     pub database_max_connections: u32,
     pub organization_grpc_target: String,
+    pub organization_grpc_ca_cert: Option<PathBuf>,
     pub service_token: Option<String>,
     pub internal_api_key: Option<String>,
     pub dependency_timeout: Duration,
@@ -86,6 +87,7 @@ impl TrustProfileServiceConfig {
         }
         let organization_grpc_target =
             grpc_target(value(&values, "ORG_GRPC_TARGET").unwrap_or("organization:9002"))?;
+        let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
         let service_token = secret(
             &values,
             "GRPC_SERVICE_TOKEN",
@@ -127,6 +129,15 @@ impl TrustProfileServiceConfig {
                 != "https"
         {
             return Err(invalid("MARTY_ISSUER_BASE_URL"));
+        }
+        if environment.is_deployed() && organization_grpc_ca_cert.is_none() {
+            return Err(TrustProfileConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT",
+            });
+        }
+        if organization_grpc_ca_cert.is_some() && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("ORG_GRPC_TARGET"));
         }
         let dependency_timeout = Duration::from_secs(number(
             &values,
@@ -185,6 +196,7 @@ impl TrustProfileServiceConfig {
             database_url,
             database_max_connections,
             organization_grpc_target,
+            organization_grpc_ca_cert,
             service_token,
             internal_api_key,
             dependency_timeout,
@@ -381,6 +393,33 @@ mod tests {
             Err(TrustProfileConfigError::Missing {
                 name: "SIGNING_KEYS_INTERNAL_API_KEY"
             })
+        );
+    }
+
+    #[test]
+    fn deployed_organization_channel_requires_public_ca_and_explicit_https() {
+        let mut beta = values("beta");
+        beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        beta.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(16));
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(beta.clone()),
+            Err(TrustProfileConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT"
+            })
+        );
+        beta.insert("ORG_GRPC_CA_CERT".into(), "public-ca.pem".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(beta.clone()),
+            Err(TrustProfileConfigError::Invalid {
+                name: "ORG_GRPC_TARGET"
+            })
+        );
+        beta.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert_eq!(
+            TrustProfileServiceConfig::from_values(beta)
+                .unwrap()
+                .organization_grpc_ca_cert,
+            Some(PathBuf::from("public-ca.pem"))
         );
     }
 

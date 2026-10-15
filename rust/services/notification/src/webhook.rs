@@ -1,5 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use hmac::{Hmac, Mac};
+use marty_openbao_http::OpenBaoHttp;
 use reqwest::{redirect::Policy, Client, StatusCode};
 use serde_json::{Map, Value};
 use sha2::Sha256;
@@ -360,44 +361,27 @@ pub struct WebhookSecretEnvelope {
 
 impl WebhookSecretEnvelope {
     pub fn from_environment() -> Result<Self, WebhookError> {
-        let bao_addr = env::var("BAO_ADDR")
-            .unwrap_or_default()
-            .trim()
-            .trim_end_matches('/')
-            .to_owned();
-        let dedicated = read_secret_value("NOTIFICATION_OPENBAO_TOKEN")?;
-        let environment = env::var("ENVIRONMENT")
-            .unwrap_or_else(|_| "development".into())
-            .to_ascii_lowercase();
-        if matches!(environment.as_str(), "production" | "prod") && dedicated.is_empty() {
+        let bao_addr = env::var("BAO_ADDR").unwrap_or_default().trim().to_owned();
+        let token = read_secret_value("NOTIFICATION_OPENBAO_TOKEN")?;
+        if token.is_empty() {
             return Err(WebhookError::EnvelopeUnavailable(
                 "Dedicated Notification OpenBao identity is not configured".into(),
             ));
         }
-        let token = if dedicated.is_empty() {
-            let shared = read_secret_value("OPENBAO_SERVICE_TOKEN")?;
-            if shared.is_empty() {
-                read_secret_value("BAO_TOKEN")?
-            } else {
-                shared
-            }
-        } else {
-            dedicated
-        };
-        if bao_addr.is_empty() || token.is_empty() || Url::parse(&bao_addr).is_err() {
-            return Err(WebhookError::EnvelopeUnavailable(
-                "OpenBao webhook secret protection is not configured".into(),
-            ));
-        }
-        let client = Client::builder()
-            .timeout(Duration::from_secs(8))
-            .build()
-            .map_err(|error| WebhookError::EnvelopeUnavailable(error.to_string()))?;
+        let ca_file = env::var("NOTIFICATION_OPENBAO_CA_CERT_FILE")
+            .ok()
+            .filter(|value| !value.trim().is_empty());
+        let transport = OpenBaoHttp::connect(
+            &bao_addr,
+            ca_file.as_deref().map(Path::new),
+            Duration::from_secs(8),
+        )
+        .map_err(WebhookError::EnvelopeUnavailable)?;
         Ok(Self {
-            bao_addr,
+            bao_addr: transport.origin().to_owned(),
             bao_token: token,
             key_id: WEBHOOK_SECRET_ENVELOPE_KEY_ID.into(),
-            client,
+            client: transport.client().clone(),
         })
     }
 

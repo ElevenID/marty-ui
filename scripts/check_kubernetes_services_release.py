@@ -25,6 +25,7 @@ UI_IMAGES = {
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
     "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+    "keycloak": "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 
 
@@ -37,7 +38,8 @@ def _unique_object(pairs: list[tuple[str, object]]) -> dict:
     return value
 
 
-def validate(manifest_path: Path, reference: str, expected_source: str, *,
+def validate(manifest_path: Path, reference: str, expected_source: str,
+             keycloak_reference: str, *,
              attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations) -> str:
     try:
         if not IMAGE.fullmatch(reference) or not COMMIT.fullmatch(expected_source):
@@ -71,7 +73,8 @@ def validate(manifest_path: Path, reference: str, expected_source: str, *,
         if sorted(item["uri"] for item in artifacts if item["type"] == "oci") \
                 != sorted(UI_IMAGES.values()):
             raise ValueError(REFUSAL)
-        if reference != images["services"]["reference"]:
+        if (reference != images["services"]["reference"]
+                or keycloak_reference != images["keycloak"]["reference"]):
             raise ValueError(REFUSAL)
         digests = {images[role]["uri"]: images[role]["digest"] for role in UI_IMAGES}
         if attest(manifest_path, digests, source_commit) is not True:
@@ -86,10 +89,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--image", required=True)
+    parser.add_argument("--keycloak-image", required=True)
     parser.add_argument("--source-sha", required=True)
     args = parser.parse_args()
     try:
-        validate(args.manifest, args.image, args.source_sha)
+        validate(args.manifest, args.image, args.source_sha, args.keycloak_image)
     except ValueError:
         parser.exit(1, REFUSAL + "\n")
     return 0

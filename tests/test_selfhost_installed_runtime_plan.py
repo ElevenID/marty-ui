@@ -50,8 +50,21 @@ def model() -> dict:
                 services[peer]["restart"] = "no"
     for name, bindings in EXPECTED_ROLE_SECRETS.items():
         services[name]["secrets"] = [
-            {"source": secret, "target": f"/run/secrets/{secret}"}
+            {"source": secret, "target": contract.secret_target(name, secret)}
             for secret in sorted(bindings)]
+    keycloak_image = "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "e" * 64
+    services["keycloak"]["image"] = keycloak_image
+    services["keycloak-configurator"]["image"] = keycloak_image
+    services["keycloak"]["environment"] = {
+        "BAO_ADDR": "https://openbao.example.com:8200",
+        "BAO_CACERT": "/run/secrets/openbao_tls_ca_cert",
+        "BAO_TOKEN_FILE": "/run/secrets/keycloak_signing_kms_token",
+        "MARTY_KEYCLOAK_RS256_CERT_DIR": "/run/secrets",
+        "MARTY_KEYCLOAK_JWE_TOKEN_DIR": "/run/secrets",
+        "MARTY_KEYCLOAK_JWE_MOUNT": "didcomm",
+        "MARTY_KEYCLOAK_KMS_KEY_PREFIX": "keycloak",
+        "MARTY_KEYCLOAK_KMS_KEY_VERSION": "1",
+    }
     return {"services": services, "secrets": {
         name: {"name": f"marty-selfhost-prod_{name}",
                "file": str(SECRET_ROOT / name)} for name in EXPECTED_SECRET_NAMES},
@@ -64,6 +77,8 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
         EXPECTED_ROLE_SECRETS["signing-keys"]
     )
     assert "signing_keys_integration_secret_key" in EXPECTED_ROLE_SECRETS["issuance"]
+    assert contract.secret_target("keycloak", "keycloak_master_cookie_token") == (
+        "/run/secrets/master-cookie.token")
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
@@ -102,6 +117,13 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
         "file": str(SECRET_ROOT / "integration_secret_master_key")}}),
     lambda m: m["secrets"]["issuance_api_key"].update({"file": str(ROOT / "outside")}),
     lambda m: m["services"]["gateway"]["secrets"][0].update({"target": "/tmp/key"}),
+    lambda m: m["services"]["keycloak"].update({"image": "quay.io/keycloak/keycloak:25.0"}),
+    lambda m: m["services"]["keycloak-configurator"].update({"image": "other"}),
+    lambda m: m["services"]["keycloak"]["environment"].update({"BAO_ADDR": "http://openbao:8200"}),
+    lambda m: m["services"]["keycloak"]["environment"].update({"BAO_TOKEN_FILE": "/tmp/token"}),
+    lambda m: next(s for s in m["services"]["keycloak"]["secrets"]
+                   if s["source"] == "keycloak_master_cookie_token").update(
+                       {"target": "/run/secrets/keycloak_master_cookie_token"}),
     lambda m: m.update({"configs": {"extra": {"file": str(ROOT / "outside")}}}),
 ])
 def test_plan_rejects_dag_and_declaration_drift(change) -> None:
@@ -131,7 +153,8 @@ def test_plan_rejects_missing_issuance_integration_secret_key() -> None:
 
 def test_source_compose_has_reviewed_full_dag() -> None:
     env = {**os.environ, "SELFHOST_STATE_DIR": str(ROOT / "_test_state"),
-           "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets")}
+           "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets"),
+           "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "e" * 64}
     completed = subprocess.run(
         ["docker", "compose", "--profile", "*", "--env-file",
          ".env.selfhost.production.example", "-f", "docker-compose.selfhost.prod.yml",

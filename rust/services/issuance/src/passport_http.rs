@@ -3063,7 +3063,7 @@ mod tests {
         let previous_bao_addr = std::env::var_os("BAO_ADDR");
         let previous_token_file = std::env::var_os("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE");
         let token_file = tempfile::NamedTempFile::new().unwrap();
-        std::env::set_var("BAO_ADDR", "http://127.0.0.1:8200");
+        std::env::set_var("BAO_ADDR", "https://127.0.0.1:8200");
         std::env::set_var(
             "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
             token_file.path(),

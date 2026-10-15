@@ -1,11 +1,14 @@
-use std::{collections::BTreeMap, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_passport_auth::PassportTenantCredentialSource;
 #[cfg(test)]
 use marty_passport_auth::PassportTenantKeyring;
-use marty_signing_grant::{minter::GrantMinter, GrantBinding, SigningOrigin, HEADER_NAME};
+use marty_signing_grant::{
+    minter::{GrantMinter, GrantMinting},
+    GrantBinding, SigningOrigin, HEADER_NAME,
+};
 use reqwest::{Client, Method, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
@@ -392,7 +395,7 @@ pub struct HttpSigningProvider {
     signing: BoundedHttpClient,
     issuer_signing: BoundedHttpClient,
     envelopes: BoundedHttpClient,
-    grant_minter: Option<GrantMinter>,
+    grant_minter: Option<Arc<dyn GrantMinting>>,
 }
 
 impl HttpSigningProvider {
@@ -433,7 +436,7 @@ impl HttpSigningProvider {
     }
 
     pub fn with_grant_minter(mut self, grant_minter: GrantMinter) -> Self {
-        self.grant_minter = Some(grant_minter);
+        self.grant_minter = Some(Arc::new(grant_minter));
         self
     }
 
@@ -856,8 +859,8 @@ fn http_status(provider: &'static str, status: StatusCode) -> FlowProviderError 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
-    use std::sync::{Arc, Mutex};
+    use marty_signing_grant::{GrantClaims, GrantEnvelope, GrantError};
+    use std::sync::Mutex;
 
     use axum::{
         extract::State,
@@ -868,6 +871,36 @@ mod tests {
 
     type CapturedRequest = Arc<Mutex<Option<(HeaderMap, Uri, Value)>>>;
     type CapturedRead = Arc<Mutex<Option<(HeaderMap, Uri)>>>;
+
+    // This contract test checks Flow's authorized request binding and HTTP
+    // shape. Transit HMAC minting is covered by the connected OpenBao tests.
+    struct ContractGrantMinter;
+
+    #[async_trait]
+    impl GrantMinting for ContractGrantMinter {
+        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
+            let now = chrono::Utc::now().timestamp();
+            Ok(GrantEnvelope {
+                claims: GrantClaims {
+                    version: 1,
+                    origin: binding.origin,
+                    operation_id: binding.operation_id.to_owned(),
+                    organization_id: binding.organization_id.to_owned(),
+                    route: binding.route.to_owned(),
+                    service_id: binding.service_id.map(str::to_owned),
+                    issuer_did: binding.issuer_did.map(str::to_owned),
+                    key_reference: binding.key_reference.map(str::to_owned),
+                    key_purpose: binding.key_purpose.to_owned(),
+                    algorithm: binding.algorithm.to_owned(),
+                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
+                    issued_at: now,
+                    expires_at: now + 30,
+                    nonce: "contract-only-nonce".into(),
+                },
+                hmac: "not-a-production-hmac".into(),
+            })
+        }
+    }
 
     async fn signing_resolver(
         State(captured): State<CapturedRequest>,
@@ -1101,34 +1134,11 @@ mod tests {
         let captured = CapturedRequest::default();
         let router = Router::new()
             .route("/internal/compat/issuer-dids/sign", post(signing_signer))
-            .route(
-                "/v1/transit/hmac/marty-sign-grant-flow-wallet-v1/sha2-256",
-                post(|headers: HeaderMap, Json(body): Json<Value>| async move {
-                    assert_eq!(headers.get("x-vault-token").unwrap(), "flow-mint-token");
-                    assert!(STANDARD
-                        .decode(body["input"].as_str().unwrap())
-                        .unwrap()
-                        .starts_with(b"marty:issuer-signing-grant:v1\n"));
-                    Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
-                }),
-            )
             .with_state(captured.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
         let api_key = "0123456789abcdef0123456789abcdef";
-        let endpoint = format!("http://{address}");
-        let prior_bao_addr = std::env::var_os("BAO_ADDR");
-        std::env::set_var("BAO_ADDR", &endpoint);
-        let token_file =
-            std::env::temp_dir().join(format!("flow-grant-{}.token", uuid::Uuid::new_v4()));
-        std::fs::write(&token_file, "flow-mint-token\n").unwrap();
-        let minter = GrantMinter::for_managed_openbao(
-            &endpoint,
-            SigningOrigin::FlowWalletRequest,
-            token_file.clone(),
-        )
-        .unwrap();
         let unconfigured = HttpSigningProvider::new(
             &format!("http://{address}/internal/"),
             api_key,
@@ -1154,7 +1164,8 @@ mod tests {
             })
         ));
         assert!(captured.lock().unwrap().is_none());
-        let provider = unconfigured.with_grant_minter(minter);
+        let mut provider = unconfigured;
+        provider.grant_minter = Some(Arc::new(ContractGrantMinter));
 
         let result = provider.sign(&request).await.unwrap();
         assert_eq!(result.signature_raw_b64url, "c2lnbmF0dXJl");
@@ -1188,11 +1199,6 @@ mod tests {
             })
         );
         server.abort();
-        std::fs::remove_file(token_file).unwrap();
-        match prior_bao_addr {
-            Some(value) => std::env::set_var("BAO_ADDR", value),
-            None => std::env::remove_var("BAO_ADDR"),
-        }
     }
 
     #[tokio::test]

@@ -1,6 +1,10 @@
 //! Scoped remote HAIP response-key operations backed by OpenBao.
 
-use std::{path::PathBuf, time::Duration};
+use std::{
+    env,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use axum::{
     http::StatusCode,
@@ -12,6 +16,7 @@ use base64::{
     Engine,
 };
 use marty_oid4vp_contract::haip_key::{matches_public_jwk, valid_version as valid_haip_version};
+use marty_openbao_http::OpenBaoHttp;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -75,11 +80,25 @@ impl IntoResponse for FlowEnvelopeError {
 
 impl OpenBaoEnvelopeProvider {
     pub fn new(endpoint: impl Into<String>, token: impl Into<String>) -> Result<Self, String> {
+        let ca = env::var("BAO_CACERT").ok();
+        Self::new_with_ca(endpoint, token, ca.as_deref().map(Path::new))
+    }
+
+    pub fn new_with_ca(
+        endpoint: impl Into<String>,
+        token: impl Into<String>,
+        ca_certificate: Option<&Path>,
+    ) -> Result<Self, String> {
         let endpoint = endpoint.into().trim_end_matches('/').to_owned();
         let token = token.into();
         let url = reqwest::Url::parse(&endpoint)
             .map_err(|error| format!("BAO_ADDR is invalid: {error}"))?;
-        if !matches!(url.scheme(), "http" | "https")
+        #[cfg(test)]
+        let test_http = url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+        #[cfg(not(test))]
+        let test_http = false;
+        if !(url.scheme() == "https" || test_http)
             || url.host_str().is_none()
             || url.path() != "/"
             || !url.username().is_empty()
@@ -90,15 +109,29 @@ impl OpenBaoEnvelopeProvider {
         {
             return Err("OpenBao envelope provider configuration is invalid".into());
         }
+        #[cfg(test)]
+        let client = if test_http {
+            Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|_| "OpenBao test HTTP client is unavailable")?
+        } else {
+            OpenBaoHttp::connect(&endpoint, ca_certificate, TIMEOUT)
+                .map_err(|_| "OpenBao envelope HTTPS client is unavailable")?
+                .client()
+                .clone()
+        };
+        #[cfg(not(test))]
+        let client = OpenBaoHttp::connect(&endpoint, ca_certificate, TIMEOUT)
+            .map_err(|_| "OpenBao envelope HTTPS client is unavailable")?
+            .client()
+            .clone();
         Ok(Self {
             endpoint,
             token,
             haip_token_file: None,
-            client: Client::builder()
-                .no_proxy()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .map_err(|_| "OpenBao envelope HTTP client is unavailable")?,
+            client,
         })
     }
 

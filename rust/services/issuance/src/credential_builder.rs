@@ -12,7 +12,7 @@ use marty_oid4vci::{
     },
     types::SignedCredential,
 };
-use marty_signing_grant::{minter::GrantMinter, GrantBinding, SigningOrigin, HEADER_NAME};
+use marty_signing_grant::{minter::GrantMinting, GrantBinding, SigningOrigin, HEADER_NAME};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -69,11 +69,11 @@ impl HttpCredentialBuilder {
         })
     }
 
-    pub fn new_with_grant(
+    pub fn new_with_grant<M: GrantMinting + 'static>(
         base_url: Url,
         api_key: Option<&str>,
         timeout: Duration,
-        minter: GrantMinter,
+        minter: M,
     ) -> Result<Self, CredentialIssuanceError> {
         Ok(Self {
             signer: Arc::new(
@@ -422,7 +422,7 @@ pub(crate) struct HttpDidSigner {
     client: Client,
     base_url: Url,
     api_key: Option<String>,
-    grant: Option<(SigningOrigin, GrantMinter)>,
+    grant: Option<(SigningOrigin, Arc<dyn GrantMinting>)>,
 }
 
 impl HttpDidSigner {
@@ -444,8 +444,12 @@ impl HttpDidSigner {
         })
     }
 
-    pub(crate) fn with_grant_minter(mut self, origin: SigningOrigin, minter: GrantMinter) -> Self {
-        self.grant = Some((origin, minter));
+    pub(crate) fn with_grant_minter<M: GrantMinting + 'static>(
+        mut self,
+        origin: SigningOrigin,
+        minter: M,
+    ) -> Self {
+        self.grant = Some((origin, Arc::new(minter)));
         self
     }
 
@@ -984,7 +988,6 @@ mod tests {
     use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
     use sha2::{Digest, Sha256};
-    use tempfile::NamedTempFile;
 
     use super::*;
     use crate::credential::IssuerContext;
@@ -1094,11 +1097,9 @@ mod tests {
             Ok("1"),
             "run only inside the disposable KMS probe"
         );
-        let base_url = reqwest::Url::parse(
-            &std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL"),
-        )
-        .expect("valid disposable OpenBao URL");
-        assert_eq!(base_url.scheme(), "http");
+        let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let base_url = reqwest::Url::parse(&endpoint).expect("valid disposable OpenBao URL");
+        assert_eq!(base_url.scheme(), "https");
         assert!(matches!(
             base_url.host_str(),
             Some("127.0.0.1" | "localhost")
@@ -1115,7 +1116,15 @@ mod tests {
             "EdDSA" => "ed25519",
             _ => panic!("unsupported disposable key algorithm"),
         };
-        let client = reqwest::Client::new();
+        let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+        let client = marty_openbao_http::OpenBaoHttp::connect(
+            &endpoint,
+            Some(std::path::Path::new(&ca_file)),
+            std::time::Duration::from_secs(10),
+        )
+        .expect("CA-verified OpenBao HTTPS client")
+        .client()
+        .clone();
         let key_url = base_url
             .join(&format!("/v1/transit/keys/{key_name}"))
             .expect("key URL");
@@ -1445,47 +1454,8 @@ mod tests {
         }))
     }
 
-    async fn credential_grant_minter() -> (GrantMinter, NamedTempFile, tokio::task::JoinHandle<()>)
-    {
-        let app = Router::new().route(
-            "/v1/transit/hmac/marty-sign-grant-issuance-credential-v1/sha2-256",
-            post(|headers: HeaderMap, Json(_body): Json<Value>| async move {
-                assert_eq!(
-                    headers.get("x-vault-token").unwrap(),
-                    "credential-mint-token"
-                );
-                Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
-            }),
-        );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("grant listener");
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let mut token_file = NamedTempFile::new().expect("mint token file");
-        std::io::Write::write_all(&mut token_file, b"credential-mint-token\n")
-            .expect("write token");
-        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
-            .lock()
-            .expect("BAO config lock");
-        let previous_bao_addr = std::env::var_os("BAO_ADDR");
-        std::env::set_var("BAO_ADDR", &endpoint);
-        let minter = GrantMinter::for_managed_openbao(
-            &endpoint,
-            SigningOrigin::IssuanceCredential,
-            token_file.path().to_path_buf(),
-        )
-        .expect("credential grant minter");
-        match previous_bao_addr {
-            Some(value) => std::env::set_var("BAO_ADDR", value),
-            None => std::env::remove_var("BAO_ADDR"),
-        }
-        (minter, token_file, server)
-    }
-
     #[tokio::test]
     async fn http_signer_sends_the_language_neutral_contract() {
-        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let capture = HttpCapture::default();
         let app = Router::new()
             .route(
@@ -1522,7 +1492,10 @@ mod tests {
             .expect_err("unconfigured signer must deny before HTTP");
         assert!(error.to_string().contains("scoped KMS grant minter"));
         assert!(capture.0.lock().expect("capture lock").is_none());
-        let signer = signer.with_grant_minter(SigningOrigin::IssuanceCredential, minter);
+        let signer = signer.with_grant_minter(
+            SigningOrigin::IssuanceCredential,
+            crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+        );
 
         let response = signer.sign(request).await.expect("sign response");
 
@@ -1576,12 +1549,10 @@ mod tests {
         assert!(missing_key.to_string().contains("resolved remote key"));
         assert!(capture.0.lock().expect("capture lock").is_none());
         server.abort();
-        grant_server.abort();
     }
 
     #[tokio::test]
     async fn http_signer_rejects_even_null_private_routing_fields() {
-        let (minter, _token_file, grant_server) = credential_grant_minter().await;
         let app = Router::new().route("/issuer-dids/sign", post(private_routing_handler));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
@@ -1594,7 +1565,10 @@ mod tests {
             Duration::from_secs(2),
         )
         .expect("HTTP signer")
-        .with_grant_minter(SigningOrigin::IssuanceCredential, minter);
+        .with_grant_minter(
+            SigningOrigin::IssuanceCredential,
+            crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+        );
 
         let error = signer
             .sign(SignRequest {
@@ -1613,6 +1587,5 @@ mod tests {
 
         assert!(error.to_string().contains("private signing routing"));
         server.abort();
-        grant_server.abort();
     }
 }

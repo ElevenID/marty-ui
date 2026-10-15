@@ -15,7 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
-APPROVED = "selfhost-kms-only-model.managed-passport.snapshot.yml"
+APPROVED = "selfhost-kms-only-model.keyless-tls.snapshot.yml"
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
     "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
@@ -81,6 +81,7 @@ REJECTED_MASTER_KEY_INPUTS = {
 }
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
 FORBIDDEN_LOCAL_CUSTODY_INPUTS = {
+    "GRPC_WORKLOAD_TLS_SERVER_KEY",
     "ICAO_DOCUMENT_SIGNER_URL",
     "ICAO_DOCUMENT_SIGNER_API_KEY",
     "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
@@ -223,49 +224,36 @@ def assert_signing_binding(model):
 def assert_models(approved, actual):
     """Check the complete current KMS-only model against its reviewed snapshot."""
     expected = deepcopy(approved)
-    # Keep the frozen reference intact; review this migration-only credential
-    # alongside the already approved Issuance credential delta below.
-    migration = expected["services"]["db-migrate"]
-    assert migration["environment"]["BAO_TOKEN_FILE"] == "/run/secrets/openbao_service_token"
-    assert [item["source"] for item in migration["secrets"]].count("openbao_service_token") == 1
-    migration["environment"]["BAO_TOKEN_FILE"] = "/run/secrets/openbao_bootstrap_token"
-    for item in migration["secrets"]:
-        if item["source"] == "openbao_service_token":
-            item["source"] = "openbao_bootstrap_token"
-            item["target"] = "/run/secrets/openbao_bootstrap_token"
-    service_secret = expected["secrets"]["openbao_service_token"]
-    assert service_secret["file"].endswith("/openbao_service_token")
-    assert service_secret["name"].endswith("_openbao_service_token")
-    expected["secrets"]["openbao_bootstrap_token"] = {
-        "file": service_secret["file"].removesuffix("openbao_service_token")
-        + "openbao_bootstrap_token",
-        "name": service_secret["name"].removesuffix("openbao_service_token")
-        + "openbao_bootstrap_token",
-    }
-    # Preserve the pinned historical snapshot: the current Issuance alias
-    # requires the same authenticated KMS startup proof as the native role.
     issuance = expected["services"]["issuance"]
     envelope = "signing_keys_integration_secret_key"
     envelope_path = f"/run/secrets/{envelope}"
-    assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in issuance["environment"]
-    assert all(item["source"] != envelope for item in issuance["secrets"])
-    issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] = envelope_path
-    after_issuer_key = next(
-        index
-        for index, item in enumerate(issuance["secrets"])
-        if item["source"] == "signing_keys_issuer_sign_key"
-    )
-    issuance["secrets"].insert(
-        after_issuer_key + 1, {"source": envelope, "target": envelope_path}
-    )
+    assert issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
+    assert [item["source"] for item in issuance["secrets"]].count(envelope) == 1
     assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
         difflib.unified_diff(
             json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
             json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
-            fromfile="approved KMS-only model plus reviewed credential deltas",
+            fromfile="approved keyless-TLS KMS model",
             tofile="current self-host model",
         )
     )
+    retired_tls_settings = {
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
+    }
+    for name, service in actual["services"].items():
+        assert not retired_tls_settings & set(service.get("environment", {})), (
+            f"{name} still accepts a workload TLS private-key file"
+        )
+        assert not any(
+            re.fullmatch(r".*_workload_(?:client|server)_key", secret["source"])
+            for secret in service.get("secrets", [])
+        ), f"{name} still mounts a workload TLS private-key file"
+    assert not any(
+        re.fullmatch(r".*_workload_(?:client|server)_key", name)
+        for name in actual["secrets"]
+    ), "Self-host still declares a workload TLS private-key secret"
     assert "INTEGRATION_SECRET_MASTER_KEY" not in json.dumps(actual)
     assert "integration_secret_master_key" not in actual.get("secrets", {})
     assert actual["secrets"][envelope]["file"].endswith(f"/{envelope}")
@@ -452,7 +440,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "6057f8101f9abce234b0413111c7190267c8a1b74a1569ce4a9d3f2fd52d477f"
+        == "c2127eb97ec34753a766b7afaf3eedea1dcc1c2ded9b6685d972d229739c9365"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])

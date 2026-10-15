@@ -202,6 +202,7 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     scoped_kms = (
         'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
         'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+        'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
     )
     assert (
         sum(
@@ -440,7 +441,9 @@ def shell_case(tmp_path):
         "python3": f'''#!/usr/bin/env bash
 if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
   printf 'kms-start|%s\\n' "$1" >> "$TEST_LOG"
-  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"http://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}'
+  [[ "${{2:-}}" == --ca-output && -n "${{3:-}}" ]] || exit 90
+  printf '%s\\n' '-----BEGIN CERTIFICATE-----' 'synthetic-public-ca' '-----END CERTIFICATE-----' > "$3"
+  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"https://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ca_cert_file":"'"$3"'"}}'
   exit 0
 fi
 exec "{Path(sys.executable).as_posix()}" "$@"
@@ -466,11 +469,15 @@ if [[ "$1" == -er ]]; then
     exit 0
   fi
   if [[ "$#" == 3 && "$2" == .url && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
-    printf 'http://127.0.0.1:8200\n'
+    printf 'https://127.0.0.1:8200\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .ca_cert_file && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf '%s\n' "$RUNNER_TEMP"/canvas-kms-ca.*/ca.crt
     exit 0
   fi
   if [[ "$#" == 3 && "$2" == .root_token && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
-    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
     exit 0
   fi
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
@@ -1983,6 +1990,14 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "    --header 'Content-Type: application/json' --request POST \\\n"
         '    --data "{\\"data\\":{\\"nonce\\":\\"$bao_nonce\\"}}" \\\n'
         "    http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        "    --data '{\"type\":\"transit\"}' \\\n"
+        "    http://127.0.0.1:8200/v1/sys/mounts/transit >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        "    --data '{\"type\":\"aes256-gcm96\",\"exportable\":false,\"allow_plaintext_backup\":false}' \\\n"
+        "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null\n"
         "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
         "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \\\n"
         "    | jq -e '.data.exportable == false' >/dev/null\n"

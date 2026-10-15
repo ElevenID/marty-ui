@@ -1,8 +1,9 @@
 use marty_applicant::{
+    event_stream_channel::event_stream_channel,
     http::{router, HttpState},
     migration::migrate_file,
     providers::{GrpcEventPublisher, HttpFlowProvider, HttpTemplateProvider},
-    select_issuance_service_url,
+    reject_unused_workload_tls, select_issuance_service_url,
     service::{ApplicantService, FilePersistence, MmfApprovalAuthorizer},
 };
 use mmf_security::ApplicationEventAuthenticator;
@@ -19,7 +20,6 @@ use tokio::{
     sync::RwLock,
     time::{self, Duration, MissedTickBehavior},
 };
-use tonic::transport::Endpoint;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -31,6 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .json()
         .init();
+
+    reject_unused_workload_tls(env::vars().map(|(name, _)| name))?;
 
     let store_path = PathBuf::from(env_value(
         "APPLICANT_DATA_FILE",
@@ -53,18 +55,42 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let flow_url = env_value("FLOW_SERVICE_URL", "http://flow:8011");
     let issuance_api_key = optional_secret("ISSUANCE_API_KEY")?;
     let event_stream_target = env_value("ES_GRPC_TARGET", "event-stream:9015");
-    let event_stream_uri = if event_stream_target.contains("://") {
-        event_stream_target
-    } else {
-        format!("http://{event_stream_target}")
+    let event_stream_ca = env::var("ES_GRPC_CA_CERT")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    let environment = env_value("ENVIRONMENT", "development").to_ascii_lowercase();
+    let deployed = match environment.as_str() {
+        "development" | "dev" | "local" | "test" => false,
+        "beta" | "production" | "prod" => true,
+        _ => return Err("ENVIRONMENT is invalid".into()),
     };
-    let event_channel = Endpoint::from_shared(event_stream_uri)?.connect_lazy();
+    let event_channel = event_stream_channel(
+        &event_stream_target,
+        event_stream_ca.as_deref().map(std::path::Path::new),
+        deployed,
+    )?;
     let notification_url = env::var("NOTIFICATION_EVENT_INGEST_URL").ok().or_else(|| {
         env::var("NOTIFICATION_SERVICE_URL")
             .ok()
             .map(|url| format!("{}/internal/events", url.trim_end_matches('/')))
     });
     let notification_token = optional_secret("NOTIFICATION_APPLICANT_EVENT_TOKEN")?;
+    let event_stream_token = optional_secret("GRPC_SERVICE_TOKEN")?;
+    if deployed
+        && event_stream_token
+            .as_ref()
+            .is_none_or(|token| token.len() < 32)
+    {
+        return Err(
+            "GRPC_SERVICE_TOKEN must have at least 32 characters outside development".into(),
+        );
+    }
+    if event_stream_token
+        .as_deref()
+        .is_some_and(|token| tonic::metadata::AsciiMetadataValue::try_from(token).is_err())
+    {
+        return Err("GRPC_SERVICE_TOKEN is not valid gRPC metadata".into());
+    }
 
     let persistence = Arc::new(FilePersistence::new(&store_path));
     let service = Arc::new(ApplicantService::with_persistence(
@@ -79,6 +105,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             event_channel,
             notification_url,
             notification_token,
+            event_stream_token,
         )),
         persistence,
     ));

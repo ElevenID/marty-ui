@@ -23,6 +23,8 @@ hmac.workspace = true
 hex.workspace = true
 http.workspace = true
 marty-key-material-policy = { path = "../../crates/key-material-policy" }
+marty-openbao-http = { path = "../../crates/openbao-http" }
+mmf-platform.workspace = true
 prost.workspace = true
 rand.workspace = true
 regex.workspace = true

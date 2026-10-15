@@ -113,7 +113,7 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
             "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
             remote_integration_secret::INTEGRATION_SECRET_KEY,
         )
-        .env("BAO_ADDR", "http://127.0.0.1:1")
+        .env("BAO_ADDR", "https://127.0.0.1:1")
         .env(
             "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
             &absent_grant_file,

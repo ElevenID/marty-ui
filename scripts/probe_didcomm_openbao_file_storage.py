@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import uuid
@@ -81,6 +82,7 @@ def run() -> None:
                 },
             ),
             ("didcomm/haip/keys/tenant_a/flow_a", {}),
+            ("didcomm/keycloak/keys/11id/cookie", {}),
         ]:
             status, _ = request(base, "POST", path, body, root)
             if status == 200:
@@ -88,7 +90,7 @@ def run() -> None:
             status, _ = request(base, "GET", path, token=root)
             if status == 200:
                 raise RuntimeError(f"Failed file-backed create left a key: {path}")
-        print("Disposable file-backed OpenBao rejected both key lifecycle writes")
+        print("Disposable file-backed OpenBao rejected all three key lifecycle writes")
     finally:
         if started:
             subprocess.run(
@@ -155,9 +157,60 @@ def run_dev() -> None:
                 },
             ),
             ("didcomm/haip/keys/tenant_a/flow_a", {}),
+            ("didcomm/keycloak/keys/11id/cookie", {}),
         ]:
             require_status(base, "POST", path, root, body)
-        print("Disposable dev OpenBao accepted both key lifecycle writes")
+        public = require_status(base, "GET", "didcomm/keycloak/keys/11id/cookie", root)["data"]
+        version = public["version"]
+        if len(version) != 32 or public.get("cek") is not None:
+            raise RuntimeError("Keycloak JWE key metadata exposed material")
+        plaintext = b"disposable-keycloak-cookie"
+        encoded = require_status(
+            base, "POST", f"didcomm/keycloak/jwe/encode/11id/cookie/{version}", root,
+            {"plaintext_base64": base64.b64encode(plaintext).decode()},
+        )["data"]["jwe"]
+        if plaintext.decode() in encoded:
+            raise RuntimeError("Keycloak JWE exposed plaintext")
+        decoded = require_status(
+            base, "POST", f"didcomm/keycloak/jwe/decode/11id/cookie/{version}", root,
+            {"jwe": encoded},
+        )["data"]["plaintext_base64"]
+        if base64.b64decode(decoded) != plaintext:
+            raise RuntimeError("Keycloak JWE failed live round trip")
+        acl = (
+            f'path "didcomm/keycloak/keys/11id/cookie" {{ capabilities = ["read"] }}\n'
+            f'path "didcomm/keycloak/jwe/encode/11id/cookie/{version}" {{ capabilities = ["update"] }}\n'
+            f'path "didcomm/keycloak/jwe/decode/11id/cookie/{version}" {{ capabilities = ["update"] }}\n'
+        )
+        require_status(base, "PUT", "sys/policies/acl/keycloak-cookie-probe", root,
+                       {"policy": acl})
+        scoped = require_status(base, "POST", "auth/token/create", root, {
+            "policies": ["keycloak-cookie-probe"], "no_default_policy": True,
+            "ttl": "10m",
+        })["auth"]["client_token"]
+        require_status(base, "GET", "didcomm/keycloak/keys/11id/cookie", scoped)
+        require_status(base, "POST", f"didcomm/keycloak/jwe/encode/11id/cookie/{version}",
+                       scoped, {"plaintext_base64": base64.b64encode(plaintext).decode()})
+        require_status(base, "POST", f"didcomm/keycloak/jwe/decode/11id/cookie/{version}",
+                       scoped, {"jwe": encoded})
+        for forbidden_path in (
+            "didcomm/keycloak/keys/11id/cookie/rotate",
+            "didcomm/keycloak/keys/master/cookie",
+            "didcomm/keycloak/keys/11id/ciba",
+        ):
+            status, _ = request(base, "POST", forbidden_path, {}, scoped)
+            if status != 403:
+                raise RuntimeError(f"scoped Keycloak JWE token crossed policy: {forbidden_path}")
+        rotated = require_status(
+            base, "POST", "didcomm/keycloak/keys/11id/cookie/rotate", root, {},
+        )["data"]["version"]
+        if rotated == version:
+            raise RuntimeError("Keycloak JWE live rotation reused the old version")
+        require_status(
+            base, "POST", f"didcomm/keycloak/jwe/decode/11id/cookie/{version}", root,
+            {"jwe": encoded},
+        )
+        print("Disposable dev OpenBao accepted scoped Keycloak JWE round trip and rotation")
     finally:
         if started:
             subprocess.run(

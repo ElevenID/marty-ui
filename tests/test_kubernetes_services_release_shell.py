@@ -50,6 +50,10 @@ def run_preflight(repo: Path, manifest_dir: Path) -> subprocess.CompletedProcess
         + 'MARTY_STACK_MANIFEST=stack-manifest.json\n'
         + 'MARTY_SERVICES_IMAGE=ghcr.io/elevenid/marty-ui-oss/services@sha256:'
         + "a" * 64 + '\n'
+        + 'MARTY_KEYCLOAK_KMS_IMAGE=ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:'
+        + "b" * 64 + '\n'
+        + 'KEYCLOAK_KMS_ADDR=https://openbao:8200\n'
+        + 'KEYCLOAK_KMS_KEY_VERSION=1\n'
         + 'PYTHON_BIN=true\n'
         + "require_kubernetes_services_release\n"
     )

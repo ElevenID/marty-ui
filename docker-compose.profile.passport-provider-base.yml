@@ -18,10 +18,12 @@ services:
       PASSPORT_SUPPORTED_CALLBACK_SIGNER_ENABLED: "true"
       PASSPORT_CALLBACK_SIGNER_API_KEY_FILE: /run/secrets/passport_callback_signer_api_key
       PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE: /run/secrets/passport_callback_signer_bao_token
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
     secrets:
       - passport_callback_signer_api_key
       - passport_callback_signer_bao_token
+      - openbao_tls_ca_cert
     depends_on:
       openbao:
         condition: service_healthy

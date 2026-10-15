@@ -1,5 +1,5 @@
 use marty_signing_grant::SigningOrigin;
-use std::{error::Error, path::PathBuf, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 
 use marty_issuance_service::issuance_proto::issuance_service_server::IssuanceServiceServer;
 use marty_issuance_service::{
@@ -155,11 +155,13 @@ use marty_issuance_service::{
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_schema_startup::SchemaStartupMode;
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use sqlx::ConnectOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -597,15 +599,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
     let kms_addr = std::env::var("DIDCOMM_KMS_ADDR").ok();
     let kms_token_file = std::env::var("DIDCOMM_KMS_TOKEN_FILE").ok();
-    match (kms_addr, kms_token_file) {
-        (Some(addr), Some(token_file)) if !addr.is_empty() && !token_file.is_empty() => {
+    let kms_ca_file = std::env::var("DIDCOMM_KMS_CA_CERT_FILE").ok();
+    match (kms_addr, kms_token_file, kms_ca_file) {
+        (Some(addr), Some(token_file), ca_file) if !addr.is_empty() && !token_file.is_empty() => {
             didcomm_envelope = didcomm_envelope
-                .with_remote_kms(RemoteDidcommKms::new(&addr, PathBuf::from(token_file))?);
+                .with_remote_kms(RemoteDidcommKms::new(
+                    &addr,
+                    PathBuf::from(token_file),
+                    ca_file.map(PathBuf::from),
+                )?);
         }
-        (None, None) => {}
+        (None, None, None) => {}
         _ => {
             return Err(
-                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together".into(),
+                "DIDCOMM_KMS_ADDR and DIDCOMM_KMS_TOKEN_FILE must be configured together; a CA requires both".into(),
             )
         }
     }
@@ -629,20 +636,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         didcomm_delivery.clone(),
         config.issuance_api_key.as_deref(),
     );
-    let initiation_control_plane = Arc::new(NativeInitiationControlPlane::connect_lazy(
-        &config.organization_grpc_target,
-        &config.credential_template_grpc_target,
-        &config.revocation_profile_grpc_target,
-        config.internal_service_token.as_deref(),
-        config.dependency_timeout,
-    )?);
+    let initiation_control_plane = Arc::new(
+        NativeInitiationControlPlane::connect_lazy(
+            &config.organization_grpc_target,
+            &config.credential_template_grpc_target,
+            &config.revocation_profile_grpc_target,
+            config.internal_service_token.as_deref(),
+            config.dependency_timeout,
+        )
+        .await?,
+    );
     let application_templates = ApplicationTemplateService::new(
         Arc::new(PostgresApplicationTemplateRepository::new(pool.clone())),
         runtime_catalog(
             &config.credential_template_grpc_target,
             config.internal_service_token.as_deref(),
             config.dependency_timeout,
-        )?,
+        )
+        .await?,
         Arc::new(SystemApplicationTemplateClock),
         config.issuance_api_key.as_deref(),
     );
@@ -845,6 +856,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    let tls_acceptor = if let Some(tls) = &config.workload_server_tls {
+        Some(
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: tls.certificate.clone(),
+                kms_ca_cert_file: tls.kms_ca_certificate.clone(),
+                kms_endpoint: tls.kms_endpoint.clone(),
+                kms_token_file: tls.kms_token_file.clone(),
+                kms_key_name: tls.kms_key_name.clone(),
+                kms_key_version: tls.kms_key_version,
+                request_timeout: Duration::from_secs(10),
+                max_concurrent_signs: 64,
+            }
+            .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
+            .await?,
+        )
+    } else {
+        None
+    };
     let transport = TransportPolicy::new(config.cors_allowed_origins.clone());
     let app = router_with_all_services(runtime.state(), discovery, transport, {
         let services = IssuanceServices::new(
@@ -909,19 +938,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = async move {
-        let Some(grpc_listener) = grpc_listener else {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-            return Ok(());
-        };
-        Server::builder()
-            .add_service(health_service)
-            .add_service(grpc_server)
-            .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
+    // Poll the TLS-enabled server behind a heap boundary: the combined HTTP
+    // and gRPC future otherwise overflows the Windows executable main stack.
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        Box::pin(async move {
+            let Some(grpc_listener) = grpc_listener else {
                 wait_for_shutdown(&mut grpc_shutdown).await;
-            })
-            .await
-    };
+                return Ok(());
+            };
+            let router = Server::builder()
+                .add_service(health_service)
+                .add_service(grpc_server);
+            if let Some(acceptor) = tls_acceptor {
+                let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                    let acceptor = acceptor.clone();
+                    async move {
+                        match connection {
+                            Ok(stream) => match acceptor.accept(stream).await {
+                                Ok(encrypted) => Ok(encrypted),
+                                Err(error) => {
+                                    debug!(%error, "Issuance workload TLS handshake rejected");
+                                    Err(error)
+                                }
+                            },
+                            Err(error) => Err(error),
+                        }
+                    }
+                });
+                router
+                    .serve_with_incoming_shutdown(incoming, async move {
+                        wait_for_shutdown(&mut grpc_shutdown).await;
+                    })
+                    .await
+            } else {
+                router
+                    .serve_with_incoming_shutdown(
+                        TcpListenerStream::new(grpc_listener),
+                        async move {
+                            wait_for_shutdown(&mut grpc_shutdown).await;
+                        },
+                    )
+                    .await
+            }
+        });
     runtime.activate()?;
     let canvas_mirror_worker = spawn_canvas_mirror_automation(
         Arc::new(canvas_mirror),

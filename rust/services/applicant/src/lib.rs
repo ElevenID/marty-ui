@@ -8,12 +8,25 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod event_stream_channel;
 pub mod http;
 pub mod issuance;
 pub mod migration;
 pub mod providers;
 pub mod service;
 pub mod store;
+
+/// Applicant currently has no workload TLS client. Reject inherited settings
+/// rather than giving operators the false impression that they protect traffic.
+pub fn reject_unused_workload_tls(names: impl IntoIterator<Item = String>) -> Result<(), String> {
+    if let Some(name) = names
+        .into_iter()
+        .find(|name| name.starts_with("GRPC_WORKLOAD_TLS_"))
+    {
+        return Err(format!("{name} is unsupported by Applicant"));
+    }
+    Ok(())
+}
 
 pub const MAX_EVIDENCE_BYTES: usize = 10 * 1024 * 1024;
 pub const LOCK_TTL_SECONDS: i64 = 300;

@@ -69,7 +69,8 @@ def test_base_stack_wires_gateway_to_the_internal_rust_signing_keys_service() ->
     assert "SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017" in compose
     assert 'SIGNING_KEYS_SERVICE_PORT: "8017"' in compose
     assert "SIGNING_KEYS_INTERNAL_API_KEY:" in compose
-    assert "BAO_TOKEN:" in compose
+    assert "BAO_TOKEN_FILE: /bao/signing-keys-token/token" in compose
+    assert "BAO_ADDR: https://openbao:8200" in compose
     assert "SERVICE_NAME: signing-keys" in compose
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
 
@@ -84,9 +85,7 @@ def test_base_stack_keeps_signing_keys_on_the_internal_network() -> None:
 
 def test_beta_stack_authenticates_signing_keys_to_redis() -> None:
     compose = read("docker-compose.beta.yml")
-    signing_keys = compose.split("\n  signing-keys:\n", 1)[1].split(
-        "\n  flow:\n", 1
-    )[0]
+    signing_keys = compose.split("\n  signing-keys:\n", 1)[1].split("\n  flow:\n", 1)[0]
 
     assert (
         "SIGNING_KEYS_REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}@redis:6379/2"
@@ -98,13 +97,19 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     compose = read("docker-compose.selfhost.prod.yml")
 
     assert "  signing-keys:\n" in compose
-    assert "SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key" in compose
+    assert (
+        "SIGNING_KEYS_INTERNAL_API_KEY_FILE: /run/secrets/issuance_api_key" in compose
+    )
     signing_keys = compose.split("\n  signing-keys:\n", 1)[1].split("\n  flow:\n", 1)[0]
     assert "BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token" in signing_keys
     assert "- signing_keys_openbao_token" in signing_keys
     assert "- openbao_service_token" not in signing_keys
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
-    assert 'test: ["CMD", "curl", "-f", "http://localhost:8017/health"]' in compose
+    assert "- workload_identity_ca_cert" in signing_keys
+    assert (
+        "--cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health"
+        in signing_keys
+    )
 
 
 def test_scoped_openbao_service_token_can_list_managed_key_names() -> None:

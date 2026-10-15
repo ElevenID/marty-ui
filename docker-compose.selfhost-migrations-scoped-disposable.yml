@@ -24,14 +24,21 @@ services:
     networks: [private]
   openbao:
     image: ${PROBE_OPENBAO_IMAGE:?reviewed disposable digest required}
+    hostname: openbao
     platform: linux/amd64
     entrypoint: [/bin/sh, /usr/local/bin/passport-supported-openbao-start]
+    environment:
+      PASSPORT_BAO_TLS_MODE: required
     configs:
       - source: openbao_start
         target: /usr/local/bin/passport-supported-openbao-start
     secrets: [bao_root_token]
+    tmpfs:
+      - /tmp/bao-tls:rw,mode=1777
+    volumes:
+      - openbao_public_ca:/bao/public-ca
     healthcheck:
-      test: [CMD, bao, status, -address=http://127.0.0.1:8200]
+      test: [CMD-SHELL, "BAO_CACERT=/bao/public-ca/ca.crt bao status -address=https://127.0.0.1:8200 >/dev/null"]
       interval: 2s
       retries: 30
     networks: [private]
@@ -41,7 +48,8 @@ services:
     user: ${PROBE_RUN_USER:?disposable host user required}
     entrypoint: [/bin/sh, /usr/local/bin/selfhost-migration-openbao-bootstrap]
     environment:
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
     configs:
       - source: openbao_bootstrap
         target: /usr/local/bin/selfhost-migration-openbao-bootstrap
@@ -52,6 +60,7 @@ services:
       - type: bind
         source: ${PROBE_SECRET_DIR:?disposable secret root required}
         target: /work/secrets
+      - openbao_public_ca:/bao/public-ca:ro
     depends_on:
       openbao: {condition: service_healthy}
     networks: [private]
@@ -70,13 +79,17 @@ services:
       MARTY_KMS_BOOTSTRAP_ENABLED: "true"
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
       BAO_TOKEN_FILE: /run/secrets/bao_bootstrap_token
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/ca.crt
       PUBLIC_DOMAIN: migration.invalid
       PUBLIC_API_URL: https://migration.invalid
       ISSUER_BASE_URL: https://migration.invalid
     secrets: [marty_db_password, bao_bootstrap_token, notification_openbao_token]
+    volumes:
+      - openbao_public_ca:/bao/public-ca:ro
     depends_on:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
@@ -115,3 +128,5 @@ configs:
 networks:
   private:
     internal: true
+volumes:
+  openbao_public_ca:

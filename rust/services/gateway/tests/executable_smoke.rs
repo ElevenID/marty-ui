@@ -14,7 +14,7 @@ fn production_command() -> (std::process::Command, Vec<tempfile::NamedTempFile>)
     let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_marty-gateway"));
     command
         .env("ENVIRONMENT", "production")
-        .env("BAO_ADDR", "http://127.0.0.1:8200")
+        .env("BAO_ADDR", "https://127.0.0.1:8200")
         .env("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE", token.path())
         .env(
             "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
@@ -41,7 +41,33 @@ fn production_command() -> (std::process::Command, Vec<tempfile::NamedTempFile>)
             "production-issuer-sign-key-at-least-32-characters",
         )
         .env("ISSUANCE_API_KEY", "production-issuance-key")
-        .env("GRPC_INSECURE_ALLOWED", "true")
+        .env("GRPC_INSECURE_ALLOWED", "false")
+        // The process must reject Redis before opening this unused CA path.
+        .env("GRPC_TLS_CA_CERT", "unused-after-redis-failure.pem")
+        .env("ORG_GRPC_CA_CERT", "unused-after-redis-failure.pem")
+        .env("ES_GRPC_CA_CERT", "unused-after-redis-failure.pem")
+        .env(
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+            "unused-after-redis-failure.pem",
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            "unused-after-redis-failure.pem",
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+            "https://127.0.0.1:8200",
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+            "unused-after-redis-failure.pem",
+        )
+        .env("GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE", token.path())
+        .env("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME", "gateway-test-tls")
+        .env("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1")
+        .env("AUTH_GRPC_TARGET", "https://localhost:9001")
+        .env("ORG_GRPC_TARGET", "https://localhost:9002")
+        .env("ES_GRPC_TARGET", "https://localhost:9015")
         .env_remove("REDIS_URL")
         .stdout(Stdio::null())
         .stderr(Stdio::piped());
@@ -58,7 +84,7 @@ async fn executable_starts_and_serves_gateway_health() {
     let issuer_token = scoped_grant_token();
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_marty-gateway"))
         .env("ENVIRONMENT", "test")
-        .env("BAO_ADDR", "http://127.0.0.1:8200")
+        .env("BAO_ADDR", "https://127.0.0.1:8200")
         .env("GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE", token.path())
         .env(
             "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",

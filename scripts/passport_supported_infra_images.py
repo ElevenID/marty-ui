@@ -17,7 +17,6 @@ ROLES = {
     "postgres": "docker.io/library/postgres",
     "redis": "docker.io/library/redis",
     "openbao": "quay.io/openbao/openbao",
-    "edge": "docker.io/library/nginx",
 }
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")

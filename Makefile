@@ -25,7 +25,7 @@
 	proto-gen grpc-health \
 	package-selfhost-bundle \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
-	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
+	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
 	selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
@@ -191,6 +191,11 @@ selfhost-prod-openbao-bootstrap: ## Re-run the standalone OpenBao bootstrap help
 	@echo "$(BLUE)Running self-host OpenBao bootstrap...$(NC)"
 	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
 	@echo "$(GREEN)✓ Self-host OpenBao bootstrap completed$(NC)"
+
+selfhost-prod-openbao-rotate-tls: ## Renew the KMS-owned listener identity, restart and unseal OpenBao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-tls-init -rotate
+	@$(SELFHOST_OPENBAO_COMPOSE) restart openbao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
 
 selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 	@echo "$(BLUE)Exporting self-host OpenBao state...$(NC)"
@@ -539,15 +544,8 @@ tunnel-keycloak-restart: ## Restart Keycloak with tunnel overrides (then runs se
 
 setup-keycloak: ## Patch Keycloak with env-var credentials (Google IdP, redirect URIs)
 	@echo "$(BLUE)⚙️  Running Keycloak configurator...$(NC)"
-	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' docker run --rm \
-		--entrypoint bash \
-		--network marty-infra-network \
-		--env-file "$(BETA_ENV_FILE)" \
-		-e KC_URL=http://marty-keycloak:8080 \
-		-e KCADM_PATH=/opt/keycloak/bin/kcadm.sh \
-		-v "$(CURDIR)/scripts/setup-keycloak.sh:/scripts/setup-keycloak.sh:ro" \
-		quay.io/keycloak/keycloak:25.0 \
-		/scripts/setup-keycloak.sh 2>&1 | sed 's/^/  /'
+	@set -o pipefail; MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+		$(TUNNEL_COMPOSE) run --rm --no-deps keycloak-configurator 2>&1 | sed 's/^/  /'
 	@echo "$(GREEN)✅ Keycloak configured$(NC)"
 
 tunnel-full-restart: tunnel-keycloak-restart tunnel-auth-restart ## Restart all tunnel-sensitive services
