@@ -21045,3 +21045,31 @@ The existing exact approved-model test module reports 71 fixture errors
 because the broad uncommitted TLS topology differs from its approved
 snapshot; that snapshot must be reviewed and updated for the grouped PR.
 This focused pass is not a connected full-stack TLS proof.
+
+2026-10-15 K12 bootstrap and backend feasibility correction: direct `javap`
+inspection of the pinned Keycloak 25.0.6 jars shows that both
+`RealmManager` (new realm) and `ApplianceBootstrap` (master realm) invoke
+`DefaultKeyProviders.createProviders`. That method explicitly adds
+`rsa-generated`, `rsa-enc-generated`, `hmac-generated` (HS512), and
+`aes-generated`; these are the four providers found in each live database.
+Merely installing a higher-priority remote Java `KeyProvider` cannot satisfy
+KMS-only, because realm creation still inserts generated-provider components
+and their current factories store private/secret material. The exact
+Keycloak bootstrap/distribution must be changed or replaced and tested from
+an empty database before the remote SPI can be considered a solution.
+
+The live config confirms `rsa-enc-generated` is `RSA-OAEP`, HMAC is `HS512`,
+and signing is RS256 in the product realm. Keycloak 25.0.6 also has a
+`CekManagementProvider` SPI (`RsaCekManagementProvider`) and direct
+`KeyManager.getActiveHmacKey`/`getActiveAesKey` APIs that return
+`SecretKey`. [OpenBao's Transit API](https://openbao.org/docs/next/api/secret/transit/)
+supports RS256-compatible `pkcs1v15` signing when explicitly selected, but
+its documented decrypt input is a Transit ciphertext, not a raw JOSE
+RSA-OAEP encrypted CEK. Treat raw JOSE decrypt and arbitrary-IV/AAD AES
+compatibility as unproven backend operations; if active Keycloak flows need
+them, implement those private operations in the planned Go OpenBao extension
+or choose an OIDC provider with a proved remote interface. Do not wire a
+partial RS256-only provider into the protected deployment. First qualify a
+source-built Keycloak distribution that never creates generated providers,
+then exercise master/11id login, refresh, JWKS/rotation and optional JWE
+paths against the remote backend and run the read-only database gate.
