@@ -22442,3 +22442,15 @@ all three OpenBao roles digest-only; 109 targeted Python checks passed (one
 skipped) with 534 planner subtests, workflow YAML parsed, and Ruff/diff checks
 passed. The commit is unpushed pending Canvas, contracts, self-host, image and
 plugin outcomes so further corrections can share one CI retry.
+
+The same hosted run's Rust Contracts lane later failed in the isolated
+database suite: `provider_rebind_publishes_before_cutover_and_preserves_the_prior_method`
+reached the new disposable OpenBao envelope guard without its root-token
+sentinel. That suite also uses the older HTTP dev OpenBao fixture, whereas
+the test intentionally requires HTTPS, a distinct scoped application token,
+and a public CA. A local, unpushed UI correction keeps the Redis-only profile
+case in the database suite and runs the complete issuer-profile contract in
+the existing disposable HTTPS OpenBao policy probe, which provisions the
+non-exportable envelope and scoped token. Python syntax, Bash syntax, diff
+checks, and all 37 database-group policy tests passed locally. Hosted proof
+remains pending; Canvas, plugin recovery, and self-host jobs are still live.
