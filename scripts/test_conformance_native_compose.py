@@ -115,11 +115,17 @@ def synthetic_values(model, directory):
         SIGNING_KEYS_INTEGRATION_SECRET_KEY="synthetic-dedicated-conformance-envelope-key-0001",
         SIGNING_KEYS_ISSUER_SIGN_KEY="synthetic-dedicated-conformance-issuer-sign-key-0001",
         OIDF_PUBLIC_BASE_URL="https://conformance.example:9443",
+        OIDF_CONFORMANCE_BRIDGE_ALIAS="conformance.example",
         OIDF_PUBLIC_PORT="9443",
         OIDF_TLS_INTERNAL_PORT="9443",
         PUBLIC_API_URL="https://conformance.example:9443",
         CORS_ORIGINS="https://conformance.example:9443",
         OIDF_TLS_CERT_DIR=(directory / "tls").as_posix(),
+        OIDF_TLS_KMS_ADDR="https://127.0.0.1:18200",
+        OIDF_TLS_KMS_CA_CERT_FILE=(directory / "openbao-ca.pem").as_posix(),
+        OIDF_TLS_KMS_TOKEN_FILE=(directory / "oidf-token").as_posix(),
+        OIDF_TLS_KMS_KEY_NAME="oidf-edge-tls-v1",
+        OIDF_TLS_KMS_KEY_VERSION="1",
         DIDCOMM_ENCRYPTION_POLICY_DIR=(directory / "policy").as_posix(),
     )
     return values
@@ -162,6 +168,27 @@ def assert_native_delta(legacy, actual):
     }
     expected["x-conformance-grpc-auth"] = {"GRPC_SERVICE_TOKEN": token}
     assert actual == expected, "Native selection changed an unowned existing field"
+
+
+def assert_keyless_oidf_edge(model, values, local):
+    edge = model["services"]["oidf-tls-proxy"]
+    environment = edge["environment"]
+    assert environment["SERVICE_NAME"] == "oidf_keyless_edge"
+    assert environment["OIDF_EDGE_TLS_KMS_ADDR"] == values["OIDF_TLS_KMS_ADDR"]
+    assert environment["OIDF_EDGE_TLS_KMS_KEY_NAME"] == values["OIDF_TLS_KMS_KEY_NAME"]
+    assert environment["OIDF_EDGE_TLS_KMS_KEY_VERSION"] == "1"
+    mounts = {mount["target"]: mount["source"] for mount in edge["volumes"]}
+    assert mounts == {
+        "/run/marty-oidf-tls/tls.crt": values["OIDF_TLS_CERT_DIR"] + "/tls.crt",
+        "/run/marty-oidf-tls/openbao-ca.pem": values["OIDF_TLS_KMS_CA_CERT_FILE"],
+        "/run/secrets/oidf-edge-tls-kms-token": values["OIDF_TLS_KMS_TOKEN_FILE"],
+    }
+    assert "tls.key" not in json.dumps(edge)
+    if local:
+        assert edge["build"]["dockerfile"] == "services/Dockerfile"
+    else:
+        assert edge["image"] == values["MARTY_SERVICES_IMAGE"]
+        assert edge.get("build") is None, edge.get("build")
 
 
 def assert_native_inputs(common, base_source):
@@ -362,6 +389,13 @@ def run(command):
                         ]
                         == expected_rate
                     )
+                edge_model = BIND["render_binding"](
+                    directory,
+                    [*command, "--profile", "oidf"],
+                    *files(native=True, local=local, authcrypt=authcrypt),
+                    project=PROJECT,
+                )
+                assert_keyless_oidf_edge(edge_model, effective, local)
     print(
         "PASS: current beta native inputs and required bindings; four native conformance compositions x five token-rate inputs. Configuration only, not runtime acceptance."
     )

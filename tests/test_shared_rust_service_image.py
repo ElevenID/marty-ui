@@ -21,6 +21,7 @@ RUST_SERVICES = {
     "gateway": "marty-gateway",
     "issuance_native": "marty-issuance-service",
     "notification": "marty-notification",
+    "oidf_keyless_edge": "marty-oidf-keyless-edge",
     "organization": "marty-organization",
     "passport_beta_bureau": "marty-passport-beta-bureau",
     "passport_provider_ingress": "marty-passport-provider-ingress",

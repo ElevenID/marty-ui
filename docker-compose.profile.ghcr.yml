@@ -17,6 +17,8 @@ x-service-image: &service-image
   build: !reset null
 
 services:
+  oidf-tls-proxy: *service-image
+
   ui:
     image: ${MARTY_UI_IMAGE:?set MARTY_UI_IMAGE to an immutable UI image digest}
     pull_policy: always
