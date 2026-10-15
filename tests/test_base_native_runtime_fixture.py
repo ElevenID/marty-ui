@@ -42,7 +42,9 @@ def test_owned_canvas_release_policy_imports_from_copied_source_assets(tmp_path)
 
 @pytest.fixture
 def spec(tmp_path):
-    (tmp_path / "ca.pem").write_text("synthetic stat-only CA control")
+    (tmp_path / "ca.pem").write_text(
+        "-----BEGIN CERTIFICATE-----\nsynthetic stat-only CA control\n-----END CERTIFICATE-----\n"
+    )
     (tmp_path / "didcomm-encryption-policy.json").write_text(
         "synthetic stat-only policy control"
     )
@@ -58,7 +60,8 @@ def spec(tmp_path):
         "legacy_origin": "http://127.0.0.1:28501",
         "ca_file": str(tmp_path / "ca.pem"),
         "policy_directory": str(tmp_path),
-        "kms_url": "http://127.0.0.1:28200",
+        "kms_url": "https://127.0.0.1:28200",
+        "kms_ca_file": str(tmp_path / "ca.pem"),
         "kms_token_file": str(tmp_path / "openbao-token"),
         "integration_secret_kms_url": "https://127.0.0.1:28201/internal",
         "integration_secret_kms_ca_file": str(tmp_path / "ca.pem"),
@@ -86,7 +89,9 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("ca_file", "absent"),
         ("policy_directory", "relative"),
         ("kms_url", "http://production.example:8200"),
+        ("kms_url", "http://127.0.0.1:28200"),
         ("kms_url", "http://user:password@127.0.0.1:28200"),
+        ("kms_ca_file", "absent"),
         ("kms_token_file", "absent"),
         ("integration_secret_kms_url", "http://127.0.0.1:28201/internal"),
         ("integration_secret_kms_url", "https://production.example:8018/internal"),
@@ -207,6 +212,7 @@ def test_actual_authcrypt_render_binds_owned_kms_address_and_token_file(spec):
     rendered = FIXTURE["render"](spec, ["docker", "compose"])
     native = rendered["native_environment"]
     assert native["DIDCOMM_KMS_ADDR"] == spec["kms_url"]
+    assert native["DIDCOMM_KMS_CA_CERT_FILE"] == spec["kms_ca_file"]
     assert native["DIDCOMM_KMS_TOKEN_FILE"] == spec["kms_token_file"]
     assert native["INTEGRATION_SECRET_KMS_URL"] == spec["integration_secret_kms_url"]
     assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == spec["integration_secret_kms_ca_file"]
