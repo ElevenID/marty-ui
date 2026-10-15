@@ -1,9 +1,13 @@
 # Public self-host handoff gate
 
 The current public Stack release is not an installable self-host product. The
-release workflow can prepare an image-locked ZIP in an opt-in job, but that job
-marks it **unqualified** and keeps it as a short-lived Actions artifact. Do not
-send that ZIP to a customer as a supported installer.
+[v1.1.247 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247)
+contains the signed Stack transaction and image evidence, but no self-host ZIP.
+Its opt-in job prepared an image-locked ZIP, lock, receipt, and product descriptor;
+the separate consumer checked the exact archive, Compose model, and anonymous
+image pulls. That preparation remains **unqualified** and is retained as a
+short-lived Actions artifact, not a public customer download. Do not send it
+as a supported installer or present its preflight as an installed journey.
 
 An outside-party handoff needs one public release containing these exact assets:
 
@@ -93,10 +97,10 @@ document with schema `marty.selfhost-kms-custody/v1`, the exact `source_sha`,
 `verifier_key_non_exportable: true`. The runner verifies its signature using
 the supplied OpenSSL Ed25519 public key before issuing, and requires that key's SHA-256 digest
 in the prepared release source commit's reviewed
-`deploy-config/selfhost-kms-custody-trust-roots.json`. This branch carries a
-disposable test signer digest for review; no published release contains that
-policy yet. Adding a trusted signer requires a reviewed source change and a
-new prepared release. The
+`deploy-config/selfhost-kms-custody-trust-roots.json`. The v1.1.247 source
+contains a reviewed disposable test signer digest, but no installed custody
+evidence or qualification has been published. A different signer requires a
+reviewed source change and a new prepared release. The
 integration checkout is pinned to protected-main commit
 `0b9aec1994378aba4ef4715f858de813b1a329ea`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet
@@ -116,6 +120,6 @@ no source-tree mounts or skipped cases; record bounded cleanup on failure and
 success. Verify image provenance and third-party licenses, sign the final ZIP,
 lock, descriptor and evidence, and test anonymous download and installation.
 
-The gate currently fails against v1.1.243 because that release publishes only
-Stack manifests, SBOMs, and a transaction. The v1.1.244 passport release is a
-separate beta migration gate and does not imply a self-host handoff.
+The gate currently fails against v1.1.247 because the public release omits the
+required ZIP, lock, preparation lineage, installed qualification, and qualified
+descriptor. A Stack release alone does not imply a self-host handoff.
