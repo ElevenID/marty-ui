@@ -51,6 +51,9 @@ code. The implementation route for this pinned version is a
 source-built Keycloak change to route cookie JWE encode/decode to remote
 operations. Keep AES/HMAC bytes inside OpenBao; do not supply real or fake
 local key bytes to satisfy the old `SecretKey` API.
+The same services JAR also has direct JWE calls in
+`CIBAAuthenticationRequest` for CIBA `auth_req_id`; the source change must
+cover that path and preserve its existing validation semantics as well.
 
 The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
 may change between releases. Keycloak's Admin REST component representation
