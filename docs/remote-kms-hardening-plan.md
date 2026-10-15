@@ -22715,3 +22715,19 @@ and Ruff pass. These two corrective commits are local and intentionally held
 for one batched push after the remaining CI lanes finish. CI source already
 contains a fifth pinned Keycloak image role and a Keycloak image qualification
 job; earlier plan statements that this source role was absent are superseded.
+
+Exact-head CI run `38809485877` finished failed. Its OpenBao plugin/recovery,
+Rust contracts, and self-host lanes passed. The Canvas lane passed the actual
+native renewal and Envoy composition tests using the new keyless bridge, but
+two Flow admission tests failed because their plaintext synthetic RPC peer was
+rebound from the now-HTTPS base target without a TLS server. Local UI commit
+`015210c63` separates that closed development admission fixture from the
+rendered production custody check: it asserts the original base/native Flow
+target remains `https://issuance-native:9005`, then uses the local plaintext
+peer only for admission behavior; self-host retains its HTTPS config-only
+branch. This is not a live Flow mTLS qualification. Its focused Python suite
+passed (20), the Rust Flow acceptance executable compiled, and format/lint/
+diff checks passed. Along with `1e4bd5d62` and `e5234e76d`, these are the
+single grouped correction for the next PR head. Keep a real Flow-to-Issuance
+KMS-backed client/server handshake and installed cutover on the acceptance
+list; no synthetic plaintext fixture proves that boundary.
