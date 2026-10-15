@@ -1255,7 +1255,7 @@ assembled Core matrix is still due.
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192, approval-free publisher #1328, clean-install follow-up #1330, and successor lock #1331 are merged. All five #1331 merge-group workflows passed at `667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI `38605156101` is running on that SHA. The first no-write `v1.1.247` claim safely refused the old lock and wrote no tag. `v1.1.246` remains immutable but its installed prepared-consumer check failed. The `stack-release` environment keeps protected-branch policy without manual approval. Signed successor publication, installed probes and full journey, real providers/device, and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests, including active identity-provider databases. Add no migration scripts; prove fresh database schemas and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. That proof covers the Marty database. Both running local self-host and beta Keycloak databases still hold four `privateKey` and four generated symmetric `secret` KeyProvider entries each in `COMPONENT_CONFIG`; K12 owns their remote-key cutover and separate clean-install/runtime proof. Exact signed-image execution, final representative writes and supported cutover remain. |
 | K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | In progress; the shared MMF remote signer is pinned in the grouped UI branch at `aa1f208335df6aa955b669511180dee6555d1896`. Signing Keys, Event Stream and several native gRPC clients/listeners use KMS-backed identities. Auth/Gateway have staged keyless mTLS and a passing connected Auth RPC test. Flow-to-Issuance has staged explicit HTTPS/KMS mTLS and passing connected transport plus real Issuance executable service-RPC tests. The grouped UI changes remain uncommitted/unlanded. Other deployed plaintext edges, disposable private-key fixtures, installed signed-artifact, rotation and full-graph proofs remain. |
-| K12 | Make the deployed OIDC provider KMS-only without losing login, session, refresh, JWKS or rotation behavior. If Keycloak remains the provider, replace active generated/imported/keystore realm signing and symmetric keys with remotely held, non-exportable references through a supported Keycloak provider/SPI or equivalent fail-closed integration; cover the master and 11id realms, disable local-key fallback, and scan the separate Keycloak database and runtime writes for private material. | In progress. Existing self-host and beta Keycloak DBs each still have four `privateKey` and four generated `secret` entries; the staged read-only SQL verifier rejects both. The unshipped Keycloak 25.0.6 Java SPI override now issues live HTTPS OpenBao Transit RS256 tokens in disposable PostgreSQL-backed `master` and `11id` realms using distinct non-exportable keys. Both tokens and successive refresh tokens independently verify against realm JWKS; scans and the read-only SQL gate pass after startup, 11id creation, issuance and KMS-loss denial. Commits `aaa9506af`, `3b70b3a13`, `ec571c91b`, `690b2334b`. RSA-OAEP and AES remain fail closed; browser login/session, rotation, broad provider disablement, packaging, and installed acceptance remain. Do not claim whole-stack KMS-only or complete K10. |
+| K12 | Make the deployed OIDC provider KMS-only without losing login, session, refresh, JWKS or rotation behavior. If Keycloak remains the provider, replace active generated/imported/keystore realm signing and symmetric keys with remotely held, non-exportable references through a supported Keycloak provider/SPI or equivalent fail-closed integration; cover the master and 11id realms, disable local-key fallback, and scan the separate Keycloak database and runtime writes for private material. | In progress. Existing self-host and beta Keycloak DBs each still have four `privateKey` and four generated `secret` entries; the read-only SQL verifier rejects both. The unshipped pinned Keycloak 25.0.6 image now combines remote RS256/HS512 factories with source-patched cookie and CIBA JWE call sites. In disposable PostgreSQL/OpenBao, both realms issue and refresh remotely signed tokens; `11id` authorization-code/PKCE login and silent session reuse pass with remote cookie JWE. KMS-token loss denies browser login and direct grants; the database gate remains clear. Grouped commits through `c12b3c9d3`. CIBA behavior itself, RSA-OAEP and other AES flows, master browser login, active-session rotation, broad provider controls, deployed packaging and installed acceptance remain. Do not claim whole-stack KMS-only or complete K10. |
 
 ### K11 TLS identity custody inventory and implementation boundary (2026-10-14)
 
@@ -21242,3 +21242,33 @@ plus live plugin probe passed again after that self-review fix. It is
 **not** Keycloak integration: the pinned source change,
 login/CIBA/session acceptance, outage and rotation behavior at the Java
 boundary, exact release image and installed database gate remain open.
+
+2026-10-15 K12 pinned Keycloak source integration, grouped UI commits
+`96bb450af` and `c12b3c9d3`: an exact Keycloak 25.0.6 image now contains
+the higher-order Java KMS factories and two source-patched upstream classes,
+`RestartLoginCookie` and `CIBAAuthenticationRequest`, in its services JAR.
+The Java provider JAR excludes duplicate upstream classes. The cookie and
+CIBA methods invoke a shared CA-verified HTTPS OpenBao client with separate
+scoped token files and realm/purpose/version-bound direct-JWE references;
+they no longer call `SecretKey` or `TokenUtil.jweDirect*`. The old unencrypted
+restart-cookie fallback was removed. The pinned image built locally as
+`sha256:ea97c5af2b9755fdf273dc067cb2c264c14351615d05a3067b880ee6b1614756`.
+
+The disposable PostgreSQL 15/HTTPS OpenBao probe used that image and the
+Go plugin image from K12. `master` and `11id` direct grants and successive
+refreshes still produced independently verified remote RS256 signatures.
+An `11id` public authorization-code client completed PKCE browser login and
+silent session reuse; both access and ID tokens verified against its JWKS.
+Replacing only its scoped OpenBao cookie token made a new browser login
+fail, while the separately scoped signing token continued to work. Then
+invalidating the signing token denied password and refresh grants in both
+realms. Direct PostgreSQL scans and the read-only custody SQL gate found
+zero KeyProvider `privateKey`/generated `secret` rows after startup, realm
+creation, browser/token activity and both KMS-loss checks. The default
+unpatched-JAR direct-grant probe also passed after the shared HTTP refactor.
+The probe cleaned its containers. This is a **local source-patched image
+proof**, not a shipped image or full OIDC acceptance. The CIBA class compiles
+and the browser image boots, but CIBA `auth_req_id` issuance/polling has not
+been exercised. RSA-OAEP and generic AES flows, master browser login,
+key/cookie rotation, provider bypass controls, production Compose/Kubernetes
+packaging, clean installed database and release qualification remain open.
