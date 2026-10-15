@@ -21804,3 +21804,10 @@ mandatory. All 12 package-local contract tests passed on Windows, but the
 Docker-backed loader ran only on hosted Linux and must be rerun at the new
 head. The correction batch is now two local UI commits, `7951863a4` and
 `6b2f8b3dd`, grouped for one push/CI cycle.
+
+Both correction commits were pushed together to PR #1344 at exact head
+`6b2f8b3dd0e0b87e6e9b2623bb4d45a270a1ee53`. The new CI run is
+[`38756048027`](https://github.com/ElevenID/marty-ui/actions/runs/38756048027);
+it was queued at registration. The older failed run `38752357622` remains
+immutable evidence for its prior head and must not be counted as a current
+gate result.
