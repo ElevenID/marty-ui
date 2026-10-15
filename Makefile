@@ -25,7 +25,7 @@
 	proto-gen grpc-health \
 	package-selfhost-bundle \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
-	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export \
+	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
 	selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
@@ -191,6 +191,11 @@ selfhost-prod-openbao-bootstrap: ## Re-run the standalone OpenBao bootstrap help
 	@echo "$(BLUE)Running self-host OpenBao bootstrap...$(NC)"
 	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
 	@echo "$(GREEN)✓ Self-host OpenBao bootstrap completed$(NC)"
+
+selfhost-prod-openbao-rotate-tls: ## Renew the KMS-owned listener identity, restart and unseal OpenBao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-tls-init -rotate
+	@$(SELFHOST_OPENBAO_COMPOSE) restart openbao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
 
 selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 	@echo "$(BLUE)Exporting self-host OpenBao state...$(NC)"

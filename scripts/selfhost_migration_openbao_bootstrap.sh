@@ -2,7 +2,9 @@
 # Disposable root-only setup; no token values are logged or put in Compose env.
 set -eu
 
-if [ "${BAO_ADDR:-}" != "http://openbao:8200" ] ||
+if [ "${BAO_ADDR:-}" != "https://openbao:8200" ] ||
+   [ "${BAO_CACERT:-}" != "/bao/public-ca/ca.crt" ] ||
+   [ ! -r "${BAO_CACERT}" ] ||
    [ ! -r /run/secrets/bao_root_token ] || [ ! -d /work/secrets ]; then
     echo "Disposable OpenBao bootstrap inputs are invalid" >&2
     exit 1

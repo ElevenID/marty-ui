@@ -21,8 +21,12 @@ impl RuntimeEnvironment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkloadTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -100,10 +104,13 @@ impl DeploymentServiceConfig {
             });
         }
         let insecure_allowed = boolean(&values, "GRPC_INSECURE_ALLOWED", false)?;
-        if environment == RuntimeEnvironment::Production && insecure_allowed {
+        if environment.is_deployed() && insecure_allowed {
             return Err(invalid("GRPC_INSECURE_ALLOWED"));
         }
-        let workload_tls = workload_tls(&values, environment, insecure_allowed)?;
+        let workload_tls = workload_tls(&values, environment)?;
+        if workload_tls.is_some() && !organization_grpc_target.starts_with("https://") {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
         let timeout = number(
             value(&values, "DEPLOYMENT_PROFILE_DEPENDENCY_TIMEOUT_SECONDS").unwrap_or("10"),
             "DEPLOYMENT_PROFILE_DEPENDENCY_TIMEOUT_SECONDS",
@@ -130,18 +137,24 @@ impl DeploymentServiceConfig {
 fn workload_tls(
     values: &BTreeMap<String, String>,
     environment: RuntimeEnvironment,
-    insecure_allowed: bool,
 ) -> Result<Option<WorkloadTlsFiles>, DeploymentConfigError> {
     let names = [
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
     ];
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
+    }
     let configured = names
         .iter()
         .filter(|name| value(values, name).is_some())
         .count();
-    if configured == 0 && (!environment.is_deployed() || insecure_allowed) {
+    if configured == 0 && !environment.is_deployed() {
         return Ok(None);
     }
     if configured != names.len() {
@@ -153,8 +166,17 @@ fn workload_tls(
     }
     Ok(Some(WorkloadTlsFiles {
         certificate: value(values, names[0]).unwrap_or_default().into(),
-        private_key: value(values, names[1]).unwrap_or_default().into(),
-        ca_certificate: value(values, names[2]).unwrap_or_default().into(),
+        ca_certificate: value(values, names[1]).unwrap_or_default().into(),
+        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
+        kms_ca_certificate: value(values, names[3]).unwrap_or_default().into(),
+        kms_token_file: value(values, names[4]).unwrap_or_default().into(),
+        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
+        kms_key_version: value(values, names[6])
+            .unwrap_or_default()
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| invalid(names[6]))?,
     }))
 }
 
@@ -251,23 +273,62 @@ mod tests {
     }
 
     #[test]
-    fn beta_can_explicitly_match_a_plaintext_organization_server_but_production_cannot() {
-        let mut beta = base("beta");
-        beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
-        beta.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
-        assert!(DeploymentServiceConfig::from_values(beta)
-            .unwrap()
-            .workload_tls
-            .is_none());
-
-        let mut production = base("production");
-        production.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
-        production.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+    fn workload_tls_requires_remote_key_and_rejects_private_key_file() {
+        let mut values = base("production");
+        values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into());
+        values.insert("GRPC_WORKLOAD_TLS_CA_CERT".into(), "server-ca.pem".into());
         assert_eq!(
-            DeploymentServiceConfig::from_values(production),
+            DeploymentServiceConfig::from_values(values.clone()),
             Err(DeploymentConfigError::Invalid {
-                name: "GRPC_INSECURE_ALLOWED"
+                name: "GRPC_WORKLOAD_TLS_CLIENT_CERT"
             })
         );
+        for (name, value) in [
+            ("GRPC_WORKLOAD_TLS_KMS_ADDR", "https://bao:8200"),
+            ("GRPC_WORKLOAD_TLS_KMS_CA_CERT", "bao-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE", "token"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_NAME", "deployment-client"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values.clone()),
+            Err(DeploymentConfigError::Invalid {
+                name: "ORG_GRPC_TARGET"
+            })
+        );
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values.clone())
+                .unwrap()
+                .workload_tls
+                .unwrap()
+                .kms_key_version,
+            1
+        );
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "legacy.pem".into());
+        assert_eq!(
+            DeploymentServiceConfig::from_values(values),
+            Err(DeploymentConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_KEY"
+            })
+        );
+    }
+
+    #[test]
+    fn deployed_environments_reject_plaintext_override() {
+        for environment in ["beta", "production"] {
+            let mut values = base(environment);
+            values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+            values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+            assert_eq!(
+                DeploymentServiceConfig::from_values(values),
+                Err(DeploymentConfigError::Invalid {
+                    name: "GRPC_INSECURE_ALLOWED"
+                })
+            );
+        }
     }
 }

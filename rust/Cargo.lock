@@ -3647,6 +3647,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "marty-event-stream",
+ "mmf-platform",
  "mmf-security",
  "regex",
  "reqwest",
@@ -3880,6 +3881,7 @@ dependencies = [
  "chrono",
  "marty-key-material-policy",
  "mmf-core",
+ "mmf-platform",
  "mmf-runtime",
  "mmf-security",
  "prost",
@@ -3997,6 +3999,7 @@ dependencies = [
  "marty-holder-key-reference",
  "marty-key-material-policy",
  "marty-signing-keys",
+ "mmf-platform",
  "p256",
  "prost",
  "protoc-bin-vendored",
@@ -4066,6 +4069,8 @@ dependencies = [
  "chrono",
  "futures-core",
  "http 1.5.0",
+ "mmf-platform",
+ "mmf-security",
  "prost",
  "protoc-bin-vendored",
  "serde",
@@ -4079,6 +4084,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -4286,6 +4292,7 @@ dependencies = [
  "marty-emrtd-issuance",
  "marty-key-material-policy",
  "marty-oid4vci",
+ "marty-openbao-http",
  "marty-passport-auth",
  "marty-platform-clock",
  "marty-response-compat",
@@ -4361,6 +4368,8 @@ dependencies = [
  "hmac 0.12.1",
  "http 1.5.0",
  "marty-key-material-policy",
+ "marty-openbao-http",
+ "mmf-platform",
  "prost",
  "protoc-bin-vendored",
  "rand 0.9.5",
@@ -4435,6 +4444,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-openbao-http"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+]
+
+[[package]]
 name = "marty-organization"
 version = "0.1.0"
 dependencies = [
@@ -4445,6 +4461,7 @@ dependencies = [
  "mmf-core",
  "mmf-data",
  "mmf-messaging",
+ "mmf-platform",
  "mmf-runtime",
  "mmf-security",
  "prost",
@@ -4478,6 +4495,22 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+]
+
+[[package]]
+name = "marty-passport-keyless-edge"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-server",
+ "base64 0.22.1",
+ "futures-util",
+ "http 1.5.0",
+ "marty-openbao-http",
+ "mmf-platform",
+ "reqwest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4566,6 +4599,7 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "marty-status",
+ "mmf-platform",
  "prost",
  "protoc-bin-vendored",
  "redis",
@@ -4584,6 +4618,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 
@@ -4660,6 +4695,9 @@ dependencies = [
  "sqlx",
  "tempfile",
  "tokio",
+ "tokio-stream",
+ "tonic",
+ "tonic-health",
  "tower",
  "url",
  "uuid",
@@ -4670,9 +4708,11 @@ dependencies = [
 name = "marty-signing-grant"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "base64 0.22.1",
  "chrono",
+ "marty-openbao-http",
  "redis",
  "reqwest",
  "serde",
@@ -4706,10 +4746,13 @@ dependencies = [
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-oid4vp-contract",
+ "marty-openbao-http",
  "marty-passport-auth",
  "marty-signing-grant",
+ "mmf-platform",
  "p256",
  "percent-encoding",
+ "rcgen",
  "redis",
  "regex",
  "reqwest",
@@ -5002,7 +5045,7 @@ dependencies = [
 [[package]]
 name = "mmf-config"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5015,7 +5058,7 @@ dependencies = [
 [[package]]
 name = "mmf-core"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "serde",
  "serde_json",
@@ -5026,7 +5069,7 @@ dependencies = [
 [[package]]
 name = "mmf-data"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5040,7 +5083,7 @@ dependencies = [
 [[package]]
 name = "mmf-messaging"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5057,7 +5100,7 @@ dependencies = [
 [[package]]
 name = "mmf-observability"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5071,9 +5114,12 @@ dependencies = [
 [[package]]
 name = "mmf-platform"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
+ "base64 0.23.1",
+ "http 1.5.0",
+ "hyper-util",
  "mmf-core",
  "mmf-observability",
  "mmf-resilience",
@@ -5083,12 +5129,15 @@ dependencies = [
  "regex",
  "reqwest",
  "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tonic",
+ "tower",
  "url",
  "uuid",
 ]
@@ -5096,7 +5145,7 @@ dependencies = [
 [[package]]
 name = "mmf-push"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "hmac 0.13.0",
@@ -5115,7 +5164,7 @@ dependencies = [
 [[package]]
 name = "mmf-resilience"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5128,7 +5177,7 @@ dependencies = [
 [[package]]
 name = "mmf-runtime"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "axum",
  "mmf-core",
@@ -5140,7 +5189,7 @@ dependencies = [
 [[package]]
 name = "mmf-security"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
@@ -5165,7 +5214,7 @@ dependencies = [
 [[package]]
 name = "mmf-security-contracts"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "mmf-core",
@@ -5176,7 +5225,7 @@ dependencies = [
 [[package]]
 name = "mmf-workflow"
 version = "0.1.1"
-source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=c55d323e6aa64cad4f49308792f1d21eaab0ebc8#c55d323e6aa64cad4f49308792f1d21eaab0ebc8"
+source = "git+https://github.com/ElevenID/marty-microservices-framework?rev=aa1f208335df6aa955b669511180dee6555d1896#aa1f208335df6aa955b669511180dee6555d1896"
 dependencies = [
  "async-trait",
  "serde",
@@ -6429,6 +6478,15 @@ dependencies = [
  "rustls-pki-types",
  "schannel",
  "security-framework",
+]
+
+[[package]]
+name = "rustls-pemfile"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
+dependencies = [
+ "rustls-pki-types",
 ]
 
 [[package]]

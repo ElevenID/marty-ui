@@ -33,6 +33,7 @@
         "namespace": "",
         "auth_mode": "iam_role",
         "auth_reference": "",
+        "ca_cert_file": "",
         "key_reference": "arn:aws:kms:us-east-1:000000000000:key/aaaa",
         "country_code": "",
         "authority_name": "",

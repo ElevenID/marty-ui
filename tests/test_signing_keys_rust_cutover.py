@@ -104,7 +104,8 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     assert "- signing_keys_openbao_token" in signing_keys
     assert "- openbao_service_token" not in signing_keys
     assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
-    assert 'test: ["CMD", "curl", "-f", "http://localhost:8017/health"]' in compose
+    assert "- workload_identity_ca_cert" in signing_keys
+    assert "--cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health" in signing_keys
 
 
 def test_scoped_openbao_service_token_can_list_managed_key_names() -> None:

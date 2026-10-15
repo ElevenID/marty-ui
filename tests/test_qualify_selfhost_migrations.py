@@ -54,12 +54,17 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                       "healthcheck": {"test": ["CMD", "redis-cli", "ping"],
                                       "interval": "2s", "retries": 30}},
             "openbao": {"image": IMAGES["openbao"],
+                        "hostname": "openbao",
                         "networks": {"private": None}, "command": None,
                         "entrypoint": ["/bin/sh",
                                        "/usr/local/bin/passport-supported-openbao-start"],
-                        "healthcheck": {"test": ["CMD", "bao", "status",
-                                                 "-address=http://127.0.0.1:8200"],
+                        "environment": {"PASSPORT_BAO_TLS_MODE": "required"},
+                        "healthcheck": {"test": ["CMD-SHELL",
+                            "BAO_CACERT=/bao/public-ca/ca.crt bao status -address=https://127.0.0.1:8200 >/dev/null"],
                                         "interval": "2s", "retries": 30},
+                        "tmpfs": ["/tmp/bao-tls:rw,mode=1777"],
+                        "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                                     "target": "/bao/public-ca", "volume": {}}],
                         "configs": [{"source": "openbao_start",
                                      "target": "/usr/local/bin/passport-supported-openbao-start"}],
                         "secrets": [{"source": "bao_root_token",
@@ -74,6 +79,9 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                                         "target": f"/run/secrets/{name}"}
                                        for name in ("marty_db_password", "bao_root_token",
                                                     "notification_openbao_token")],
+                           "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                                        "target": "/bao/public-ca", "read_only": True,
+                                        "volume": {}}],
                            "environment": {
                                "ENVIRONMENT": "production",
                                "MARTY_MIGRATION_PROFILE": "selfhost-production",
@@ -81,9 +89,12 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
                                "REDIS_DB_GATEWAY": "2",
                                "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
                                "BAO_TOKEN_FILE": "/run/secrets/bao_root_token",
+                               "BAO_CACERT": "/bao/public-ca/ca.crt",
                                "NOTIFICATION_OPENBAO_TOKEN_FILE":
                                    "/run/secrets/notification_openbao_token",
-                               "BAO_ADDR": "http://openbao:8200",
+                               "NOTIFICATION_OPENBAO_CA_CERT_FILE":
+                                   "/bao/public-ca/ca.crt",
+                               "BAO_ADDR": "https://openbao:8200",
                                "DATABASE_URL_TEMPLATE":
                                    "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
                                "MARTY_ORG_ADMIN_EMAIL": "probe@migration.invalid",
@@ -114,6 +125,8 @@ def model(secret_dir: Path, project: str = PROJECT) -> dict:
         },
         "networks": {"private": {"internal": True,
                                  "name": f"{project}_private", "ipam": {}}},
+        "volumes": {"openbao_public_ca": {
+            "name": f"{project}_openbao_public_ca"}},
         "secrets": {
             name: {"file": str(secret_dir / name), "name": f"{project}_{name}"}
             for name in ("marty_db_password", "bao_root_token",
@@ -211,6 +224,14 @@ def test_model_rejects_profile_network_port_or_secret_escape(tmp_path: Path) -> 
             ENVIRONMENT="development"),
         lambda m: m["services"]["db-migrate"]["environment"].pop(
             "NOTIFICATION_OPENBAO_TOKEN_FILE"),
+        lambda m: m["services"]["db-migrate"]["environment"].update(
+            BAO_ADDR="http://openbao:8200"),
+        lambda m: m["services"]["db-migrate"]["environment"].pop(
+            "NOTIFICATION_OPENBAO_CA_CERT_FILE"),
+        lambda m: m["services"]["openbao"].update(hostname="wrong-host"),
+        lambda m: m["services"]["openbao"]["environment"].update(
+            PASSPORT_BAO_TLS_MODE="database-probe"),
+        lambda m: m["services"]["openbao"].pop("tmpfs"),
         lambda m: m["services"]["db-migrate"].update(command=["true"]),
         lambda m: m["services"]["db-migrate"].update(ports=["5432:5432"]),
         lambda m: m["services"]["db-migrate"].update(pid="host"),

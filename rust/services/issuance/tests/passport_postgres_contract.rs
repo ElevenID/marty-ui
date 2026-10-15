@@ -35,7 +35,7 @@ use marty_issuance_service::passport_repository::{
 };
 use marty_issuance_service::passport_signer::{ManagedProfileSigner, PassportSigner};
 use marty_passport_auth::PassportTenantKeyring;
-use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
+use marty_signing_grant::SigningOrigin;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::postgres::PgPoolOptions;
@@ -44,6 +44,9 @@ use tower::ServiceExt;
 
 #[path = "support/passport_mock_artifact_kms.rs"]
 mod passport_mock_artifact_kms;
+
+#[path = "support/contract_grant.rs"]
+mod contract_grant;
 
 #[path = "../src/passport_test_vectors.rs"]
 mod passport_test_vectors;
@@ -255,12 +258,6 @@ async fn exercise_native_passport_http(
         .route("/internal/signing-keys/resolve-issuer-did", get(resolve))
         .route("/internal/signing-keys/csca-trust-anchors", get(trust))
         .route("/internal/signing-keys/issuer-dids/sign", post(sign))
-        .route(
-            "/v1/transit/hmac/marty-sign-grant-issuance-passport-v1/sha2-256",
-            post(|| async {
-                Json(json!({"data":{"hmac":format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
-            }),
-        )
         .route("/v1/personalization/jobs", post(submit))
         .route(
             "/v1/personalization/jobs/{job_id}",
@@ -297,20 +294,6 @@ async fn exercise_native_passport_http(
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base_url = format!("http://{}", listener.local_addr().unwrap());
     let server = tokio::spawn(async move { axum::serve(listener, mock).await.unwrap() });
-    let mut grant_file = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(&mut grant_file, b"passport-mint-token\n").unwrap();
-    let previous_bao_addr = std::env::var_os("BAO_ADDR");
-    std::env::set_var("BAO_ADDR", &base_url);
-    let minter = GrantMinter::for_managed_openbao(
-        &base_url,
-        SigningOrigin::IssuancePassport,
-        grant_file.path().to_path_buf(),
-    )
-    .unwrap();
-    match previous_bao_addr {
-        Some(value) => std::env::set_var("BAO_ADDR", value),
-        None => std::env::remove_var("BAO_ADDR"),
-    }
     let signing_url = url::Url::parse(&format!("{base_url}/internal/signing-keys/")).unwrap();
     let app = passport_router(
         PassportHttpService::new(
@@ -322,7 +305,7 @@ async fn exercise_native_passport_http(
                     signing_url,
                     Some("synthetic-internal-key"),
                     Some("synthetic-issuer-sign-key"),
-                    minter,
+                    contract_grant::ContractGrantMinter(SigningOrigin::IssuancePassport),
                 )
                 .unwrap(),
             ))),

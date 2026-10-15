@@ -13,7 +13,9 @@ is_placeholder_secret_value() {
     return 1
 }
 
-BAO_ADDR="${BAO_ADDR:-http://openbao:8200}"
+BAO_ADDR="${BAO_ADDR:-https://openbao:8200}"
+BAO_CACERT="${BAO_CACERT:-/bao/data/tls/ca.crt}"
+BAO_PUBLIC_CA_FILE="${BAO_PUBLIC_CA_FILE:-/bao/runtime/openbao_tls_ca_cert}"
 BAO_INIT_FILE="${BAO_INIT_FILE:-/bao/data/selfhost-init.json}"
 BAO_ROOT_TOKEN_FILE="${BAO_ROOT_TOKEN_FILE:-/bao/data/root.token}"
 BAO_UNSEAL_KEY_FILE="${BAO_UNSEAL_KEY_FILE:-/bao/data/unseal.key}"
@@ -26,7 +28,7 @@ BAO_HAIP_TOKEN_FILE="${BAO_HAIP_TOKEN_FILE:-/bao/runtime/haip-kms.token}"
 BAO_HAIP_POLICY_FILE="${BAO_HAIP_POLICY_FILE:-/scripts/openbao-haip-workload-policy.hcl}"
 BAO_GRANT_TOKEN_DIR="${BAO_GRANT_TOKEN_DIR:-/bao/runtime}"
 
-mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
+mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "$(dirname "${BAO_PUBLIC_CA_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
 
 status_json() {
     bao status -address="${BAO_ADDR}" -format=json 2>/dev/null || true
@@ -80,6 +82,19 @@ while :; do
     echo "  waiting..."
     sleep 2
 done
+
+# Publish only the public trust anchor to application mounts. The CA and
+# listener private keys remain inside the OpenBao state directory.
+if ! grep -q '^-----BEGIN CERTIFICATE-----$' "${BAO_CACERT}" || grep -q 'PRIVATE KEY' "${BAO_CACERT}"; then
+    echo "OpenBao TLS public CA is missing or invalid." >&2
+    exit 1
+fi
+if ! cmp -s "${BAO_CACERT}" "${BAO_PUBLIC_CA_FILE}"; then
+    ca_tmp="$(mktemp "${BAO_PUBLIC_CA_FILE}.XXXXXX")"
+    chmod 0644 "${ca_tmp}"
+    cp "${BAO_CACERT}" "${ca_tmp}"
+    mv -f "${ca_tmp}" "${BAO_PUBLIC_CA_FILE}"
+fi
 
 initialized="$(json_bool "${current_status}" initialized)"
 if [ "${initialized}" != "true" ]; then

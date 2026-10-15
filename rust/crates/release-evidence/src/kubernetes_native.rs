@@ -392,7 +392,9 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
+                == Some(
+                    &&json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
+                ),
         )?;
     } else {
         for values in [&auth, &applicant, &policy] {
@@ -403,7 +405,9 @@ fn issuance_consumer_bindings(resources: &[Value], selected: bool) -> Result<()>
         require(flow.get("ISSUANCE_NATIVE_SERVICE_URL") == Some(&&native_ref))?;
         require(
             flow.get("ISSUANCE_GRPC_TARGET")
-                == Some(&&json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"})),
+                == Some(
+                    &&json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
+                ),
         )?;
     }
     let gateway = environment(container(
@@ -493,6 +497,19 @@ fn native_template(resources: &[Value]) -> Result<()> {
         config_ref("DIDCOMM_KMS_ADDR", "BAO_ADDR"),
     );
     expected.insert("BAO_ADDR", config_ref("BAO_ADDR", "BAO_ADDR"));
+    for (name, key) in [
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "ISSUANCE_TLS_KMS_ADDR"),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            "ISSUANCE_TLS_KMS_KEY_NAME",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+            "ISSUANCE_TLS_KMS_KEY_VERSION",
+        ),
+    ] {
+        expected.insert(name, config_ref(name, key));
+    }
     for (name, path) in [
         (
             "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
@@ -518,9 +535,29 @@ fn native_template(resources: &[Value]) -> Result<()> {
         ("ISSUANCE_SERVICE_PORT", "8005"),
         ("ISSUANCE_GRPC_ENABLED", "true"),
         ("ISSUANCE_GRPC_PORT", "9005"),
-        ("ORG_GRPC_TARGET", "organization:9002"),
-        ("CT_GRPC_TARGET", "credential-template:9003"),
-        ("RP_GRPC_TARGET", "revocation-profile:9013"),
+        ("ORG_GRPC_TARGET", "https://organization:9002"),
+        ("CT_GRPC_TARGET", "https://credential-template:9003"),
+        ("RP_GRPC_TARGET", "https://revocation-profile:9013"),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            "/run/secrets/issuance-server-tls/tls.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            "/run/secrets/issuance-server-tls/ca.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "/run/secrets/issuance-server-kms/ca.crt",
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            "/run/secrets/issuance-server-kms/token",
+        ),
+        (
+            "GRPC_TLS_CA_CERT",
+            "/run/secrets/integration-secret-ca/ca.crt",
+        ),
         (
             "SIGNING_KEYS_INTERNAL_URL",
             "http://gateway:8000/internal/signing-keys",
@@ -574,12 +611,23 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
             && owner["image"] == "${MARTY_SERVICES_IMAGE}"
             && owner["imagePullPolicy"] == "Always",
     )?;
-    for probe in ["livenessProbe", "readinessProbe"] {
-        require_keys(
-            &owner[probe],
-            &["httpGet", "initialDelaySeconds", "periodSeconds"],
-        )?;
-    }
+    require_keys(
+        &owner["livenessProbe"],
+        &["httpGet", "initialDelaySeconds", "periodSeconds"],
+    )?;
+    require_keys(
+        &owner["readinessProbe"],
+        if didcomm_token {
+            &["httpGet", "initialDelaySeconds", "periodSeconds"]
+        } else {
+            &[
+                "exec",
+                "initialDelaySeconds",
+                "periodSeconds",
+                "timeoutSeconds",
+            ]
+        },
+    )?;
     let pod = deployment.pointer("/spec/template/spec").ok_or(REFUSAL)?;
     require(
         pod["serviceAccountName"] == "marty-app"
@@ -601,20 +649,20 @@ fn closed_runtime_pod(deployment: &Value, owner: &Value, didcomm_token: bool) ->
     if didcomm_token {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
+                == json!([{"name":"issuance-server-tls","mountPath":"/run/secrets/issuance-server-tls","readOnly":true},{"name":"issuance-server-kms","mountPath":"/run/secrets/issuance-server-kms","readOnly":true},{"name":"didcomm-kms-token","mountPath":"/run/secrets/didcomm-kms","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"issuance-sign-grants","mountPath":"/run/secrets/issuance-sign-grants","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
+                == json!([{"name":"issuance-server-tls","secret":{"secretName":"issuance-server-tls"}},{"name":"issuance-server-kms","secret":{"secretName":"issuance-server-kms"}},{"name":"didcomm-kms-token","secret":{"secretName":"marty-secrets","items":[{"key":"DIDCOMM_ISSUANCE_OPENBAO_TOKEN","path":"token"}]}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"issuance-sign-grants","secret":{"secretName":"marty-secrets","items":[{"key":"ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN","path":"credential"},{"key":"ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN","path":"canvas"},{"key":"ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN","path":"readiness"},{"key":"ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN","path":"passport"}]}}]),
         )?;
     } else {
         require(
             owner["volumeMounts"]
-                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true}]),
+                == json!([{"name":"integration-secret-tls","mountPath":"/run/secrets/integration-secret-tls","readOnly":true},{"name":"integration-secret-ca","mountPath":"/run/secrets/integration-secret-ca","readOnly":true},{"name":"signing-keys-tls-kms","mountPath":"/run/secrets/signing-keys-tls-kms","readOnly":true},{"name":"signing-grant-verify","mountPath":"/run/secrets/signing-grant-verify","readOnly":true}]),
         )?;
         require(
             pod["volumes"]
-                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}}]),
+                == json!([{"name":"integration-secret-tls","secret":{"secretName":"signing-keys-integration-secret-server-tls"}},{"name":"integration-secret-ca","secret":{"secretName":"signing-keys-integration-secret-ca"}},{"name":"signing-keys-tls-kms","secret":{"secretName":"signing-keys-tls-kms"}},{"name":"signing-grant-verify","secret":{"secretName":"marty-secrets","items":[{"key":"SIGNING_KEYS_GRANT_VERIFY_TOKEN","path":"token"}]}}]),
         )?;
     }
     Ok(())
@@ -643,8 +691,12 @@ fn signing_template(resources: &[Value]) -> Result<()> {
             "/run/secrets/integration-secret-tls/tls.crt",
         ),
         (
-            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
-            "/run/secrets/integration-secret-tls/tls.key",
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+            "/run/secrets/signing-keys-tls-kms/ca.crt",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+            "/run/secrets/signing-keys-tls-kms/token",
         ),
         (
             "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
@@ -671,6 +723,22 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         secret_ref("DEVICE_REGISTRATION_SIGNING_KEYS_KEY"),
     );
     expected.insert("OPENBAO_SERVICE_TOKEN", json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}}));
+    for (name, key) in [
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR",
+            "SIGNING_KEYS_TLS_KMS_ADDR",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
+            "SIGNING_KEYS_TLS_KMS_KEY_NAME",
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION",
+            "SIGNING_KEYS_TLS_KMS_KEY_VERSION",
+        ),
+    ] {
+        expected.insert(name, config_ref(name, key));
+    }
     for name in ["BAO_ADDR", "PUBLIC_DOMAIN"] {
         expected.insert(name, config_ref(name, name));
     }
@@ -684,9 +752,12 @@ fn signing_template(resources: &[Value]) -> Result<()> {
         owner["ports"]
             == json!([{"name":"http","containerPort":8017},{"name":"secret-tls","containerPort":8018}]),
     )?;
-    for probe in ["livenessProbe", "readinessProbe"] {
-        require(owner[probe]["httpGet"] == json!({"path":"/health","port":8017}))?;
-    }
+    require(owner["livenessProbe"]["httpGet"] == json!({"path":"/health","port":8017}))?;
+    require(owner["readinessProbe"]["exec"]["command"] == json!([
+        "/bin/sh", "-c",
+        "curl -fsS http://127.0.0.1:8017/health >/dev/null && curl -fsS --cacert /run/secrets/integration-secret-ca/ca.crt --resolve signing-keys:8018:127.0.0.1 https://signing-keys:8018/health >/dev/null"
+    ]))?;
+    require(owner["readinessProbe"]["timeoutSeconds"] == 8)?;
     require(
         service["spec"]
             == json!({"type":"ClusterIP","selector":{"app":"signing-keys"},"ports":[{"name":"http","port":8017,"targetPort":8017},{"name":"secret-tls","port":8018,"targetPort":8018}]}),
@@ -852,7 +923,7 @@ pub fn compose(
     replace_env(
         flow,
         "ISSUANCE_GRPC_TARGET",
-        json!({"name":"ISSUANCE_GRPC_TARGET","value":"issuance-native:9005"}),
+        json!({"name":"ISSUANCE_GRPC_TARGET","value":"https://issuance-native:9005"}),
     )?;
     replace_env(
         flow,
@@ -1177,11 +1248,17 @@ fn normalized_pod(deployment: &Value) -> Result<Value> {
                     3
                 },
             ),
-            ("timeoutSeconds", 1),
         ] {
             remove_default(&mut owner[name], key, json!(value))?;
         }
-        remove_default(&mut owner[name]["httpGet"], "scheme", json!("HTTP"))?;
+        if owner[name]["timeoutSeconds"] == 1 {
+            remove_default(&mut owner[name], "timeoutSeconds", json!(1))?;
+        }
+        if let Some(http_get) = owner[name].get_mut("httpGet") {
+            remove_default(http_get, "scheme", json!("HTTP"))?;
+        } else {
+            require(owner[name].get("exec").is_some())?;
+        }
     }
     Ok(pod)
 }

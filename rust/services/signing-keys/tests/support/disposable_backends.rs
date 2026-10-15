@@ -33,19 +33,27 @@ pub async fn disposable_redis_url() -> String {
 pub async fn disposable_openbao_envelope() -> OpenBaoEnvelopeProvider {
     let url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
+    let root_token =
+        std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("disposable guard token");
+    assert_ne!(root_token, token, "application token must be scoped");
     let parsed = reqwest::Url::parse(&url).expect("disposable OpenBao URL syntax");
-    assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert!(parsed.scheme() == "https" && parsed.host_str() == Some("127.0.0.1"));
     assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok(token.as_str()));
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable OpenBao CA path");
+    let ca = reqwest::Certificate::from_pem(&std::fs::read(ca_file).expect("public CA"))
+        .expect("OpenBao CA certificate");
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("disposable OpenBao sentinel value");
     assert!(nonce.len() >= 16);
     let client = reqwest::Client::builder()
+        .add_root_certificate(ca)
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .unwrap();
     let marker: Value = client
         .get(format!("{url}/v1/secret/data/marty-test-disposable-guard"))
-        .header("X-Vault-Token", &token)
+        .header("X-Vault-Token", &root_token)
         .send()
         .await
         .unwrap()

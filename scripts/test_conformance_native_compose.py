@@ -189,7 +189,7 @@ def assert_native_inputs(common, base_source):
     ]
     assert (
         base_source["secrets"]["dev_integration_secret_ca"]["file"]
-        == "./.dev-integration-secret-tls/ca.crt"
+        == "${DEV_INTEGRATION_SECRET_CA_FILE:?DEV_INTEGRATION_SECRET_CA_FILE must be set}"
     )
     for setting in SHARED_SETTING_REPAIRS:
         assert setting in shared and setting in native

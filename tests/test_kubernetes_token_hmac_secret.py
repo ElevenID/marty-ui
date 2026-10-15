@@ -100,17 +100,19 @@ def harness(tmp_path):
         "IMAGE_PULL_SECRET_NAME": "synthetic-pull-secret",
         "FLOW_WEBHOOK_SECRET": "synthetic-flow-webhook-at-least-thirty-two-bytes",
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT": "synthetic-signing-keys-server-certificate",
-        "SIGNING_KEYS_WORKLOAD_SERVER_KEY": "synthetic-signing-keys-server-private-key",
+        "OPENBAO_TLS_CA_CERT": "synthetic-openbao-ca-certificate",
+        "SIGNING_KEYS_TLS_KMS_TOKEN": "synthetic-signing-keys-tls-kms-token",
         "PYTHONPATH": str(ROOT / "packages"),
         "TEST_REQUIRED_SECRET_ENVS": "\n".join(
             entry["env"] for entry in token_catalog().values()
             if "kubernetes-production" in entry.get("required_for", [])
+            and "env" in entry
         ),
     }
     if os.name == "nt":
         env["SystemRoot"] = os.environ["SystemRoot"]
     for entry in token_catalog().values():
-        if "kubernetes-production" in entry.get("required_for", []):
+        if "kubernetes-production" in entry.get("required_for", []) and "env" in entry:
             env.setdefault(
                 entry["env"], "synthetic-required-value-at-least-thirty-two-bytes"
             )
@@ -173,7 +175,7 @@ kubectl() {
       [[ "$4" == synthetic-pull-secret ]] || return 92 ;;
     create:secret:generic)
       case "$4" in
-        marty-secrets|signing-keys-integration-secret-server-tls|signing-keys-integration-secret-ca|presentation-policy-workload-tls|flow-workload-tls|flow-server-workload-tls|auth-workload-tls|applicant-workload-tls|verification-workload-tls|deployment-profile-workload-tls|compliance-profile-workload-tls) ;;
+        marty-secrets|keycloak-kms|signing-keys-integration-secret-server-tls|signing-keys-tls-kms|signing-keys-integration-secret-ca|org-workload-tls|org-tls-kms|es-workload-tls|es-tls-kms|rp-workload-tls|rp-tls-kms|ct-workload-tls|ct-tls-kms|presentation-policy-workload-tls|pp-tls-kms|flow-workload-tls|flow-client-tls-kms|flow-server-workload-tls|flow-server-tls-kms|auth-workload-tls|auth-tls-kms|auth-server-tls|auth-server-kms|gateway-auth-tls|gateway-auth-kms|issuance-server-tls|issuance-server-kms|verification-workload-tls|verification-tls-kms|deployment-profile-workload-tls|deployment-profile-tls-kms|compliance-profile-workload-tls|compliance-profile-tls-kms) ;;
         *) return 93 ;;
       esac ;;
     apply:-f:-) [[ $# == 3 ]] || return 94 ;;
@@ -299,8 +301,82 @@ def test_setup_publishes_same_existing_token_once_without_echo(harness, source):
     )
     assert (
         len([call for call in calls if call[:3] == ["create", "secret", "generic"]])
-        == 11
+            == 33
     )
+    created_names = {
+        call[3]
+        for call in calls
+        if call[:3] == ["create", "secret", "generic"]
+    }
+    assert {
+        "keycloak-kms",
+        "org-workload-tls", "org-tls-kms",
+        "es-workload-tls", "es-tls-kms",
+        "rp-workload-tls", "rp-tls-kms",
+        "ct-workload-tls", "ct-tls-kms",
+    } <= created_names
+    signing_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "signing-keys-integration-secret-server-tls"]
+    )
+    assert any(arg.startswith("--from-literal=tls.crt=") for arg in signing_tls)
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in signing_tls)
+    kms_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "signing-keys-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_tls)
+    assert any(arg.startswith("--from-literal=token=") for arg in kms_tls)
+    pp_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "presentation-policy-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in pp_tls)
+    pp_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "pp-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in pp_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in pp_kms)
+    auth_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "auth-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in auth_tls)
+    auth_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "auth-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in auth_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in auth_kms)
+    verification_tls = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "verification-workload-tls"]
+    )
+    assert not any(arg.startswith("--from-literal=tls.key=") for arg in verification_tls)
+    verification_kms = next(
+        call for call in calls
+        if call[:4] == ["create", "secret", "generic", "verification-tls-kms"]
+    )
+    assert any(arg.startswith("--from-literal=ca.crt=") for arg in verification_kms)
+    assert any(arg.startswith("--from-literal=token=") for arg in verification_kms)
+    for workload, signer in (
+        ("flow-workload-tls", "flow-client-tls-kms"),
+        ("flow-server-workload-tls", "flow-server-tls-kms"),
+        ("deployment-profile-workload-tls", "deployment-profile-tls-kms"),
+        ("compliance-profile-workload-tls", "compliance-profile-tls-kms"),
+    ):
+        tls_secret = next(
+            call for call in calls
+            if call[:4] == ["create", "secret", "generic", workload]
+        )
+        assert not any(arg.startswith("--from-literal=tls.key=") for arg in tls_secret)
+        kms_secret = next(
+            call for call in calls
+            if call[:4] == ["create", "secret", "generic", signer]
+        )
+        assert any(arg.startswith("--from-literal=ca.crt=") for arg in kms_secret)
+        assert any(arg.startswith("--from-literal=token=") for arg in kms_secret)
 
 
 @pytest.mark.parametrize("source", ["environment", "file"])

@@ -14,12 +14,15 @@ use marty_flow::{
     PresentationEvaluationRequest, PresentationPolicyProvider,
 };
 use mmf_platform::{
-    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+    read_public_certificates, GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial,
+    GrpcTransportSecurity, GrpcTrustMode, KeylessGrpcChannelFactory, KeylessGrpcTransportOptions,
+    KeylessTlsIdentity, OpenBaoTlsIdentityFiles,
 };
 use mmf_security::TenantMembershipProvider;
 use prost::Message;
 use serde_json::Value;
 use tonic::{metadata::AsciiMetadataValue, transport::Channel, Request};
+use url::Url;
 
 use crate::{EvaluationResult, VerificationError};
 
@@ -30,8 +33,12 @@ const MAX_PROVIDER_JSON_BYTES: usize = 1024 * 1024;
 #[derive(Clone, Debug)]
 pub struct WorkloadClientTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -78,25 +85,26 @@ pub struct VerificationProviders {
 }
 
 impl VerificationProviders {
-    pub fn connect_lazy(config: &GrpcProviderConfig) -> Result<Self, VerificationError> {
+    pub async fn connect_lazy(config: &GrpcProviderConfig) -> Result<Self, VerificationError> {
         if config.timeout.is_zero() {
             return Err(unavailable("gRPC dependency timeout must be positive"));
         }
-        let organization = factory(&config.organization_target, config.workload_tls.as_ref())?
-            .connect_lazy()
-            .map_err(|_| unavailable("organization service channel is invalid"))?;
-        let credential_template = factory(
+        let keyless = keyless_setup(config).await?;
+        let organization = channel(
+            &config.organization_target,
+            keyless.as_ref(),
+            config.timeout,
+        )?;
+        let credential_template = channel(
             &config.credential_template_target,
-            config.workload_tls.as_ref(),
-        )?
-        .connect_lazy()
-        .map_err(|_| unavailable("credential template service channel is invalid"))?;
-        let presentation_policy = factory(
+            keyless.as_ref(),
+            config.timeout,
+        )?;
+        let presentation_policy = channel(
             &config.presentation_policy_target,
-            config.workload_tls.as_ref(),
-        )?
-        .connect_lazy()
-        .map_err(|_| unavailable("presentation policy service channel is invalid"))?;
+            keyless.as_ref(),
+            config.timeout,
+        )?;
         let membership = Arc::new(
             GrpcTenantMembershipProvider::new(
                 OrganizationServiceClient::new(organization),
@@ -126,9 +134,7 @@ impl VerificationProviders {
         )?);
         let inspection: Arc<dyn InspectionProvider> = match &config.inspection_target {
             Some(target) if !target.trim().is_empty() => Arc::new(GrpcInspectionProvider::new(
-                factory(target, config.workload_tls.as_ref())?
-                    .connect_lazy()
-                    .map_err(|_| unavailable("inspection service channel is invalid"))?,
+                channel(target, keyless.as_ref(), config.timeout)?,
                 &config.inspection_method,
                 config.service_token.as_deref(),
                 config.timeout,
@@ -339,30 +345,16 @@ impl InspectionProvider for GrpcInspectionProvider {
     }
 }
 
-fn factory(
-    target: &str,
-    workload_tls: Option<&WorkloadClientTlsFiles>,
-) -> Result<GrpcChannelFactory, VerificationError> {
+fn factory(target: &str) -> Result<GrpcChannelFactory, VerificationError> {
     let target = normalize_target(target);
-    let (target, security, trust, material) = match workload_tls {
-        Some(files) => (
-            target.replacen("http://", "https://", 1),
-            GrpcTransportSecurity::MutualTls,
-            GrpcTrustMode::CustomCa,
-            GrpcTlsMaterial::from_pem_files(
-                Some(&files.ca_certificate),
-                Some(&files.certificate),
-                Some(&files.private_key),
-            )
-            .map_err(|_| unavailable("workload TLS material is invalid"))?,
-        ),
-        None if target.starts_with("https://") => (
+    let (target, security, trust, material) = match target.starts_with("https://") {
+        true => (
             target,
             GrpcTransportSecurity::ServerTls,
             GrpcTrustMode::NativeRoots,
             GrpcTlsMaterial::default(),
         ),
-        None => (
+        false => (
             target,
             GrpcTransportSecurity::Plaintext,
             GrpcTrustMode::NativeRoots,
@@ -379,6 +371,63 @@ fn factory(
         material,
     )
     .map_err(|_| unavailable("gRPC channel configuration is invalid"))
+}
+
+async fn keyless_setup(
+    config: &GrpcProviderConfig,
+) -> Result<Option<(KeylessTlsIdentity, Vec<Vec<u8>>)>, VerificationError> {
+    let Some(files) = &config.workload_tls else {
+        return Ok(None);
+    };
+    let ca = read_public_certificates(&files.ca_certificate)
+        .map_err(|_| unavailable("workload server CA is invalid"))?;
+    let identity = OpenBaoTlsIdentityFiles {
+        certificate_chain_file: files.certificate.clone(),
+        kms_ca_cert_file: files.kms_ca_certificate.clone(),
+        kms_endpoint: files.kms_endpoint.clone(),
+        kms_token_file: files.kms_token_file.clone(),
+        kms_key_name: files.kms_key_name.clone(),
+        kms_key_version: files.kms_key_version,
+        request_timeout: config.timeout.min(Duration::from_secs(30)),
+        max_concurrent_signs: 64,
+    }
+    .connect()
+    .await
+    .map_err(|_| unavailable("workload remote TLS identity is unavailable"))?;
+    Ok(Some((identity, ca)))
+}
+
+fn channel(
+    target: &str,
+    keyless: Option<&(KeylessTlsIdentity, Vec<Vec<u8>>)>,
+    timeout: Duration,
+) -> Result<Channel, VerificationError> {
+    let Some((identity, ca)) = keyless else {
+        return factory(target)?
+            .connect_lazy()
+            .map_err(|_| unavailable("gRPC channel is invalid"));
+    };
+    if !target.starts_with("https://") {
+        return Err(unavailable("keyless gRPC target must use explicit HTTPS"));
+    }
+    let target = target.to_owned();
+    let server_name = Url::parse(&target)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+        .ok_or_else(|| unavailable("workload target is invalid"))?;
+    KeylessGrpcChannelFactory::with_options(
+        &target,
+        &server_name,
+        identity,
+        ca.clone(),
+        KeylessGrpcTransportOptions {
+            connect_timeout: timeout,
+            request_timeout: timeout,
+            ..KeylessGrpcTransportOptions::default()
+        },
+    )
+    .map(|factory| factory.connect_lazy())
+    .map_err(|_| unavailable("keyless gRPC channel is invalid"))
 }
 
 fn normalize_target(target: &str) -> String {

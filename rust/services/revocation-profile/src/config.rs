@@ -1,4 +1,10 @@
-use std::{collections::HashMap, env, fs, net::SocketAddr, path::Path};
+use std::{
+    collections::HashMap,
+    env, fs,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+};
+use url::Url;
 
 const DEFAULT_HTTP_PORT: u16 = 8013;
 const DEFAULT_GRPC_PORT: u16 = 9013;
@@ -23,11 +29,23 @@ pub struct Config {
     pub database_max_connections: u32,
     pub redis_url: String,
     pub organization_grpc_target: String,
+    pub organization_grpc_ca_cert: Option<PathBuf>,
+    pub grpc_server_tls: Option<GrpcServerTls>,
     pub service_token: Option<String>,
     pub status_list_base_url: String,
     pub organization_id: String,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrpcServerTls {
+    pub certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,10 +76,19 @@ impl Config {
         let database_url = normalize_database_url(&database_url)?;
         let redis_url = required(values, "REDIS_URL")?;
         let organization_grpc_target = required(values, "ORG_GRPC_TARGET")?;
+        let organization_grpc_target = normalize_grpc_target(&organization_grpc_target);
+        let organization_grpc_ca_cert = value(values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
         let service_token = read_service_token(values, &read_file)?;
 
         if !is_development {
             validate_production_token(service_token.as_deref())?;
+            if organization_grpc_ca_cert.is_none() {
+                return Err("ORG_GRPC_CA_CERT is required outside development".into());
+            }
+        }
+        if organization_grpc_ca_cert.is_some() && !organization_grpc_target.starts_with("https://")
+        {
+            return Err("ORG_GRPC_TARGET must use HTTPS with ORG_GRPC_CA_CERT".into());
         }
 
         let status_list_base_url = value(values, "STATUS_LIST_BASE_URL")
@@ -92,16 +119,26 @@ impl Config {
         if database_max_connections == 0 {
             return Err("RP_DATABASE_MAX_CONNECTIONS must be greater than zero".into());
         }
+        let grpc_enabled = parse_bool(values, "RP_GRPC_ENABLED", true)?;
+        if !is_development && !grpc_enabled {
+            return Err("RP_GRPC_ENABLED must remain enabled outside development".into());
+        }
+        let grpc_server_tls = grpc_server_tls(values)?;
+        if !is_development && grpc_server_tls.is_none() {
+            return Err("GRPC_WORKLOAD_TLS_SERVER_CERT is required outside development".into());
+        }
 
         Ok(Self {
             environment,
             http_addr: SocketAddr::from(([0, 0, 0, 0], http_port)),
             grpc_addr: SocketAddr::from(([0, 0, 0, 0], grpc_port)),
-            grpc_enabled: parse_bool(values, "RP_GRPC_ENABLED", true)?,
+            grpc_enabled,
             database_url,
             database_max_connections,
             redis_url,
-            organization_grpc_target: normalize_grpc_target(&organization_grpc_target),
+            organization_grpc_target,
+            organization_grpc_ca_cert,
+            grpc_server_tls,
             service_token,
             status_list_base_url,
             organization_id,
@@ -248,6 +285,56 @@ fn normalize_database_url(url: &str) -> Result<String, String> {
     }
 }
 
+fn grpc_server_tls(values: &HashMap<String, String>) -> Result<Option<GrpcServerTls>, String> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err("GRPC_WORKLOAD_TLS_SERVER_KEY is retired".into());
+    }
+    const NAMES: [&str; 6] = [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ];
+    let present = NAMES
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != NAMES.len() {
+        return Err("gRPC server TLS requires public certificate and complete KMS identity".into());
+    }
+    let endpoint = value(values, NAMES[1]).unwrap_or_default();
+    let url = Url::parse(&endpoint).map_err(|_| "invalid gRPC server TLS KMS origin")?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("gRPC server TLS KMS origin must use credential-free HTTPS".into());
+    }
+    let version = value(values, NAMES[5])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or("gRPC server TLS KMS key version must be positive")?;
+    Ok(Some(GrpcServerTls {
+        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
+        kms_endpoint: endpoint,
+        kms_ca_certificate: PathBuf::from(value(values, NAMES[2]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
+        kms_key_name: value(values, NAMES[4]).unwrap_or_default(),
+        kms_key_version: version,
+    }))
+}
+
 fn normalize_grpc_target(target: &str) -> String {
     if target.starts_with("http://") || target.starts_with("https://") {
         target.to_string()
@@ -269,6 +356,32 @@ mod tests {
             ),
             ("REDIS_URL".into(), "redis://redis:6379/4".into()),
             ("ORG_GRPC_TARGET".into(), "organization:9002".into()),
+        ])
+    }
+
+    fn remote_server_tls_values() -> HashMap<String, String> {
+        HashMap::from([
+            ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "server.pem".into()),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+                "https://bao:8200".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+                "bao-ca.pem".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+                "scoped-token".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+                "revocation-server".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+                "1".into(),
+            ),
         ])
     }
 
@@ -299,6 +412,12 @@ mod tests {
         assert!(Config::from_values(&values, |_| unreachable!()).is_err());
 
         values.insert("GRPC_SERVICE_TOKEN".into(), "a".repeat(32));
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-ca.pem".into());
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+        values.extend(remote_server_tls_values());
         assert!(Config::from_values(&values, |_| unreachable!()).is_ok());
     }
 
@@ -338,6 +457,9 @@ mod tests {
         assert!(Config::from_values(&values, |_| unreachable!()).is_err());
 
         values.insert("PUBLIC_API_URL".into(), "https://beta.example.test/".into());
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-ca.pem".into());
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        values.extend(remote_server_tls_values());
         let config = Config::from_values(&values, |_| unreachable!()).unwrap();
         assert_eq!(config.status_list_base_url, "https://beta.example.test");
     }
@@ -359,5 +481,34 @@ mod tests {
         );
         assert_eq!(config.organization_id, crate::DEFAULT_ORGANIZATION_ID);
         assert_eq!(config.status_list_base_url, "https://beta.example.test");
+    }
+
+    #[test]
+    fn remote_server_identity_rejects_private_key_files_and_http_kms() {
+        let mut values = required_values("beta");
+        values.insert("GRPC_SERVICE_TOKEN".into(), "a".repeat(32));
+        values.insert("ORG_GRPC_CA_CERT".into(), "public-ca.pem".into());
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        values.extend(remote_server_tls_values());
+        values.insert("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "retired.pem".into());
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+        values.remove("GRPC_WORKLOAD_TLS_SERVER_KEY");
+        values.insert(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "http://bao:8200".into(),
+        );
+        assert!(Config::from_values(&values, |_| unreachable!()).is_err());
+        values.insert(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        );
+        assert_eq!(
+            Config::from_values(&values, |_| unreachable!())
+                .unwrap()
+                .grpc_server_tls
+                .unwrap()
+                .kms_key_version,
+            1
+        );
     }
 }

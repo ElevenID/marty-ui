@@ -23,3 +23,13 @@ pub mod profiles;
 pub mod registry;
 pub mod validation;
 pub mod vc_api_holder_proof;
+
+#[cfg(test)]
+extern crate self as marty_signing_keys;
+
+#[cfg(test)]
+mod managed_key_create_mock_contract;
+#[cfg(test)]
+mod public_config_resolve_mock_contract;
+#[cfg(test)]
+mod service_rotation_mock_contract;

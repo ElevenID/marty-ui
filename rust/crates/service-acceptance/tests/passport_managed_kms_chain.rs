@@ -366,8 +366,8 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
     let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed_bao = url::Url::parse(&bao_url).expect("disposable OpenBao URL syntax");
     assert!(
-        parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
-        "passport chain test requires a loopback disposable OpenBao instance"
+        parsed_bao.scheme() == "https" && parsed_bao.host_str() == Some("127.0.0.1"),
+        "passport chain test requires a TLS loopback disposable OpenBao instance"
     );
     let bao_url = bao_url.trim_end_matches('/').to_owned();
     let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
@@ -381,7 +381,14 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         bao_nonce.len() >= 16,
         "disposable OpenBao sentinel is too short"
     );
-    let kms_client = reqwest::Client::new();
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable OpenBao CA path");
+    let ca = reqwest::Certificate::from_pem(&fs::read(&ca_file).expect("public CA"))
+        .expect("OpenBao CA certificate");
+    let kms_client = reqwest::Client::builder()
+        .add_root_certificate(ca)
+        .no_proxy()
+        .build()
+        .expect("CA-verified KMS client");
     let marker = kms_client
         .get(
             parsed_bao
@@ -430,6 +437,7 @@ async fn managed_passport_chain_issues_and_verifies_sod_without_exporting_privat
         "id": "managed-openbao-transit", "name": "Disposable Passport KMS",
         "service_type": "openbao-transit", "endpoint": bao_url,
         "mount": "transit", "auth_mode": "token", "auth_reference": bao_token,
+        "ca_cert_file": ca_file,
         "key_reference": "unused-disposable-default", "algorithms": ["ES256"],
         "key_purposes": ["csca", "x509_doc_signer"],
         "credential_formats": ["mso_mdoc", "icao_emrtd"]

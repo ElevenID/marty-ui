@@ -11,6 +11,7 @@ import concurrent.futures
 import json
 import os
 import re
+import ssl
 import subprocess
 import time
 import urllib.error
@@ -57,6 +58,7 @@ def request(
     token: str = "",
     *,
     timeout: float = 10,
+    ca_file: Path | None = None,
 ) -> tuple[int, dict]:
     payload = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
@@ -66,7 +68,8 @@ def request(
         f"{base}/v1/{path}", data=payload, method=method, headers=headers
     )
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - loopback only
+        context = ssl.create_default_context(cafile=str(ca_file)) if ca_file else None
+        with urllib.request.urlopen(req, timeout=timeout, context=context) as response:  # noqa: S310 - loopback only
             raw = response.read()
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as error:
@@ -95,8 +98,11 @@ def require_status(
     body: dict | None = None,
     *,
     timeout: float = 10,
+    ca_file: Path | None = None,
 ) -> dict:
-    status, response = request(base, method, path, body, token, timeout=timeout)
+    status, response = request(
+        base, method, path, body, token, timeout=timeout, ca_file=ca_file
+    )
     if status not in (200, 204):
         raise RuntimeError(
             f"Disposable HA probe failed: {method} {path} status {status}"

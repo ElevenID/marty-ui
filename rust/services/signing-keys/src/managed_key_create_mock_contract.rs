@@ -1,4 +1,4 @@
-//! Opt-in managed-key creation route against disposable Redis and mock Transit KMS.
+//! Managed-key route regression checks with disposable Redis and unit-only Transit mocks.
 
 use std::{
     collections::BTreeMap,
@@ -36,7 +36,7 @@ const ROTATED_ED25519_PUBLIC_B64: &str = "ebVWLo/mVPlAeLES6KmLp5AfhTrmlb7X4OORC6
 
 type Keys = Arc<Mutex<BTreeMap<String, String>>>;
 
-#[path = "support/mock_bao_addr.rs"]
+#[path = "../tests/support/mock_bao_addr.rs"]
 mod mock_bao_addr_support;
 use mock_bao_addr_support::mock_bao_addr;
 

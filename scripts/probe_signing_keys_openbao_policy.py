@@ -11,7 +11,9 @@ import base64
 import hashlib
 import json
 import os
+import ssl
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -40,6 +42,11 @@ REDIS_IMAGE = json.loads(CATALOG.read_text(encoding="utf-8"))["images"]["redis"]
 POSTGRES_IMAGE = json.loads(CATALOG.read_text(encoding="utf-8"))["images"][
     "postgres"
 ]["reference"]
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, response, code, message, headers, new_url):
+        return None
 
 
 def docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
@@ -95,6 +102,9 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
     postgres_name = f"kms-holder-postgres-{uuid.uuid4().hex[:12]}"
     root_token = f"disposable-root-{uuid.uuid4().hex}"
     postgres_password = f"disposable-holder-{uuid.uuid4().hex}"
+    ca_directory = tempfile.TemporaryDirectory(prefix="marty-signing-policy-ca-")
+    ca_file = Path(ca_directory.name) / "openbao-public-ca.pem"
+    init_script = ROOT / "docker/openbao-init.sh"
     started = False
     redis_started = False
     postgres_started = False
@@ -107,18 +117,42 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             name,
             "--label",
             "marty.disposable=kms-signing-policy",
+            "--tmpfs",
+            "/tmp/bao-tls:rw,mode=1777",
             "-e",
             f"BAO_DEV_ROOT_TOKEN_ID={root_token}",
+            "-e",
+            "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200",
+            "-v",
+            f"{init_script}:/scripts/openbao-init.sh:ro",
             "-p",
             "127.0.0.1::8200",
             IMAGE,
             "server",
             "-dev",
+            "-dev-tls",
+            "-dev-tls-cert-dir=/tmp/bao-tls",
         )
         started = True
         mapping = require_docker("port", name, "8200/tcp")
         port = int(mapping.splitlines()[0].rsplit(":", 1)[1])
-        endpoint = f"http://127.0.0.1:{port}/v1"
+        endpoint = f"https://127.0.0.1:{port}/v1"
+
+        for _ in range(40):
+            candidate = docker("exec", name, "cat", "/tmp/bao-tls/vault-ca.pem")
+            if candidate.returncode == 0 and "BEGIN CERTIFICATE" in candidate.stdout:
+                ca_file.write_text(candidate.stdout, encoding="ascii")
+                break
+            time.sleep(0.25)
+        else:
+            raise RuntimeError("Disposable OpenBao public CA was not available")
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPSHandler(
+                context=ssl.create_default_context(cafile=str(ca_file))
+            ),
+            NoRedirect(),
+        )
 
         def call(
             method: str, path: str, token: str, body: dict | None = None
@@ -131,7 +165,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 headers={"X-Vault-Token": token, "Content-Type": "application/json"},
             )
             try:
-                with urllib.request.urlopen(request, timeout=10) as response:  # noqa: S310 - disposable loopback only
+                with opener.open(request, timeout=10) as response:
                     raw = response.read()
                     return response.status, json.loads(raw) if raw else {}
             except urllib.error.HTTPError as error:
@@ -149,19 +183,15 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
         else:
             raise RuntimeError("Disposable OpenBao did not become healthy")
 
-        init_script = ROOT / "docker/openbao-init.sh"
         require_docker(
-            "run",
-            "--rm",
-            "--network",
-            f"container:{name}",
+            "exec",
             "-e",
-            "BAO_ADDR=http://127.0.0.1:8200",
+            "BAO_ADDR=https://127.0.0.1:8200",
+            "-e",
+            "BAO_CACERT=/tmp/bao-tls/vault-ca.pem",
             "-e",
             f"BAO_TOKEN={root_token}",
-            "-v",
-            f"{init_script}:/scripts/openbao-init.sh:ro",
-            IMAGE,
+            name,
             "/bin/sh",
             "/scripts/openbao-init.sh",
         )
@@ -443,6 +473,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             environment.update({
                 "MARTY_TEST_OPENBAO_URL": endpoint.removesuffix("/v1"),
                 "BAO_ADDR": endpoint.removesuffix("/v1"),
+                "BAO_CACERT": str(ca_file),
                 "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                 "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
                 "MARTY_TEST_OPENBAO_TOKEN": root_token,
@@ -571,6 +602,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 {
                     "MARTY_TEST_OPENBAO_URL": endpoint.removesuffix("/v1"),
                     "BAO_ADDR": endpoint.removesuffix("/v1"),
+                    "BAO_CACERT": str(ca_file),
                     "MARTY_TEST_OPENBAO_TOKEN": managed,
                     "MARTY_TEST_OPENBAO_ROOT_TOKEN": root_token,
                     "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE": nonce,
@@ -586,6 +618,81 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     ),
                 }
             )
+            migration_transport = subprocess.run(
+                ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                 "--lib", "--locked", "--offline", "-j2",
+                 "bootstrap_runtime::tests::live_migration_openbao_transport_is_ca_verified",
+                 "--", "--ignored", "--exact"],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if (migration_transport.returncode
+                or "test result: ok. 1 passed; 0 failed" not in migration_transport.stdout):
+                detail = (migration_transport.stdout + migration_transport.stderr)
+                detail = detail.replace(root_token, "[root]").replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust migration OpenBao HTTPS transport failed:\n{detail[-2000:]}"
+                )
+            envelope_key = "integration-secret-envelope-marty-aes256"
+            status, _ = call(
+                "POST", f"transit/keys/{envelope_key}", root_token,
+                {"type": "aes256-gcm96", "exportable": False,
+                 "allow_plaintext_backup": False},
+            )
+            ensure(status in (200, 204), "create non-exportable credential envelope")
+            envelope_policy = "\n".join(
+                f'path "transit/{operation}/{envelope_key}" '
+                '{ capabilities = ["create", "update"] }'
+                for operation in ("encrypt", "decrypt")
+            ) + f'\npath "transit/keys/{envelope_key}" {{ capabilities = ["read"] }}'
+            status, _ = call(
+                "PUT", "sys/policies/acl/kms-public-contract-envelope", root_token,
+                {"policy": envelope_policy},
+            )
+            ensure(status in (200, 204), "install scoped envelope policy")
+            public_contract_token = issue(["kms-public-contract-envelope"])
+            public_contract_environment = dict(
+                environment,
+                MARTY_TEST_OPENBAO_TOKEN=public_contract_token,
+                BAO_TOKEN=public_contract_token,
+            )
+            for suite, expected in (
+                ("vdsnc_registration_live_contract", 2),
+                ("public_key_metadata_live_contract", 2),
+            ):
+                result = subprocess.run(
+                    ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                     "--test", suite, "--locked", "--offline", "-j2",
+                     "--", "--ignored", "--test-threads=1"],
+                    cwd=ROOT / "rust", env=public_contract_environment,
+                    capture_output=True, text=True, timeout=600, check=False,
+                )
+                if result.returncode or f"test result: ok. {expected} passed; 0 failed" not in result.stdout:
+                    detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                    detail = detail.replace(public_contract_token, "[envelope]")
+                    raise RuntimeError(
+                        f"Rust public Signing Keys contract {suite} failed:\n"
+                        f"{detail[-2000:]}"
+                    )
+            for suite, expected in (
+                ("public_config_resolve_mock_contract", 2),
+                ("service_rotation_mock_contract", 2),
+                ("registry::tests::persisted_registry_credentials_use_real_openbao_ciphertext", 1),
+            ):
+                result = subprocess.run(
+                    ["cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                     "--lib", "--locked", "--offline", "-j2", suite,
+                     "--", "--ignored", "--test-threads=1"],
+                    cwd=ROOT / "rust", env=public_contract_environment,
+                    capture_output=True, text=True, timeout=600, check=False,
+                )
+                if result.returncode or f"test result: ok. {expected} passed; 0 failed" not in result.stdout:
+                    detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                    detail = detail.replace(public_contract_token, "[envelope]")
+                    raise RuntimeError(
+                        f"Rust Signing Keys mock regression {suite} failed:\n"
+                        f"{detail[-2000:]}"
+                    )
             provider_environment = dict(environment)
             provider_environment.update({
                 "MARTY_TEST_PROVIDER_CALLBACK_TOKEN": supported_callback,
@@ -835,6 +942,22 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 raise RuntimeError(
                     f"Rust registered-service signing check failed:\n{detail[-2000:]}"
                 )
+            result = subprocess.run(
+                [
+                    "cargo", "+1.95", "test", "-p", "marty-signing-keys",
+                    "--test", "managed_profile_real_openbao", "--locked", "--offline",
+                    "-j1", "--", "--ignored", "--nocapture",
+                ],
+                cwd=ROOT / "rust", env=environment,
+                capture_output=True, text=True, timeout=600, check=False,
+            )
+            if result.returncode:
+                detail = (result.stdout + result.stderr).replace(root_token, "[root]")
+                detail = detail.replace(managed, "[scoped]")
+                raise RuntimeError(
+                    f"Rust real OpenBao managed-profile route failed:\n{detail[-2000:]}"
+                )
+            print("Real OpenBao managed issuer profile route passed over verified HTTPS")
             mock_environment = dict(environment, BAO_TOKEN="test-only")
             result = subprocess.run(
                 [
@@ -843,14 +966,15 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     "test",
                     "-p",
                     "marty-signing-keys",
-                    "--test",
-                    "managed_key_create_live_contract",
+                    "--lib",
                     "--locked",
                     "--offline",
                     "-j1",
+                    "managed_key_create_mock_contract",
                     "--",
                     "--ignored",
                     "--nocapture",
+                    "--test-threads=1",
                 ],
                 cwd=ROOT / "rust",
                 env=mock_environment,
@@ -872,7 +996,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     "-j2", "authenticated_gateway_reaches_rust_managed_key_route_without_custody",
                     "--", "--ignored", "--exact", "--nocapture",
                 ],
-                cwd=ROOT / "rust", env=mock_environment,
+                cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
             if result.returncode:
@@ -976,6 +1100,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
             docker("rm", "-f", redis_name, timeout=30)
         if started:
             docker("rm", "-f", name, timeout=30)
+        ca_directory.cleanup()
 
 
 if __name__ == "__main__":

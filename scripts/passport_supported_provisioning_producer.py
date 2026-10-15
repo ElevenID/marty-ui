@@ -33,14 +33,15 @@ if __package__:
     )
     from .check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        ModelPreflightError, preflight_attested_plan,
+        ModelPreflightError, preflight_attested_plan, render_model,
+        require_keyless_tls_custody,
         source_identity,
     )
     from .passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
     from .passport_supported_infra_images import ROLES
-    from .stage_passport_disposable_tls import TLS_FILES, stage_tls
+    from .passport_remote_tls import PUBLIC_TLS_FILES
 else:
     from check_passport_supported_compose_ownership import (
         _expected_image, _expected_mounts, _inspect, _labels, docker,
@@ -48,14 +49,15 @@ else:
     )
     from check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        ModelPreflightError, preflight_attested_plan,
+        ModelPreflightError, preflight_attested_plan, render_model,
+        require_keyless_tls_custody,
         source_identity,
     )
     from passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
     from passport_supported_infra_images import ROLES
-    from stage_passport_disposable_tls import TLS_FILES, stage_tls
+    from passport_remote_tls import PUBLIC_TLS_FILES
 
 
 WORKFLOW_REF = (
@@ -88,7 +90,7 @@ TEXT_SECRETS = frozenset({
     "bureau_database_url", "token_hmac_key",
     "flow_webhook_secret", "flow_application_event_hmac_key",
 })
-STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
+STAGED_SECRETS = TEXT_SECRETS
 BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token", "notification_openbao_token"})
 EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
     "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
@@ -96,10 +98,11 @@ EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
 })
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
+    "openbao_public_ca",
 })
 PARTIAL_ONLY_SERVICES = frozenset({
     "passport-openbao-bootstrap", "passport-certificate-bootstrap",
-    "passport-bureau-poll",
+    "passport-bureau-poll", "passport-tls-bootstrap",
 })
 
 
@@ -200,6 +203,13 @@ def verify_pre_mutation(
     require(report.get("status") == "blocked"
             and report.get("model", {}).get("model_safe") is True,
             "Disposable model preflight failed")
+    if workflow_ref == WORKFLOW_REF:
+        model = render_model(
+            plan["surface"], plan["project"], env_file, disposable_root,
+            plan["services_reference"], owner_labels=plan["owner_labels"],
+            plan_expires_at=plan["expires_at"],
+        )
+        require_keyless_tls_custody(model)
     return plan
 
 
@@ -324,9 +334,8 @@ def stage_disposable_inputs(
             # intended containers. OpenBao's pinned image starts as root.
             mode = 0o600 if name == "bao_root_token" else 0o644
             _write_private(secret_dir / name, value.encode("ascii"), mode=mode)
-        stage_tls(secret_dir)
         require({path.name for path in secret_dir.iterdir()} == STAGED_SECRETS,
-                "Disposable TLS and secret set is incomplete")
+                "Disposable secret set is incomplete before remote TLS bootstrap")
         require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
                 "Disposable OpenBao tokens were prepopulated")
         env_file = root / "acceptance.env"
@@ -347,7 +356,7 @@ def _remove_staged_inputs(root: Path) -> None:
     if secret_dir.exists():
         require(secret_dir.resolve() == secret_dir and not secret_dir.is_symlink(),
                 "Disposable input cleanup secret directory changed identity")
-        for name in STAGED_SECRETS | EPHEMERAL_SECRETS:
+        for name in STAGED_SECRETS | PUBLIC_TLS_FILES | EPHEMERAL_SECRETS:
             (secret_dir / name).unlink(missing_ok=True)
         for path in secret_dir.iterdir():
             require(re.fullmatch(
@@ -357,8 +366,44 @@ def _remove_staged_inputs(root: Path) -> None:
                 "Disposable secret directory has an unexpected file")
             path.unlink()
         secret_dir.rmdir()
+    tls_output = root / "tls-output"
+    if tls_output.exists():
+        require(tls_output.resolve() == tls_output and not tls_output.is_symlink(),
+                "Disposable TLS output directory changed identity")
+        for path in tls_output.iterdir():
+            require(path.name in PUBLIC_TLS_FILES and not path.is_symlink(),
+                    "Disposable TLS output contains an unexpected file")
+            path.unlink()
+        tls_output.rmdir()
     (root / "acceptance.env").unlink(missing_ok=True)
     root.rmdir()
+
+
+def _tls_bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
+    """Run the signed Rust keyless TLS issuer after disposable OpenBao is live."""
+    project = plan["project"]
+    labels = {"com.docker.compose.project": project,
+              "com.docker.compose.service": "passport-tls-bootstrap",
+              **plan["owner_labels"]}
+    user = f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"
+    return [
+        "docker", "run", "--rm", "--name", f"{project}-passport-tls-bootstrap-1",
+        "--network", f"{project}_private", "--user", user,
+        *(argument for key, value in sorted(labels.items())
+          for argument in ("--label", f"{key}={value}")),
+        "--mount", ("type=bind,src=" + str(root / "secrets" / "bao_root_token")
+                    + ",dst=/run/secrets/bao_root_token,readonly"),
+        "--mount", ("type=volume,src=" + project
+                    + "_openbao_public_ca,dst=/bao/public-ca,readonly"),
+        "--mount", ("type=bind,src=" + str(output_dir) + ",dst=/work/output"),
+        "--env", "BAO_ADDR=https://openbao:8200",
+        "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
+        "--env", "BAO_ROOT_TOKEN_FILE=/run/secrets/bao_root_token",
+        "--env", f"PASSPORT_ACCEPTANCE_PROJECT={project}",
+        "--env", "PASSPORT_TLS_OUTPUT_DIR=/work/output",
+        "--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",
+        plan["services_reference"],
+    ]
 
 
 def _write_private(path: Path, value: bytes, *, mode: int = 0o600) -> None:

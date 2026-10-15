@@ -38,6 +38,7 @@ UI_IMAGES = {
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
     "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+    "keycloak": "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 PLAN_WORKFLOW = "ElevenID/marty-ui/.github/workflows/passport-supported-provisioning-plan.yml"
 # The hosted attestor signs a blocked producer receipt after its plan handoff.

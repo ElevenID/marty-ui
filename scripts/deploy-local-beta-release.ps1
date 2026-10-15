@@ -847,26 +847,40 @@ if ($EnablePassportNative) {
         throw "Beta DSC and CSCA operator credentials must differ"
     }
 }
+foreach ($envFile in $script:EnvFiles) {
+    foreach ($line in Get-Content -LiteralPath $envFile) {
+        if ($line -match '^(SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE|SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE|AUTH_WORKLOAD_SERVER_KEY_FILE|GATEWAY_WORKLOAD_CLIENT_KEY_FILE)=') {
+            throw "Beta workload TLS private-key files are retired; use remote KMS signers"
+        }
+    }
+}
 $workloadIdentityPathNames = @(
     "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE",
     "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
-    "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE",
+    "SIGNING_KEYS_TLS_KMS_TOKEN_FILE",
+    "ES_WORKLOAD_SERVER_CERT_FILE",
+    "ES_TLS_KMS_TOKEN_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
-    "PP_WORKLOAD_SERVER_KEY_FILE",
+    "OPENBAO_TLS_CA_CERT_FILE",
+    "PP_TLS_KMS_TOKEN_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
-    "FLOW_WORKLOAD_CLIENT_KEY_FILE",
+    "FLOW_CLIENT_TLS_KMS_TOKEN_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
-    "FLOW_WORKLOAD_SERVER_KEY_FILE",
+    "FLOW_SERVER_TLS_KMS_TOKEN_FILE",
     "AUTH_WORKLOAD_CLIENT_CERT_FILE",
-    "AUTH_WORKLOAD_CLIENT_KEY_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_KEY_FILE",
+    "AUTH_TLS_KMS_TOKEN_FILE",
+    "AUTH_WORKLOAD_SERVER_CERT_FILE",
+    "AUTH_SERVER_TLS_KMS_TOKEN_FILE",
+    "GATEWAY_WORKLOAD_CLIENT_CERT_FILE",
+    "GATEWAY_TLS_KMS_TOKEN_FILE",
+    "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
+    "ISSUANCE_TLS_KMS_TOKEN_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
-    "VERIFICATION_WORKLOAD_CLIENT_KEY_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE",
+    "VERIFICATION_TLS_KMS_TOKEN_FILE",
     "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE"
+    "COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE",
+    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+    "DEPLOYMENT_PROFILE_TLS_KMS_TOKEN_FILE"
 )
 $workloadIdentityPaths = @{}
 foreach ($name in $workloadIdentityPathNames) {
@@ -899,19 +913,54 @@ if (-not (Get-Command openssl -ErrorAction SilentlyContinue)) {
 $workloadCa = $workloadIdentityPaths["MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"]
 $workloadLeafNames = @(
     "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
+    "ES_WORKLOAD_SERVER_CERT_FILE",
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
     "AUTH_WORKLOAD_CLIENT_CERT_FILE",
-    "APPLICANT_WORKLOAD_CLIENT_CERT_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"
+    "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"
 )
 foreach ($name in $workloadLeafNames) {
     $certificate = $workloadIdentityPaths[$name]
     Invoke-Checked -FilePath openssl -Arguments @("x509", "-checkend", "3600", "-noout", "-in", $certificate)
     Invoke-Checked -FilePath openssl -Arguments @("verify", "-CAfile", $workloadCa, $certificate)
+}
+foreach ($identity in @(
+    @{ Name = "Auth"; File = "AUTH_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/auth" },
+    @{ Name = "Verification"; File = "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/verification" },
+    @{ Name = "Flow"; File = "FLOW_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/flow" },
+    @{ Name = "Compliance Profile"; File = "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/compliance-profile" },
+    @{ Name = "Deployment Profile"; File = "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/deployment-profile" }
+)) {
+    $certificate = $workloadIdentityPaths[$identity.File]
+    $subjectAltName = & openssl x509 -noout -ext subjectAltName -in $certificate
+    if ($LASTEXITCODE -ne 0 -or ($subjectAltName -join "`n") -notmatch [regex]::Escape($identity.Uri)) {
+        throw "$($identity.Name) workload certificate must contain the expected SPIFFE URI SAN"
+    }
+    $extendedKeyUsage = & openssl x509 -noout -ext extendedKeyUsage -in $certificate
+    if ($LASTEXITCODE -ne 0 -or ($extendedKeyUsage -join "`n") -notmatch "TLS Web Client Authentication") {
+        throw "$($identity.Name) workload certificate must permit client authentication"
+    }
+}
+$flowServerCertificate = $workloadIdentityPaths["FLOW_WORKLOAD_SERVER_CERT_FILE"]
+$flowServerSan = & openssl x509 -noout -ext subjectAltName -in $flowServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($flowServerSan -join "`n") -notmatch [regex]::Escape("DNS:flow")) {
+    throw "Flow server certificate must contain the flow DNS SAN"
+}
+$flowServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $flowServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($flowServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Flow server certificate must permit server authentication"
+}
+$eventServerCertificate = $workloadIdentityPaths["ES_WORKLOAD_SERVER_CERT_FILE"]
+$eventServerSan = & openssl x509 -noout -ext subjectAltName -in $eventServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($eventServerSan -join "`n") -notmatch [regex]::Escape("DNS:event-stream")) {
+    throw "Event Stream server certificate must contain the event-stream DNS SAN"
+}
+$eventServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $eventServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($eventServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Event Stream server certificate must permit server authentication"
 }
 $repositoryNames = @($sourceManifest.repositories.PSObject.Properties.Name | Sort-Object)
 $componentEntries = @($sourceManifest.component_revisions)

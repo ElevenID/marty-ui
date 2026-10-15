@@ -17,7 +17,9 @@ use marty_gateway::{
     transport::ReqwestUpstream,
 };
 use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
-use mmf_platform::{GatewayProxy, ProxyConfig};
+use mmf_platform::{
+    GatewayProxy, KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles, ProxyConfig,
+};
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -85,9 +87,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ..DistributedProviderConfig::default()
     })
     .await?;
+    let auth_channel = if let Some(tls) = &config.auth_grpc_client_tls {
+        OpenBaoTlsIdentityFiles {
+            certificate_chain_file: tls.certificate.clone(),
+            kms_ca_cert_file: tls.kms_ca_certificate.clone(),
+            kms_endpoint: tls.kms_endpoint.clone(),
+            kms_token_file: tls.kms_token_file.clone(),
+            kms_key_name: tls.kms_key_name.clone(),
+            kms_key_version: tls.kms_key_version,
+            request_timeout: Duration::from_secs(10),
+            max_concurrent_signs: 64,
+        }
+        .grpc_channel_connected(
+            &config.auth_grpc_target,
+            &tls.ca_certificate,
+            KeylessGrpcTransportOptions::default(),
+        )
+        .await?
+    } else {
+        grpc_channel(&config, &config.auth_grpc_target, None)?
+    };
     let identity_provider = Arc::new(GrpcIdentityProvider::new(
-        grpc_channel(&config, &config.auth_grpc_target)?,
-        grpc_channel(&config, &config.organization_grpc_target)?,
+        auth_channel,
+        grpc_channel(
+            &config,
+            &config.organization_grpc_target,
+            config.organization_grpc_ca_certificate.as_ref(),
+        )?,
         Duration::from_secs(5),
         config.grpc_service_token.clone(),
     ));
@@ -104,7 +130,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let owners: Arc<dyn ResourceOwnerProvider> = http_provider.clone();
     let readiness: Arc<dyn ReadinessProvider> = http_provider;
     let event_streams = Arc::new(GrpcEventStreamProvider::new(
-        grpc_channel(&config, &config.event_stream_grpc_target)?,
+        grpc_channel(
+            &config,
+            &config.event_stream_grpc_target,
+            config.event_stream_grpc_ca_certificate.as_ref(),
+        )?,
         config.grpc_service_token.clone(),
     ));
     let state = Arc::new(
@@ -179,21 +209,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn grpc_channel(config: &GatewayConfig, target: &str) -> Result<Channel, Box<dyn Error>> {
-    let mut endpoint_target = target.to_owned();
-    let mut endpoint = if let Some(ca_path) = &config.grpc_ca_certificate {
-        if endpoint_target.starts_with("http://") {
-            endpoint_target = endpoint_target.replacen("http://", "https://", 1);
-        }
-        let parsed = url::Url::parse(&endpoint_target)?;
+fn grpc_channel(
+    config: &GatewayConfig,
+    target: &str,
+    ca_override: Option<&std::path::PathBuf>,
+) -> Result<Channel, Box<dyn Error>> {
+    let mut endpoint = if let Some(ca_path) = ca_override.or(config.grpc_ca_certificate.as_ref()) {
+        let parsed = url::Url::parse(target)?;
         let host = parsed.host_str().ok_or("gRPC endpoint requires a host")?;
-        Endpoint::from_shared(endpoint_target.clone())?.tls_config(
+        Endpoint::from_shared(target.to_owned())?.tls_config(
             ClientTlsConfig::new()
                 .ca_certificate(Certificate::from_pem(fs::read(ca_path)?))
                 .domain_name(host),
         )?
     } else {
-        Endpoint::from_shared(endpoint_target)?
+        Endpoint::from_shared(target.to_owned())?
     };
     endpoint = endpoint
         .connect_timeout(Duration::from_secs(5))

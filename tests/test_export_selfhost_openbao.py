@@ -6,6 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import runpy
 import threading
+import urllib.request
 
 import pytest
 
@@ -17,17 +18,23 @@ EXPORT = runpy.run_path(str(ROOT / "scripts/export-selfhost-openbao.py"))
     "origin",
     [
         "http://example.com:8200",
-        "https://127.0.0.1:8200",
+        "http://127.0.0.1:8200",
         "http://127.0.0.1:8200/other",
         "http://user:pass@127.0.0.1:8200",
     ],
 )
-def test_snapshot_origin_must_be_plain_loopback(origin: str) -> None:
+def test_snapshot_origin_must_be_https_loopback(origin: str) -> None:
     with pytest.raises(ValueError):
         EXPORT["snapshot_url"](origin)
 
 
-def test_snapshot_redirect_never_forwards_root_token(tmp_path: Path) -> None:
+def test_snapshot_origin_accepts_https_loopback() -> None:
+    assert EXPORT["snapshot_url"]("https://127.0.0.1:8200") == (
+        "https://127.0.0.1:8200/v1/sys/storage/raft/snapshot"
+    )
+
+
+def test_snapshot_redirect_never_forwards_root_token() -> None:
     forwarded: list[str | None] = []
 
     class Destination(BaseHTTPRequestHandler):
@@ -62,12 +69,15 @@ def test_snapshot_redirect_never_forwards_root_token(tmp_path: Path) -> None:
     try:
         for thread in threads:
             thread.start()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), EXPORT["NoRedirect"]()
+        )
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{redirect.server_port}/snapshot",
+            headers={"X-Vault-Token": "sensitive-token"},
+        )
         with pytest.raises(RuntimeError, match="redirected"):
-            EXPORT["stream_snapshot"](
-                f"http://127.0.0.1:{redirect.server_port}/snapshot",
-                "sensitive-token",
-                tmp_path / "raft.snap",
-            )
+            opener.open(request, timeout=5)
         assert forwarded == []
     finally:
         for server in (destination, redirect):

@@ -21,7 +21,7 @@ const SERVICE_TOKEN_HEADER: &str = "x-service-token";
 /// remains fail-closed: no unauthenticated request can be sent, and validation
 /// reports the catalog as unavailable until deployment configuration supplies
 /// the token.
-pub fn runtime_catalog(
+pub async fn runtime_catalog(
     target: &str,
     service_token: Option<&str>,
     timeout: Duration,
@@ -29,11 +29,9 @@ pub fn runtime_catalog(
     if service_token.map(str::trim).is_none_or(str::is_empty) {
         return Ok(Arc::new(UnavailableApplicationTemplateCatalog));
     }
-    Ok(Arc::new(GrpcApplicationTemplateCatalog::connect_lazy(
-        target,
-        service_token,
-        timeout,
-    )?))
+    Ok(Arc::new(
+        GrpcApplicationTemplateCatalog::connect_lazy(target, service_token, timeout).await?,
+    ))
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -70,7 +68,7 @@ impl std::fmt::Debug for GrpcApplicationTemplateCatalog {
 }
 
 impl GrpcApplicationTemplateCatalog {
-    pub fn connect_lazy(
+    pub async fn connect_lazy(
         target: &str,
         service_token: Option<&str>,
         timeout: Duration,
@@ -84,15 +82,15 @@ impl GrpcApplicationTemplateCatalog {
             .ok_or(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)?
             .parse()
             .map_err(|_| ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)?;
-        let channel = grpc_client_channel::endpoint(target, timeout)
+        let channel = grpc_client_channel::credential_template_channel(target, timeout)
+            .await
             .map_err(|error| {
                 if error == "invalid gRPC target" {
                     ApplicationTemplateCatalogConfigurationError::InvalidTarget
                 } else {
                     ApplicationTemplateCatalogConfigurationError::InvalidTlsConfiguration
                 }
-            })?
-            .connect_lazy();
+            })?;
         Ok(Self {
             templates: CredentialTemplateServiceClient::new(channel),
             service_token,
@@ -313,6 +311,7 @@ mod tests {
     #[tokio::test]
     async fn configuration_requires_authentication_and_valid_transport_settings() {
         let unavailable = runtime_catalog("credential-template:9003", None, Duration::from_secs(1))
+            .await
             .expect("missing runtime token uses a fail-closed catalog");
         assert_eq!(
             unavailable.get_strict("template-1").await,
@@ -323,7 +322,8 @@ mod tests {
                 "credential-template:9003",
                 None,
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::MissingServiceToken)
         ));
         assert!(matches!(
@@ -331,7 +331,8 @@ mod tests {
                 "credential-template:9003",
                 Some("token\nvalue"),
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidServiceToken)
         ));
         assert!(matches!(
@@ -339,7 +340,8 @@ mod tests {
                 "credential template:9003",
                 Some("token"),
                 Duration::from_secs(1)
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidTarget)
         ));
         assert!(matches!(
@@ -347,7 +349,8 @@ mod tests {
                 "credential-template:9003",
                 Some("token"),
                 Duration::ZERO
-            ),
+            )
+            .await,
             Err(ApplicationTemplateCatalogConfigurationError::InvalidTimeout)
         ));
 
@@ -356,6 +359,7 @@ mod tests {
             Some("token"),
             Duration::from_secs(1),
         )
+        .await
         .expect("valid catalog");
         let request = catalog.request(GetTemplateRequest {
             template_id: "template-1".to_owned(),
@@ -469,6 +473,7 @@ mod tests {
             Some("fixture-token"),
             Duration::from_secs(2),
         )
+        .await
         .expect("authenticated catalog");
         assert_eq!(
             catalog.get_strict("missing").await,
@@ -496,6 +501,7 @@ mod tests {
             Some("wrong-token"),
             Duration::from_secs(2),
         )
+        .await
         .expect("configured but unauthorized catalog");
         assert_eq!(
             unauthenticated.get_strict("template-1").await,

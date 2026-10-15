@@ -17,6 +17,9 @@ Required files:
 - `keycloak_db_password`
 - `marty_db_password`
 - `keycloak_admin_password`
+- `keycloak_signing_kms_token` (scoped OpenBao Transit read/sign/HMAC/verify token for both realms)
+- `keycloak_master_rs256_cert` and `keycloak_11id_rs256_cert` (public certificates for the pinned non-exportable Transit signing keys)
+- `keycloak_master_cookie_token`, `keycloak_master_ciba_token`, `keycloak_11id_cookie_token`, and `keycloak_11id_ciba_token` (separate OpenBao direct-JWE read/encode/decode tokens for each realm and purpose)
 - `marty_api_client_secret`
 - `issuance_api_key`
 - `signing_keys_service_sign_gateway_key` (Gateway and Signing Keys only; distinct random value, at least 32 characters)
@@ -28,24 +31,37 @@ Required files:
 - `notification_webhook_secret`
 - `notification_applicant_event_token`
 - `workload_identity_ca_cert`
+- `org_workload_server_cert`
+- `org_tls_kms_token`
+- `es_workload_server_cert`
+- `es_tls_kms_token`
+- `rp_workload_server_cert`
+- `rp_tls_kms_token`
+- `ct_workload_server_cert`
+- `ct_tls_kms_token`
 - `signing_keys_workload_server_cert`
-- `signing_keys_workload_server_key`
+- `openbao_tls_ca_cert`
+- `signing_keys_tls_kms_token`
 - `pp_workload_server_cert`
-- `pp_workload_server_key`
+- `pp_tls_kms_token`
 - `flow_workload_client_cert`
-- `flow_workload_client_key`
+- `flow_client_tls_kms_token`
 - `flow_workload_server_cert`
-- `flow_workload_server_key`
+- `flow_server_tls_kms_token`
 - `auth_workload_client_cert`
-- `auth_workload_client_key`
-- `applicant_workload_client_cert`
-- `applicant_workload_client_key`
+- `auth_tls_kms_token`
+- `auth_workload_server_cert`
+- `auth_server_tls_kms_token`
+- `gateway_workload_client_cert`
+- `gateway_tls_kms_token`
+  - `issuance_workload_server_cert`
+  - `issuance_tls_kms_token`
 - `verification_workload_client_cert`
-- `verification_workload_client_key`
+- `verification_tls_kms_token`
 - `deployment_profile_workload_client_cert`
-- `deployment_profile_workload_client_key`
+- `deployment_profile_tls_kms_token`
 - `compliance_profile_workload_client_cert`
-- `compliance_profile_workload_client_key`
+- `compliance_profile_tls_kms_token`
 - `flow_application_event_hmac_key`
 - `flow_webhook_secret`
 - `token_hmac_key`

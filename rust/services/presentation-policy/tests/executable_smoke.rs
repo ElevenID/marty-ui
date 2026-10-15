@@ -28,10 +28,14 @@ fn executable_fails_before_binding_without_database_configuration() {
 fn deployed_executable_fails_before_database_io_without_service_identity() {
     let output = run_service(
         "beta",
-        &[(
-            "DATABASE_URL",
-            "postgresql://marty:secret@127.0.0.1:1/unreachable",
-        )],
+        &[
+            ("ORG_GRPC_TARGET", "https://organization:9002"),
+            ("ORG_GRPC_CA_CERT", "unused-public-ca.pem"),
+            (
+                "DATABASE_URL",
+                "postgresql://marty:secret@127.0.0.1:1/unreachable",
+            ),
+        ],
     );
     assert!(!output.status.success());
     assert!(diagnostics(&output).contains("GRPC_SERVICE_TOKEN is required"));
@@ -39,6 +43,8 @@ fn deployed_executable_fails_before_database_io_without_service_identity() {
     let output = run_service(
         "beta",
         &[
+            ("ORG_GRPC_TARGET", "https://organization:9002"),
+            ("ORG_GRPC_CA_CERT", "unused-public-ca.pem"),
             (
                 "DATABASE_URL",
                 "postgresql://marty:secret@127.0.0.1:1/unreachable",

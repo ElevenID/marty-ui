@@ -6,8 +6,15 @@ bootstrap_stage=validate
 # Report only a fixed stage name on failure; CLI output can contain tokens.
 trap 'status=$?; if [ "$status" -ne 0 ]; then printf "Disposable OpenBao bootstrap failed at %s (status %s)\n" "$bootstrap_stage" "$status" >&2; fi' EXIT
 
-if [ "${BAO_ADDR:-}" != "http://openbao:8200" ]; then
+if [ "${BAO_ADDR:-}" != "https://openbao:8200" ]; then
     echo "Disposable OpenBao endpoint is invalid" >&2
+    exit 1
+fi
+if [ "${BAO_CACERT:-}" != "/bao/public-ca/ca.crt" ] ||
+   [ ! -r "$BAO_CACERT" ] ||
+   ! grep -q 'BEGIN CERTIFICATE' "$BAO_CACERT" ||
+   grep -q 'PRIVATE KEY' "$BAO_CACERT"; then
+    echo "Disposable OpenBao public CA is missing or invalid" >&2
     exit 1
 fi
 if [ ! -r /run/secrets/bao_root_token ] || [ ! -d /work/secrets ]; then
@@ -34,6 +41,7 @@ fi
 export BAO_TOKEN
 export VAULT_ADDR="$BAO_ADDR"
 export VAULT_TOKEN="$BAO_TOKEN"
+export VAULT_CACERT="$BAO_CACERT"
 
 # Reuse the ordinary Marty transit/key/policy initializer. Its development
 # PKI root is not the passport CSCA; that certificate needs a managed profile.

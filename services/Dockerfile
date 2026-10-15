@@ -124,6 +124,8 @@ COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sync-wo
 COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-beta-bureau /usr/local/bin/marty-passport-beta-bureau
 COPY --from=rust-service-builder /build/rust/target/release/marty-passport-provider-ingress /usr/local/bin/marty-passport-provider-ingress
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge
+COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap
 COPY --from=rust-service-builder /build/rust/target/release/marty-deployment-profile /usr/local/bin/marty-deployment-profile
 COPY --from=rust-service-builder /build/rust/target/release/marty-compliance-profile /usr/local/bin/marty-compliance-profile
 RUN chmod +x /app/services/entrypoint.sh /app/load-secrets-env.sh

@@ -132,7 +132,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 15
+    assert len(entries) == len({v["name"] for v in entries}) == 20
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -144,9 +144,13 @@ def signing_inventory(values):
             "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
             "value": "/run/secrets/integration-secret-tls/tls.crt",
         },
-        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE": {
-            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
-            "value": "/run/secrets/integration-secret-tls/tls.key",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+            "value": "/run/secrets/signing-keys-tls-kms/ca.crt",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+            "value": "/run/secrets/signing-keys-tls-kms/token",
         },
         "SIGNING_KEYS_REDIS_URL": {
             "name": "SIGNING_KEYS_REDIS_URL",
@@ -155,6 +159,10 @@ def signing_inventory(values):
         "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": {
             "name": "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
             "value": "/run/secrets/signing-grant-verify/token",
+        },
+        "BAO_CACERT": {
+            "name": "BAO_CACERT",
+            "value": "/run/secrets/signing-keys-tls-kms/ca.crt",
         },
     }
     for name in (
@@ -182,6 +190,17 @@ def signing_inventory(values):
             "name": name,
             "valueFrom": {"configMapKeyRef": {"name": "marty-config", "key": name}},
         }
+    for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION"):
+        name = f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_{suffix}"
+        expected[name] = {
+            "name": name,
+            "valueFrom": {
+                "configMapKeyRef": {
+                    "name": "marty-config",
+                    "key": f"SIGNING_KEYS_TLS_KMS_{suffix}",
+                }
+            },
+        }
     expected["ISSUER_BASE_URL"] = {
         "name": "ISSUER_BASE_URL",
         "valueFrom": {
@@ -198,6 +217,16 @@ def signing_inventory(values):
             "readOnly": True,
         },
         {
+            "name": "integration-secret-ca",
+            "mountPath": "/run/secrets/integration-secret-ca",
+            "readOnly": True,
+        },
+        {
+            "name": "signing-keys-tls-kms",
+            "mountPath": "/run/secrets/signing-keys-tls-kms",
+            "readOnly": True,
+        },
+        {
             "name": "signing-grant-verify",
             "mountPath": "/run/secrets/signing-grant-verify",
             "readOnly": True,
@@ -207,6 +236,14 @@ def signing_inventory(values):
         {
             "name": "integration-secret-tls",
             "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
+        },
+        {
+            "name": "integration-secret-ca",
+            "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+        {
+            "name": "signing-keys-tls-kms",
+            "secret": {"secretName": "signing-keys-tls-kms"},
         },
         {
             "name": "signing-grant-verify",
@@ -227,8 +264,16 @@ def signing_inventory(values):
             {"name": "secret-tls", "port": 8018, "targetPort": 8018},
         ],
     }
-    for name in ("livenessProbe", "readinessProbe"):
-        assert selected[name]["httpGet"] == {"path": "/health", "port": 8017}
+    assert selected["livenessProbe"]["httpGet"] == {"path": "/health", "port": 8017}
+    assert selected["readinessProbe"]["exec"]["command"] == [
+        "/bin/sh",
+        "-c",
+        "curl -fsS http://127.0.0.1:8017/health >/dev/null && "
+        "curl -fsS --cacert /run/secrets/integration-secret-ca/ca.crt "
+        "--resolve signing-keys:8018:127.0.0.1 "
+        "https://signing-keys:8018/health >/dev/null",
+    ]
+    assert selected["readinessProbe"]["timeoutSeconds"] == 8
 
 
 @pytest.mark.parametrize(
@@ -286,7 +331,7 @@ def test_signing_existing_service_and_kubernetes_dependency_sources_are_connecte
     assert not any(v["metadata"]["name"] == "signing-keys" for v in original)
     gateway = owner(deployment(original, "gateway"))
     assert [v for v in gateway["env"] if v["name"] == "AUTH_GRPC_TARGET"] == [
-        {"name": "AUTH_GRPC_TARGET", "value": "auth:9001"}
+        {"name": "AUTH_GRPC_TARGET", "value": "https://auth:9001"}
     ]
     cli = (
         ROOT / "rust/crates/release-evidence/src/kubernetes_native_cli.rs"
@@ -346,11 +391,24 @@ def native_inventory(value):
         for v in entries
         if "configMapKeyRef" in v.get("valueFrom", {})
     }
-    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR", "BAO_ADDR"}
+    server_kms_refs = {
+        f"GRPC_WORKLOAD_TLS_SERVER_KMS_{suffix}": f"ISSUANCE_TLS_KMS_{suffix}"
+        for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION")
+    }
+    assert set(refs) == (
+        constants("INHERITED_SETTINGS")
+        | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR", "BAO_ADDR"}
+        | set(server_kms_refs)
+    )
     assert refs == {
         name: {
             "name": "marty-config",
-            "key": "PUBLIC_API_URL" if name == "ISSUER_BASE_URL" else "BAO_ADDR" if name == "DIDCOMM_KMS_ADDR" else name,
+            "key": server_kms_refs.get(
+                name,
+                "PUBLIC_API_URL"
+                if name == "ISSUER_BASE_URL"
+                else "BAO_ADDR" if name == "DIDCOMM_KMS_ADDR" else name,
+            ),
         }
         for name in refs
     }
@@ -382,6 +440,10 @@ def native_inventory(value):
         "name": "DIDCOMM_KMS_TOKEN_FILE",
         "value": "/run/secrets/didcomm-kms/token",
     }
+    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_CA_CERT_FILE") == {
+        "name": "DIDCOMM_KMS_CA_CERT_FILE",
+        "value": "/run/secrets/issuance-server-kms/ca.crt",
+    }
     for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT"):
         name = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
         assert next(v for v in entries if v["name"] == name) == {
@@ -389,6 +451,16 @@ def native_inventory(value):
             "value": f"/run/secrets/issuance-sign-grants/{origin.lower()}",
         }
     assert selected["volumeMounts"] == [
+        {
+            "name": "issuance-server-tls",
+            "mountPath": "/run/secrets/issuance-server-tls",
+            "readOnly": True,
+        },
+        {
+            "name": "issuance-server-kms",
+            "mountPath": "/run/secrets/issuance-server-kms",
+            "readOnly": True,
+        },
         {
             "name": "didcomm-kms-token",
             "mountPath": "/run/secrets/didcomm-kms",
@@ -406,6 +478,14 @@ def native_inventory(value):
         },
     ]
     assert value["spec"]["template"]["spec"].get("volumes") == [
+        {
+            "name": "issuance-server-tls",
+            "secret": {"secretName": "issuance-server-tls"},
+        },
+        {
+            "name": "issuance-server-kms",
+            "secret": {"secretName": "issuance-server-kms"},
+        },
         {
             "name": "didcomm-kms-token",
             "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
@@ -427,6 +507,21 @@ def native_inventory(value):
     ]
     assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] == "https://signing-keys:8018/internal"
     assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_CA_FILE")["value"] == "/run/secrets/integration-secret-ca/ca.crt"
+    assert {
+        entry["name"]: entry["value"]
+        for entry in entries
+        if entry["name"] in {
+            "GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        }
+    } == {
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/issuance-server-tls/tls.crt",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/issuance-server-tls/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/run/secrets/issuance-server-kms/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance-server-kms/token",
+    }
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY" not in {entry["name"] for entry in entries}
     assert value["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
 
 
@@ -474,11 +569,13 @@ def test_native_inventory_is_complete_and_custody_free(fault):
     elif fault == "missing-kms-token":
         value["spec"]["template"]["spec"].pop("volumes")
     elif fault == "wrong-kms-token":
-        value["spec"]["template"]["spec"]["volumes"][0]["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+        volumes = value["spec"]["template"]["spec"]["volumes"]
+        next(v for v in volumes if v["name"] == "didcomm-kms-token")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
     elif fault == "missing-grant-mount":
         owner(value)["volumeMounts"].pop()
     elif fault == "wrong-grant-token":
-        value["spec"]["template"]["spec"]["volumes"][2]["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+        volumes = value["spec"]["template"]["spec"]["volumes"]
+        next(v for v in volumes if v["name"] == "issuance-sign-grants")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
     if fault:
         with pytest.raises(AssertionError):
             native_inventory(value)
@@ -516,6 +613,7 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "DIDCOMM_ENCRYPTION_POLICY_FILE",
         "DIDCOMM_TLS_CA_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
         "INTEGRATION_SECRET_MASTER_KEY",
         "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
@@ -570,11 +668,11 @@ def test_existing_three_way_management_identity_and_legacy_owner_are_preserved()
     assert owner(alias)["image"] == "${MARTY_ISSUANCE_IMAGE}"
     assert owner(alias)["command"] == ["/usr/local/bin/marty-issuance-service"]
     assert alias["spec"]["selector"]["matchLabels"] == {"app": "issuance"}
-    assert {v["containerPort"] for v in owner(alias)["ports"]} == {8005, 9005}
+    assert {v["containerPort"] for v in owner(alias)["ports"]} == {8005}
     flow = owner(deployment(original, "flow"))
     assert (
         next(v for v in flow["env"] if v["name"] == "ISSUANCE_GRPC_TARGET")["value"]
-        == "issuance-native:9005"
+        == "https://issuance-native:9005"
     )
     assert "ISSUANCE_NATIVE_SERVICE_URL" not in {
         v["name"] for v in owner(deployment(original, "gateway"))["env"]

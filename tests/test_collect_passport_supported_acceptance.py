@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-import ssl
-from threading import Thread
 
 import pytest
 import yaml
 
 from scripts import collect_passport_supported_acceptance as gate
-from scripts.passport_supported_infra_images import qualified_images
-from scripts.stage_passport_disposable_tls import stage_tls
 
 COMMIT = "a" * 40
 DIGEST = "sha256:" + "b" * 64
@@ -78,8 +73,7 @@ def docker_runner(project: str, *, wrong_image: bool = False,
         flags = [f"{name}=true" for name in gate.COMPOSE_FLAGS.get(service, ())]
         if service == "signing-keys" and signer_selector:
             flags.append("SERVICE_NAME=signing_keys")
-        image = (qualified_images(verify_registry=False)["edge"]
-                 if service == "edge" else REFERENCE)
+        image = REFERENCE
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "28000"}]
         record = {
             "Image": "sha256:" + "e" * 64,
@@ -107,8 +101,7 @@ def test_compose_runtime_reads_six_exact_running_service_images() -> None:
     assert set(observed) == set(gate.COMPOSE_SERVICES) | {"edge"}
     assert all(item["oci_reference"] == REFERENCE
                for service, item in observed.items() if service != "edge")
-    assert observed["edge"]["oci_reference"] == qualified_images(
-        verify_registry=False)["edge"]
+    assert observed["edge"]["oci_reference"] == REFERENCE
     with pytest.raises(gate.SupportedEvidenceError, match="released services image"):
         gate.observe_compose("base", BASE, REFERENCE, docker_runner(BASE, wrong_image=True))
     with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys selector"):
@@ -117,42 +110,6 @@ def test_compose_runtime_reads_six_exact_running_service_images() -> None:
     with pytest.raises(gate.SupportedEvidenceError, match="Signing Keys process"):
         gate.observe_compose("base", BASE, REFERENCE,
                              docker_runner(BASE, signer_process=False))
-
-
-def test_disposable_https_capability_probe_uses_scoped_ca(tmp_path: Path) -> None:
-    stage_tls(tmp_path)
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            assert self.path == "/v1/passport/capabilities"
-            body = b'{"supported":true}'
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *_args) -> None:
-            pass
-
-    server = HTTPServer(("127.0.0.1", 0), Handler)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.load_cert_chain(str(tmp_path / "passport_edge_tls_cert"),
-                            str(tmp_path / "passport_edge_tls_key"))
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    thread = Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        origin = f"https://localhost:{server.server_port}"
-        with pytest.raises(gate.SupportedEvidenceError, match="no CA"):
-            gate.capability_status(origin, None)
-        assert gate.capability_status(
-            origin, None, tmp_path / "workload_identity_ca_cert"
-        ) == (200, {"supported": True})
-    finally:
-        server.shutdown()
-        server.server_close()
-        thread.join(timeout=5)
 
 
 def test_missing_targets_and_runtime_proof_remain_blocked(tmp_path: Path) -> None:

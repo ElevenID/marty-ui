@@ -36,7 +36,10 @@ UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
     "marty-passport-acceptance-api-key",
 }
-PROFILE_RUST_BINARIES = {"marty-canvas-sandbox"}
+PROFILE_RUST_BINARIES = {
+    "marty-canvas-sandbox", "marty-passport-keyless-edge",
+    "marty-passport-tls-bootstrap",
+}
 ALL_RUST_BINARIES = (
     set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
 )

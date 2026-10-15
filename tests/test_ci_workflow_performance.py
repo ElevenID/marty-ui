@@ -316,39 +316,27 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
     assert cleanup["if"] == "always() && matrix.lane != 'selfhost'"
     assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
-        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
     )
     managed_chain = next(
         step for step in rust["steps"] if step.get("name") == chain_step_name
     )["run"]
-    assert 'sys/policies/acl/kms-gateway-envelope-test' in managed_chain
-    assert '"policies":["kms-gateway-envelope-test"]' in managed_chain
-    for operation in ("encrypt", "decrypt"):
-        assert (
-            f'transit/{operation}/integration-secret-envelope-marty-aes256'
-            in managed_chain
-        )
-    assert 'transit/keys/integration-secret-envelope-marty-aes256' in managed_chain
-    assert "--test passport_managed_kms_chain" in managed_chain
-    assert (
-        "-p marty-service-acceptance --test passport_managed_kms_chain" in managed_chain
+    assert managed_chain == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    policy_probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
+        encoding="utf-8"
     )
-    assert '-- --list | grep -Fx "$chain_test: test"' in managed_chain
-    assert '"$chain_test" -- --ignored --exact' in managed_chain
-    chain_test_name = (
-        "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys"
-    )
-    assert chain_test_name in managed_chain
-    assert (
-        "test_name='authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key'"
-        in managed_chain
-    )
-    assert (
-        managed_chain.count(
-            "-p marty-service-acceptance --test gateway_signing_acceptance"
-        )
-        == 5
-    )
+    assert '"passport_managed_kms_chain"' in policy_probe
+    assert "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys" in policy_probe
+    assert '"service_certificate_live_kms"' in policy_probe
+    assert "live_grant_verification_is_one_use_before_kms_signing" in policy_probe
+    for suite in (
+        "vdsnc_registration_live_contract",
+        "public_key_metadata_live_contract",
+        "public_config_resolve_mock_contract",
+        "service_rotation_mock_contract",
+        "persisted_registry_credentials_use_real_openbao_ciphertext",
+    ):
+        assert suite in policy_probe
     for case in (
         "authenticated_gateway_reaches_remaining_rust_signing_handlers",
         "authenticated_gateway_rotates_only_a_dedicated_signing_service",
@@ -356,29 +344,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
         "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
     ):
-        assert case in managed_chain
-    assert '-- --list | grep -Fx "$test_name: test"' in managed_chain
-    assert '"$test_name" -- --ignored --exact' in managed_chain
-    assert "-- --ignored --exact" in managed_chain
-    signing_routes = next(
-        step["run"]
-        for step in rust["steps"]
-        if step.get("name")
-        == "Exercise authenticated Signing Keys Gateway to Rust routes"
-    )
-    assert (
-        signing_routes.count(
-            "-p marty-service-acceptance --test gateway_signing_acceptance"
-        )
-        == 1
-    )
-    assert "authenticated_gateway_reaches_rust_managed_key_route_without_custody" in signing_routes
-    assert "authenticated_gateway_rotates_only_a_dedicated_signing_service" not in signing_routes
-    assert signing_routes.count("-- --ignored --exact") == 1
-    assert "--test public_config_resolve_live_contract" in managed_chain
-    assert "signing-public_config_resolve_live_contract.log" in managed_chain
-    assert "--test public_key_metadata_live_contract" in managed_chain
-    assert "signing-public_key_metadata_live_contract.log" in managed_chain
+        assert case in policy_probe
     redis_contracts = next(
         step["run"]
         for step in rust["steps"]
@@ -829,13 +795,14 @@ def test_verified_contract_test_sources_select_contracts_only_on_pr(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 7
+    assert verified[-1] == b"" and len(verified) == 8
     contract_tests = [value.decode("utf-8") for value in verified[:-1]]
     assert contract_tests == [
         "rust/crates/service-acceptance/tests/passport_managed_kms_chain.rs",
         "rust/crates/service-acceptance/tests/passport_gateway_postgres.rs",
         "rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs",
         "rust/crates/service-acceptance/tests/csca_capability_contract.rs",
+        "rust/crates/service-acceptance/tests/tls_openbao_keyless.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_behavior.rs",
         "rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs",
     ]
@@ -1135,6 +1102,9 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
     for path in (
         "openbao/didcomm-authcrypt/backend/haip.go",
         "docker/openbao-haip-migration-audit-policy.hcl",
+        "keycloak/openbao-provider/src/main/java/dev/marty/keycloak/kms/RemoteDirectJwe.java",
+        "scripts/probe_keycloak_remote_rs256.py",
+        "scripts/sql/keycloak-kms-only-verify.sql",
     ):
         selected = _classify_changed_path(path, tmp_path)
         assert selected["openbao"] == selected["rust"] == selected["security"] == "true"
@@ -1168,6 +1138,18 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         if step.get("name") == "Test and build the pinned OpenBao plugin image"
     )
     assert image_build["with"]["file"] == "openbao/didcomm-authcrypt/Dockerfile"
+    keycloak_build = next(
+        step for step in job["steps"]
+        if step.get("name") == "Build the pinned Keycloak remote-key image"
+    )
+    assert keycloak_build["with"]["file"] == "keycloak/openbao-provider/Dockerfile"
+    keycloak_gate = next(
+        step for step in job["steps"]
+        if step.get("name") == "Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody"
+    )
+    assert "scripts/probe_keycloak_remote_rs256.py --require-browser" in keycloak_gate["run"]
+    assert "--keycloak-image marty-keycloak-openbao:ci" in keycloak_gate["run"]
+    assert "--openbao-image marty-openbao-didcomm:ci" in keycloak_gate["run"]
     storage_gate = next(
         step
         for step in job["steps"]
@@ -1184,13 +1166,10 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         "probe_didcomm_openbao_ha.py",
     ):
         assert probe in storage_gate["run"]
-    recovery_gate = next(
-        step
+    assert not any(
+        step.get("name") == "Qualify live Raft snapshot export and recovery"
         for step in job["steps"]
-        if step.get("name") == "Qualify live Raft snapshot export and recovery"
     )
-    assert recovery_gate["shell"] == "pwsh"
-    assert "test_openbao_raft_recovery.ps1" in recovery_gate["run"]
     coordinated_gate = next(
         step
         for step in job["steps"]
@@ -1708,9 +1687,8 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Prepare database contract executables",
         "Create isolated Rust contract databases",
         "Run safe Rust contract groups concurrently",
-        "Exercise authenticated Signing Keys Gateway to Rust routes",
         "Exercise live Signing Keys public contracts on disposable Redis",
-        "Exercise Gateway CSR and managed passport chain with disposable OpenBao",
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao",
         "Run Flow database contract after workspace suite",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
@@ -1740,16 +1718,17 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         assert not steps[name].get("continue-on-error", False)
     live_signing = steps["Exercise live Signing Keys public contracts on disposable Redis"]["run"]
     assert "csca_lifecycle_storage_contract:2" in live_signing
-    assert "managed_key_create_live_contract:5" in live_signing
+    assert "managed_key_create_live_contract" not in live_signing
+    assert "--rust-adapter" in steps[
+        "Qualify scoped provider callback verification against disposable OpenBao"
+    ]["run"]
     assert "document_storage_contract:1" in live_signing
     assert "service_rotation_live_contract" not in live_signing
     assert "vdsnc_registration_live_contract" not in live_signing
     live_openbao = steps[
-        "Exercise Gateway CSR and managed passport chain with disposable OpenBao"
+        "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
     ]["run"]
-    for suite in ("service_rotation_live_contract", "vdsnc_registration_live_contract"):
-        assert f"--test {suite}" in live_openbao
-    assert "MARTY_TEST_OPENBAO_DISPOSABLE_NONCE" in live_openbao
+    assert live_openbao == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
     assert steps["Prepare pinned standalone Compose renderer for Rust contracts"][
         "if"
     ] == "matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'"
@@ -3442,6 +3421,7 @@ def test_selfhost_reference_test_is_not_a_service_image_input() -> None:
         ROOT / "services/Dockerfile",
         ROOT / "services/Dockerfile.migrations",
         ROOT / "openbao/didcomm-authcrypt/Dockerfile",
+        ROOT / "keycloak/openbao-provider/Dockerfile",
         ROOT / "rust/services/Dockerfile.ci",
         *(ROOT / "rust/services").glob("*/Dockerfile"),
     ]
@@ -5347,6 +5327,7 @@ def test_canvas_acceptance_has_distinct_targets_without_signing_kms_dependencies
         "passport_gateway_postgres",
         "gateway_signing_acceptance",
         "csca_capability_contract",
+        "tls_openbao_keyless",
     }
     assert "marty-signing-keys" not in canvas["dev-dependencies"]
     assert "marty-signing-keys" not in worker["dev-dependencies"]

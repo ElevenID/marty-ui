@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -774,21 +775,75 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert '"FLOW_APPLICATION_EVENT_HMAC_KEY"' in deploy
     assert '"FLOW_WEBHOOK_SECRET"' in deploy
     assert 'Invoke-Checked -FilePath openssl -Arguments @("verify"' in deploy
-    assert "spiffe://marty.internal/service/auth" in initializer
-    assert "spiffe://marty.internal/service/applicant" in initializer
-    assert "spiffe://marty.internal/service/flow" in initializer
-    assert "private keys and certificate contents were not displayed" in initializer
+    assert "spiffe://marty.internal/service/auth" in deploy
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert "the private signer remains in KMS" in initializer
+    assert 'SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in initializer
+    assert '"${role}_TLS_KMS_KEY_VERSION"' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in deploy
+    assert "Beta workload TLS private-key files are retired" in deploy
+    assert "openssl genpkey" not in initializer
     assert (
         "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert" in beta
     )
     assert (
         "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert" in beta
     )
-    assert (
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert"
-        in beta
-    )
+    assert "applicant_workload_client_key" not in beta
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key" not in beta
+    assert "pp_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token" in beta
+    assert 'PP_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token" in beta
+    assert 'AUTH_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token" in beta
+    assert 'VERIFICATION_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "spiffe://marty.internal/service/verification" in deploy
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token" in beta
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert 'Flow server certificate must contain the flow DNS SAN' in deploy
+    assert 'FLOW_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'FLOW_WORKLOAD_SERVER_KEY_FILE' in initializer
+
+
+def test_beta_identity_helper_rejects_retired_signing_keys_file() -> None:
+    shell = shutil.which("powershell")
+    if shell is None:
+        pytest.skip("PowerShell is unavailable")
+    with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+        fixture = Path(directory) / "beta.env"
+        fixture.write_text(
+            "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE=retired.pem\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                shell,
+                "-NoProfile",
+                "-File",
+                str(ROOT / "scripts/ensure-beta-workload-identity.ps1"),
+                "-GeneratedEnvFile",
+                str(fixture),
+                "-OutputDirectory",
+                directory,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE is retired" in (
+            result.stdout + result.stderr
+        )
 
 
 def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> None:

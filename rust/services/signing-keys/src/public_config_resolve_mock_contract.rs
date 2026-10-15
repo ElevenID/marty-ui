@@ -21,7 +21,7 @@ use std::sync::{
 };
 use tower::ServiceExt;
 
-#[path = "support/disposable_backends.rs"]
+#[path = "../tests/support/disposable_backends.rs"]
 mod disposable_backends;
 use disposable_backends::{disposable_openbao_envelope, disposable_redis_url};
 
@@ -267,8 +267,10 @@ async fn managed_config_resolve_does_not_revive_retired_tuple_binding() {
         .await
         .unwrap();
     let profiles = ProfileStore::from_connection(store.connection());
-    let fixture: Value =
-        serde_json::from_str(include_str!("fixtures/issuer_profile_vectors.json")).unwrap();
+    let fixture: Value = serde_json::from_str(include_str!(
+        "../tests/fixtures/issuer_profile_vectors.json"
+    ))
+    .unwrap();
     let mut lti_profile = fixture["normalize"]["expected"].clone();
     lti_profile["organization_id"] = json!(lti_organization_id);
     lti_profile["signing_service_id"] = json!("managed-openbao-transit");

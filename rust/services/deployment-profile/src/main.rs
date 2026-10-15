@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     runtime.mark_healthy(DeploymentDependency::Database)?;
     run_migrations(&pool).await?;
     runtime.mark_healthy(DeploymentDependency::Schema)?;
-    let memberships = tenant_membership_provider(&config)?;
+    let memberships = tenant_membership_provider(&config).await?;
     runtime.mark_healthy(DeploymentDependency::Organization)?;
     let repository: Arc<dyn DeploymentRepository> =
         Arc::new(PostgresDeploymentRepository::new(pool));

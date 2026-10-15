@@ -22,7 +22,7 @@ use std::sync::{
 use tokio::sync::oneshot;
 use tower::ServiceExt;
 
-#[path = "support/disposable_backends.rs"]
+#[path = "../tests/support/disposable_backends.rs"]
 mod disposable_backends;
 
 async fn rotate(

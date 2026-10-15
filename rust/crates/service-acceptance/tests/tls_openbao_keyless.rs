@@ -10,15 +10,15 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use rustls::{
-    ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection,
-    SignatureAlgorithm, SignatureScheme, StreamOwned,
     pki_types::{CertificateDer, ServerName, SubjectPublicKeyInfoDer},
     server::WebPkiClientVerifier,
     sign::{CertifiedKey, Signer, SigningKey, SingleCertAndKey},
+    ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection,
+    SignatureAlgorithm, SignatureScheme, StreamOwned,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 struct OpenBaoTlsKey {
@@ -68,10 +68,8 @@ impl OpenBaoTlsKey {
             public_spki_der: self.public_spki_der.clone(),
         }
     }
-}
 
-impl Signer for OpenBaoTlsKey {
-    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+    fn remote_sign(&self, message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
         let input = STANDARD.encode(Sha256::digest(message));
         let url = format!("{}/v1/transit/sign/{}", self.endpoint, self.key_name);
         let response: Value = self
@@ -100,6 +98,16 @@ impl Signer for OpenBaoTlsKey {
             .decode(signature)
             .map_err(|_| rustls::Error::General("remote TLS signature is invalid".into()))
     }
+}
+
+impl Signer for OpenBaoTlsKey {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::task::block_in_place(|| self.remote_sign(message))
+        } else {
+            self.remote_sign(message)
+        }
+    }
 
     fn scheme(&self) -> SignatureScheme {
         SignatureScheme::ECDSA_NISTP256_SHA256
@@ -110,17 +118,23 @@ fn guarded_openbao() -> (String, String, reqwest::blocking::Client) {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
     assert!(
-        parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"),
+        matches!(parsed.scheme(), "http" | "https") && parsed.host_str() == Some("127.0.0.1"),
         "TLS signer proof requires a loopback disposable OpenBao instance"
     );
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("disposable OpenBao marker nonce");
     assert!(nonce.len() >= 16, "disposable marker nonce is too short");
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .unwrap();
+    let mut builder = reqwest::blocking::Client::builder().timeout(Duration::from_secs(5));
+    if parsed.scheme() == "https" {
+        let ca_file = std::env::var("MARTY_TEST_OPENBAO_CA_CERT_FILE")
+            .expect("disposable OpenBao public CA file");
+        let ca_pem = std::fs::read(ca_file).expect("public OpenBao CA certificate");
+        builder = builder.add_root_certificate(
+            reqwest::Certificate::from_pem(&ca_pem).expect("public OpenBao CA certificate PEM"),
+        );
+    }
+    let client = builder.build().unwrap();
     let marker: Value = client
         .get(format!(
             "{endpoint}/v1/secret/data/marty-test-disposable-guard"
@@ -277,16 +291,16 @@ fn issue_leaf_certificate(signer: &OpenBaoTlsKey, mount: &str, common_name: &str
 }
 
 fn complete_tls_handshake(
-    signer: OpenBaoTlsKey,
+    signer: Arc<dyn SigningKey>,
     leaf_der: Vec<u8>,
     ca_der: Vec<u8>,
     require_client_auth: bool,
-    client_identity: Option<(OpenBaoTlsKey, Vec<u8>)>,
+    client_identity: Option<(Arc<dyn SigningKey>, Vec<u8>)>,
     server_name: &str,
     expect_success: bool,
 ) {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-    let certified = CertifiedKey::new(vec![CertificateDer::from(leaf_der)], Arc::new(signer));
+    let certified = CertifiedKey::new(vec![CertificateDer::from(leaf_der)], signer);
     certified
         .keys_match()
         .expect("certificate must match remote KMS key");
@@ -309,10 +323,8 @@ fn complete_tls_handshake(
     };
     let client_builder = ClientConfig::builder().with_root_certificates(roots);
     let client_config = if let Some((client_signer, client_leaf_der)) = client_identity {
-        let client_certified = CertifiedKey::new(
-            vec![CertificateDer::from(client_leaf_der)],
-            Arc::new(client_signer),
-        );
+        let client_certified =
+            CertifiedKey::new(vec![CertificateDer::from(client_leaf_der)], client_signer);
         client_certified
             .keys_match()
             .expect("client certificate must match remote KMS key");
@@ -357,6 +369,155 @@ fn complete_tls_handshake(
     }
 }
 
+async fn complete_tonic_grpc_mtls(
+    server_signer: OpenBaoTlsKey,
+    client_signer: OpenBaoTlsKey,
+    server_leaf_der: Vec<u8>,
+    client_leaf_der: Vec<u8>,
+    ca_der: Vec<u8>,
+) {
+    let server_identity =
+        mmf_platform::KeylessTlsIdentity::new(vec![server_leaf_der], Arc::new(server_signer))
+            .expect("keyless gRPC server identity");
+    let client_identity =
+        mmf_platform::KeylessTlsIdentity::new(vec![client_leaf_der], Arc::new(client_signer))
+            .expect("keyless gRPC client identity");
+    let acceptor = mmf_platform::KeylessGrpcTlsAcceptor::new(
+        &server_identity,
+        vec![ca_der.clone()],
+        2,
+        Duration::from_secs(5),
+    )
+    .expect("keyless gRPC acceptor");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (sender, incoming) = tokio::sync::mpsc::channel(2);
+    let accept_task = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            if let Ok(encrypted) = acceptor.accept(stream).await {
+                if sender
+                    .send(Ok::<_, std::io::Error>(encrypted))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+    let (_, health_service) = tonic_health::server::health_reporter();
+    let server_task = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(health_service)
+            .serve_with_incoming(tokio_stream::wrappers::ReceiverStream::new(incoming))
+            .await
+    });
+    let factory = mmf_platform::KeylessGrpcChannelFactory::new(
+        &format!("https://127.0.0.1:{port}"),
+        "localhost",
+        &client_identity,
+        vec![ca_der.clone()],
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .expect("keyless gRPC channel configuration");
+    let channel = factory.connect().await.expect("keyless gRPC connection");
+    let mut client = tonic_health::pb::health_client::HealthClient::new(channel);
+    let response = client
+        .check(tonic::Request::new(tonic_health::pb::HealthCheckRequest {
+            service: String::new(),
+        }))
+        .await
+        .expect("authenticated keyless gRPC health response")
+        .into_inner();
+    assert_eq!(response.status, 1);
+    let wrong_host = mmf_platform::KeylessGrpcChannelFactory::new(
+        &format!("https://127.0.0.1:{port}"),
+        "wrong.example",
+        &client_identity,
+        vec![ca_der.clone()],
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )
+    .expect("wrong-host channel configuration");
+    assert!(wrong_host.connect().await.is_err());
+    let ca_pem = format!(
+        "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
+        STANDARD.encode(&ca_der)
+    );
+    let public_client = |port| {
+        mmf_platform::GrpcChannelFactory::new(
+            mmf_platform::GrpcChannelConfig {
+                target: format!("https://127.0.0.1:{port}"),
+                security: mmf_platform::GrpcTransportSecurity::ServerTls,
+                trust: mmf_platform::GrpcTrustMode::CustomCa,
+                server_name: Some("localhost".into()),
+                ..mmf_platform::GrpcChannelConfig::default()
+            },
+            mmf_platform::GrpcTlsMaterial {
+                ca_certificate_pem: Some(ca_pem.as_bytes().to_vec()),
+            },
+        )
+        .expect("public-CA gRPC client configuration")
+    };
+    if let Ok(channel) = public_client(port).connect().await {
+        let result = tonic_health::pb::health_client::HealthClient::new(channel)
+            .check(tonic::Request::new(tonic_health::pb::HealthCheckRequest {
+                service: String::new(),
+            }))
+            .await;
+        assert!(
+            result.is_err(),
+            "mTLS listener must reject a request without a client certificate"
+        );
+    }
+    accept_task.abort();
+    server_task.abort();
+
+    let server_only = mmf_platform::KeylessGrpcTlsAcceptor::without_client_auth(
+        &server_identity,
+        2,
+        Duration::from_secs(5),
+    )
+    .expect("keyless server-only gRPC acceptor");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let server_only_port = listener.local_addr().unwrap().port();
+    let (sender, incoming) = tokio::sync::mpsc::channel(2);
+    let accept_task = tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            if let Ok(encrypted) = server_only.accept(stream).await {
+                if sender
+                    .send(Ok::<_, std::io::Error>(encrypted))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }
+    });
+    let (_, health_service) = tonic_health::server::health_reporter();
+    let server_task = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(health_service)
+            .serve_with_incoming(tokio_stream::wrappers::ReceiverStream::new(incoming))
+            .await
+    });
+    let channel = public_client(server_only_port)
+        .connect()
+        .await
+        .expect("public-CA client connects without a private key");
+    let response = tonic_health::pb::health_client::HealthClient::new(channel)
+        .check(tonic::Request::new(tonic_health::pb::HealthCheckRequest {
+            service: String::new(),
+        }))
+        .await
+        .expect("server-only keyless gRPC health response");
+    assert_eq!(response.into_inner().status, 1);
+    accept_task.abort();
+    server_task.abort();
+}
+
 #[test]
 #[ignore = "requires an independently marked disposable OpenBao instance"]
 fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
@@ -377,26 +538,82 @@ fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
         .expect("matching TLS signature scheme");
     let handshake_message = b"disposable rustls handshake signing bytes";
     let signature = selected.sign(handshake_message).expect("Transit signature");
-    assert!(
-        marty_crypto::ecdsa::verify_p256_sha256(
-            &signer.public_spki_der,
-            handshake_message,
-            &signature
-        )
-        .unwrap()
-    );
-    assert!(
-        !marty_crypto::ecdsa::verify_p256_sha256(
-            &signer.public_spki_der,
-            b"changed handshake signing bytes",
-            &signature
-        )
-        .unwrap()
-    );
+    assert!(marty_crypto::ecdsa::verify_p256_sha256(
+        &signer.public_spki_der,
+        handshake_message,
+        &signature
+    )
+    .unwrap());
+    assert!(!marty_crypto::ecdsa::verify_p256_sha256(
+        &signer.public_spki_der,
+        b"changed handshake signing bytes",
+        &signature
+    )
+    .unwrap());
     let mut unavailable = signer.clone_for_handshake();
     unavailable.endpoint = "http://127.0.0.1:1".into();
     assert!(unavailable.sign(handshake_message).is_err());
     let (leaf_der, ca_der, ca_mount) = issue_tls_certificate(&signer);
+    if signer.endpoint.starts_with("https://") {
+        let bao_ca_pem = std::fs::read_to_string(
+            std::env::var("MARTY_TEST_OPENBAO_CA_CERT_FILE")
+                .expect("disposable OpenBao public CA file"),
+        )
+        .unwrap();
+        let token_directory = tempfile::tempdir().unwrap();
+        let token_file = token_directory.path().join("scoped-tls-token");
+        std::fs::write(&token_file, &signer.token).unwrap();
+        let production = mmf_platform::OpenBaoTlsSigner::new(
+            &signer.endpoint,
+            &pem_certificate_der(&bao_ca_pem),
+            &signer.key_name,
+            1,
+            token_file.clone(),
+            Duration::from_secs(5),
+            2,
+        )
+        .expect("production OpenBao TLS signer loads non-exportable metadata");
+        let signature = production
+            .choose_scheme(&[SignatureScheme::ECDSA_NISTP256_SHA256])
+            .unwrap()
+            .sign(handshake_message)
+            .expect("production TLS signer uses the pinned Transit key");
+        assert!(marty_crypto::ecdsa::verify_p256_sha256(
+            &signer.public_spki_der,
+            handshake_message,
+            &signature
+        )
+        .unwrap());
+        complete_tls_handshake(
+            Arc::new(production.clone()),
+            leaf_der.clone(),
+            ca_der.clone(),
+            false,
+            None,
+            "localhost",
+            true,
+        );
+        std::fs::write(&token_file, "denied-disposable-token").unwrap();
+        complete_tls_handshake(
+            Arc::new(production.clone()),
+            leaf_der.clone(),
+            ca_der.clone(),
+            false,
+            None,
+            "localhost",
+            false,
+        );
+        std::fs::remove_file(token_file).unwrap();
+        complete_tls_handshake(
+            Arc::new(production),
+            leaf_der.clone(),
+            ca_der.clone(),
+            false,
+            None,
+            "localhost",
+            false,
+        );
+    }
     let wrong_key_name = format!("tls-wrong-key-{}", uuid::Uuid::new_v4().simple());
     let wrong_spki = provision_key(
         &signer.endpoint,
@@ -413,7 +630,7 @@ fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
     );
     assert!(wrong_certified.keys_match().is_err());
     complete_tls_handshake(
-        signer.clone_for_handshake(),
+        Arc::new(signer.clone_for_handshake()),
         leaf_der.clone(),
         ca_der.clone(),
         false,
@@ -422,7 +639,7 @@ fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
         true,
     );
     complete_tls_handshake(
-        unavailable,
+        Arc::new(unavailable),
         leaf_der.clone(),
         ca_der.clone(),
         false,
@@ -431,7 +648,7 @@ fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
         false,
     );
     complete_tls_handshake(
-        signer.clone_for_handshake(),
+        Arc::new(signer.clone_for_handshake()),
         leaf_der.clone(),
         ca_der.clone(),
         false,
@@ -451,13 +668,36 @@ fn rustls_signer_uses_non_exportable_openbao_key_and_fails_closed() {
     client_signer.public_spki_der = client_spki;
     let client_leaf_der = issue_leaf_certificate(&client_signer, &ca_mount, "marty-client");
     complete_tls_handshake(
-        signer.clone_for_handshake(),
+        Arc::new(signer.clone_for_handshake()),
         leaf_der.clone(),
         ca_der.clone(),
         true,
-        Some((client_signer, client_leaf_der)),
+        Some((
+            Arc::new(client_signer.clone_for_handshake()),
+            client_leaf_der.clone(),
+        )),
         "localhost",
         true,
     );
-    complete_tls_handshake(signer, leaf_der, ca_der, true, None, "localhost", false);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(complete_tonic_grpc_mtls(
+        signer.clone_for_handshake(),
+        client_signer,
+        leaf_der.clone(),
+        client_leaf_der,
+        ca_der.clone(),
+    ));
+    complete_tls_handshake(
+        Arc::new(signer),
+        leaf_der,
+        ca_der,
+        true,
+        None,
+        "localhost",
+        false,
+    );
 }

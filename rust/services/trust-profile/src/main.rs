@@ -7,6 +7,9 @@ use marty_trust_profile::{
     TrustProfileHttpState, TrustProfileRepository, TrustProfileRuntime, TrustProfileServiceConfig,
     TrustRegistryScheduler,
 };
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
@@ -49,11 +52,34 @@ async fn main() -> Result<(), Box<dyn Error>> {
     .await?;
     runtime.mark_healthy(TrustProfileDependency::SystemCatalog)?;
 
-    let control = Arc::new(NativeTrustProfileControlPlane::connect_lazy(
-        &config.organization_grpc_target,
-        config.service_token.as_deref(),
-        config.dependency_timeout,
-    )?);
+    let control = if let Some(ca_cert) = &config.organization_grpc_ca_cert {
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: config.organization_grpc_target.clone(),
+                security: GrpcTransportSecurity::ServerTls,
+                trust: GrpcTrustMode::CustomCa,
+                connect_timeout_ms: config.dependency_timeout.as_millis() as u64,
+                request_timeout_ms: config.dependency_timeout.as_millis() as u64,
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::from_ca_pem_file(Some(ca_cert))?,
+        )?
+        .connect()
+        .await?;
+        let control = NativeTrustProfileControlPlane::from_channel(
+            channel,
+            config.service_token.as_deref(),
+            config.dependency_timeout,
+        )?;
+        control.check_health().await?;
+        Arc::new(control)
+    } else {
+        Arc::new(NativeTrustProfileControlPlane::connect_lazy(
+            &config.organization_grpc_target,
+            config.service_token.as_deref(),
+            config.dependency_timeout,
+        )?)
+    };
     runtime.mark_healthy(TrustProfileDependency::ControlPlane)?;
     let repository: Arc<dyn TrustProfileRepository> = store;
     let issuer_key_resolver = Arc::new(NativeIssuerKeyResolver::new(

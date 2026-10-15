@@ -13,7 +13,7 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
     let scoped_token =
         std::env::var("MARTY_TEST_OPENBAO_SCOPED_TOKEN").unwrap_or_else(|_| token.clone());
     let parsed = Url::parse(&endpoint).expect("OpenBao URL");
-    assert_eq!(parsed.scheme(), "http");
+    assert_eq!(parsed.scheme(), "https");
     assert!(matches!(
         parsed.host_str(),
         Some("127.0.0.1" | "localhost" | "::1")
@@ -21,6 +21,15 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
     std::env::set_var("BAO_ADDR", &endpoint);
     std::env::set_var("BAO_TOKEN", &scoped_token);
     let client = Client::new();
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+    let kms_client = marty_openbao_http::OpenBaoHttp::connect(
+        &endpoint,
+        Some(std::path::Path::new(&ca_file)),
+        std::time::Duration::from_secs(10),
+    )
+    .expect("CA-verified OpenBao HTTPS client")
+    .client()
+    .clone();
     // The disposable bootstrap mounts Transit. This test runs with a scoped
     // workload token, which must not have sys/mounts privileges.
 
@@ -120,7 +129,7 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
         uuid::Uuid::new_v4().simple()
     );
     let stale_url = format!("{endpoint}/v1/transit/keys/{stale_name}");
-    let stale_created = client
+    let stale_created = kms_client
         .post(&stale_url)
         .header("X-Vault-Token", &token)
         .json(&json!({"type":"ed25519","exportable":false,"allow_plaintext_backup":false}))
@@ -130,7 +139,7 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
     assert!(stale_created.status().is_success());
     assert_eq!(provider.reap_stale_keys().await.expect("reap orphan"), 1);
     assert_eq!(
-        client
+        kms_client
             .get(&stale_url)
             .header("X-Vault-Token", &token)
             .send()
@@ -140,7 +149,7 @@ async fn holder_proof_is_verified_and_ephemeral_key_is_deleted() {
         reqwest::StatusCode::NOT_FOUND
     );
 
-    let listed = client
+    let listed = kms_client
         .get(format!("{endpoint}/v1/transit/keys?list=true"))
         .header("X-Vault-Token", &token)
         .send()

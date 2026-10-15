@@ -254,6 +254,7 @@ def test_release_checksums_cover_every_published_asset_once(tmp_path: Path) -> N
         "marty-deploy-linux-amd64",
         "marty-deploy-linux-arm64",
         "marty-ui-openbao-didcomm-sbom.cdx.json",
+        "marty-ui-keycloak-sbom.cdx.json",
     }
     expected_assets = subjects | {f"{name}.sigstore.json" for name in subjects}
     for name in expected_assets:
@@ -385,6 +386,7 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
             "stack-manifest.json", "release-transaction.json",
             "marty-ui-sbom.cdx.json", "marty-ui-services-sbom.cdx.json",
             "marty-ui-migrations-sbom.cdx.json", "marty-ui-openbao-didcomm-sbom.cdx.json",
+            "marty-ui-keycloak-sbom.cdx.json",
             "marty-deploy-linux-amd64",
             "marty-deploy-linux-arm64",
         )
@@ -421,9 +423,9 @@ def test_release_resume_accepts_original_signed_assets_after_bundle_regeneration
     )
     assert result.returncode == 0, result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 16  # Eight Cosign signatures and eight source attestations.
-    assert sum(call.startswith("cosign:") for call in calls) == 8
-    assert sum(call.startswith("gh:") for call in calls) == 8
+    assert len(calls) == 18  # Nine Cosign signatures and nine source attestations.
+    assert sum(call.startswith("cosign:") for call in calls) == 9
+    assert sum(call.startswith("gh:") for call in calls) == 9
 
     (old / "marty-deploy-linux-arm64").write_bytes(b"tampered")
     tampered = subprocess.run(
@@ -952,7 +954,7 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
 
 
-def test_public_stack_smoke_binds_all_four_kms_images() -> None:
+def test_public_stack_smoke_binds_all_five_kms_images() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     smoke = jobs["public-stack-smoke"]
     plugin = jobs["didcomm-plugin-image-qualification"]
@@ -963,10 +965,26 @@ def test_public_stack_smoke_binds_all_four_kms_images() -> None:
 
     assert "build-openbao-didcomm" in smoke["needs"]
     assert build["env"]["OPENBAO_DIDCOMM_DIGEST"] == "${{ needs.build-openbao-didcomm.outputs.digest }}"
-    assert script.count('{type: "oci"') == 4
+    assert script.count('{type: "oci"') == 5
+    assert 'marty-ui-oss/keycloak' in script
     assert 'marty-ui-oss/openbao-didcomm' in script
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
+
+
+def test_release_qualifies_exact_keycloak_kms_image_before_promotion() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    gate = jobs["keycloak-kms-image-qualification"]
+    assert {"build-keycloak", "build-openbao-didcomm", "record-digests"} <= set(gate["needs"])
+    proof = next(step["run"] for step in gate["steps"]
+                 if step.get("name") == "Verify and exercise exact Keycloak and OpenBao image digests")
+    assert 'gh attestation verify "oci://$image"' in proof
+    assert '--require-browser' in proof
+    assert '--keycloak-image "$keycloak" --openbao-image "$openbao"' in proof
+    assert "keycloak-kms-image-qualification" in jobs["qualify-release"]["needs"]
+    qualifier = next(step["run"] for step in jobs["qualify-release"]["steps"]
+                     if step.get("name") == "Persist exact gate evidence")
+    assert '--gate "keycloak_kms=$GITHUB_RUN_ID:$keycloak_digest"' in qualifier
 
 
 def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> None:
@@ -1000,7 +1018,7 @@ def test_release_publishes_and_qualifies_the_exact_openbao_didcomm_image() -> No
         'export MARTY_OPENBAO_PROBE_IMAGE="$image"',
         "probe_didcomm_issuance_token.py",
         "probe_didcomm_openbao_ha.py",
-        "test_openbao_raft_recovery.ps1",
+        "probe_selfhost_openbao_raft_bootstrap.py",
     ):
         assert required in probe
     assert "didcomm-plugin-image-qualification" in jobs["qualify-release"]["needs"]

@@ -106,6 +106,7 @@ SERVICE_ACCEPTANCE_TARGETS = (
     "passport_gateway_postgres",
     "gateway_signing_acceptance",
     "csca_capability_contract",
+    "tls_openbao_keyless",
 )
 SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"
 SIGNING_CSCA_TEST_FILES = (

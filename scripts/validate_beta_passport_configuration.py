@@ -508,20 +508,26 @@ def validate_physical_model(model, files, provider_registry=None):
         physical_require(isinstance(labels, dict)
                          and not any(key.startswith("com.docker.compose.") for key in labels),
                          "Beta physical provider callback service labels are invalid")
-    physical_require(not physical_secret_sources(services["gateway"]),
-                     "Beta physical provider core service gained a secret mount")
+    physical_require(physical_secret_sources(services["gateway"]) ==
+                     {"workload_identity_ca_cert", "gateway_workload_client_cert",
+                      "gateway_tls_kms_token", "openbao_tls_ca_cert"},
+                     "Beta physical provider Gateway CA mounts are invalid")
     physical_require(physical_secret_sources(services["signing-keys"]) == {
         "dev_integration_secret_server_cert",
-        "dev_integration_secret_server_key",
+        "dev_integration_secret_ca",
+        "openbao_tls_ca_cert",
+        "signing_keys_tls_kms_token",
     }, "Beta physical provider Signing Keys TLS mounts are invalid")
     physical_require(physical_secret_sources(services["flow"]) == {
-        "flow_workload_client_cert", "flow_workload_client_key",
-        "flow_workload_server_cert", "flow_workload_server_key",
-        "workload_identity_ca_cert"},
+        "flow_workload_client_cert", "flow_client_tls_kms_token",
+        "flow_workload_server_cert", "flow_server_tls_kms_token",
+        "openbao_tls_ca_cert", "workload_identity_ca_cert"},
         "Beta physical provider flow workload secret mounts are invalid")
     physical_require(physical_secret_sources(services["issuance-native"])
                      == {"passport_physical_provider_api_key",
-                         "dev_integration_secret_ca"},
+                         "dev_integration_secret_ca", "workload_identity_ca_cert",
+                         "issuance_workload_server_cert", "issuance_tls_kms_token",
+                         "openbao_tls_ca_cert"},
                      "Beta physical provider native secret mounts are invalid")
     for service in (signer_service, ingress_service):
         physical_require(not any(service.get(field) for field in (

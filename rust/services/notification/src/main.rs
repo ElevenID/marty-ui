@@ -5,6 +5,7 @@ use marty_notification::{
     },
     domain::default_templates,
     grpc::NotificationGrpc,
+    grpc_tls::NotificationGrpcTlsSettings,
     http::{router_with_service, validate_internal_auth_config},
     migration,
     postgres::PgNotificationRepository,
@@ -14,14 +15,10 @@ use marty_notification::{
     webhook::WebhookSecretEnvelope,
 };
 use sqlx::postgres::PgPoolOptions;
-use std::{env, error::Error, fs, io, net::SocketAddr, sync::Arc};
+use std::{env, error::Error, fs, future::Future, io, net::SocketAddr, pin::Pin, sync::Arc};
 use subtle::ConstantTimeEq;
-use tonic::{
-    metadata::MetadataMap,
-    service::Interceptor,
-    transport::{Certificate, Identity, Server, ServerTlsConfig},
-    Request, Status,
-};
+use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+use tonic::{metadata::MetadataMap, service::Interceptor, transport::Server, Request, Status};
 use tracing::{error, info};
 use tracing_subscriber::EnvFilter;
 
@@ -104,35 +101,17 @@ fn grpc_token() -> Result<Option<String>, io::Error> {
     Ok(Some(token))
 }
 
-fn grpc_tls() -> Result<Option<ServerTlsConfig>, io::Error> {
-    let cert = env::var("GRPC_TLS_CERT").unwrap_or_default();
-    let key = env::var("GRPC_TLS_KEY").unwrap_or_default();
-    if cert.is_empty() != key.is_empty() {
-        return Err(io_error("Incomplete gRPC TLS configuration"));
-    }
-    if cert.is_empty() {
-        if is_development() {
-            return Ok(None);
-        }
-        return Err(io_error(
-            "gRPC TLS is required outside development environments",
-        ));
-    }
-    let mut config =
-        ServerTlsConfig::new().identity(Identity::from_pem(fs::read(cert)?, fs::read(key)?));
-    let require_client = matches!(
-        env::var("GRPC_TLS_REQUIRE_CLIENT_AUTH")
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .as_str(),
-        "true" | "1" | "yes"
-    );
-    if require_client {
-        let ca = env::var("GRPC_TLS_CA_CERT")
-            .map_err(|_| io_error("GRPC_TLS_CA_CERT is required for client authentication"))?;
-        config = config.client_ca_root(Certificate::from_pem(fs::read(ca)?));
-    }
-    Ok(Some(config))
+async fn grpc_tls() -> Result<Option<mmf_platform::KeylessGrpcTlsAcceptor>, io::Error> {
+    let Some(settings) = NotificationGrpcTlsSettings::from_values(env::vars(), is_development())
+        .map_err(io_error)?
+    else {
+        return Ok(None);
+    };
+    settings
+        .acceptor()
+        .await
+        .map(Some)
+        .map_err(|error| io_error(error.to_string()))
 }
 
 fn database_url() -> String {
@@ -202,14 +181,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
         reporter
             .set_serving::<NotificationServiceServer<NotificationGrpc>>()
             .await;
-        let mut server = Server::builder();
-        if let Some(tls) = grpc_tls()? {
-            server = server.tls_config(tls)?
-        }
-        let grpc = server
+        let tls_acceptor = grpc_tls().await?;
+        let router = Server::builder()
             .add_service(health)
-            .add_service(notification)
-            .serve(grpc_address);
+            .add_service(notification);
+        let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+            if let Some(acceptor) = tls_acceptor {
+                let listener = tokio::net::TcpListener::bind(grpc_address).await?;
+                let incoming = TcpListenerStream::new(listener).then(move |connection| {
+                    let acceptor = acceptor.clone();
+                    async move {
+                        match connection {
+                            Ok(stream) => acceptor.accept(stream).await,
+                            Err(error) => Err(error),
+                        }
+                    }
+                });
+                Box::pin(router.serve_with_incoming(incoming))
+            } else {
+                Box::pin(router.serve(grpc_address))
+            };
         info!(address=%grpc_address,"notification gRPC listening");
         tokio::select! {result=http=>{result?},result=grpc=>{result?},_ = shutdown()=>{info!("notification shutdown requested")}}
     } else {

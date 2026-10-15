@@ -4,7 +4,8 @@
 use std::{fmt, fs::File, io::Read, path::PathBuf, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use reqwest::{redirect::Policy, Client, Url};
+use marty_openbao_http::OpenBaoHttp;
+use reqwest::{Client, Url};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use thiserror::Error;
 
@@ -175,28 +176,19 @@ async fn bounded_json<T: DeserializeOwned>(
 }
 
 impl RemoteDidcommKms {
-    pub fn new(base_url: &str, token_file: PathBuf) -> Result<Self, RemoteDidcommKmsError> {
-        let url = Url::parse(base_url).map_err(|_| RemoteDidcommKmsError::InvalidConfiguration)?;
-        if !matches!(url.scheme(), "http" | "https")
-            || url.host().is_none()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.query().is_some()
-            || url.fragment().is_some()
-            || url.path() != "/"
-        {
-            return Err(RemoteDidcommKmsError::InvalidConfiguration);
-        }
-        let client = Client::builder()
-            .timeout(Duration::from_secs(10))
-            .redirect(Policy::none())
-            .no_proxy()
-            .build()
+    pub fn new(
+        base_url: &str,
+        token_file: PathBuf,
+        ca_file: Option<PathBuf>,
+    ) -> Result<Self, RemoteDidcommKmsError> {
+        let transport = OpenBaoHttp::connect(base_url, ca_file.as_deref(), Duration::from_secs(10))
+            .map_err(|_| RemoteDidcommKmsError::InvalidConfiguration)?;
+        let url = Url::parse(transport.origin())
             .map_err(|_| RemoteDidcommKmsError::InvalidConfiguration)?;
         Ok(Self {
             base_url: url,
             token_file,
-            client,
+            client: transport.client().clone(),
         })
     }
 
@@ -329,15 +321,23 @@ mod tests {
     }
 
     #[test]
-    fn kms_url_rejects_credentials_paths_and_redirect_targets() {
+    fn kms_url_requires_https_origin_and_rejects_invalid_ca() {
         let token_file = std::path::PathBuf::from("/not-read-in-constructor");
         for url in [
+            "http://openbao:8200",
             "http://user:password@localhost:8200",
             "https://example.org/other/path",
             "https://example.org/?query=1",
             "file:///tmp/openbao",
         ] {
-            assert!(RemoteDidcommKms::new(url, token_file.clone()).is_err());
+            assert!(RemoteDidcommKms::new(url, token_file.clone(), None).is_err());
         }
+        assert!(RemoteDidcommKms::new("https://openbao:8200", token_file.clone(), None).is_ok());
+        assert!(RemoteDidcommKms::new(
+            "https://openbao:8200",
+            token_file,
+            Some(std::path::PathBuf::from("/missing-openbao-ca")),
+        )
+        .is_err());
     }
 }

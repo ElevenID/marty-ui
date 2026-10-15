@@ -48,6 +48,10 @@ spec:
               value: /run/secrets/openbao_bootstrap_token
             - name: NOTIFICATION_OPENBAO_TOKEN_FILE
               value: /run/secrets/notification_openbao_token
+            - name: NOTIFICATION_OPENBAO_CA_CERT_FILE
+              value: /run/secrets/openbao_tls_ca_cert
+            - name: BAO_CACERT
+              value: /run/secrets/openbao_tls_ca_cert
           volumeMounts:
             - name: selfhost-secret-files
               mountPath: /run/secrets
@@ -68,3 +72,5 @@ spec:
                 path: openbao_bootstrap_token
               - key: NOTIFICATION_OPENBAO_TOKEN
                 path: notification_openbao_token
+              - key: OPENBAO_TLS_CA_CERT
+                path: openbao_tls_ca_cert

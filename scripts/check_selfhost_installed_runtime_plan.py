@@ -67,37 +67,49 @@ EXPECTED_DEPENDENCIES = {
     "verification": {"credential-template": H, "presentation-policy": H, "redis": H},
 }
 EXPECTED_ROLE_SECRETS = {
-    "applicant": {"marty_db_password", "grpc_service_token", "applicant_workload_client_cert",
-                  "applicant_workload_client_key", "workload_identity_ca_cert",
-                  "notification_applicant_event_token", "flow_application_event_hmac_key"},
+    "applicant": {"marty_db_password", "grpc_service_token",
+                  "notification_applicant_event_token", "flow_application_event_hmac_key",
+                  "workload_identity_ca_cert"},
     "auth": {"marty_api_client_secret", "marty_db_password", "grpc_service_token",
-             "auth_workload_client_cert", "auth_workload_client_key",
+             "auth_workload_client_cert", "openbao_tls_ca_cert", "auth_tls_kms_token",
+             "auth_workload_server_cert", "auth_server_tls_kms_token",
              "workload_identity_ca_cert", "flow_webhook_secret"},
     "canvas-sync-worker": {"marty_db_password", "issuance_api_key", "token_hmac_key",
                            "signing_keys_integration_secret_key", "signing_keys_issuer_sign_key",
-                           "sign_grant_mint_issuance_canvas_token", "workload_identity_ca_cert"},
+                           "sign_grant_mint_issuance_canvas_token", "openbao_tls_ca_cert",
+                           "workload_identity_ca_cert"},
     "cloudflared": {"cloudflare_tunnel_token"},
     "cloudflared-beta": {"cloudflare_beta_tunnel_token"},
     "compliance-profile": {"marty_db_password", "grpc_service_token",
                            "compliance_profile_workload_client_cert",
-                           "compliance_profile_workload_client_key", "workload_identity_ca_cert"},
-    "credential-template": {"marty_db_password", "issuance_api_key", "grpc_service_token"},
-    "db-migrate": {"marty_db_password", "openbao_bootstrap_token", "notification_openbao_token"},
+                           "openbao_tls_ca_cert", "compliance_profile_tls_kms_token",
+                           "workload_identity_ca_cert"},
+    "credential-template": {"marty_db_password", "issuance_api_key", "grpc_service_token",
+                            "workload_identity_ca_cert", "ct_workload_server_cert",
+                            "openbao_tls_ca_cert", "ct_tls_kms_token"},
+    "db-migrate": {"marty_db_password", "openbao_bootstrap_token", "notification_openbao_token",
+                   "openbao_tls_ca_cert"},
     "deployment-profile": {"marty_db_password", "grpc_service_token",
                            "deployment_profile_workload_client_cert",
-                           "deployment_profile_workload_client_key", "workload_identity_ca_cert"},
+                           "openbao_tls_ca_cert", "deployment_profile_tls_kms_token",
+                           "workload_identity_ca_cert"},
     "device-registration": {"marty_db_password", "grpc_service_token",
-                            "device_registration_gateway_key", "device_registration_signing_keys_key"},
-    "event-stream": {"grpc_service_token"},
+                            "device_registration_gateway_key", "device_registration_signing_keys_key",
+                            "workload_identity_ca_cert"},
+    "event-stream": {"grpc_service_token", "es_workload_server_cert",
+                     "openbao_tls_ca_cert", "es_tls_kms_token"},
     "flow": {"marty_db_password", "grpc_service_token", "flow_workload_client_cert",
-             "flow_workload_client_key", "flow_workload_server_cert",
-             "flow_workload_server_key", "workload_identity_ca_cert", "flow_webhook_secret",
+             "flow_client_tls_kms_token", "flow_workload_server_cert",
+             "flow_server_tls_kms_token", "openbao_tls_ca_cert", "workload_identity_ca_cert", "flow_webhook_secret",
              "flow_application_event_hmac_key", "issuance_api_key",
              "sign_grant_mint_flow_wallet_token", "signing_keys_issuer_sign_key"},
     "gateway": {"issuance_api_key", "grpc_service_token", "device_registration_gateway_key",
                 "sign_grant_mint_gateway_issuer_did_token", "sign_grant_mint_gateway_service_token",
-                "signing_keys_issuer_sign_key", "signing_keys_service_sign_gateway_key"},
-    "issuance": {"marty_db_password", "openbao_service_token", "issuance_api_key",
+                "signing_keys_issuer_sign_key", "signing_keys_service_sign_gateway_key",
+                "workload_identity_ca_cert", "gateway_workload_client_cert",
+                "gateway_tls_kms_token", "openbao_tls_ca_cert"},
+    "issuance": {"marty_db_password", "openbao_service_token", "openbao_tls_ca_cert",
+                 "issuance_api_key",
                  "token_hmac_key", "canvas_credentials_shared_secret", "grpc_service_token",
                  "didcomm_issuance_openbao_token", "sign_grant_mint_issuance_canvas_token",
                  "sign_grant_mint_issuance_credential_token", "sign_grant_mint_issuance_passport_token",
@@ -110,32 +122,60 @@ EXPECTED_ROLE_SECRETS = {
                         "didcomm_issuance_openbao_token", "sign_grant_mint_issuance_canvas_token",
                         "sign_grant_mint_issuance_credential_token", "sign_grant_mint_issuance_passport_token",
                         "sign_grant_mint_issuance_readiness_token", "signing_keys_integration_secret_key",
-                        "signing_keys_issuer_sign_key", "workload_identity_ca_cert"},
+                        "signing_keys_issuer_sign_key", "workload_identity_ca_cert",
+                        "issuance_workload_server_cert", "openbao_tls_ca_cert",
+                        "issuance_tls_kms_token"},
     "keycloak": {"keycloak_admin_password", "keycloak_db_password", "google_client_id",
-                 "google_client_secret", "marty_api_client_secret"},
+                 "google_client_secret", "marty_api_client_secret", "openbao_tls_ca_cert",
+                 "keycloak_signing_kms_token", "keycloak_master_rs256_cert",
+                 "keycloak_11id_rs256_cert", "keycloak_master_cookie_token",
+                 "keycloak_master_ciba_token", "keycloak_11id_cookie_token",
+                 "keycloak_11id_ciba_token"},
     "keycloak-configurator": {"keycloak_admin_password", "google_client_id",
                               "google_client_secret", "marty_api_client_secret", "smtp_password"},
     "notification": {"marty_db_password", "grpc_service_token", "smtp_password",
                      "notification_webhook_secret", "notification_applicant_event_token",
-                     "notification_openbao_token"},
-    "organization": {"marty_db_password", "grpc_service_token"},
+                     "notification_openbao_token", "openbao_tls_ca_cert"},
+    "organization": {"marty_db_password", "grpc_service_token",
+                     "org_workload_server_cert", "openbao_tls_ca_cert", "org_tls_kms_token",
+                     "workload_identity_ca_cert"},
     "postgres": {"postgres_password", "keycloak_db_password", "marty_db_password"},
     "presentation-policy": {"marty_db_password", "grpc_service_token",
-                            "pp_workload_server_cert", "pp_workload_server_key",
-                            "workload_identity_ca_cert"},
-    "revocation-profile": {"marty_db_password", "grpc_service_token"},
+                            "pp_workload_server_cert", "pp_tls_kms_token",
+                            "openbao_tls_ca_cert", "workload_identity_ca_cert"},
+    "revocation-profile": {"marty_db_password", "grpc_service_token",
+                           "workload_identity_ca_cert", "rp_workload_server_cert",
+                           "openbao_tls_ca_cert", "rp_tls_kms_token"},
     "revocation-profile-migrate": {"marty_db_password"},
     "signing-keys": {"issuance_api_key", "device_registration_signing_keys_key",
                      "haip_kms_token", "sign_grant_verify_token",
                      "signing_keys_integration_secret_key", "signing_keys_issuer_sign_key",
                      "signing_keys_openbao_token", "signing_keys_service_sign_gateway_key",
-                     "signing_keys_workload_server_cert", "signing_keys_workload_server_key"},
-    "trust-profile": {"marty_db_password", "grpc_service_token", "issuance_api_key"},
+                     "signing_keys_workload_server_cert", "openbao_tls_ca_cert",
+                     "signing_keys_tls_kms_token", "workload_identity_ca_cert"},
+    "trust-profile": {"marty_db_password", "grpc_service_token", "issuance_api_key",
+                      "workload_identity_ca_cert"},
     "ui": {"google_analytics_measurement_id", "google_site_verification"},
     "verification": {"grpc_service_token", "verification_workload_client_cert",
-                     "verification_workload_client_key", "workload_identity_ca_cert"},
+                     "openbao_tls_ca_cert", "verification_tls_kms_token",
+                     "workload_identity_ca_cert"},
 }
 EXPECTED_SECRET_NAMES = frozenset().union(*EXPECTED_ROLE_SECRETS.values())
+KEYCLOAK_IMAGE = re.compile(r"^ghcr\.io/elevenid/marty-ui-oss/keycloak@sha256:[0-9a-f]{64}$")
+KEYCLOAK_SECRET_TARGETS = {
+    "keycloak_master_rs256_cert": "keycloak-master-rs256.crt",
+    "keycloak_11id_rs256_cert": "keycloak-11id-rs256.crt",
+    "keycloak_master_cookie_token": "master-cookie.token",
+    "keycloak_master_ciba_token": "master-ciba.token",
+    "keycloak_11id_cookie_token": "11id-cookie.token",
+    "keycloak_11id_ciba_token": "11id-ciba.token",
+}
+
+
+def secret_target(service: str, source: str) -> str:
+    """Return the reviewed in-container secret path for a service binding."""
+    filename = KEYCLOAK_SECRET_TARGETS.get(source, source) if service == "keycloak" else source
+    return f"/run/secrets/{filename}"
 
 
 def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
@@ -147,6 +187,25 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
             or preflight.get("qualification") != "unqualified"
             or preflight.get("service_count") != len(services)):
         raise ValueError("runtime DAG is not bound to full prepared preflight")
+    keycloak = services["keycloak"]
+    configurator = services["keycloak-configurator"]
+    if (not isinstance(keycloak, dict) or not isinstance(configurator, dict)
+            or not isinstance(keycloak.get("image"), str)
+            or KEYCLOAK_IMAGE.fullmatch(keycloak["image"]) is None
+            or configurator.get("image") != keycloak["image"]):
+        raise ValueError("installed Keycloak services require the same pinned remote-key image")
+    keycloak_env = keycloak.get("environment")
+    if (not isinstance(keycloak_env, dict)
+            or not isinstance(keycloak_env.get("BAO_ADDR"), str)
+            or not keycloak_env["BAO_ADDR"].startswith("https://")
+            or keycloak_env.get("BAO_CACERT") != "/run/secrets/openbao_tls_ca_cert"
+            or keycloak_env.get("BAO_TOKEN_FILE") != "/run/secrets/keycloak_signing_kms_token"
+            or keycloak_env.get("MARTY_KEYCLOAK_RS256_CERT_DIR") != "/run/secrets"
+            or keycloak_env.get("MARTY_KEYCLOAK_JWE_TOKEN_DIR") != "/run/secrets"
+            or keycloak_env.get("MARTY_KEYCLOAK_JWE_MOUNT") != "didcomm"
+            or keycloak_env.get("MARTY_KEYCLOAK_KMS_KEY_PREFIX") != "keycloak"
+            or re.fullmatch(r"[1-9][0-9]*", str(keycloak_env.get("MARTY_KEYCLOAK_KMS_KEY_VERSION", ""))) is None):
+        raise ValueError("installed Keycloak remote-key environment is invalid")
     for digest_name in ("archive_sha256", "image_lock_sha256", "transaction_sha256"):
         if re.fullmatch(r"[0-9a-f]{64}", str(preflight.get(digest_name, ""))) is None:
             raise ValueError("runtime DAG lacks exact artifact identity")
@@ -185,7 +244,7 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
             if (not isinstance(reference, dict) or set(reference) != {"source", "target"}
                     or not isinstance(reference["source"], str)
                     or reference["source"] not in secrets
-                    or reference["target"] != f"/run/secrets/{reference['source']}"
+                    or reference["target"] != secret_target(name, reference["source"])
                     or reference["source"] in seen_secrets):
                 raise ValueError(f"installed runtime service {name} has invalid secret binding")
             seen_secrets.add(reference["source"])

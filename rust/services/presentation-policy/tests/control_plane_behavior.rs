@@ -218,3 +218,21 @@ fn invalid_native_control_plane_configuration_fails_before_startup() {
         Err(PresentationVerificationError::Failed(_))
     ));
 }
+
+#[tokio::test]
+async fn ca_verified_organization_client_rejects_plaintext() {
+    let result = NativePresentationControlPlane::connect_with_ca(
+        "http://organization:9002",
+        std::path::Path::new("unused-public-ca.pem"),
+        "http://trust-profile:8004",
+        "http://issuance:8005/v1/issuance/credentials/{credential_id}/status",
+        Some(&"s".repeat(32)),
+        None,
+        Duration::from_secs(1),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Err(PresentationVerificationError::Failed(_))
+    ));
+}

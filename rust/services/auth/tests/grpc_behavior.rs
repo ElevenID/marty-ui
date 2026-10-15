@@ -73,7 +73,53 @@ fn session() -> Session {
 }
 
 fn service(session: Option<Session>) -> AuthGrpcService {
-    AuthGrpcService::new(Arc::new(SessionStub { session }))
+    AuthGrpcService::new(Arc::new(SessionStub { session }), None, false).unwrap()
+}
+
+#[tokio::test]
+async fn deployed_auth_grpc_rejects_missing_or_invalid_service_tokens() {
+    let token = "s".repeat(32);
+    let service = AuthGrpcService::new(
+        Arc::new(SessionStub {
+            session: Some(session()),
+        }),
+        Some(token.clone()),
+        true,
+    )
+    .unwrap();
+    let request = || {
+        Request::new(ValidateSessionRequest {
+            session_id: "session-1".into(),
+        })
+    };
+    assert_eq!(
+        service
+            .validate_session(request())
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut wrong = request();
+    wrong
+        .metadata_mut()
+        .insert("x-service-token", "wrong".parse().unwrap());
+    assert_eq!(
+        service.validate_session(wrong).await.unwrap_err().code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut valid = request();
+    valid
+        .metadata_mut()
+        .insert("x-service-token", token.parse().unwrap());
+    assert!(
+        service
+            .validate_session(valid)
+            .await
+            .unwrap()
+            .into_inner()
+            .valid
+    );
 }
 
 #[test]

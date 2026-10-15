@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     net::{IpAddr, SocketAddr},
+    path::PathBuf,
     time::Duration,
 };
 
@@ -218,10 +219,22 @@ impl PassportNativeConfig {
 }
 
 #[derive(Clone, Eq, PartialEq)]
+pub struct IssuanceWorkloadServerTlsFiles {
+    pub ca_certificate: PathBuf,
+    pub certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
+}
+
+#[derive(Clone, Eq, PartialEq)]
 pub struct IssuanceServiceConfig {
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub grpc_enabled: bool,
+    pub workload_server_tls: Option<IssuanceWorkloadServerTlsFiles>,
     pub release_version: String,
     pub build_revision: String,
     pub issuer_base_url: String,
@@ -298,6 +311,10 @@ impl std::fmt::Debug for IssuanceServiceConfig {
             .field("http_addr", &self.http_addr)
             .field("grpc_addr", &self.grpc_addr)
             .field("grpc_enabled", &self.grpc_enabled)
+            .field(
+                "workload_server_tls_configured",
+                &self.workload_server_tls.is_some(),
+            )
             .field("release_version", &self.release_version)
             .field("build_revision", &self.build_revision)
             .field("issuer_base_url", &self.issuer_base_url)
@@ -1005,6 +1022,11 @@ impl IssuanceServiceConfig {
             .map_or("development", String::as_str)
             .trim()
             .to_ascii_lowercase();
+        let workload_server_tls = issuance_workload_server_tls(
+            &values,
+            settings.server.grpc_enabled,
+            matches!(environment.as_str(), "production" | "prod" | "beta"),
+        )?;
         let canvas_local_admin_token =
             if environment_flag(&values, "CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK")
                 && !matches!(environment.as_str(), "production" | "prod")
@@ -1019,6 +1041,7 @@ impl IssuanceServiceConfig {
             http_addr,
             grpc_addr,
             grpc_enabled: settings.server.grpc_enabled,
+            workload_server_tls,
             release_version: settings.build.release_version,
             build_revision: settings.build.revision,
             issuer_base_url,
@@ -1460,6 +1483,64 @@ fn optional_trimmed(value: Option<String>) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+fn issuance_workload_server_tls(
+    values: &BTreeMap<String, String>,
+    grpc_enabled: bool,
+    deployed: bool,
+) -> Result<Option<IssuanceWorkloadServerTlsFiles>, MmfError> {
+    let invalid = |message: &str| MmfError::new(ErrorCode::Configuration, message);
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("Issuance TLS private-key files are retired"));
+    }
+    const NAMES: [&str; 7] = [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ];
+    let get = |name: &str| optional_environment_value(values, name);
+    let configured = NAMES.iter().filter(|name| get(name).is_some()).count();
+    if configured == 0 && !(deployed && grpc_enabled) {
+        return Ok(None);
+    }
+    if configured != NAMES.len() {
+        return Err(invalid(
+            "Issuance gRPC requires complete remote TLS identity",
+        ));
+    }
+    let endpoint = get(NAMES[2]).unwrap_or_default();
+    let parsed =
+        url::Url::parse(&endpoint).map_err(|_| invalid("Issuance TLS KMS origin is invalid"))?;
+    if parsed.scheme() != "https"
+        || parsed.host_str().is_none()
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.path() != "/"
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+    {
+        return Err(invalid("Issuance TLS KMS origin must be HTTPS"));
+    }
+    let version = get(NAMES[6])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| invalid("Issuance TLS KMS key version is invalid"))?;
+    Ok(Some(IssuanceWorkloadServerTlsFiles {
+        certificate: PathBuf::from(get(NAMES[0]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(get(NAMES[1]).unwrap_or_default()),
+        kms_endpoint: endpoint,
+        kms_ca_certificate: PathBuf::from(get(NAMES[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(get(NAMES[4]).unwrap_or_default()),
+        kms_key_name: get(NAMES[5]).unwrap_or_default(),
+        kms_key_version: version,
+    }))
+}
+
 fn optional_environment_value(values: &BTreeMap<String, String>, name: &str) -> Option<String> {
     optional_trimmed(values.get(name).cloned())
 }
@@ -1663,6 +1744,38 @@ mod tests {
             .iter()
             .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
             .collect()
+    }
+
+    fn remote_server_tls_values() -> Vec<(String, String)> {
+        values(&[
+            ("GRPC_WORKLOAD_TLS_SERVER_CERT", "issuance-public.pem"),
+            ("GRPC_WORKLOAD_TLS_CA_CERT", "workload-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "https://bao:8200"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT", "bao-public-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE", "scoped-token"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME", "issuance-server"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+        ])
+    }
+
+    #[test]
+    fn deployed_grpc_requires_remote_tls_and_rejects_private_key_files() {
+        let deployed = values(&[("ENVIRONMENT", "beta")]);
+        assert!(IssuanceServiceConfig::from_values(deployed.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("complete remote TLS identity"));
+        let mut configured = deployed;
+        configured.extend(remote_server_tls_values());
+        assert!(IssuanceServiceConfig::from_values(configured.clone())
+            .unwrap()
+            .workload_server_tls
+            .is_some());
+        configured.push(("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "private.pem".into()));
+        assert!(IssuanceServiceConfig::from_values(configured)
+            .unwrap_err()
+            .to_string()
+            .contains("private-key files are retired"));
     }
 
     #[test]
@@ -1945,6 +2058,7 @@ mod tests {
                 "passport-beta-bureau",
             ),
         ]);
+        beta.extend(remote_server_tls_values());
         assert!(
             IssuanceServiceConfig::from_values(beta.clone())
                 .unwrap()
@@ -3062,12 +3176,14 @@ mod tests {
         assert!(diagnostic.contains("canvas_local_admin_token_configured: true"));
         assert!(!diagnostic.contains("local-simulator-token"));
 
-        let production = IssuanceServiceConfig::from_values(values(&[
+        let mut production_values = values(&[
             ("ENVIRONMENT", "production"),
             ("CANVAS_ALLOW_LOCAL_ADMIN_TOKEN_FALLBACK", "true"),
             ("CANVAS_ADMIN_API_TOKEN", "must-not-load"),
-        ]))
-        .expect("production ignores local fallback");
+        ]);
+        production_values.extend(remote_server_tls_values());
+        let production = IssuanceServiceConfig::from_values(production_values)
+            .expect("production ignores local fallback");
         assert!(production.canvas_local_admin_token.is_none());
 
         let disabled = IssuanceServiceConfig::from_values(values(&[

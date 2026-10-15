@@ -166,7 +166,7 @@ def validate_scoped_model(model: dict, images: dict[str, str],
                           secret_dir: Path, install_root: Path, project: str) -> None:
     """Validate exact disposable topology, then reuse the mature base contract."""
     require(isinstance(model, dict) and set(model) ==
-            {"name", "services", "networks", "secrets", "configs"},
+            {"name", "services", "networks", "volumes", "secrets", "configs"},
             "Disposable Compose model has unexpected top-level inputs")
     services = model.get("services")
     require(isinstance(services, dict) and set(services) ==
@@ -187,15 +187,20 @@ def validate_scoped_model(model: dict, images: dict[str, str],
             and bootstrap["networks"] == {"private": None}
             and bootstrap["entrypoint"] ==
             ["/bin/sh", "/usr/local/bin/selfhost-migration-openbao-bootstrap"]
-            and bootstrap["environment"] == {"BAO_ADDR": "http://openbao:8200"}
+            and bootstrap["environment"] == {
+                "BAO_ADDR": "https://openbao:8200",
+                "BAO_CACERT": "/bao/public-ca/ca.crt"}
             and bootstrap["secrets"] == [{"source": "bao_root_token",
                                           "target": "/run/secrets/bao_root_token"}]
             and bootstrap["configs"] == [
                 {"source": "openbao_bootstrap",
                  "target": "/usr/local/bin/selfhost-migration-openbao-bootstrap"},
                 {"source": "openbao_init", "target": "/usr/local/bin/openbao-init"}]
-            and bootstrap["volumes"] == [{"type": "bind", "source": str(secret_dir),
-                                           "target": "/work/secrets"}]
+            and bootstrap["volumes"] == [
+                {"type": "bind", "source": str(secret_dir),
+                 "target": "/work/secrets"},
+                {"type": "volume", "source": "openbao_public_ca",
+                 "target": "/bao/public-ca", "read_only": True, "volume": {}}]
             and bootstrap["depends_on"] ==
             {"openbao": {"condition": "service_healthy", "required": True}}
             and bootstrap["restart"] == "no", "Disposable bootstrap topology changed")

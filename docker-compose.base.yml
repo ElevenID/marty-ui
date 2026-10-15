@@ -659,8 +659,6 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN: ${NOTIFICATION_APPLICANT_EVENT_TOKEN:-dev-notification-applicant-event-token}
-      ORG_GRPC_TARGET: organization:9002
-      FLOW_GRPC_TARGET: flow:9011
       ES_GRPC_TARGET: event-stream:9015
     ports:
       - "127.0.0.1:8006:8006"
@@ -824,7 +822,11 @@ services:
     environment:
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/dev_integration_secret_server_cert
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/dev_integration_secret_server_key
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: ${SIGNING_KEYS_TLS_KMS_ADDR:?SIGNING_KEYS_TLS_KMS_ADDR must be set}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: /run/secrets/signing_keys_tls_kms_token
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: ${SIGNING_KEYS_TLS_KMS_KEY_NAME:?SIGNING_KEYS_TLS_KMS_KEY_NAME must be set}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: ${SIGNING_KEYS_TLS_KMS_KEY_VERSION:?SIGNING_KEYS_TLS_KMS_KEY_VERSION must be set}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ${SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY:-dev-signing-keys-service-sign-gateway-key}
@@ -840,7 +842,9 @@ services:
       RUST_LOG: info
     secrets:
       - dev_integration_secret_server_cert
-      - dev_integration_secret_server_key
+      - dev_integration_secret_ca
+      - openbao_tls_ca_cert
+      - signing_keys_tls_kms_token
     volumes:
       - openbao_verify_grant:/bao/verify-grant:ro
     depends_on:
@@ -851,9 +855,9 @@ services:
       openbao-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8017/health >/dev/null && curl -fsS --cacert /run/secrets/dev_integration_secret_ca https://signing-keys:8018/health >/dev/null"]
       interval: 10s
-      timeout: 5s
+      timeout: 8s
       retries: 3
     networks:
       - marty-network
@@ -948,6 +952,7 @@ services:
       SERVICE_NAME: issuance_native
       MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_GRPC_ENABLED: "false"
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -1043,7 +1048,6 @@ services:
       - openbao_issuance_passport_grant:/bao/issuance-passport-grant:ro
     ports:
       - "127.0.0.1:8005:8005"
-      - "127.0.0.1:9005:9005"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1328,11 +1332,13 @@ services:
 
 secrets:
   dev_integration_secret_ca:
-    file: ./.dev-integration-secret-tls/ca.crt
+    file: ${DEV_INTEGRATION_SECRET_CA_FILE:?DEV_INTEGRATION_SECRET_CA_FILE must be set}
   dev_integration_secret_server_cert:
-    file: ./.dev-integration-secret-tls/tls.crt
-  dev_integration_secret_server_key:
-    file: ./.dev-integration-secret-tls/tls.key
+    file: ${SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE:?SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE must be set}
+  openbao_tls_ca_cert:
+    file: ${OPENBAO_TLS_CA_CERT_FILE:?OPENBAO_TLS_CA_CERT_FILE must be set}
+  signing_keys_tls_kms_token:
+    file: ${SIGNING_KEYS_TLS_KMS_TOKEN_FILE:?SIGNING_KEYS_TLS_KMS_TOKEN_FILE must be set}
 
 volumes:
   postgres_data:

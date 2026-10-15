@@ -49,7 +49,7 @@ spec:
             'until nc -z postgres 5432; do echo "waiting for postgres"; sleep 3; done']
       containers:
         - name: keycloak
-          image: quay.io/keycloak/keycloak:25.0
+          image: ${MARTY_KEYCLOAK_KMS_IMAGE}
           command:
             - start
             - --import-realm
@@ -116,6 +116,28 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: KEYCLOAK_REALM
+            - name: BAO_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: KEYCLOAK_KMS_ADDR
+            - name: BAO_CACERT
+              value: /run/secrets/openbao_tls_ca_cert
+            - name: BAO_TOKEN_FILE
+              value: /run/secrets/keycloak_signing_kms_token
+            - name: MARTY_KEYCLOAK_RS256_CERT_DIR
+              value: /run/secrets
+            - name: MARTY_KEYCLOAK_JWE_TOKEN_DIR
+              value: /run/secrets
+            - name: MARTY_KEYCLOAK_JWE_MOUNT
+              value: didcomm
+            - name: MARTY_KEYCLOAK_KMS_KEY_PREFIX
+              value: keycloak
+            - name: MARTY_KEYCLOAK_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: KEYCLOAK_KMS_KEY_VERSION
             - name: GOOGLE_CLIENT_ID
               valueFrom:
                 secretKeyRef:
@@ -145,6 +167,9 @@ spec:
             - name: keycloak-themes
               mountPath: /opt/keycloak/themes
               readOnly: true
+            - name: keycloak-kms
+              mountPath: /run/secrets
+              readOnly: true
           livenessProbe:
             httpGet:
               path: /health/live
@@ -164,6 +189,9 @@ spec:
             name: keycloak-realm-config
         - name: keycloak-themes
           emptyDir: {}    # mount your theme files via an init-container or a PVC if needed
+        - name: keycloak-kms
+          secret:
+            secretName: keycloak-kms
 ---
 # Keycloak configurator — one-shot Job that patches realm settings
 # after Keycloak finishes importing the realm (Google OAuth URIs, etc.)
@@ -190,7 +218,7 @@ spec:
             'until wget -q --spider http://keycloak:8080/health/ready; do echo "waiting for keycloak"; sleep 10; done']
       containers:
         - name: configurator
-          image: quay.io/keycloak/keycloak:25.0
+          image: ${MARTY_KEYCLOAK_KMS_IMAGE}
           command: ["/bin/bash", "/scripts/setup-keycloak-selfhost-production.sh"]
           env:
             - name: KC_URL

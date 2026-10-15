@@ -36,8 +36,25 @@ spec:
               value: "8017"
             - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE
               value: /run/secrets/integration-secret-tls/tls.crt
-            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE
-              value: /run/secrets/integration-secret-tls/tls.key
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SIGNING_KEYS_TLS_KMS_ADDR
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE
+              value: /run/secrets/signing-keys-tls-kms/ca.crt
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE
+              value: /run/secrets/signing-keys-tls-kms/token
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SIGNING_KEYS_TLS_KMS_KEY_NAME
+            - name: SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION
+              valueFrom:
+                configMapKeyRef:
+                  name: marty-config
+                  key: SIGNING_KEYS_TLS_KMS_KEY_VERSION
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:
@@ -75,6 +92,8 @@ spec:
                 configMapKeyRef:
                   name: marty-config
                   key: BAO_ADDR
+            - name: BAO_CACERT
+              value: /run/secrets/signing-keys-tls-kms/ca.crt
             - name: OPENBAO_SERVICE_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -96,6 +115,12 @@ spec:
             - name: integration-secret-tls
               mountPath: /run/secrets/integration-secret-tls
               readOnly: true
+            - name: integration-secret-ca
+              mountPath: /run/secrets/integration-secret-ca
+              readOnly: true
+            - name: signing-keys-tls-kms
+              mountPath: /run/secrets/signing-keys-tls-kms
+              readOnly: true
             - name: signing-grant-verify
               mountPath: /run/secrets/signing-grant-verify
               readOnly: true
@@ -113,15 +138,24 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 15
           readinessProbe:
-            httpGet:
-              path: /health
-              port: 8017
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - curl -fsS http://127.0.0.1:8017/health >/dev/null && curl -fsS --cacert /run/secrets/integration-secret-ca/ca.crt --resolve signing-keys:8018:127.0.0.1 https://signing-keys:8018/health >/dev/null
             initialDelaySeconds: 10
             periodSeconds: 10
+            timeoutSeconds: 8
       volumes:
         - name: integration-secret-tls
           secret:
             secretName: signing-keys-integration-secret-server-tls
+        - name: integration-secret-ca
+          secret:
+            secretName: signing-keys-integration-secret-ca
+        - name: signing-keys-tls-kms
+          secret:
+            secretName: signing-keys-tls-kms
         - name: signing-grant-verify
           secret:
             secretName: marty-secrets

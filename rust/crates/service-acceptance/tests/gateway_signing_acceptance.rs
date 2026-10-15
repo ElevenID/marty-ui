@@ -3,19 +3,18 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{atomic::Ordering, Arc},
+    sync::Arc,
 };
 
 use async_trait::async_trait;
 use axum::{
     body::{to_bytes, Body},
-    extract::{Path, Request, State},
+    extract::Request,
     http::{header, HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{any, get},
     Json, Router,
 };
-use base64::Engine as _;
 use marty_gateway::{
     authorization::{OrganizationMembership, OrganizationMembershipProvider},
     contract::GatewayContract,
@@ -165,20 +164,6 @@ async fn disposable_signing_redis_url() -> String {
     url
 }
 
-#[derive(Clone, Default)]
-struct GatewayTransitFixture {
-    keys: Arc<std::sync::Mutex<BTreeMap<String, String>>>,
-    creates: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    signs: Arc<std::sync::Mutex<Vec<(String, Value)>>>,
-}
-
-fn gateway_transit_authorized(headers: &HeaderMap) -> bool {
-    headers
-        .get("x-vault-token")
-        .and_then(|value| value.to_str().ok())
-        == Some("test-only")
-}
-
 struct DisposableDscIdentity {
     organization_id: String,
     dsc_operator: bool,
@@ -318,7 +303,8 @@ fn gateway_with_signing_http_dsc(
     issuer_csr_grant_minter: Option<marty_signing_grant::minter::GrantMinter>,
 ) -> Router {
     let mut state = signing_gateway_state(signing_url);
-    Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = issuer_csr_grant_minter;
+    Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter =
+        issuer_csr_grant_minter.map(|minter| Arc::new(minter) as _);
     if let Some(dsc_key) = dsc_key {
         let state = Arc::get_mut(&mut state).unwrap();
         state.dsc_issue_gateway_key = Some(dsc_key.to_owned());
@@ -341,130 +327,12 @@ fn gateway_with_signing_http_dsc(
     gateway_router(state)
 }
 
-async fn gateway_transit_create(
-    State(fixture): State<GatewayTransitFixture>,
-    Path(reference): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    if !gateway_transit_authorized(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Some(key_type) = body.get("type").and_then(Value::as_str) else {
-        return StatusCode::BAD_REQUEST.into_response();
-    };
-    fixture
-        .creates
-        .lock()
-        .unwrap()
-        .push((reference.clone(), key_type.to_owned()));
-    let mut keys = fixture.keys.lock().unwrap();
-    if keys.contains_key(&reference) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(json!({"errors":["key already exists"]})),
-        )
-            .into_response();
-    }
-    keys.insert(reference, key_type.to_owned());
-    StatusCode::NO_CONTENT.into_response()
-}
-
-async fn gateway_transit_read(
-    State(fixture): State<GatewayTransitFixture>,
-    Path(reference): Path<String>,
-    headers: HeaderMap,
-) -> Response {
-    if !gateway_transit_authorized(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    let material = match key_type.as_str() {
-        "ed25519" => "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
-        "ecdsa-p256" => "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt\n6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==\n-----END PUBLIC KEY-----\n",
-        _ => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
-    };
-    Json(json!({"data": {
-        "latest_version": 1, "type": key_type, "supports_signing": true,
-        "soft_deleted": false, "exportable": false,
-        "allow_plaintext_backup": false, "deletion_allowed": false,
-        "imported_key": false,
-        "keys": {"1": {"name": key_type, "public_key": material}}
-    }}))
-    .into_response()
-}
-
-async fn gateway_transit_list(
-    State(fixture): State<GatewayTransitFixture>,
-    headers: HeaderMap,
-) -> Response {
-    if !gateway_transit_authorized(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let keys = fixture
-        .keys
-        .lock()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>();
-    Json(json!({"data":{"keys":keys}})).into_response()
-}
-
-async fn gateway_transit_sign(
-    State(fixture): State<GatewayTransitFixture>,
-    Path(reference): Path<String>,
-    headers: HeaderMap,
-    Json(body): Json<Value>,
-) -> Response {
-    if !gateway_transit_authorized(&headers) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let Some(key_type) = fixture.keys.lock().unwrap().get(&reference).cloned() else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
-    fixture.signs.lock().unwrap().push((reference, body));
-    // Return structurally valid remote signatures for each managed key type.
-    // This stub proves routing and custody boundaries, not cryptographic
-    // validity against a real provider key.
-    let signature = if key_type == "ed25519" {
-        format!(
-            "vault:v1:{}",
-            base64::engine::general_purpose::STANDARD.encode([7_u8; 64])
-        )
-    } else {
-        "vault:v1:MAYCAQECAQI=".to_owned()
-    };
-    Json(json!({"data":{"signature":signature}})).into_response()
-}
-
 #[tokio::test]
-#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only; run alone"]
+#[ignore = "requires guarded disposable Redis and HTTPS OpenBao; run alone"]
 async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() {
-    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
     let redis_url = disposable_signing_redis_url().await;
     let organization_id = format!("gateway-managed-{}", uuid::Uuid::new_v4().simple());
-    let fixture = GatewayTransitFixture::default();
-    let kms = Router::new()
-        .route("/v1/transit/keys", get(gateway_transit_list))
-        .route(
-            "/v1/transit/keys/{reference}",
-            get(gateway_transit_read).post(gateway_transit_create),
-        )
-        .route(
-            "/v1/transit/sign/{reference}",
-            axum::routing::post(gateway_transit_sign),
-        )
-        .with_state(fixture.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    // This exact-case acceptance process binds the mounted token to its own
-    // disposable transit stub, matching the production BAO_ADDR guard.
-    let prior_bao_addr = std::env::var_os("BAO_ADDR");
-    std::env::set_var("BAO_ADDR", &endpoint);
-    let kms_server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let (endpoint, scoped_token) = disposable_signing_openbao().await;
     let store = SigningRegistryStore::connect(&redis_url)
         .await
         .unwrap()
@@ -545,11 +413,19 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     .unwrap();
     let reference = created["provider_key_name"].as_str().unwrap();
     assert_eq!(created["key"]["public_jwk"]["crv"], "P-256");
-    assert_eq!(
-        fixture.keys.lock().unwrap().get(reference).unwrap(),
-        "ecdsa-p256"
-    );
-    assert!(!created.to_string().contains("test-only"));
+    let remote_key =
+        marty_signing_keys::kms::read_managed_openbao(marty_signing_keys::kms::ProviderRequest {
+            service_config: json!({
+                "id": "managed-openbao-transit", "service_type": "openbao-transit",
+                "auth_mode": "service_token", "endpoint": endpoint,
+                "mount": "transit", "key_reference": reference, "algorithm": "ES256"
+            }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(remote_key["exportable"], false);
+    assert_eq!(remote_key["allow_plaintext_backup"], false);
+    assert!(!created.to_string().contains(&scoped_token));
     assert!(!created.to_string().contains("private_key"));
     let service_sign_path = "/v1/signing-keys/services/managed-openbao-transit/sign";
     let service_sign_body = json!({
@@ -572,7 +448,6 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .await
         .unwrap();
     assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-    assert!(fixture.signs.lock().unwrap().is_empty());
     let signed_service = gateway
         .clone()
         .oneshot(service_sign_request(true))
@@ -585,10 +460,8 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
             .unwrap(),
     )
     .unwrap();
-    // This mock Transit fixture has no grant minter. The Gateway must stop
-    // before reaching the signer; real OpenBao grant paths are probed apart.
+    // This route lacks a signing-grant minter and must stop before signing.
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{signed_service}");
-    assert!(fixture.signs.lock().unwrap().is_empty());
     let listed = gateway
         .clone()
         .oneshot(
@@ -630,7 +503,7 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     .unwrap();
     assert_eq!(detail["id"], reference);
     assert_eq!(detail["public_jwk"]["crv"], "P-256");
-    assert!(!detail.to_string().contains("test-only"));
+    assert!(!detail.to_string().contains(&scoped_token));
     let issuer_did = format!(
         "did:web:issuer.example:orgs:{organization_id}-{}",
         uuid::Uuid::new_v4().simple()
@@ -692,17 +565,19 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let profile_reference = profile["signing_key_reference"].as_str().unwrap();
     assert_eq!(profile["key_purpose"], "vc_jwt_issuer");
     assert!(profile_reference.starts_with("cred-issuer-"));
-    assert_eq!(
-        fixture.keys.lock().unwrap().get(profile_reference).unwrap(),
-        "ed25519"
-    );
-    assert_eq!(
-        fixture.creates.lock().unwrap().as_slice(),
-        &[
-            (reference.to_owned(), "ecdsa-p256".into()),
-            (profile_reference.to_owned(), "ed25519".into())
-        ]
-    );
+    let profile_key =
+        marty_signing_keys::kms::read_managed_openbao(marty_signing_keys::kms::ProviderRequest {
+            service_config: json!({
+                "id": "managed-openbao-transit", "service_type": "openbao-transit",
+                "auth_mode": "service_token", "endpoint": endpoint,
+                "mount": "transit", "key_reference": profile_reference, "algorithm": "EdDSA"
+            }),
+        })
+        .await
+        .unwrap();
+    assert_eq!(profile_key["exportable"], false);
+    assert_eq!(profile_key["allow_plaintext_backup"], false);
+    assert_eq!(profile_key["public_jwk"]["crv"], "Ed25519");
     let resolved = gateway
         .clone()
         .oneshot(request(
@@ -738,7 +613,6 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .await
         .unwrap();
     assert_eq!(denied_sign.status(), StatusCode::UNAUTHORIZED);
-    assert!(fixture.signs.lock().unwrap().is_empty());
     let shared_key_sign = gateway
         .clone()
         .oneshot(
@@ -753,7 +627,6 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .await
         .unwrap();
     assert_eq!(shared_key_sign.status(), StatusCode::UNAUTHORIZED);
-    assert!(fixture.signs.lock().unwrap().is_empty());
     let signed = gateway
         .clone()
         .oneshot(
@@ -775,9 +648,8 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     )
     .unwrap();
     assert_eq!(status, StatusCode::UNAUTHORIZED, "{signed}");
-    assert!(fixture.signs.lock().unwrap().is_empty());
     for public in [&created, &resolved, &signed] {
-        for secret in [&endpoint[..], "test-only", profile_reference] {
+        for secret in [&endpoint[..], &scoped_token, profile_reference] {
             assert!(!public.to_string().contains(secret), "{public}");
         }
     }
@@ -809,19 +681,13 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         .await
         .unwrap();
     signing_server.abort();
-    kms_server.abort();
-    if let Some(previous) = prior_bao_addr {
-        std::env::set_var("BAO_ADDR", previous);
-    } else {
-        std::env::remove_var("BAO_ADDR");
-    }
 }
 
 async fn disposable_signing_openbao() -> (String, String) {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed_bao = url::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
     assert!(
-        parsed_bao.scheme() == "http" && parsed_bao.host_str() == Some("127.0.0.1"),
+        parsed_bao.scheme() == "https" && parsed_bao.host_str() == Some("127.0.0.1"),
         "CSR test requires a loopback disposable OpenBao instance"
     );
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
@@ -843,7 +709,16 @@ async fn disposable_signing_openbao() -> (String, String) {
         bao_nonce.len() >= 16,
         "disposable OpenBao sentinel is too short"
     );
-    let marker = reqwest::Client::new()
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+    let ca_pem = std::fs::read(ca_file).expect("read public OpenBao CA");
+    let ca = reqwest::Certificate::from_pem(&ca_pem).expect("parse public OpenBao CA");
+    let marker = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .expect("guarded OpenBao HTTPS client")
         .get(
             parsed_bao
                 .join("/v1/secret/data/marty-test-disposable-guard")
@@ -940,7 +815,7 @@ async fn authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao
     let state = Arc::get_mut(&mut gateway_state).unwrap();
     state.identities = identity.clone();
     state.memberships = identity;
-    state.issuer_csr_grant_minter = Some(minter);
+    state.issuer_csr_grant_minter = Some(Arc::new(minter));
     let gateway = gateway_router(gateway_state);
     let mut references = Vec::new();
     let mut public_keys = Vec::new();
@@ -1147,7 +1022,15 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         .simple()
         .to_string();
     let key_reference = format!("cred-issuer-{namespace}-service-csr-es256");
-    let client = reqwest::Client::new();
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+    let ca = reqwest::Certificate::from_pem(&std::fs::read(&ca_file).unwrap()).unwrap();
+    let client = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .unwrap();
     let created_key = client
         .post(format!("{endpoint}/v1/transit/keys/{key_reference}"))
         .header("X-Vault-Token", &token)
@@ -1167,6 +1050,7 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
         "id":service_id, "name":"Gateway dedicated CSR",
         "service_type":"openbao-transit", "endpoint":endpoint,
         "mount":"transit", "auth_mode":"token", "auth_reference":token,
+        "ca_cert_file":ca_file,
         "key_reference":key_reference, "algorithms":["ES256"],
         "key_purposes":["x509_doc_signer"]
     });
@@ -1222,7 +1106,7 @@ async fn authenticated_gateway_generates_a_dedicated_service_csr_in_openbao() {
     let state = Arc::get_mut(&mut gateway_state).unwrap();
     state.identities = identity.clone();
     state.memberships = identity;
-    state.service_sign_grant_minter = Some(minter);
+    state.service_sign_grant_minter = Some(Arc::new(minter));
     let gateway = gateway_router(gateway_state);
     let route = format!("/v1/signing-keys/services/{service_id}/certificate-csr");
     let subject = json!({
@@ -1734,86 +1618,105 @@ async fn authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key(
 #[tokio::test]
 #[ignore = "requires disposable Redis and OpenBao with integration-secret Transit key"]
 async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
-    use std::sync::atomic::AtomicUsize;
-
     let redis_url = disposable_signing_redis_url().await;
     let (bao_url, bao_token) = disposable_signing_openbao().await;
     let organization_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let key_reference = format!("gateway-rotation-key-{}", uuid::Uuid::new_v4().simple());
-    let version = Arc::new(AtomicUsize::new(1));
-    let rotations = Arc::new(AtomicUsize::new(0));
-    let kms = Router::new()
-        .route(
-            "/v1/transit/keys/{reference}",
-            get({
-                let version = Arc::clone(&version);
-                let expected = key_reference.clone();
-                move |Path(reference): Path<String>, headers: HeaderMap| {
-                    let version = Arc::clone(&version);
-                    let expected = expected.clone();
-                    async move {
-                        if !gateway_transit_authorized(&headers) {
-                            return StatusCode::FORBIDDEN.into_response();
-                        }
-                        if reference != expected {
-                            return StatusCode::NOT_FOUND.into_response();
-                        }
-                        Json(json!({"data":{"latest_version":version.load(Ordering::SeqCst)}}))
-                            .into_response()
-                    }
-                }
-            }),
-        )
-        .route(
-            "/v1/transit/keys/{reference}/rotate",
-            axum::routing::post({
-                let version = Arc::clone(&version);
-                let rotations = Arc::clone(&rotations);
-                let expected = key_reference.clone();
-                move |Path(reference): Path<String>, headers: HeaderMap| {
-                    let version = Arc::clone(&version);
-                    let rotations = Arc::clone(&rotations);
-                    let expected = expected.clone();
-                    async move {
-                        if !gateway_transit_authorized(&headers) {
-                            return StatusCode::FORBIDDEN;
-                        }
-                        if reference != expected {
-                            return StatusCode::NOT_FOUND;
-                        }
-                        rotations.fetch_add(1, Ordering::SeqCst);
-                        version.fetch_add(1, Ordering::SeqCst);
-                        StatusCode::NO_CONTENT
-                    }
-                }
-            }),
-        );
-    let kms_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", kms_listener.local_addr().unwrap());
-    let kms_server = tokio::spawn(async move { axum::serve(kms_listener, kms).await.unwrap() });
+    let root_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").unwrap();
+    let ca_file = std::env::var("BAO_CACERT").unwrap();
+    let ca = reqwest::Certificate::from_pem(&std::fs::read(&ca_file).unwrap()).unwrap();
+    let root_client = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .unwrap();
+    root_client
+        .post(format!("{bao_url}/v1/transit/keys/{key_reference}"))
+        .header("X-Vault-Token", &root_token)
+        .json(&json!({"type":"ecdsa-p256", "exportable":false, "allow_plaintext_backup":false}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap();
+    let policy = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
+    root_client.put(format!("{bao_url}/v1/sys/policies/acl/{policy}"))
+        .header("X-Vault-Token", &root_token)
+        .json(&json!({"policy": format!(
+            "path \"transit/keys/{key_reference}\" {{ capabilities = [\"read\"] }}\npath \"transit/keys/{key_reference}/rotate\" {{ capabilities = [\"update\"] }}"
+        )}))
+        .send().await.unwrap().error_for_status().unwrap();
+    let scoped: Value = root_client
+        .post(format!("{bao_url}/v1/auth/token/create"))
+        .header("X-Vault-Token", &root_token)
+        .json(&json!({"policies":[policy], "no_default_policy":true, "ttl":"5m"}))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let rotation_token = scoped["auth"]["client_token"].as_str().unwrap();
+    let key_state = || {
+        root_client
+            .get(format!("{bao_url}/v1/transit/keys/{key_reference}"))
+            .header("X-Vault-Token", &root_token)
+    };
+    let before: Value = key_state()
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(before["data"]["latest_version"], 1);
     let store = SigningRegistryStore::connect(&redis_url)
         .await
         .unwrap()
         .with_auth_envelopes(Some(
-            OpenBaoEnvelopeProvider::new(bao_url, bao_token).unwrap(),
+            OpenBaoEnvelopeProvider::new(bao_url.clone(), bao_token).unwrap(),
         ));
     let service_id = format!("gateway-rotation-{}", uuid::Uuid::new_v4().simple());
     let mut registry = marty_signing_keys::registry::empty_registry();
     registry["services"].as_array_mut().unwrap().push(json!({
         "id":service_id, "name":"Gateway dedicated rotation",
-        "service_type":"openbao-transit", "endpoint":endpoint,
-        "mount":"transit", "auth_mode":"token", "auth_reference":"test-only",
+        "service_type":"openbao-transit", "endpoint":bao_url,
+        "mount":"transit", "auth_mode":"token", "auth_reference":rotation_token,
+        "ca_cert_file":ca_file,
         "key_reference":key_reference, "algorithms":["ES256"],
         "key_purposes":["vc_jwt_issuer"]
     }));
     store.save(&organization_id, &registry).await.unwrap();
+    let saved = store.load(&organization_id).await.unwrap();
+    let saved_service = saved["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|service| service["id"] == service_id)
+        .unwrap()
+        .clone();
+    assert_eq!(saved_service["ca_cert_file"], ca_file);
+    assert_eq!(
+        marty_signing_keys::kms::openbao_latest_version(marty_signing_keys::kms::ProviderRequest {
+            service_config: saved_service
+        },)
+        .await
+        .expect("scoped external Transit version read"),
+        1
+    );
     let signing = signing_router(
         "internal-signing-key".into(),
         Some("dedicated-service-sign-gateway-key-000001".into()),
         Some(
             store
                 .clone()
-                .with_managed_openbao(Some("http://127.0.0.1:1".into())),
+                .with_managed_openbao(Some("https://unmounted-managed.example.invalid".into())),
         ),
         None,
         None,
@@ -1856,7 +1759,16 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
         .await
         .unwrap();
     assert_eq!(managed.status(), StatusCode::FORBIDDEN);
-    assert_eq!(rotations.load(Ordering::SeqCst), 0);
+    let unchanged: Value = key_state()
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(unchanged["data"]["latest_version"], 1);
     let accepted = gateway
         .clone()
         .oneshot(request(&route, true))
@@ -1886,7 +1798,17 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
         accepted["rotation_state"]["previous_versions"][0]["key_reference"],
         key_reference
     );
-    assert_eq!(rotations.load(Ordering::SeqCst), 1);
+    let rotated: Value = key_state()
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(rotated["data"]["latest_version"], 2);
+    assert_eq!(rotated["data"]["exportable"], false);
     let stored = store.load(&organization_id).await.unwrap();
     let stored_service = stored["services"]
         .as_array()
@@ -1902,8 +1824,8 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
         .await
         .unwrap()
         .is_none());
-    assert!(!accepted.to_string().contains(&endpoint));
-    assert!(!accepted.to_string().contains("test-only"));
+    assert!(!accepted.to_string().contains(&bao_url));
+    assert!(!accepted.to_string().contains(rotation_token));
     let mut cleanup = store.connection();
     let _: usize = redis::cmd("DEL")
         .arg(marty_signing_keys::registry::storage_key(&organization_id))
@@ -1911,7 +1833,6 @@ async fn authenticated_gateway_rotates_only_a_dedicated_signing_service() {
         .await
         .unwrap();
     signing_server.abort();
-    kms_server.abort();
 }
 
 #[tokio::test]

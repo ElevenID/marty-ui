@@ -103,4 +103,4 @@ def test_registry_index_fails_closed_when_both_digest_sources_fail() -> None:
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Buildx unavailable")
 def test_reviewed_registry_indexes_are_available_now() -> None:
     # Read-only registry smoke. It does not pull, run, or provision containers.
-    assert set(qualified_images()) == {"postgres", "redis", "openbao", "edge"}
+    assert set(qualified_images()) == {"postgres", "redis", "openbao"}

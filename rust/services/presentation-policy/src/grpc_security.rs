@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use marty_crypto::certificate::get_certificate_info;
-use mmf_platform::GrpcServerTlsMaterial;
+use mmf_platform::{KeylessGrpcTlsAcceptor, OpenBaoTlsIdentityFiles};
 use mmf_security::{WorkloadAuthorizationDecision, WorkloadIdentityPolicy};
 use thiserror::Error;
 use tonic::{
@@ -9,7 +9,7 @@ use tonic::{
     Request, Status,
 };
 
-use crate::PresentationPolicyServiceConfig;
+use crate::{PresentationPolicyServiceConfig, WorkloadServerTlsFiles};
 
 pub const GET_POLICY_METHOD: &str =
     "/marty.ui.presentation_policy.v1.PresentationPolicyService/GetPolicy";
@@ -30,24 +30,14 @@ pub enum PresentationGrpcSecurityError {
 
 pub struct PresentationGrpcSecurity {
     workload_policy: WorkloadIdentityPolicy,
-    server_tls: Option<GrpcServerTlsMaterial>,
+    server_tls: Option<WorkloadServerTlsFiles>,
 }
 
 impl PresentationGrpcSecurity {
     pub fn from_config(
         config: &PresentationPolicyServiceConfig,
     ) -> Result<Self, PresentationGrpcSecurityError> {
-        let server_tls = config
-            .workload_server_tls
-            .as_ref()
-            .map(|files| {
-                GrpcServerTlsMaterial::from_pem_files(
-                    &files.ca_certificate,
-                    &files.certificate,
-                    &files.private_key,
-                )
-            })
-            .transpose()?;
+        let server_tls = config.workload_server_tls.clone();
         if config.environment.is_deployed() && server_tls.is_none() {
             return Err(PresentationGrpcSecurityError::Configuration(
                 "workload server TLS is missing".into(),
@@ -67,11 +57,29 @@ impl PresentationGrpcSecurity {
         })
     }
 
-    #[must_use]
-    pub fn server_tls_config(&self) -> Option<tonic::transport::ServerTlsConfig> {
-        self.server_tls
-            .as_ref()
-            .map(GrpcServerTlsMaterial::server_tls_config)
+    pub async fn server_tls_acceptor(
+        &self,
+    ) -> Result<Option<KeylessGrpcTlsAcceptor>, PresentationGrpcSecurityError> {
+        let Some(files) = &self.server_tls else {
+            return Ok(None);
+        };
+        let acceptor = OpenBaoTlsIdentityFiles {
+            certificate_chain_file: files.certificate.clone(),
+            kms_ca_cert_file: files.kms_ca_certificate.clone(),
+            kms_endpoint: files.kms_endpoint.clone(),
+            kms_token_file: files.kms_token_file.clone(),
+            kms_key_name: files.kms_key_name.clone(),
+            kms_key_version: files.kms_key_version,
+            request_timeout: std::time::Duration::from_secs(10),
+            max_concurrent_signs: 64,
+        }
+        .grpc_acceptor(
+            &files.ca_certificate,
+            64,
+            std::time::Duration::from_secs(15),
+        )
+        .await?;
+        Ok(Some(acceptor))
     }
 
     pub fn authorize<T>(&self, request: &Request<T>, method: &str) -> Result<(), Status> {

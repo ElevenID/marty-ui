@@ -91,6 +91,14 @@ FILE_SELECTORS = frozenset(
         "CANVAS_CREDENTIALS_API_TOKEN_FILE",
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE",
     }
@@ -133,13 +141,22 @@ def assert_sources(base, profile, runtime):
     worker = base["services"]["canvas-sync-worker"]
     assert signer["secrets"] == [
         "dev_integration_secret_server_cert",
-        "dev_integration_secret_server_key",
+        "dev_integration_secret_ca",
+        "openbao_tls_ca_cert",
+        "signing_keys_tls_kms_token",
+    ]
+    assert signer["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        "curl -fsS http://localhost:8017/health >/dev/null && "
+        "curl -fsS --cacert /run/secrets/dev_integration_secret_ca "
+        "https://signing-keys:8018/health >/dev/null",
     ]
     assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE"] == (
         "/run/secrets/dev_integration_secret_server_cert"
     )
-    assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE"] == (
-        "/run/secrets/dev_integration_secret_server_key"
+    assert "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE" not in signer["environment"]
+    assert signer["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE"] == (
+        "/run/secrets/signing_keys_tls_kms_token"
     )
     assert worker["secrets"] == ["dev_integration_secret_ca"]
     for client in (worker["environment"], env):
@@ -153,24 +170,31 @@ def assert_sources(base, profile, runtime):
     assert set(base["secrets"]) == {
         "dev_integration_secret_ca",
         "dev_integration_secret_server_cert",
-        "dev_integration_secret_server_key",
+        "openbao_tls_ca_cert",
+        "signing_keys_tls_kms_token",
     }
-    for secret, file_name in (
-        ("dev_integration_secret_ca", "ca.crt"),
-        ("dev_integration_secret_server_cert", "tls.crt"),
-        ("dev_integration_secret_server_key", "tls.key"),
+    for secret, file_env in (
+        ("dev_integration_secret_ca", "DEV_INTEGRATION_SECRET_CA_FILE"),
+        ("dev_integration_secret_server_cert", "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE"),
+        ("openbao_tls_ca_cert", "OPENBAO_TLS_CA_CERT_FILE"),
+        ("signing_keys_tls_kms_token", "SIGNING_KEYS_TLS_KMS_TOKEN_FILE"),
     ):
         assert base["secrets"][secret] == {
-            "file": "./.dev-integration-secret-tls/" + file_name
+            "file": "${" + file_env + ":?" + file_env + " must be set}"
         }
     owner_selection = {"DIDCOMM_DELIVERY_OWNER", "ISSUANCE_NATIVE_SERVICE_URL"}
     assert set(legacy) - set(env) - owner_selection == LEGACY_ONLY
     assert set(env) - set(legacy) == set(NATIVE_ONLY) - {
         "GRPC_SERVICE_TOKEN",
         "SERVICE_NAME",
+        "ISSUANCE_GRPC_ENABLED",
     }
     assert {key: env[key] for key in NATIVE_ONLY} == NATIVE_ONLY
     for key in set(env) & set(legacy):
+        if key == "ISSUANCE_GRPC_ENABLED":
+            assert legacy[key] == "false"
+            assert env[key] == "true"
+            continue
         if key == "SIGNING_KEYS_INTERNAL_URL":
             assert legacy[key] == "http://signing-keys:8017/internal"
             assert env[key] == "http://gateway:8000/internal/signing-keys"
