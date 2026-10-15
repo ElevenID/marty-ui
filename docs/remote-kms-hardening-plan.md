@@ -22470,3 +22470,11 @@ Canvas Clippy with warnings denied, rustfmt, and diff checks passed. This
 is an evidence-based correction, not a claim that the hosted handshake has
 passed; the next exact-head run must prove it. Together with local commits
 `aa77cecc4` and `48638e858`, it forms the next grouped PR retry batch.
+
+The grouped retry batch was pushed as `60c05939f` to PR #1344, and the PR
+description now reflects the terminal previous run and current acceptance
+limits. [Exact-head CI run 38795737288](https://github.com/ElevenID/marty-ui/actions/runs/38795737288)
+was queued at this checkpoint; CodeQL and organization-quality runs were
+also live, while the new open-source policy check had passed. Do not infer
+runtime success from the static/local checks. The beta Keycloak image and
+installed database cutover remain open even if this CI retry passes.
