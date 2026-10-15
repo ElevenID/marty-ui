@@ -5938,7 +5938,7 @@ production/self-host boundary.
 - Add dependency and source-boundary checks preventing canonical logic from returning to orchestration layers.
 - Remove compatibility re-exports after downstream consumers have migrated.
 - Update architecture, operations, SBOM, threat-model, and contributor documentation.
-- Compare language composition, image size, startup time, p50/p95/p99 latency, memory, failure rates, and native-backend errors against the baseline. Generate commit-pinned source and dependency measurements with [the language-composition evidence tool](rust-migrations/language-composition-evidence.md).
+- Compare language composition, image size, startup time, p50/p95/p99 latency, memory, failure rates, and native-backend errors against the baseline. The commit-pinned source and dependency measurements from this completed phase are recorded in the [final migration evidence](rust-migrations/final-migration-evidence-2026-08-14.md).
 - Prepare a separate production/self-host promotion proposal using beta evidence. Do not promote as part of this phase without approval.
 
 ## Per-workstream migration method
