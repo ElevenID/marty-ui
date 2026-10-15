@@ -22427,3 +22427,18 @@ cutover or removal of the stock-Keycloak graph before calling any beta
 deployment KMS-only; the read-only database gate must prove zero KeyProvider
 `privateKey`/generated `secret` rows after startup and login. Do not treat
 PR #1344's image packaging as completion of this beta identity-provider work.
+
+Exact-head run `38791978877` is still live. Rust Lint's canonical packaging
+step failed because its render-only required-variable loop lacked a synthetic
+immutable `MARTY_OPENBAO_DIDCOMM_IMAGE`; a closed inventory of all 96 required
+Compose variables found no other uncovered non-KMS input after that addition.
+Release Contracts completed with two failures: the hosted Compose renderer
+retained an inherited `build` on `openbao-init` despite the GHCR profile's
+YAML-merged reset, and one beta runner assertion expected the former inline
+database URL rather than the shared `$liveDatabaseUrl`. Local UI commit
+`aa77cecc4` adds explicit build resets on each OpenBao GHCR role and updates
+the expectation without weakening the image-only guard. WSL Compose showed
+all three OpenBao roles digest-only; 109 targeted Python checks passed (one
+skipped) with 534 planner subtests, workflow YAML parsed, and Ruff/diff checks
+passed. The commit is unpushed pending Canvas, contracts, self-host, image and
+plugin outcomes so further corrections can share one CI retry.
