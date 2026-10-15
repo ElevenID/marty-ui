@@ -20763,3 +20763,21 @@ run. Signing Keys library tests passed 197/0 with 18 opt-in ignored, and
 the known HTTP OpenBao hosted step without dropping its intended coverage,
 but the grouped UI code remains uncommitted/unpushed, the protected passport
 TLS private-key fixture remains, and no exact published release proof exists.
+
+2026-10-15 protected passport OpenBao TLS foundation, staged in the grouped
+UI worktree: the disposable Compose OpenBao service now selects the
+`PASSPORT_BAO_TLS_MODE=required` launcher, stores its own dev TLS key under a
+container tmpfs, exports only its public CA through a dedicated named volume,
+and uses a CA-verified HTTPS health check. The protected keyless model gate
+now requires the TLS mode, HTTPS health check and public CA volume before any
+runtime mutation. Ownership, model and teardown inventories include the new
+volume. Four focused passport model/ownership/producer modules passed 256
+cases with two skips; Python compilation and diff checks passed. This is a
+prerequisite, not a completed fixture conversion: producer staging still
+creates local workload and edge TLS private keys before OpenBao startup,
+several services still use HTTP OpenBao/plaintext gRPC, and the nginx edge
+still mounts a private key. Next, invoke the existing Rust remote TLS
+bootstrap after OpenBao starts, carry its public certificates and scoped
+sign-only tokens to the five services, replace the edge with the staged Rust
+keyless edge, convert all active gRPC routes, then run the full protected
+passport journey against local paired images before pushing the grouped PR.
