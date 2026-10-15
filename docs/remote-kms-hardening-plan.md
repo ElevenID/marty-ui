@@ -20833,3 +20833,17 @@ fixture still declares workload and nginx edge TLS private-key files and
 plaintext gRPC. Convert those service selectors and edge to the remote signer,
 then qualify the full protected journey against paired local images before
 the grouped UI PR is pushed. No published release proof is claimed.
+
+2026-10-15 protected workload TLS selector cutover, staged in the grouped UI
+worktree: the disposable Signing Keys HTTPS integration-secret listener and
+selfhost-surface Flow client/server and Presentation Policy server now use
+the five-role bootstrap's matching OpenBao key names, pinned version 1,
+scoped token files and CA-verified HTTPS origin. Their old TLS private-key
+secret declarations and mounts were removed. The model and live ownership
+checks require the remote selectors and project-bound key names; the rendered
+Compose test verifies the token and key-name bindings for both surfaces.
+Six focused suites passed 284 cases with two skips; Python compilation and
+diff checks passed. The nginx edge still mounts a private TLS key, and
+plaintext gRPC selectors still block the strict protected acceptance gate.
+Replace the edge and convert active gRPC routes before local paired-image
+acceptance and the grouped PR.
