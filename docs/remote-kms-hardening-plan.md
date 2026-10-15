@@ -21790,3 +21790,17 @@ affected Rust packages passed formatting. The Docker daemon still did not
 answer `docker info`, so live Passport/Keycloak/image acceptance must be
 retested in the next hosted run. No green CI or merge is claimed for this
 unpublished correction.
+
+The final job of run `38752357622`, Rust Service Tests (selfhost), also
+failed: the published-image HTTP loader fixture still expected the old
+secret inventory. Local UI commit `6b2f8b3dd` supplies the three new
+public-certificate/CA/scoped-token fixtures and updates the exact mount
+identity list from 10 to 16. Its isolated runtime copy verifies the
+production model declares complete keyless gRPC TLS settings, then disables
+that listener for this **HTTP loader** exercise because this fixture does
+not own a real TLS-signing KMS. It therefore does not prove installed gRPC
+TLS; the separate connected live TLS and installed-artifact gates remain
+mandatory. All 12 package-local contract tests passed on Windows, but the
+Docker-backed loader ran only on hosted Linux and must be rerun at the new
+head. The correction batch is now two local UI commits, `7951863a4` and
+`6b2f8b3dd`, grouped for one push/CI cycle.
