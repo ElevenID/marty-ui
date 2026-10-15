@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import argparse
 import base64
+from http.cookiejar import CookieJar
+from html.parser import HTMLParser
+import hashlib
 import json
 from pathlib import Path
 import secrets
@@ -13,8 +16,9 @@ import subprocess
 import tempfile
 import time
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import (HTTPCookieProcessor, HTTPRedirectHandler, Request,
+                            build_opener, urlopen)
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
@@ -45,6 +49,76 @@ def post_admin(url: str, token: str, payload: dict) -> None:
     with urlopen(request, timeout=8) as response:
         if response.status not in (201, 204):
             raise RuntimeError("Keycloak admin write returned an unexpected status")
+
+
+class LoginForm(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.action: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "form" and values.get("id") == "kc-form-login":
+            self.action = values.get("action")
+
+
+class StopAtCallback(HTTPRedirectHandler):
+    def __init__(self, callback: str) -> None:
+        self.callback = callback
+
+    def redirect_request(self, request: Request, fp, code: int, message: str,
+                         headers, newurl: str) -> Request | None:
+        if newurl.startswith(self.callback + "?"):
+            return None
+        return super().redirect_request(request, fp, code, message, headers,
+                                        newurl)
+
+
+def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
+    verifier = secrets.token_urlsafe(32)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()) \
+        .rstrip(b"=").decode()
+    state = secrets.token_urlsafe(16)
+    params = {
+        "client_id": "probe-browser", "response_type": "code",
+        "scope": "openid", "redirect_uri": callback, "state": state,
+        "code_challenge": challenge, "code_challenge_method": "S256",
+    }
+    if not login:
+        params["prompt"] = "none"
+    url = base + "/realms/11id/protocol/openid-connect/auth?" + urlencode(params)
+    location = ""
+    try:
+        with opener.open(url, timeout=8) as response:
+            form = LoginForm()
+            form.feed(response.read().decode())
+            if not login or not form.action:
+                raise RuntimeError("Keycloak did not present the expected browser login")
+            try:
+                opener.open(Request(form.action, data=urlencode({
+                    "username": "probe11", "password": "synthetic-probe-only",
+                }).encode()), timeout=8)
+            except HTTPError as callback_response:
+                if callback_response.code != 302:
+                    raise
+                location = callback_response.headers.get("Location", "")
+            else:
+                raise RuntimeError("Browser login did not redirect to the callback")
+    except HTTPError as callback_response:
+        if callback_response.code != 302:
+            raise RuntimeError(f"Browser authorization failed: HTTP "
+                               f"{callback_response.code}") from callback_response
+        location = callback_response.headers.get("Location", "")
+    if not location.startswith(callback + "?"):
+        raise RuntimeError("Keycloak redirected browser to an unexpected callback")
+    query = parse_qs(urlparse(location).query)
+    if query.get("state") != [state] or len(query.get("code", [])) != 1:
+        raise RuntimeError("Keycloak browser flow did not return a valid code/state")
+    return http_json(base + "/realms/11id/protocol/openid-connect/token", {
+        "client_id": "probe-browser", "grant_type": "authorization_code",
+        "code": query["code"][0], "redirect_uri": callback,
+        "code_verifier": verifier,
+    })
 
 
 def wait_for(path: Path, seconds: int = 30) -> None:
@@ -118,7 +192,8 @@ def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
     return decoded(key["n"])
 
 
-def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
+def probe(keycloak_image: str, openbao_image: str, jar: Path,
+          require_browser: bool = False) -> None:
     if not jar.is_file():
         raise RuntimeError("Build keycloak/openbao-provider with Maven first")
     suffix = secrets.token_hex(5)
@@ -323,6 +398,34 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path) -> None:
                                        base + "/realms/11id")
             if realm_modulus == master_modulus:
                 raise RuntimeError("master and 11id reused one remote RSA key")
+            if require_browser:
+                callback = base + "/probe-callback"
+                post_admin(base + "/admin/realms/11id/clients", token, {
+                    "clientId": "probe-browser", "enabled": True,
+                    "publicClient": True, "standardFlowEnabled": True,
+                    "directAccessGrantsEnabled": False,
+                    "protocol": "openid-connect", "redirectUris": [callback],
+                    "attributes": {"pkce.code.challenge.method": "S256"},
+                })
+                browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                                       StopAtCallback(callback))
+                for login in (True, False):
+                    try:
+                        browser_tokens = browser_code(browser, base, callback,
+                                                      login=login)
+                    except Exception as error:
+                        observed = subprocess.run(["docker", "logs", "--tail", "120", kc_name],
+                                                  capture_output=True, text=True, timeout=10)
+                        lines = (observed.stdout + observed.stderr).splitlines()
+                        logs = "\n".join(line for line in lines
+                                         if "Failed to create fallback key" in line
+                                         or "Caused by:" in line
+                                         or "Error encoding cookie" in line)[:1200]
+                        raise RuntimeError(f"Browser flow failed: {error}\n{logs}") from error
+                    for field in ("access_token", "id_token"):
+                        verify_jwt(browser_tokens[field], jwks_11id,
+                                   f"{prefix}-11id-rs256-v1",
+                                   base + "/realms/11id")
             refreshed_tokens = {}
             for realm, issued, jwks_for_realm in (
                 ("master", master_tokens, jwks),
@@ -397,5 +500,8 @@ if __name__ == "__main__":
     parser.add_argument("--openbao-image", default="quay.io/openbao/openbao:2")
     parser.add_argument("--jar", type=Path,
                         default=ROOT / "keycloak/openbao-provider/target/keycloak-openbao-provider-0.0.0-probe.jar")
+    parser.add_argument("--require-browser", action="store_true",
+                        help="Require an authorization-code login and silent session reuse")
     args = parser.parse_args()
-    probe(args.keycloak_image, args.openbao_image, args.jar.resolve())
+    probe(args.keycloak_image, args.openbao_image, args.jar.resolve(),
+          require_browser=args.require_browser)

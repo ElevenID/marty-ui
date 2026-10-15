@@ -29,6 +29,15 @@ PostgreSQL custody verifier in the installed stack plus connected browser login 
 for both realms. The two-realm direct-grant/refresh proof uses a disposable
 PostgreSQL database, not the product's browser login or installed stack.
 
+Run `python scripts/probe_keycloak_remote_rs256.py --require-browser` to
+exercise an authorization-code login with PKCE and silent session reuse in
+`11id`. This acceptance check currently fails closed at the initial login:
+Keycloak 25.0.6 reports `Error encoding cookie` and `Failed to find key:
+realm=11id algorithm=AES use=ENC`. The AES key provider intentionally returns
+no local `SecretKey`. A remote AES cookie operation is required before browser
+login can pass; the default probe continues to cover the proven signing and
+refresh slice.
+
 The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
 may change between releases. Keycloak's Admin REST component representation
 omits secret config fields, so the acceptance gate must inspect the database
