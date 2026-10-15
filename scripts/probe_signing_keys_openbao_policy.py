@@ -11,6 +11,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import time
 import urllib.error
@@ -75,6 +76,19 @@ def pull_pinned_openbao() -> None:
 def ensure(condition: bool, operation: str) -> None:
     if not condition:
         raise RuntimeError(f"Scoped signing-keys policy failed: {operation}")
+
+
+_RUST_TEST_RESULT = re.compile(
+    r"^test result: ok\. ([1-9][0-9]*) passed; 0 failed; "
+    r"[0-9]+ ignored; [0-9]+ measured; [0-9]+ filtered out; "
+    r"finished in [0-9.]+s$",
+    re.MULTILINE,
+)
+
+
+def rust_test_succeeded(result: subprocess.CompletedProcess[str]) -> bool:
+    """Reject a successful Cargo invocation that selected no Rust tests."""
+    return result.returncode == 0 and bool(_RUST_TEST_RESULT.search(result.stdout))
 
 
 def assert_holder_runtime_custody(postgres_name: str) -> tuple[int, int, int]:
@@ -479,7 +493,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment, capture_output=True,
                 text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(grant_verify_token, "[verify]")
                 detail = detail.replace(
@@ -494,7 +508,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment, capture_output=True,
                 text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[managed]")
                 detail = detail.replace(grant_verify_token, "[verify]")
@@ -510,7 +524,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment, capture_output=True,
                 text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(grant_verify_token, "[verify]")
                 for token in grant_mint_tokens.values():
@@ -619,7 +633,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=provider_environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(supported_callback, "[scoped]")
                 raise RuntimeError(f"Rust provider HMAC verifier failed:\n{detail[-2000:]}")
@@ -646,7 +660,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 timeout=600,
                 check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -681,7 +695,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(f"Rust live CSR custody failed:\n{detail[-2000:]}")
@@ -695,7 +709,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode or "test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 detail = detail.replace(postgres_password, "[postgres]")
@@ -711,7 +725,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 detail = detail.replace(postgres_password, "[postgres]")
@@ -727,7 +741,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(postgres_password, "[postgres]")
                 raise RuntimeError(
@@ -742,7 +756,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 detail = detail.replace(postgres_password, "[postgres]")
@@ -773,7 +787,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 timeout=600,
                 check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(f"Rust live RS256 profile failed:\n{detail[-2000:]}")
@@ -801,7 +815,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 timeout=600,
                 check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -831,7 +845,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 timeout=600,
                 check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -847,7 +861,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -877,7 +891,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 timeout=600,
                 check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -893,7 +907,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=mock_environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -915,7 +929,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                     cwd=ROOT / "rust", env=envelope_environment,
                     capture_output=True, text=True, timeout=600, check=False,
                 )
-                if result.returncode:
+                if not rust_test_succeeded(result):
                     detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                     detail = detail.replace(managed, "[scoped]")
                     detail = detail.replace(plain, "[envelope]")
@@ -932,7 +946,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -948,7 +962,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
@@ -964,7 +978,7 @@ def qualify(*, rust_adapter: bool = False, grant_verifier: bool = False) -> None
                 cwd=ROOT / "rust", env=environment,
                 capture_output=True, text=True, timeout=600, check=False,
             )
-            if result.returncode:
+            if not rust_test_succeeded(result):
                 detail = (result.stdout + result.stderr).replace(root_token, "[root]")
                 detail = detail.replace(managed, "[scoped]")
                 raise RuntimeError(
