@@ -71,6 +71,7 @@ def inspect_owned(
     expected_tmpfs: set[str] | None = None,
     expected_user: str | None = None,
     expected_image: str = HELPER_IMAGE,
+    expected_network: str | None = None,
 ) -> str:
     raw = checked(
         ["docker", "inspect", "--format", "{{json .}}", container_id],
@@ -79,8 +80,9 @@ def inspect_owned(
     )
     try:
         item = json.loads(raw)
-        bridge = item["NetworkSettings"]["Networks"]["bridge"]
-        address = bridge["IPAddress"]
+        address = item["NetworkSettings"]["Networks"].get("bridge", {}).get(
+            "IPAddress", ""
+        )
         network = item["HostConfig"]["NetworkMode"]
         labels = item["Config"]["Labels"]
         image = item["Config"]["Image"]
@@ -90,11 +92,8 @@ def inspect_owned(
         assert item["Id"] == container_id
         assert item["Name"] == "/" + name
         assert isinstance(labels, dict)
-        assert (
-            network
-            in ({"bridge"} if expected_mounts is None else {"bridge", "default"})
-            and labels.get(OWNED) == name
-        )
+        assert network == (expected_network or "bridge")
+        assert labels.get(OWNED) == name
         assert image == expected_image
         if expected_user is not None:
             assert user == expected_user
@@ -191,7 +190,8 @@ def mount_disposable_plugin(
     client_env = {**env, "BAO_TOKEN": root_token}
     cli = [
         "docker", "exec", "--env", "BAO_TOKEN",
-        "--env", "BAO_ADDR=http://127.0.0.1:8200", container_id, "bao",
+        "--env", "BAO_ADDR=https://127.0.0.1:8200",
+        "--env", "BAO_CACERT=/openbao/file/vault-ca.pem", container_id, "bao",
     ]
     checked(
         cli + ["plugin", "register", f"-sha256={plugin_sha}", "secret", "openbao-didcomm-authcrypt"],
@@ -268,6 +268,8 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                     plugin_image,
                     "server",
                     "-dev",
+                    "-dev-tls",
+                    "-dev-tls-cert-dir=/openbao/file",
                     "-dev-listen-address=0.0.0.0:8200",
                     "-config=/openbao/config/plugin.hcl",
                 ],
@@ -292,7 +294,7 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                 env,
                 "Disposable OpenBao cannot start",
             )
-            address = inspect_owned(
+            inspect_owned(
                 container_id, env, name, expected_mounts=server_mount,
                 expected_tmpfs=server_tmpfs, expected_image=plugin_image,
             )
@@ -301,10 +303,11 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                     [
                         "docker",
                         "exec",
+                        "--env", "BAO_CACERT=/openbao/file/vault-ca.pem",
                         container_id,
                         "bao",
                         "status",
-                        "-address=http://127.0.0.1:8200",
+                        "-address=https://127.0.0.1:8200",
                     ],
                     env,
                     10,
@@ -316,6 +319,21 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                 raise migrations.QualificationError(
                     "Disposable OpenBao did not become ready"
                 )
+            ca_file = Path(temporary) / "openbao-ca.crt"
+            checked(
+                [
+                    "docker", "cp",
+                    f"{container_id}:/openbao/file/vault-ca.pem",
+                    str(ca_file),
+                ],
+                env,
+                "Disposable OpenBao public CA cannot be copied",
+            )
+            public_ca = ca_file.read_bytes() if ca_file.is_file() else b""
+            require(
+                b"BEGIN CERTIFICATE" in public_ca and b"PRIVATE KEY" not in public_ca,
+                "Disposable OpenBao exported invalid public CA",
+            )
             mount_disposable_plugin(container_id, env, root_token)
             helper_env = {
                 **{
@@ -323,7 +341,8 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                     for key, value in env.items()
                     if key != "BAO_DEV_ROOT_TOKEN_ID"
                 },
-                "BAO_ADDR": f"http://{address}:8200",
+                "BAO_ADDR": "https://127.0.0.1:8200",
+                "BAO_CACERT": str(ca_file),
                 "BAO_TOKEN_FILE": str(token_file),
                 "SELFHOST_SECRET_DIR": str(secret_dir),
                 "SELFHOST_BOOTSTRAP_CONTAINER_NAME": helper_name,
@@ -378,11 +397,16 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                         require_address=False,
                         expected_mounts={
                             "/scripts/openbao-init.sh": (source, False),
+                            "/work-kms-ca/ca.crt": (str(ca_file.resolve()), False),
                             "/work-service": (directory, True),
                             "/work-bootstrap": (directory, True),
+                            "/work-signing": (directory, True),
+                            "/work-didcomm": (directory, True),
                             "/work-notification": (directory, True),
                             "/work-callback": (directory, True),
+                            "/work-grants": (directory, True),
                         },
+                        expected_network=f"container:{name}",
                         expected_user=(
                             f"{os.getuid()}:{os.getgid()}"
                             if os.name == "posix"

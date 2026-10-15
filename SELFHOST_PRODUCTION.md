@@ -77,6 +77,7 @@ That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Ke
 
 ```bash
 BAO_ADDR=https://vault.example.com \
+BAO_CACERT=/path/to/public-vault-ca.crt \
 BAO_TOKEN_FILE=/path/to/bootstrap.token \
 SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 ./scripts/bootstrap-selfhost-vault.sh

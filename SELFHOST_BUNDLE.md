@@ -105,6 +105,7 @@ remain external; packaging does not load their values.
 
 ```bash
 BAO_ADDR=https://vault.example.com \
+BAO_CACERT=/path/to/public-vault-ca.crt \
 BAO_TOKEN_FILE=/path/to/bootstrap.token \
 SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 ./scripts/bootstrap-selfhost-vault.sh

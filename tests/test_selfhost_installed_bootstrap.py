@@ -27,6 +27,7 @@ def owned_model(
     mounts: list[dict] | None = None,
     image: str = bootstrap.HELPER_IMAGE,
     tmpfs: set[str] | None = None,
+    network: str = "bridge",
 ) -> str:
     return json.dumps(
         {
@@ -44,11 +45,15 @@ def owned_model(
                 else "openbao",
             },
             "HostConfig": {
-                "NetworkMode": "default" if mounts else "bridge",
+                "NetworkMode": network,
                 "PortBindings": {},
                 "Tmpfs": {path: "" for path in (tmpfs or set())},
             },
-            "NetworkSettings": {"Networks": {"bridge": {"IPAddress": address}}},
+            "NetworkSettings": {
+                "Networks": {"bridge": {"IPAddress": address}}
+                if network == "bridge"
+                else {}
+            },
             "Mounts": mounts or [],
         }
     )
@@ -165,6 +170,46 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
     assert 'write_private_token "$grant_file" "$grant_token"' in source
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX bootstrap helper")
+@pytest.mark.parametrize("fault", ["http", "missing_ca", "private_ca"])
+def test_shipped_helper_rejects_unverified_or_private_kms_trust(
+    tmp_path: Path, fault: str
+) -> None:
+    helper = Path(__file__).resolve().parents[1] / "scripts/bootstrap-selfhost-vault.sh"
+    ca_file = tmp_path / "ca.crt"
+    ca_file.write_text(
+        "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n"
+        if fault != "private_ca"
+        else "-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----\n",
+        encoding="ascii",
+    )
+    environment = {
+        **os.environ,
+        "BAO_ADDR": (
+            "http://127.0.0.1:8200"
+            if fault == "http"
+            else "https://127.0.0.1:8200"
+        ),
+        "BAO_CACERT": "" if fault == "missing_ca" else str(ca_file),
+        "BAO_TOKEN": "synthetic-bootstrap-token",
+    }
+    completed = subprocess.run(
+        ["/bin/sh", str(helper)],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    assert completed.returncode != 0
+    expected = (
+        "BAO_ADDR must use verified HTTPS"
+        if fault == "http"
+        else "BAO_CACERT must be a readable public CA"
+    )
+    assert expected in completed.stderr
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX atomic file replacement")
 def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
     tmp_path: Path,
@@ -200,7 +245,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         path.chmod(0o644)
     environment = {
         **os.environ,
-        "BAO_ADDR": "http://127.0.0.1:8200",
+        "BAO_ADDR": "https://127.0.0.1:8200",
         "BAO_TOKEN": "synthetic-bootstrap-token",
         "SERVICE_TOKEN_OUTPUT_FILE": str(tmp_path / "openbao_service_token"),
         "BOOTSTRAP_TOKEN_OUTPUT_FILE": str(tmp_path / "openbao_bootstrap_token"),
@@ -305,10 +350,18 @@ def test_shipped_helper_inherits_token_without_argv_value(
     env_file = tmp_path / "env"
     secret_dir = tmp_path / "secrets"
     secret_dir.mkdir(mode=0o700)
+    ca_file = tmp_path / "ca.crt"
+    ca_file.write_bytes(
+        (
+            Path(__file__).resolve().parents[1]
+            / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+        ).read_bytes()
+    )
     environment = {
         **os.environ,
         "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
-        "BAO_ADDR": "http://127.0.0.1:8200",
+        "BAO_ADDR": "https://127.0.0.1:8200",
+        "BAO_CACERT": str(ca_file),
         "BAO_TOKEN": synthetic_token,
         "SELFHOST_SECRET_DIR": str(secret_dir),
         "FAKE_DOCKER_ARGV": str(argv_file),
@@ -330,18 +383,23 @@ def test_shipped_helper_inherits_token_without_argv_value(
     assert synthetic_token not in argv_file.read_text(encoding="ascii")
     assert synthetic_token not in completed.stdout + completed.stderr
     args = argv_file.read_text(encoding="ascii").splitlines()
+    assert args[args.index("-e") + 1] == "BAO_ADDR=https://127.0.0.1:8200"
+    assert "BAO_CACERT=/work-kms-ca/ca.crt" in args
+    assert str(ca_file) + ":/work-kms-ca/ca.crt:ro" in args
     assert args[args.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
     assert ("--name" in args) is named
     if named:
         assert args[args.index("--name") + 1] == disposable_name
         assert ("marty.selfhost.bootstrap-handoff=" + disposable_name) in args
     assert stat.S_IMODE(secret_dir.stat().st_mode) == 0o700
+    if named:
+        assert "container:" + disposable_name.removesuffix("-helper") in args
     for token_name in bootstrap.TOKEN_NAMES:
         assert stat.S_IMODE((secret_dir / token_name).stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize(
-    "failure", [None, "helper", "token", "leak", "bad_create", "timeout"]
+    "failure", [None, "helper", "token", "leak", "bad_create", "bad_ca", "timeout"]
 )
 def test_handoff_owns_cleanup_and_never_prints_tokens(
     monkeypatch,
@@ -376,6 +434,8 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
             assert "BAO_DEV_ROOT_TOKEN_ID" in args and not any(
                 env["BAO_DEV_ROOT_TOKEN_ID"] in part for part in args
             )
+            assert "-dev-tls" in args
+            assert "-dev-tls-cert-dir=/openbao/file" in args
             return result(
                 args, "malformed" if failure == "bad_create" else container_id
             )
@@ -383,11 +443,18 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
             if args[-1] == helper_id:
                 directory = str(Path(helper_env["SELFHOST_SECRET_DIR"]).resolve())
                 source = str((tmp_path / "docker/openbao-init.sh").resolve())
+                ca_file = str(Path(helper_env["BAO_CACERT"]).resolve())
                 mounts = [
                     {
                         "Type": "bind",
                         "Source": source,
                         "Destination": "/scripts/openbao-init.sh",
+                        "RW": False,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": ca_file,
+                        "Destination": "/work-kms-ca/ca.crt",
                         "RW": False,
                     },
                     *(
@@ -400,13 +467,22 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
                         for destination in (
                             "/work-service",
                             "/work-bootstrap",
+                            "/work-signing",
+                            "/work-didcomm",
                             "/work-notification",
                             "/work-callback",
+                            "/work-grants",
                         )
                     ),
                 ]
                 return result(
-                    args, owned_model(helper_id, name[0] + "-helper", mounts=mounts)
+                    args,
+                    owned_model(
+                        helper_id,
+                        name[0] + "-helper",
+                        mounts=mounts,
+                        network="container:" + name[0],
+                    ),
                 )
             create = next(call for call in calls if call[:2] == ["docker", "create"])
             plugin_config = create[create.index("-v") + 1].split(
@@ -434,13 +510,23 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
                 return result(args, "a" * 64 + "  /plugins/openbao-didcomm-authcrypt\n")
             return result(args)
         if args[:3] == ["docker", "exec", "--env"]:
-            assert env["BAO_TOKEN"] not in args
+            assert env.get("BAO_TOKEN", "synthetic-unset-token") not in args
+            return result(args)
+        if args[:2] == ["docker", "cp"]:
+            Path(args[-1]).write_text(
+                "-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----\n"
+                if failure == "bad_ca"
+                else "-----BEGIN CERTIFICATE-----\npublic\n-----END CERTIFICATE-----\n",
+                encoding="ascii",
+            )
             return result(args)
         if args[:2] == ["/bin/sh", str(helper)]:
             helper_env.update(env)
             assert "BAO_TOKEN_FILE" in env and env["BAO_TOKEN_FILE"] not in args
             assert "BAO_DEV_ROOT_TOKEN_ID" not in env
             assert env["SELFHOST_BOOTSTRAP_CONTAINER_NAME"] == name[0] + "-helper"
+            assert env["BAO_ADDR"] == "https://127.0.0.1:8200"
+            assert Path(env["BAO_CACERT"]).is_file()
             if failure == "timeout":
                 raise bootstrap.migrations.QualificationError("synthetic timeout")
             if failure != "helper":
@@ -475,7 +561,8 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
     else:
         with pytest.raises(bootstrap.migrations.QualificationError):
             bootstrap.probe(tmp_path, receipt, PLUGIN_IMAGE)
-    if failure != "bad_create":
+    if failure not in {"bad_create", "bad_ca"}:
+        assert any(call[:2] == ["docker", "cp"] for call in calls)
         helper_call = next(
             i for i, call in enumerate(calls)
             if call[:2] == ["/bin/sh", str(helper)]
