@@ -29,6 +29,7 @@ else:
         ("Exercise live Signing Keys public contracts on disposable Redis", 1),
         ("Exercise Gateway CSR and managed passport chain with disposable OpenBao", 7),
         ("Test beta passport reconciliation and native batch on PostgreSQL", 1),
+        ("Run Flow database contract after workspace suite", 1),
     ],
 )
 def test_focused_rust_ci_cases_require_positive_execution(

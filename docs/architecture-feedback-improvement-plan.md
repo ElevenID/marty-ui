@@ -4356,13 +4356,19 @@ compile boundary. The published-worker group took about 501 seconds within
 the concurrent database phase; changing its real-time lifecycle intervals
 without separate evidence would risk test guarantees.
 
-Another current A0 gap is two direct Cargo commands: the Signing Keys
-private-material library case and the five-case passport reconciliation group
-can exit zero after selecting no tests. This candidate reuses the same guard
-for both in their existing contracts-lane steps, without adding invocations,
-changing case filters or backing services, or weakening the full/protected
-gates. The 171 focused workflow-policy tests pass locally; exact-head and
-protected CI remain required before a merge or coverage claim.
+October 15 A0 guard closure: [#1354](https://github.com/ElevenID/marty-ui/pull/1354)
+applied the positive test-summary guard to the Signing Keys private-material
+library case and five-case passport reconciliation group. Independent review,
+exact-head CI, and [protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38811347250)
+passed; it merged as `f39b0e6ea`. The selected cases and backing services did
+not change. This prevents zero-selected false greens, not a speedup.
+
+The remaining direct Flow PostgreSQL contract executable also ran without a
+positive test-summary guard. The next A0 slice wraps its existing invocation
+in the same guard, retaining its serial position after the workspace suite,
+database URL, complete unfiltered case selection, and protected gates. Local
+policy tests and exact-head CI must confirm the change before merge. This is
+another coverage-integrity fix, not a measured speedup.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
