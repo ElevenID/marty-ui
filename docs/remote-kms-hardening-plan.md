@@ -21724,3 +21724,11 @@ The base development Compose graph still configures HTTP OpenBao on several
 services; changing only its DIDComm overlay would break those consumers.
 Its conversion must be graph-wide or use a separately scoped HTTPS KMS node
 and CA-only client mounts, with live acceptance before claiming closure.
+
+2026-10-15 local UI follow-up `ce6fb9add`: the installed bootstrap probe
+now checks that the same disposable HTTPS listener rejects an untrusted
+client before it exports the public CA and runs the scoped-token helper.
+The broader self-host/bootstrap-related Python batch passed 269 tests
+(seven skipped on Windows). Local Docker Desktop processes were present,
+but `com.docker.service` was stopped and could not be started from this
+session; this still leaves the real installed-bundle handoff unqualified.
