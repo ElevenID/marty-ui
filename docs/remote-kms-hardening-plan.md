@@ -22414,3 +22414,16 @@ failure, and installed-cutover limits. [New exact-head CI run 38791978877](https
 is queued, with related policy, CodeQL and organization-quality runs live.
 Wait for terminal exact-head results before treating any runtime lane as
 qualified; the installed beta/Keycloak cutover remains separate required work.
+
+2026-10-15 beta identity-provider graph audit: `docker-compose.base.yml`
+still selects stock `quay.io/keycloak/keycloak:25.0` for both Keycloak and its
+configurator. `docker-compose.beta.yml` and the passport beta profile do not
+override those images or supply remote Keycloak KMS identity settings. Thus
+even a fresh beta Compose install would create local Keycloak KeyProvider
+material, independent of the old installed rows. The pinned remote-key
+Keycloak image and scoped files are wired into `docker-compose.selfhost.prod.yml`
+and the Kubernetes model only. K12 therefore requires a beta/base graph
+cutover or removal of the stock-Keycloak graph before calling any beta
+deployment KMS-only; the read-only database gate must prove zero KeyProvider
+`privateKey`/generated `secret` rows after startup and login. Do not treat
+PR #1344's image packaging as completion of this beta identity-provider work.
