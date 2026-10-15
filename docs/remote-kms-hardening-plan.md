@@ -21922,3 +21922,21 @@ qualification is [CI run `38764261250`](https://github.com/ElevenID/marty-ui/act
 queued at registration. PR #1344's body now describes that exact head,
 local checks, the four prior red lanes, and remaining release boundaries.
 Do not count run `38759939281` as a passing gate for this head.
+
+2026-10-15 run `38764261250` is still live. Its Keycloak job again failed
+HTTP 400 at `/realms/master/login-actions/authenticate`, now with a
+`Restart login cookie` error marker after CIBA token restoration. No scoped
+OpenBao denial was shown in the fresh browser-phase logs, so the earlier
+403 was not established as this failure's cause. The local next-batch UI
+commit `6e257e08f` adds a separate baseline browser/PKCE login, verifies
+the old restart cookie's HS512 JWS through OpenBao Transit before the
+mid-login rotation, and enables category-limited disposable Keycloak debug
+messages with token-free diagnostics. It does not disable the rotation
+acceptance requirement or claim K12 is solved. The Release Contract Tests
+lane also failed one static test that still demanded the duplicate HTTP
+holder step removed at the prior head. The same local commit updates that
+gate to require the single scoped HTTPS `--rust-adapter` owner and its exact
+holder case. Its focused Python test passed locally; the Keycloak live
+diagnostics remain unverified. Canvas, contracts, selfhost and image jobs
+were still running when inspected. Local Docker still did not answer
+`docker info`; the hung command was stopped without changing Docker state.
