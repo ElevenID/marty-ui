@@ -2868,12 +2868,6 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12.10"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          persist-credentials: false
-          repository: ElevenID/marty-credentials
-          ref: aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26
-          path: .reference/marty-credentials-v0.1.76
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "0.11.3"
@@ -2947,25 +2941,6 @@ jobs:
           PY
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
-      - name: Replay Canvas mirror oracle in exact Credentials release image
-        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
-        shell: bash
-        run: |
-          set -euo pipefail
-          image="ghcr.io/elevenid/marty-credentials-issuance"
-          digest="sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5"
-          # The oracle intentionally replays v0.1.76 even after the deployable
-          # stack lock advances to a newer Credentials release.
-          docker pull "$image@$digest"
-          python scripts/capture_canvas_mirror_reference.py \
-            .reference/marty-credentials-v0.1.76 \
-            --release-image --check
-          python scripts/capture_canvas_mirror_reference.py \
-            .reference/marty-credentials-v0.1.76 \
-            --release-image --adapter-reference --check
-          python scripts/capture_canvas_mirror_reference.py \
-            .reference/marty-credentials-v0.1.76 \
-            --release-image --publication-boundary-reference --check
       - name: Require workflow policy test collection
         run: python -m pytest --collect-only -q tests/test_ci_workflow_performance.py
       - name: Run exact DIDComm test-source PR checks

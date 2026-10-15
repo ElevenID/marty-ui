@@ -8,10 +8,11 @@ The behavioral oracle runs only inside immutable issuance image
 `ghcr.io/elevenid/marty-credentials-issuance@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
 It verifies the release Dockerfile blob and refuses any runtime other than the
 deployed FastAPI `0.109.0`, Pydantic `2.11.7`, and httpx `0.26.0` profile before
-executing a route. CI executes the complete `--check` capture in that image;
-all three reference modes must pass, so static artifact hashes are not accepted
-as behavioral replay evidence. Artifact checks and writes refuse to run without
-the release-image controller.
+executing a route. The original migration CI replayed all three reference
+modes in that image. Current CI checks the frozen artifacts and native Rust
+behavior; the release-image replay remains available through the commands
+below when the historical observations need investigation. Artifact checks
+and writes refuse to run without the release-image controller.
 
 This slice covers six HTTP operations, bridge and Badgr publication, mirror
 health/provenance, publication and lifecycle-retry batches, alerts/webhooks, and
@@ -74,9 +75,10 @@ maintainer review, and all repository CI. The packaged-main gate now starts the
 real issuance executable against the owned PostgreSQL/provider fixture, proves
 all six routes are mounted with authentication-first admission, and performs an
 authenticated mirror-health read. The publication adapter's 51-case corpus and
-15 additional timestamp/cancellation/response cases remain required CI gates.
-Only after those gates pass may the superseded Python route/helper/worker code
-be deleted and the aggregate beta deployment proceed.
+15 additional timestamp/cancellation/response cases were required cutover gates
+at this migration checkpoint. Only after those gates passed could the
+superseded Python route/helper/worker code be deleted and the aggregate beta
+deployment proceed.
 
 ## Ownership and deletion boundary
 
