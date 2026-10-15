@@ -21211,5 +21211,8 @@ value would reopen a local-key/algorithm confusion risk and is not accepted
 as KMS-only proof. For this pinned version, pursue a source-built Keycloak
 patch that routes the complete cookie JWE AES/HMAC encode/decode operation
 to the planned Go OpenBao extension, preserving the existing cookie format,
-validation, rotation and outage behavior. Keep the browser gate
+validation, rotation and outage behavior. The same services JAR contains
+`CIBAAuthenticationRequest` direct calls to the JWE helper for CIBA
+`auth_req_id`; the source change must cover that path too rather than
+silently dropping CIBA behavior. Keep the browser gate
 failing until the complete path passes with no local secret material.
