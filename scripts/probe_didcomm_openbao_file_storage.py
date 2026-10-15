@@ -188,6 +188,7 @@ def run_dev() -> None:
             "policies": ["keycloak-cookie-probe"], "no_default_policy": True,
             "ttl": "10m",
         })["auth"]["client_token"]
+        require_status(base, "GET", "didcomm/keycloak/keys/11id/cookie", scoped)
         require_status(base, "POST", f"didcomm/keycloak/jwe/encode/11id/cookie/{version}",
                        scoped, {"plaintext_base64": base64.b64encode(plaintext).decode()})
         require_status(base, "POST", f"didcomm/keycloak/jwe/decode/11id/cookie/{version}",
