@@ -35,7 +35,7 @@ def test_every_startup_case_is_used_in_each_configuration_mode(startup):
             }
             assert "CANVAS_SYNC_PROCESSOR" not in environment
             assert environment["CANVAS_SYNC_WORKER_POLL_SECONDS"] == "60"
-            assert environment["BAO_ADDR"] == "http://127.0.0.1:1"
+            assert environment["BAO_ADDR"] == "https://127.0.0.1:1"
             assert environment["ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE"].startswith(
                 "/nonexistent/"
             )

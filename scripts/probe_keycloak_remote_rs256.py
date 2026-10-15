@@ -329,9 +329,14 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             bao_base = f"https://127.0.0.1:{bao_port}/v1/"
             bao_tls = ssl.create_default_context(cafile=str(ca_dir / "ca.crt"))
 
-            def bao_api(path: str, payload: dict, token: str | None = None) -> dict:
-                request = Request(bao_base + path, data=json.dumps(payload).encode(),
-                                  headers={"X-Vault-Token": token or root_token.read_text(),
+            def bao_api(path: str, payload: dict | None = None,
+                        token: str | None = None) -> dict:
+                selected_token = root_token.read_text() if token is None else token
+                if not selected_token.strip():
+                    raise RuntimeError("OpenBao probe token is empty")
+                request = Request(bao_base + path,
+                                  data=json.dumps(payload).encode() if payload is not None else None,
+                                  headers={"X-Vault-Token": selected_token,
                                            "Content-Type": "application/json"})
                 with urlopen(request, context=bao_tls, timeout=8) as response:
                     body = response.read()
@@ -359,8 +364,33 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 version = rotated["version"]
                 if version == old_version or rotated.get("kid") != f"keycloak-{realm}-{purpose}-{version}":
                     raise RuntimeError("Remote JWE rotation did not advance the key version")
-                bao("policy", "write", f"keycloak-{realm}-{purpose}-probe", "-",
+                policy_name = f"keycloak-{realm}-{purpose}-probe"
+                bao("policy", "write", policy_name, "-",
                     input_text=jwe_policy(realm, purpose, (old_version, version)))
+                # Refresh the scoped token after expanding its version policy. Verify
+                # both versions through the same token file consumed by Keycloak.
+                token_file = jwe_token_dir / f"{realm}-{purpose}.token"
+                token_file.write_text(
+                    bao("token", "create", f"-policy={policy_name}",
+                        "-ttl=1h", "-field=token"), encoding="ascii")
+                token = token_file.read_text(encoding="ascii")
+                current = bao_api(f"didcomm/keycloak/keys/{realm}/{purpose}",
+                                  token=token)["data"]
+                if current.get("version") != version:
+                    raise RuntimeError("Scoped remote JWE current reference did not advance")
+                plaintext = base64.b64encode(b"rotation-probe").decode("ascii")
+                compact = bao_api(
+                    f"didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}",
+                    {"plaintext_base64": plaintext}, token=token)["data"]["jwe"]
+                for accepted_version in (old_version, version):
+                    candidate = compact if accepted_version == version else bao_api(
+                        f"didcomm/keycloak/jwe/encode/{realm}/{purpose}/{old_version}",
+                        {"plaintext_base64": plaintext}, token=token)["data"]["jwe"]
+                    decoded = bao_api(
+                        f"didcomm/keycloak/jwe/decode/{realm}/{purpose}/{accepted_version}",
+                        {"jwe": candidate}, token=token)["data"]["plaintext_base64"]
+                    if decoded != plaintext:
+                        raise RuntimeError("Remote JWE rotation lost scoped encode/decode access")
                 return version
 
             deadline = time.monotonic() + 25
@@ -737,7 +767,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                             logs = "\n".join(line for line in lines
                                              if "Failed to create fallback key" in line
                                              or "Caused by:" in line
-                                             or "Error encoding cookie" in line)[:1200]
+                                             or "Error encoding cookie" in line
+                                             or "at dev.marty.keycloak.kms." in line)[:2400]
                             raise RuntimeError(f"{realm} browser flow failed: {error}\n{logs}") from error
                         for field in ("access_token", "id_token"):
                             verify_jwt(browser_tokens[field], realm_jwks,

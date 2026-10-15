@@ -536,7 +536,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-          bun install
+          PUPPETEER_SKIP_DOWNLOAD=true bun install
       - name: Validate shard completeness and run fast checks
         working-directory: ui
         shell: bash
@@ -689,7 +689,7 @@ jobs:
           bash "$GITHUB_WORKSPACE/scripts/ci/download-verified-ui-release-assets.sh"
           bun pm pkg set "dependencies.@elevenid/marty-api-core=file:$RUNNER_TEMP/marty-api-core.tgz"
           bun pm pkg set "dependencies.@elevenid/marty-blog=file:$RUNNER_TEMP/marty-blog.tgz"
-      - run: bun install
+      - run: PUPPETEER_SKIP_DOWNLOAD=true bun install
       - name: Unit tests
         env:
           VITEST_TIMING_OUTPUT: ${{ runner.temp }}/ui-vitest-timing-${{ matrix.shard }}.json

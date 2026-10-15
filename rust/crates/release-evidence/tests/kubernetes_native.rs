@@ -1641,6 +1641,10 @@ cmd_update_images
             )
             .env("NAMESPACE", "marty-prod")
             .env("PYTHON_BIN", "controlled_canvas_guard")
+            .env(
+                "MARTY_KEYCLOAK_KMS_IMAGE",
+                format!("ghcr.io/elevenid/keycloak@sha256:{}", "b".repeat(64)),
+            )
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
@@ -1683,26 +1687,26 @@ cmd_update_images
             .filter(|v| v.starts_with("set image "))
             .collect();
         if fault == "none" || fault == "absent" {
-            assert_eq!(writes.len(), 6);
+            assert_eq!(writes.len(), 7);
             assert!(writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
         } else if fault == "rollout" {
             assert_eq!(
                 writes.len(),
-                2,
+                3,
                 "No sibling writes after native rollout failure"
             );
         } else if fault == "issuance-rollout" {
             assert_eq!(
                 writes.len(),
-                3,
+                4,
                 "No sibling writes after issuance rollout failure"
             );
         } else if fault == "signing-rollout" {
             assert_eq!(
                 writes.len(),
-                1,
+                2,
                 "No native or sibling writes after signing rollout failure"
             );
         } else {
@@ -1721,7 +1725,7 @@ cmd_update_images
         }
         if fault == "none" || fault == "absent" || fault == "rollout" {
             assert_eq!(
-                writes[1],
+                writes[2],
                 format!(
                     "set image deployment/issuance-native issuance-native={} -n marty-prod",
                     values["MARTY_SERVICES_IMAGE"]
@@ -1729,7 +1733,7 @@ cmd_update_images
             );
             if fault != "rollout" {
                 assert_eq!(
-                    writes[2],
+                    writes[3],
                     format!(
                         "set image deployment/issuance issuance={} -n marty-prod",
                         values["MARTY_SERVICES_IMAGE"]

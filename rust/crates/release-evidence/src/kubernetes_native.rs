@@ -551,6 +551,10 @@ fn native_template(resources: &[Value]) -> Result<()> {
             "/run/secrets/issuance-server-kms/ca.crt",
         ),
         (
+            "DIDCOMM_KMS_CA_CERT_FILE",
+            "/run/secrets/issuance-server-kms/ca.crt",
+        ),
+        (
             "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
             "/run/secrets/issuance-server-kms/token",
         ),
@@ -698,6 +702,7 @@ fn signing_template(resources: &[Value]) -> Result<()> {
             "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
             "/run/secrets/signing-keys-tls-kms/token",
         ),
+        ("BAO_CACERT", "/run/secrets/signing-keys-tls-kms/ca.crt"),
         (
             "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
             "/run/secrets/signing-grant-verify/token",

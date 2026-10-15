@@ -513,7 +513,7 @@ fn checked_spec(value: &Value) -> Result<Spec> {
     owned_url(&spec.redis_url, &["redis"])?;
     owned_url(&spec.peer_origin, &["http"])?;
     owned_url(&spec.legacy_origin, &["http"])?;
-    owned_url(&spec.kms_url, &["http"])?;
+    owned_url(&spec.kms_url, &["https"])?;
     owned_url(&spec.integration_secret_kms_url, &["https"])?;
     let secret_url = url::Url::parse(&spec.integration_secret_kms_url).map_err(|_| ERROR)?;
     require(
@@ -1019,7 +1019,7 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "legacy_origin": "http://127.0.0.1:18002",
         "ca_file": ca_path,
         "policy_directory": directory.path(),
-        "kms_url": "http://127.0.0.1:18200",
+        "kms_url": "https://127.0.0.1:18200",
         "kms_token_file": token,
         "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
         "integration_secret_kms_ca_file": ca,
@@ -1062,7 +1062,7 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
-            Some("http://127.0.0.1:18200")
+            Some("https://127.0.0.1:18200")
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
