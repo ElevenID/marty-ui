@@ -18,6 +18,7 @@ import sys
 import tempfile
 import time
 import uuid
+from contextlib import nullcontext
 from pathlib import Path
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
@@ -25,6 +26,7 @@ from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
+from selfhost_journey_diagnostics import RunDiagnostics
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -71,6 +73,10 @@ CANVAS_UNUSED_SETTINGS = frozenset({
     "CANVAS_CREDENTIALS_PUBLISH_URL", "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
     "CANVAS_CREDENTIALS_ISSUER_ID", "CANVAS_CREDENTIALS_BADGECLASS_ID",
 })
+
+
+def measured(diagnostics: RunDiagnostics | None, name: str):
+    return diagnostics.measure(name) if diagnostics is not None else nullcontext()
 
 
 def command(args: list[str], *, cwd: Path | None = None,
@@ -354,10 +360,12 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       environment: dict[str, str], setup_script: Path,
                       setup_sha256: str,
                       evidence: Path, signature: Path, public_key: Path,
-                      preflight: dict, trusted_keys: frozenset[str]
+                      preflight: dict, trusted_keys: frozenset[str],
+                      diagnostics: RunDiagnostics | None = None,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
-    fresh_project(state_root, compose, install_root, environment)
+    with measured(diagnostics, "fresh_project"):
+        fresh_project(state_root, compose, install_root, environment)
     selected = sorted(LOCAL_SERVICES)
     started = False
     failure: Exception | None = None
@@ -366,22 +374,25 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
     try:
         # A temporary empty Docker config prevents borrowing operator registry
         # credentials. Every pulled image has already been matched to the lock.
-        command([*compose, "pull", *selected], cwd=install_root,
-                env=environment, timeout=1200)
+        with measured(diagnostics, "image_pull"):
+            command([*compose, "pull", *selected], cwd=install_root,
+                    env=environment, timeout=1200)
         started = True
-        command([*compose, "up", "-d", "--no-build", *selected],
-                cwd=install_root, env=environment, timeout=900)
-        deadline = time.monotonic() + 300
-        while True:
-            status = command([*compose, "ps", "--all", "--format", "json"],
-                             cwd=install_root, env=environment)
-            try:
-                states = live_services(status, model)
-                break
-            except ValueError:
-                if time.monotonic() >= deadline:
-                    raise ValueError("installed service closure did not become healthy") from None
-                time.sleep(5)
+        with measured(diagnostics, "startup"):
+            command([*compose, "up", "-d", "--no-build", *selected],
+                    cwd=install_root, env=environment, timeout=900)
+        with measured(diagnostics, "readiness"):
+            deadline = time.monotonic() + 300
+            while True:
+                status = command([*compose, "ps", "--all", "--format", "json"],
+                                 cwd=install_root, env=environment)
+                try:
+                    states = live_services(status, model)
+                    break
+                except ValueError:
+                    if time.monotonic() >= deadline:
+                        raise ValueError("installed service closure did not become healthy") from None
+                    time.sleep(5)
         journey_env = {**environment, "PYTHONDONTWRITEBYTECODE": "1",
                        "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH": str(evidence),
                        "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature),
@@ -390,24 +401,28 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                        "SELFHOST_SOURCE_SHA": preflight["source_sha"],
                        "SELFHOST_ARCHIVE_SHA256": preflight["archive_sha256"],
                        "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"]}
-        if evidence.exists() or signature.exists():
-            raise ValueError("KMS custody output exists before fresh fixture setup")
-        fixture_setup(setup_script, setup_sha256, integration_checkout)
-        command([sys.executable, str(setup_script)], cwd=integration_checkout,
-                env=journey_env, timeout=600)
-        custody_sha256 = verify_kms_custody(evidence, signature, public_key,
-                                            preflight, journey_env, trusted_keys)
-        command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
-                 JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
+        with measured(diagnostics, "fixture_setup"):
+            if evidence.exists() or signature.exists():
+                raise ValueError("KMS custody output exists before fresh fixture setup")
+            fixture_setup(setup_script, setup_sha256, integration_checkout)
+            command([sys.executable, str(setup_script)], cwd=integration_checkout,
+                    env=journey_env, timeout=600)
+        with measured(diagnostics, "custody_verification"):
+            custody_sha256 = verify_kms_custody(evidence, signature, public_key,
+                                                preflight, journey_env, trusted_keys)
+        with measured(diagnostics, "public_journey"):
+            command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
+                     JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
     except Exception as error:
         failure = error
     finally:
         if started:
             try:
-                command([*compose, "down", "--volumes", "--remove-orphans",
-                         "--timeout", "30"], cwd=install_root, env=environment,
-                        timeout=120)
-                empty_project(compose, install_root, environment)
+                with measured(diagnostics, "cleanup"):
+                    command([*compose, "down", "--volumes", "--remove-orphans",
+                             "--timeout", "30"], cwd=install_root, env=environment,
+                            timeout=120)
+                    empty_project(compose, install_root, environment)
             except Exception as error:
                 raise ValueError("owned qualification project teardown failed") from error
     if failure is not None:
@@ -415,7 +430,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
     return states, custody_sha256
 
 
-def run(args: argparse.Namespace) -> dict:
+def validate_inputs(args: argparse.Namespace) -> frozenset[str]:
     if sys.platform != "linux":
         raise ValueError("installed business journey requires Linux Docker")
     if PROJECT.fullmatch(args.project_name) is None:
@@ -450,26 +465,35 @@ def run(args: argparse.Namespace) -> dict:
     trusted_keys = trusted_custody_keys(args.source_checkout, args.source_sha)
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
+    return trusted_keys
+
+
+def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> dict:
+    with measured(diagnostics, "input_validation"):
+        trusted_keys = validate_inputs(args)
     environment = os.environ.copy()
     compose = ["docker", "compose", "--project-name", args.project_name,
                "--env-file", str(args.env_file),
                "-f", str(args.install_root / "docker-compose.yml")]
-    raw_model = command([*compose, "--profile", "*", "config", "--format", "json"],
-                        cwd=args.install_root, env=environment)
-    model = json.loads(raw_model)
-    preflight = check(args.archive, args.image_lock, args.transaction, args.receipt,
-                      Path(args.compose_model), args.source_checkout,
-                      args.source_sha, args.run_id, args.install_root,
-                      args.state_root, args.secret_root)
-    if json.loads(args.compose_model.read_text(encoding="utf-8")) != model:
-        raise ValueError("rendered installed Compose model differs from live source")
-    runtime_plan = plan(model, preflight, args.secret_root)
-    if runtime_plan.get("qualification") != "unqualified":
-        raise ValueError("installed runtime plan unexpectedly claims qualification")
-    required_secrets(args.secret_root, model)
+    with measured(diagnostics, "compose_render"):
+        raw_model = command([*compose, "--profile", "*", "config", "--format", "json"],
+                            cwd=args.install_root, env=environment)
+        model = json.loads(raw_model)
+    with measured(diagnostics, "artifact_preflight"):
+        preflight = check(args.archive, args.image_lock, args.transaction, args.receipt,
+                          Path(args.compose_model), args.source_checkout,
+                          args.source_sha, args.run_id, args.install_root,
+                          args.state_root, args.secret_root)
+        if json.loads(args.compose_model.read_text(encoding="utf-8")) != model:
+            raise ValueError("rendered installed Compose model differs from live source")
+        runtime_plan = plan(model, preflight, args.secret_root)
+        if runtime_plan.get("qualification") != "unqualified":
+            raise ValueError("installed runtime plan unexpectedly claims qualification")
+        required_secrets(args.secret_root, model)
     with (tempfile.TemporaryDirectory(prefix="marty-selfhost-jwk-build-") as build_root,
           tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config):
-        jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
+        with measured(diagnostics, "public_key_tool_build"):
+            jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
         environment["SELFHOST_KMS_JWK_TOOL"] = str(jwk_tool)
         environment["DOCKER_CONFIG"] = config
         states, custody_sha256 = installed_journey(
@@ -478,7 +502,7 @@ def run(args: argparse.Namespace) -> dict:
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight, trusted_keys)
+            args.kms_custody_public_key, preflight, trusted_keys, diagnostics)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
@@ -489,6 +513,22 @@ def run(args: argparse.Namespace) -> dict:
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
+
+
+def diagnostic_target(args: argparse.Namespace) -> Path | None:
+    target = args.diagnostic_output
+    if target is None:
+        return None
+    resolved = target.resolve()
+    if (not target.is_absolute() or target.is_symlink() or target.exists()
+            or not target.parent.is_dir()
+            or resolved.is_relative_to(args.source_checkout.resolve())
+            or resolved.is_relative_to(args.install_root.resolve())
+            or resolved.is_relative_to(args.integration_checkout.resolve())
+            or resolved.is_relative_to(args.secret_root.resolve())
+            or resolved == args.output.resolve()):
+        raise ValueError("diagnostic output path is not fresh and isolated")
+    return target
 
 
 def main() -> int:
@@ -502,17 +542,47 @@ def main() -> int:
     for name in ("source-sha", "run-id", "integration-sha", "project-name",
                  "fixture-setup-sha256"):
         parser.add_argument(f"--{name}", required=True)
+    parser.add_argument("--diagnostic-output", type=Path,
+                        help="optional redacted timing and host-resource report")
     args = parser.parse_args()
     try:
-        result = run(args)
-        if args.output.exists():
-            raise ValueError("installed journey output already exists")
-        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
-                               encoding="utf-8")
+        target = diagnostic_target(args)
+        if (not args.output.is_absolute() or not args.output.parent.is_dir()
+                or args.output.exists() or args.output.is_symlink()):
+            raise ValueError("installed journey output is not fresh and absolute")
+    except (OSError, ValueError) as error:
+        print(f"installed journey output preflight failed: {error}", file=sys.stderr)
+        return 2
+    diagnostics = RunDiagnostics(args.state_root)
+    diagnostics.start()
+    status = 0
+    result: dict | None = None
+    try:
+        result = run(args, diagnostics)
     except (OSError, KeyError, TypeError, ValueError) as error:
         print(f"installed journey failed: {error}", file=sys.stderr)
-        return 2
-    return 0
+        status = 2
+    finally:
+        diagnostics.stop()
+    if target is not None:
+        try:
+            with target.open("x", encoding="utf-8") as stream:
+                json.dump(diagnostics.report(
+                    checks_result="passed" if status == 0 else "failed"),
+                          stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        except (OSError, ValueError) as error:
+            print(f"installed journey diagnostic failed: {error}", file=sys.stderr)
+            status = 2
+    if status == 0 and result is not None:
+        try:
+            with args.output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, sort_keys=True)
+                stream.write("\n")
+        except (OSError, ValueError) as error:
+            print(f"installed journey output failed: {error}", file=sys.stderr)
+            status = 2
+    return status
 
 
 if __name__ == "__main__":

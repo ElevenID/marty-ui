@@ -29,6 +29,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     trusted_custody_keys,
     verify_kms_custody,
 )
+from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 
 
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
@@ -222,7 +223,10 @@ def test_compose_ndjson_status_is_accepted() -> None:
     assert parse_status("\n".join(json.dumps(row) for row in rows)) == rows
 
 
-def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("stale_name", [None, "custody.json", "custody.sig"])
+def test_custody_failure_tears_down_owned_project(
+    monkeypatch, tmp_path: Path, stale_name: str | None,
+) -> None:
     import run_selfhost_business_journey as runner
 
     raw, model = status_fixture()
@@ -234,6 +238,8 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
     integration.mkdir()
     state = tmp_path / "state"
     state.mkdir()
+    if stale_name is not None:
+        (tmp_path / stale_name).write_text("stale", encoding="utf-8")
 
     def fake_command(argv, **_kwargs):
         nonlocal active
@@ -247,7 +253,10 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
-    with pytest.raises(ValueError, match="signed custody evidence is absent"):
+    diagnostics = RunDiagnostics(tmp_path)
+    error = ("KMS custody output exists before fresh fixture setup" if stale_name
+             else "signed custody evidence is absent")
+    with pytest.raises(ValueError, match=error):
         installed_journey(["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"],
                           tmp_path, state, tmp_path / "compose.json", tmp_path / "secrets",
                           model, integration, {}, setup_script,
@@ -255,10 +264,21 @@ def test_missing_custody_proof_tears_down_owned_project(monkeypatch, tmp_path: P
                           tmp_path / "custody.json", tmp_path / "custody.sig",
                           tmp_path / "custody.pub",
                           {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                           "image_lock_sha256": "c" * 64}, frozenset())
+                           "image_lock_sha256": "c" * 64}, frozenset(), diagnostics)
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
+    report = diagnostics.report(checks_result="failed")
+    expected_phase = "fixture_setup" if stale_name else "custody_verification"
+    assert report["first_failure_phase"] == expected_phase
+    expected_names = ["fresh_project", "image_pull", "startup", "readiness",
+                      "fixture_setup"]
+    if stale_name is None:
+        expected_names.append("custody_verification")
+    expected_names.append("cleanup")
+    assert [row["name"] for row in report["phases"]] == expected_names
+    assert next(row for row in report["phases"] if row["name"] == expected_phase)["status"] == "failed"
+    assert report["phases"][-1]["status"] == "passed"
 
 
 def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:

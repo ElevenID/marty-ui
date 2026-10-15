@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-15 UTC checkpoint; UI main `d19599032`).
+Status: active implementation (2026-10-15 UTC checkpoint; UI main `397fc4d1c`).
 Current delivery priority (2026-10-15): enable outside testers to anonymously
 download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
 preparation and independent archive/Compose/image-pull checks; the same bytes
@@ -16,6 +16,20 @@ Self-host preparation and opt-in consumer probes through #1266 are merged, but
 there is no qualified or supported self-host bundle or independently qualified
 standalone verifier. Core v0.2.2 publishes a headless verifier preview bundle;
 its external-user handoff remains unqualified.
+
+October 15 self-host tester checkpoint: UI [#1351](https://github.com/ElevenID/marty-ui/pull/1351)
+merged the local-role-only secret closure for the installed journey, and
+[#1352](https://github.com/ElevenID/marty-ui/pull/1352) merged fail-closed
+validation for catalog-declared empty optional secrets only when their rendered
+integrations are disabled. Both passed protected merge-group CI. This follow-up
+records redacted installed-journey phase and host-memory diagnostics, including
+the first failing phase, without classifying that record as a successful
+installation. The published [preview .2](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.2)
+remains an unsupported experimental download; there is still no complete
+installed journey, KMS custody qualification, or measured 16 GiB operating
+envelope. The separate KMS-custody branch and one-command disposable setup
+remain prerequisites to a new tester bundle.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
