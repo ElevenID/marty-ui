@@ -37,6 +37,7 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
             or ca_output.is_symlink() or ca_output.resolve().is_relative_to(ROOT)):
         raise ValueError("Canvas public CA output must be outside the checkout")
     started = False
+    last_status_error = "not checked"
     try:
         network_args = (
             ["--network", f"container:{namespace_postgres_id}"]
@@ -52,27 +53,35 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
             "--label",
             "marty.disposable=canvas-renewal-kms",
             *network_args,
-            "-v",
-            f"{ROOT / 'docker/openbao-didcomm-dev.hcl'}:/openbao/config/plugin.hcl:ro",
+            "--tmpfs",
+            "/tmp/canvas-openbao-tls:rw,mode=1777",
             "-e",
             f"BAO_DEV_ROOT_TOKEN_ID={root_token}",
+            "-e",
+            "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200",
+            "-e",
+            'BAO_LOCAL_CONFIG={"plugin_directory":"/plugins"}',
             image,
             "server",
             "-dev",
             "-dev-tls",
             "-dev-tls-cert-dir=/tmp/canvas-openbao-tls",
-            "-dev-listen-address=0.0.0.0:8200",
-            "-config=/openbao/config/plugin.hcl",
         )
         started = True
-        wait_for(
-            "Canvas HTTPS OpenBao listener",
-            lambda: subprocess.run(
+        def listener_ready() -> bool:
+            nonlocal last_status_error
+            result = subprocess.run(
                 ["docker", "exec", "--env", "BAO_ADDR=https://127.0.0.1:8200",
                  "--env", f"BAO_CACERT={DEV_CA}", name, "bao", "status"],
                 capture_output=True, check=False, timeout=5,
-            ).returncode == 0,
-        )
+                text=True,
+            )
+            last_status_error = (
+                result.stderr.strip()[-300:] or f"bao status exit {result.returncode}"
+            ).replace(root_token, "[redacted]")
+            return result.returncode == 0
+
+        wait_for("Canvas HTTPS OpenBao listener", listener_ready)
         if namespace_postgres_id:
             base = "https://127.0.0.1:8200"
         else:
@@ -92,7 +101,24 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
         docker(*cli, "secrets", "enable", "-path=transit", "transit")
         print(json.dumps({"url": base, "root_token": root_token, "container": name,
                           "ca_cert_file": str(ca_output)}))
-    except BaseException:
+    except BaseException as error:
+        # The caller captures stderr. Report only bounded, token-redacted
+        # diagnostics; the dev server's full logs print its root token.
+        state = "not started"
+        if started:
+            inspect = subprocess.run(
+                ["docker", "inspect", "--format",
+                 "{{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}", name],
+                capture_output=True, text=True, check=False, timeout=10,
+            )
+            state = inspect.stdout.strip()[:300] or f"inspect exit {inspect.returncode}"
+        print(
+            "Canvas OpenBao startup: "
+            f"{type(error).__name__}: {str(error).replace(root_token, '[redacted]')[:300]}; "
+            f"container={state.replace(root_token, '[redacted]')}; "
+            f"last_status={last_status_error}",
+            file=sys.stderr,
+        )
         if started:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=30)
         ca_output.unlink(missing_ok=True)

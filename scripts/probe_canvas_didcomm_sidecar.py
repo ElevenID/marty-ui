@@ -15,6 +15,14 @@ from probe_didcomm_openbao_ha import IMAGE, docker, prepare_image
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def startup_diagnostic(stderr: str) -> str:
+    return next(
+        (line[:1000] for line in stderr.splitlines()
+         if line.startswith("Canvas OpenBao startup: ")),
+        "no sanitized startup diagnostics",
+    )
+
+
 def run() -> None:
     prepare_image()
     anchor = f"canvas-kms-anchor-{uuid.uuid4().hex[:12]}"
@@ -46,7 +54,10 @@ def run() -> None:
             timeout=150,
         )
         if result.returncode:
-            raise RuntimeError("Disposable Canvas namespace plugin startup failed")
+            raise RuntimeError(
+                "Disposable Canvas namespace plugin startup failed: "
+                + startup_diagnostic(result.stderr)
+            )
         response = json.loads(result.stdout)
         sidecar = response["container"]
         if response["url"] != "https://127.0.0.1:8200":
@@ -97,7 +108,10 @@ def run_host() -> None:
             timeout=150,
         )
         if result.returncode:
-            raise RuntimeError("Disposable Canvas host plugin startup failed")
+            raise RuntimeError(
+                "Disposable Canvas host plugin startup failed: "
+                + startup_diagnostic(result.stderr)
+            )
         response = json.loads(result.stdout)
         sidecar = response["container"]
         if not response["url"].startswith("https://127.0.0.1:"):
