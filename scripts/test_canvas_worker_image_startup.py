@@ -42,8 +42,13 @@ def mount(path, destination):
 def selected_pinned_dockerhub_image(reference):
     if os.name == "nt":
         # Windows Python cannot pass a Win32 path as a script argument to WSL bash.
-        docker("pull", reference, timeout=120)
-        return reference
+        try:
+            docker("pull", reference, timeout=120)
+            return reference
+        except subprocess.CalledProcessError:
+            mirror = f"mirror.gcr.io/library/{reference}"
+            docker("pull", mirror, timeout=120)
+            return mirror
     return subprocess.run(
         ["bash", str(ROOT / "scripts/ci/pull-pinned-dockerhub-image.sh"), reference],
         check=True, capture_output=True, text=True, timeout=120,

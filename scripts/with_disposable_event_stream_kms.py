@@ -89,12 +89,16 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
     })
     if "private_key" in ca.get("data", {}):
         raise RuntimeError("OpenBao PKI returned private key material")
-    bao.request("POST", f"pki/roles/{role}", {
+    role_config = {
         "allow_any_name": True, "allow_localhost": True, "server_flag": True,
         "allow_ip_sans": True, "client_flag": False, "key_type": "ec", "key_bits": 256,
         "max_ttl": "24h", "use_csr_common_name": False,
-        "use_csr_sans": False,
-    })
+    }
+    if role == "signing-keys-image":
+        # This fixture needs the Docker DNS alias as a certificate SAN. Other
+        # established profiles retain their existing CSR SAN behavior.
+        role_config["use_csr_sans"] = False
+    bao.request("POST", f"pki/roles/{role}", role_config)
     csr = bao.request("POST", f"transit/keys/{key_name}/csr", {"version": 1})
     common_name = "synthetic-secret-service" if role == "signing-keys-image" else "localhost"
     sign_request = {"csr": csr["data"]["csr"], "common_name": common_name, "ttl": "1h"}
