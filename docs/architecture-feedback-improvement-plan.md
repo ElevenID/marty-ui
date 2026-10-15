@@ -4340,13 +4340,14 @@ the unchanged-head failed-job rerun and all 23 protected combined-head jobs
 passed. [#1346](https://github.com/ElevenID/marty-ui/pull/1346) merged as
 `5559aea1` on October 15. This is not a speedup claim.
 
-October 15 A0 follow-up candidate: several other focused Rust commands in the
-contracts/Canvas lanes use `--exact` but accept libtest's zero-selected exit
-status. Reuse the #1343 shared positive-summary guard for the feature-observer,
-Canvas HTTPS, passport Gateway, and Signing Keys/Gateway exact cases without
-changing filters, service fixtures, gates, or test implementations. Retain
-case-level timing and require local policy tests, independent review, and
-exact-head/protected CI before merging. In #1346's protected Canvas run,
+October 15 A0 follow-up: [#1348](https://github.com/ElevenID/marty-ui/pull/1348)
+reused the #1343 positive-summary guard for twelve focused feature-observer,
+Canvas HTTPS, passport Gateway, and Signing Keys/Gateway Rust invocations.
+Their filters, service fixtures, gates, and test implementations were retained.
+Exact-head CI and [protected CI](https://github.com/ElevenID/marty-ui/actions/runs/38768652402)
+passed; #1348 merged as `d19599032`. This closes selected false-green paths,
+not the full A0 obligation inventory, and is not a speedup claim. In #1346's
+protected Canvas run,
 Bookworm-isolated reusable compilation took 476 seconds; the host `sccache`
 snapshot captured only three non-cacheable calls because the compile runs
 inside a network-isolated container. Therefore host zero-hit counters do not
@@ -4354,6 +4355,14 @@ prove a failing compiler cache or justify relaxing the runtime-compatible
 compile boundary. The published-worker group took about 501 seconds within
 the concurrent database phase; changing its real-time lifecycle intervals
 without separate evidence would risk test guarantees.
+
+Another current A0 gap is two direct Cargo commands: the Signing Keys
+private-material library case and the five-case passport reconciliation group
+can exit zero after selecting no tests. This candidate reuses the same guard
+for both in their existing contracts-lane steps, without adding invocations,
+changing case filters or backing services, or weakening the full/protected
+gates. The 171 focused workflow-policy tests pass locally; exact-head and
+protected CI remain required before a merge or coverage claim.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
