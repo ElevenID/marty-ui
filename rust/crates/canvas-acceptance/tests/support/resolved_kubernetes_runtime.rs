@@ -351,6 +351,11 @@ struct Spec {
     database_url: String,
     redis_url: String,
     peer_origin: String,
+    grpc_peer_origin: String,
+    grpc_ca_file: PathBuf,
+    grpc_tls_certificate_file: PathBuf,
+    grpc_tls_token_file: PathBuf,
+    grpc_tls_key_name: String,
     legacy_origin: String,
     ca_file: PathBuf,
     policy_directory: PathBuf,
@@ -513,6 +518,7 @@ fn checked_spec(value: &Value) -> Result<Spec> {
     owned_url(&spec.database_url, &["postgres", "postgresql"])?;
     owned_url(&spec.redis_url, &["redis"])?;
     owned_url(&spec.peer_origin, &["http"])?;
+    owned_url(&spec.grpc_peer_origin, &["https"])?;
     owned_url(&spec.legacy_origin, &["http"])?;
     owned_url(&spec.kms_url, &["https"])?;
     owned_url(&spec.integration_secret_kms_url, &["https"])?;
@@ -523,6 +529,14 @@ fn checked_spec(value: &Value) -> Result<Spec> {
             && secret_url.username().is_empty()
             && secret_url.password().is_none()
             && spec.ca_file.is_file()
+            && spec.grpc_ca_file.is_file()
+            && spec.grpc_tls_certificate_file.is_file()
+            && fs::read_to_string(&spec.grpc_tls_certificate_file)
+                .is_ok_and(|pem| pem.contains("BEGIN CERTIFICATE") && !pem.contains("PRIVATE KEY"))
+            && spec.grpc_tls_token_file.is_file()
+            && spec.grpc_tls_key_name.starts_with("canvas_grpc_tls_")
+            && fs::read_to_string(&spec.grpc_ca_file)
+                .is_ok_and(|pem| pem.contains("BEGIN CERTIFICATE") && !pem.contains("PRIVATE KEY"))
             && spec.kms_ca_file.is_file()
             && spec.integration_secret_kms_ca_file.is_file()
             && spec.policy_directory.is_dir()
@@ -751,10 +765,14 @@ fn overlay(
     ] {
         require(native.get(name).map(String::as_str) == Some(expected))?;
     }
+    for name in ["ORG_GRPC_TARGET", "CT_GRPC_TARGET", "RP_GRPC_TARGET"] {
+        native.insert(name.into(), spec.grpc_peer_origin.clone());
+    }
+    native.insert(
+        "GRPC_TLS_CA_CERT".into(),
+        spec.grpc_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
     for name in [
-        "ORG_GRPC_TARGET",
-        "CT_GRPC_TARGET",
-        "RP_GRPC_TARGET",
         "CREDENTIAL_TEMPLATE_SERVICE_URL",
         "REVOCATION_PROFILE_SERVICE_URL",
         "SIGNING_KEYS_INTERNAL_URL",
@@ -766,6 +784,11 @@ fn overlay(
     native.insert("DATABASE_URL".into(), spec.database_url.clone());
     native.insert("ISSUANCE_SERVICE_PORT".into(), spec.http_port.to_string());
     native.insert("ISSUANCE_GRPC_PORT".into(), spec.grpc_port.to_string());
+    native.insert("BAO_ADDR".into(), spec.kms_url.clone());
+    native.insert(
+        "BAO_CACERT".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
     require(native["DIDCOMM_KMS_ADDR"] == "https://vault.example.com")?;
     require(native["DIDCOMM_KMS_TOKEN_FILE"] == "/run/secrets/didcomm-kms/token")?;
     require(native["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/issuance-server-kms/ca.crt")?;
@@ -811,7 +834,35 @@ fn overlay(
         gateway.insert((*name).into(), spec.peer_origin.clone());
     }
     for name in ["AUTH_GRPC_TARGET", "ORG_GRPC_TARGET", "ES_GRPC_TARGET"] {
-        gateway.insert(name.into(), spec.peer_origin.clone());
+        gateway.insert(name.into(), spec.grpc_peer_origin.clone());
+    }
+    for name in ["GRPC_TLS_CA_CERT", "ORG_GRPC_CA_CERT", "ES_GRPC_CA_CERT"] {
+        gateway.insert(name.into(), spec.grpc_ca_file.to_str().ok_or(ERROR)?.into());
+    }
+    for name in ["GRPC_WORKLOAD_TLS_CA_CERT"] {
+        gateway.insert(name.into(), spec.grpc_ca_file.to_str().ok_or(ERROR)?.into());
+    }
+    for (name, value) in [
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+            spec.grpc_tls_certificate_file.to_str().ok_or(ERROR)?,
+        ),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR", spec.kms_url.as_str()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+            spec.kms_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+            spec.grpc_tls_token_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+            spec.grpc_tls_key_name.as_str(),
+        ),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+    ] {
+        gateway.insert(name.into(), value.into());
     }
     gateway.insert("ISSUANCE_SERVICE_URL".into(), spec.legacy_origin.clone());
     gateway.insert(
@@ -819,6 +870,11 @@ fn overlay(
         format!("http://127.0.0.1:{}", spec.http_port),
     );
     gateway.insert("GATEWAY_PORT".into(), spec.gateway_port.to_string());
+    gateway.insert("BAO_ADDR".into(), spec.kms_url.clone());
+    gateway.insert(
+        "BAO_CACERT".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
     gateway.insert("REDIS_URL".into(), spec.redis_url.clone());
     Ok(ResolvedRuntime {
         native_environment: native,
@@ -1027,6 +1083,11 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
         "redis_url": "redis://127.0.0.1:16379",
         "peer_origin": "http://127.0.0.1:18001",
+        "grpc_peer_origin": "https://127.0.0.1:18003",
+        "grpc_ca_file": ca_path,
+        "grpc_tls_certificate_file": ca_path,
+        "grpc_tls_token_file": token,
+        "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
         "legacy_origin": "http://127.0.0.1:18002",
         "ca_file": ca_path,
         "policy_directory": directory.path(),

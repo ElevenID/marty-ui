@@ -32,6 +32,8 @@ mod envoy_runtime_sidecar;
 mod issuance_named_peers;
 #[path = "support/rendered_base_process.rs"]
 mod rendered_base_process;
+#[path = "support/remote_tls_peer.rs"]
+mod remote_tls_peer;
 #[path = "support/renewal_binding_postgres.rs"]
 mod renewal_binding_postgres;
 #[path = "support/renewal_fresh_main.rs"]

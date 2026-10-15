@@ -500,14 +500,15 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
     response
 }
 
+pub(super) fn peer_router(state: PeerState) -> Router {
+    Router::new()
+        .fallback(peer)
+        .with_state(state)
+        .merge(super::issuance_process::remote_integration_secret::router_for(ENVELOPE_KEY))
+}
+
 pub(super) async fn start_peers(state: PeerState) -> OwnedHttp {
-    OwnedHttp::start(
-        Router::new()
-            .fallback(peer)
-            .with_state(state)
-            .merge(super::issuance_process::remote_integration_secret::router_for(ENVELOPE_KEY)),
-    )
-    .await
+    OwnedHttp::start(peer_router(state)).await
 }
 
 pub(super) fn counts(values: &[String]) -> BTreeMap<&str, usize> {

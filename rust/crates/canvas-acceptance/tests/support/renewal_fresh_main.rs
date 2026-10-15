@@ -267,12 +267,26 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             ordinary_wallets: Arc::default(),
         };
         let peers = start_peers(state.clone()).await;
+        let tls_peers = if rendered_redis.is_some() {
+            Some(
+                super::remote_tls_peer::RemoteTlsPeer::start(
+                    state.clone(),
+                    wallet.ca_file.parent().unwrap(),
+                )
+                .await,
+            )
+        } else {
+            None
+        };
         let legacy = if gateway {
             Some(super::base_runtime_gateway::LegacyFixture::start().await)
         } else {
             None
         };
         let origin = format!("http://127.0.0.1:{}", peers.port);
+        let grpc_origin = tls_peers
+            .as_ref()
+            .map(|peer| format!("https://127.0.0.1:{}", peer.port));
         let policy = wallet
             .ca_file
             .parent()
@@ -403,7 +417,12 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
                 },
                 "http_port":http_port, "grpc_port":grpc_port, "gateway_port":gateway_port,
                 "database_url":database_url, "redis_url":redis_url,
-                "peer_origin":origin, "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
+                "peer_origin":origin, "grpc_peer_origin":grpc_origin,
+                "grpc_ca_file":tls_peers.as_ref().map(|peer| &peer.ca_file),
+                "grpc_tls_certificate_file":tls_peers.as_ref().map(|peer| &peer.certificate_file),
+                "grpc_tls_token_file":tls_peers.as_ref().map(|peer| &peer.token_file),
+                "grpc_tls_key_name":tls_peers.as_ref().map(|peer| &peer.key_name),
+                "legacy_origin":legacy.as_ref().map_or_else(|| format!("http://127.0.0.1:{gateway_port}"), super::base_runtime_gateway::LegacyFixture::origin),
                 "ca_file":wallet.ca_file, "policy_directory":wallet.ca_file.parent().unwrap(),
                 "kms_url":remote_sender.base_url, "kms_ca_file":remote_sender.ca_file,
                 "kms_token_file":remote_sender.token_file,
@@ -610,6 +629,9 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             child.0.kill().unwrap();
             child.0.wait().unwrap();
             peers.close().await;
+            if let Some(peer) = tls_peers {
+                peer.close().await;
+            }
             legacy.unwrap().close().await;
             wallet.close_verified();
             continue;
@@ -838,6 +860,9 @@ async fn run_with_profile(database_url: &str, rendered_redis: Option<&str>, ingr
             "every final-stage peer request must be validated"
         );
         peers.close().await;
+        if let Some(peer) = tls_peers {
+            peer.close().await;
+        }
         if let Some(legacy) = legacy {
             legacy.close().await;
         }
