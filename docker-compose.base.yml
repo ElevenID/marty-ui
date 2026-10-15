@@ -77,7 +77,7 @@ services:
           memory: 64M
 
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     command:
       - start-dev
       - --features=organization
@@ -101,6 +101,29 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}
+      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:?KEYCLOAK_KMS_ADDR must identify HTTPS OpenBao}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
+      BAO_TOKEN_FILE: /run/secrets/keycloak_signing_kms_token
+      MARTY_KEYCLOAK_RS256_CERT_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_TOKEN_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_MOUNT: didcomm
+      MARTY_KEYCLOAK_KMS_KEY_PREFIX: keycloak
+      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:?KEYCLOAK_KMS_KEY_VERSION must pin a remote Keycloak version}
+    secrets:
+      - openbao_tls_ca_cert
+      - keycloak_signing_kms_token
+      - source: keycloak_master_rs256_cert
+        target: /run/secrets/keycloak-master-rs256.crt
+      - source: keycloak_11id_rs256_cert
+        target: /run/secrets/keycloak-11id-rs256.crt
+      - source: keycloak_master_cookie_token
+        target: /run/secrets/master-cookie.token
+      - source: keycloak_master_ciba_token
+        target: /run/secrets/master-ciba.token
+      - source: keycloak_11id_cookie_token
+        target: /run/secrets/11id-cookie.token
+      - source: keycloak_11id_ciba_token
+        target: /run/secrets/11id-ciba.token
     depends_on:
       postgres:
         condition: service_healthy
@@ -130,7 +153,7 @@ services:
   # that cannot be embedded in the realm JSON. Idempotent — safe to run on
   # every 'docker compose up'.
   keycloak-configurator:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak.sh"]
     environment:
       KC_URL: http://keycloak:8080
@@ -1429,6 +1452,20 @@ services:
     restart: unless-stopped
 
 secrets:
+  keycloak_signing_kms_token:
+    file: ${KEYCLOAK_SIGNING_KMS_TOKEN_FILE:?KEYCLOAK_SIGNING_KMS_TOKEN_FILE must be set}
+  keycloak_master_rs256_cert:
+    file: ${KEYCLOAK_MASTER_RS256_CERT_FILE:?KEYCLOAK_MASTER_RS256_CERT_FILE must be set}
+  keycloak_11id_rs256_cert:
+    file: ${KEYCLOAK_11ID_RS256_CERT_FILE:?KEYCLOAK_11ID_RS256_CERT_FILE must be set}
+  keycloak_master_cookie_token:
+    file: ${KEYCLOAK_MASTER_COOKIE_TOKEN_FILE:?KEYCLOAK_MASTER_COOKIE_TOKEN_FILE must be set}
+  keycloak_master_ciba_token:
+    file: ${KEYCLOAK_MASTER_CIBA_TOKEN_FILE:?KEYCLOAK_MASTER_CIBA_TOKEN_FILE must be set}
+  keycloak_11id_cookie_token:
+    file: ${KEYCLOAK_11ID_COOKIE_TOKEN_FILE:?KEYCLOAK_11ID_COOKIE_TOKEN_FILE must be set}
+  keycloak_11id_ciba_token:
+    file: ${KEYCLOAK_11ID_CIBA_TOKEN_FILE:?KEYCLOAK_11ID_CIBA_TOKEN_FILE must be set}
   dev_integration_secret_ca:
     file: ${DEV_INTEGRATION_SECRET_CA_FILE:?DEV_INTEGRATION_SECRET_CA_FILE must be set}
   dev_integration_secret_server_cert:

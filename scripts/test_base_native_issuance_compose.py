@@ -188,6 +188,13 @@ def assert_sources(base, profile, runtime):
         "issuance_tls_kms_token",
     ]
     assert set(base["secrets"]) == {
+        "keycloak_signing_kms_token",
+        "keycloak_master_rs256_cert",
+        "keycloak_11id_rs256_cert",
+        "keycloak_master_cookie_token",
+        "keycloak_master_ciba_token",
+        "keycloak_11id_cookie_token",
+        "keycloak_11id_ciba_token",
         "dev_integration_secret_ca",
         "dev_integration_secret_server_cert",
         "openbao_tls_ca_cert",
@@ -201,6 +208,13 @@ def assert_sources(base, profile, runtime):
         "flow_client_tls_kms_token",
     }
     for secret, file_env in (
+        ("keycloak_signing_kms_token", "KEYCLOAK_SIGNING_KMS_TOKEN_FILE"),
+        ("keycloak_master_rs256_cert", "KEYCLOAK_MASTER_RS256_CERT_FILE"),
+        ("keycloak_11id_rs256_cert", "KEYCLOAK_11ID_RS256_CERT_FILE"),
+        ("keycloak_master_cookie_token", "KEYCLOAK_MASTER_COOKIE_TOKEN_FILE"),
+        ("keycloak_master_ciba_token", "KEYCLOAK_MASTER_CIBA_TOKEN_FILE"),
+        ("keycloak_11id_cookie_token", "KEYCLOAK_11ID_COOKIE_TOKEN_FILE"),
+        ("keycloak_11id_ciba_token", "KEYCLOAK_11ID_CIBA_TOKEN_FILE"),
         ("dev_integration_secret_ca", "DEV_INTEGRATION_SECRET_CA_FILE"),
         (
             "dev_integration_secret_server_cert",

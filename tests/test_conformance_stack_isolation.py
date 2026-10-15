@@ -493,13 +493,16 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
     for service in (
         "postgres",
         "redis",
-        "keycloak",
         "mailpit",
         "openbao",
         "envoy",
     ):
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "@sha256:" in section
+
+    for service in ("keycloak", "keycloak-configurator"):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?" in section
 
     assert "GET /ready HTTP/1.1" in infrastructure
     assert "Connection: close" in infrastructure

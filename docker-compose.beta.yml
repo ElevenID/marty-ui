@@ -10,36 +10,6 @@ x-beta-grpc-service-auth: &beta-grpc-service-auth
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:?GRPC_SERVICE_TOKEN must be set for beta Rust services}
 
 services:
-  keycloak:
-    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image for beta}
-    environment:
-      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:?KEYCLOAK_KMS_ADDR must identify HTTPS OpenBao for beta}
-      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
-      BAO_TOKEN_FILE: /run/secrets/keycloak_signing_kms_token
-      MARTY_KEYCLOAK_RS256_CERT_DIR: /run/secrets
-      MARTY_KEYCLOAK_JWE_TOKEN_DIR: /run/secrets
-      MARTY_KEYCLOAK_JWE_MOUNT: didcomm
-      MARTY_KEYCLOAK_KMS_KEY_PREFIX: keycloak
-      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:?KEYCLOAK_KMS_KEY_VERSION must pin a remote beta Keycloak version}
-    secrets:
-      - openbao_tls_ca_cert
-      - keycloak_signing_kms_token
-      - source: keycloak_master_rs256_cert
-        target: /run/secrets/keycloak-master-rs256.crt
-      - source: keycloak_11id_rs256_cert
-        target: /run/secrets/keycloak-11id-rs256.crt
-      - source: keycloak_master_cookie_token
-        target: /run/secrets/master-cookie.token
-      - source: keycloak_master_ciba_token
-        target: /run/secrets/master-ciba.token
-      - source: keycloak_11id_cookie_token
-        target: /run/secrets/11id-cookie.token
-      - source: keycloak_11id_ciba_token
-        target: /run/secrets/11id-ciba.token
-
-  keycloak-configurator:
-    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image for beta}
-
   redis:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set for beta}
@@ -427,20 +397,6 @@ services:
       - workload_identity_ca_cert
 
 secrets:
-  keycloak_signing_kms_token:
-    file: ${KEYCLOAK_SIGNING_KMS_TOKEN_FILE:?KEYCLOAK_SIGNING_KMS_TOKEN_FILE must be set for beta}
-  keycloak_master_rs256_cert:
-    file: ${KEYCLOAK_MASTER_RS256_CERT_FILE:?KEYCLOAK_MASTER_RS256_CERT_FILE must be set for beta}
-  keycloak_11id_rs256_cert:
-    file: ${KEYCLOAK_11ID_RS256_CERT_FILE:?KEYCLOAK_11ID_RS256_CERT_FILE must be set for beta}
-  keycloak_master_cookie_token:
-    file: ${KEYCLOAK_MASTER_COOKIE_TOKEN_FILE:?KEYCLOAK_MASTER_COOKIE_TOKEN_FILE must be set for beta}
-  keycloak_master_ciba_token:
-    file: ${KEYCLOAK_MASTER_CIBA_TOKEN_FILE:?KEYCLOAK_MASTER_CIBA_TOKEN_FILE must be set for beta}
-  keycloak_11id_cookie_token:
-    file: ${KEYCLOAK_11ID_COOKIE_TOKEN_FILE:?KEYCLOAK_11ID_COOKIE_TOKEN_FILE must be set for beta}
-  keycloak_11id_ciba_token:
-    file: ${KEYCLOAK_11ID_CIBA_TOKEN_FILE:?KEYCLOAK_11ID_CIBA_TOKEN_FILE must be set for beta}
   workload_identity_ca_cert:
     file: ${MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE:?MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE must be set for beta}
   org_workload_server_cert:
