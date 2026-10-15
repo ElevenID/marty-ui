@@ -21376,3 +21376,22 @@ self-host OpenBao project remains HTTP, so it cannot supply the required
 Keycloak HTTPS origin as currently configured. A released fifth Keycloak
 image role and an HTTPS OpenBao deployment path remain prerequisites; this
 source gate alone is not installed KMS-only proof.
+
+2026-10-15 fifth-image release work (staged in the grouped UI worktree,
+not pushed): the digest-first transaction now requires the hardened Keycloak
+OCI role. The protected claim checks its version tag is absent; the release
+workflow builds, attests and signs its digest, records it in the transaction,
+qualifies that exact image alongside the exact OpenBao plugin image with the
+two-realm browser/CIBA/rotation/KMS-loss/PostgreSQL probe, and requires the
+new `keycloak_kms` gate before promotion. Publication adds a Keycloak SBOM,
+manifest artifact and exact asset allowlist entry. The self-host image lock
+binds both Keycloak services to the transaction digest instead of accepting
+them as independent external image inputs; the installed-runtime plan checks
+the pinned image and remote-key settings. Local targeted contract suites
+passed: 234 release/image-lock/beta/Kubernetes/manifest tests, 148 CI selector
+tests, and a follow-up 73 transaction/release-workflow tests. This has not
+run in hosted CI, produced a published digest or qualified an installed
+stack. The existing local Keycloak database is still dirty, standalone
+self-host OpenBao is still HTTP, Kubernetes Keycloak still needs a matching
+KMS-only deployment, and the exact release consumer's fifth-artifact
+acceptance remains to be exercised.
