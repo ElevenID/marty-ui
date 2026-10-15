@@ -11,15 +11,17 @@ import argparse
 import json
 import os
 from pathlib import Path
+import secrets
 import subprocess
 import sys
+import tempfile
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from probe_didcomm_openbao_ha import docker, wait_for  # noqa: E402
 
-DEV_CA = "/tmp/canvas-openbao-tls/vault-ca.pem"
+DEV_CA = "/tmp/bao-tls/vault-ca.pem"
 
 
 def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
@@ -27,7 +29,7 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
     if not image or any(character.isspace() for character in image):
         raise ValueError("Canvas OpenBao image is missing or malformed")
     name = f"canvas-kms-{uuid.uuid4().hex[:12]}"
-    root_token = uuid.uuid4().hex
+    root_token = secrets.token_hex(32)
     if namespace_postgres_id is not None and (
         len(namespace_postgres_id) != 64
         or any(character not in "0123456789abcdef" for character in namespace_postgres_id)
@@ -38,7 +40,13 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
         raise ValueError("Canvas public CA output must be outside the checkout")
     started = False
     last_status_error = "not checked"
+    token_fd, token_name = tempfile.mkstemp(prefix="canvas-kms-root-")
+    os.close(token_fd)
+    token_file = Path(token_name)
     try:
+        token_file.write_text(root_token, encoding="ascii")
+        if ca_output.name != "ca.crt" or ca_output.exists():
+            raise ValueError("Canvas public CA output must be a new ca.crt file")
         network_args = (
             ["--network", f"container:{namespace_postgres_id}"]
             if namespace_postgres_id
@@ -54,22 +62,28 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
             "marty.disposable=canvas-renewal-kms",
             *network_args,
             "--tmpfs",
-            "/tmp/canvas-openbao-tls:rw,mode=1777",
+            "/tmp/bao-tls:rw,mode=1777",
+            "--mount",
+            f"type=bind,src={ROOT / 'scripts/passport_supported_openbao_start.sh'},dst=/usr/local/bin/passport-supported-openbao-start,readonly",
+            "--mount",
+            f"type=bind,src={token_file},dst=/run/secrets/bao_root_token,readonly",
+            "--mount",
+            f"type=bind,src={ca_output.parent},dst=/bao/public-ca",
             "-e",
-            f"BAO_DEV_ROOT_TOKEN_ID={root_token}",
-            "-e",
-            "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200",
+            "PASSPORT_BAO_TLS_MODE=required",
             "-e",
             'BAO_LOCAL_CONFIG={"plugin_directory":"/plugins"}',
+            "--entrypoint",
+            "/bin/sh",
             image,
-            "server",
-            "-dev",
-            "-dev-tls",
-            "-dev-tls-cert-dir=/tmp/canvas-openbao-tls",
+            "/usr/local/bin/passport-supported-openbao-start",
         )
         started = True
         def listener_ready() -> bool:
             nonlocal last_status_error
+            if not ca_output.is_file() or ca_output.stat().st_size == 0:
+                last_status_error = "public CA not ready"
+                return False
             result = subprocess.run(
                 ["docker", "exec", "--env", "BAO_ADDR=https://127.0.0.1:8200",
                  "--env", f"BAO_CACERT={DEV_CA}", name, "bao", "status"],
@@ -87,7 +101,6 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
         else:
             port = int(docker("port", name, "8200/tcp").splitlines()[0].rsplit(":", 1)[1])
             base = f"https://127.0.0.1:{port}"
-        docker("cp", f"{name}:{DEV_CA}", str(ca_output))
         public_ca = ca_output.read_text(encoding="ascii")
         if "BEGIN CERTIFICATE" not in public_ca or "PRIVATE KEY" in public_ca:
             raise ValueError("Canvas OpenBao published CA is invalid")
@@ -123,6 +136,8 @@ def start(ca_output: Path, namespace_postgres_id: str | None = None) -> None:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True, check=False, timeout=30)
         ca_output.unlink(missing_ok=True)
         raise
+    finally:
+        token_file.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

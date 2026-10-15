@@ -27,9 +27,8 @@ def run() -> None:
     prepare_image()
     anchor = f"canvas-kms-anchor-{uuid.uuid4().hex[:12]}"
     sidecar: str | None = None
-    ca_fd, ca_name = tempfile.mkstemp(prefix="canvas-kms-ca-", suffix=".pem")
-    os.close(ca_fd)
-    ca_file = Path(ca_name)
+    ca_directory = Path(tempfile.mkdtemp(prefix="canvas-kms-ca-"))
+    ca_file = ca_directory / "ca.crt"
     anchor_started = False
     try:
         docker(
@@ -66,7 +65,7 @@ def run() -> None:
             raise RuntimeError("Canvas sidecar returned an unexpected public CA path")
         cli = (
             "exec", "--env", f"BAO_ADDR={response['url']}",
-            "--env", "BAO_CACERT=/tmp/canvas-openbao-tls/vault-ca.pem",
+            "--env", "BAO_CACERT=/tmp/bao-tls/vault-ca.pem",
             "--env", f"BAO_TOKEN={response['root_token']}", sidecar, "bao",
         )
         mounts = json.loads(docker(*cli, "secrets", "list", "-format=json"))
@@ -79,7 +78,6 @@ def run() -> None:
         )
         print("PASS disposable Canvas network-namespace plugin created a sender key")
     finally:
-        ca_file.unlink(missing_ok=True)
         if sidecar is not None:
             subprocess.run(
                 ["docker", "rm", "-f", sidecar],
@@ -90,13 +88,15 @@ def run() -> None:
                 ["docker", "rm", "-f", anchor],
                 capture_output=True, check=False, timeout=30,
             )
+        ca_file.unlink(missing_ok=True)
+        (ca_directory / ".ca.crt.tmp").unlink(missing_ok=True)
+        ca_directory.rmdir()
 
 
 def run_host() -> None:
     sidecar: str | None = None
-    ca_fd, ca_name = tempfile.mkstemp(prefix="canvas-kms-ca-", suffix=".pem")
-    os.close(ca_fd)
-    ca_file = Path(ca_name)
+    ca_directory = Path(tempfile.mkdtemp(prefix="canvas-kms-ca-"))
+    ca_file = ca_directory / "ca.crt"
     try:
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts/ci/start-canvas-didcomm-openbao.py"),
@@ -120,7 +120,7 @@ def run_host() -> None:
             raise RuntimeError("Canvas host plugin returned an unexpected public CA path")
         cli = (
             "exec", "--env", "BAO_ADDR=https://127.0.0.1:8200",
-            "--env", "BAO_CACERT=/tmp/canvas-openbao-tls/vault-ca.pem",
+            "--env", "BAO_CACERT=/tmp/bao-tls/vault-ca.pem",
             "--env", f"BAO_TOKEN={response['root_token']}", sidecar, "bao",
         )
         created = json.loads(docker(*cli, "write", "-format=json",
@@ -156,12 +156,14 @@ def run_host() -> None:
             if completed.returncode:
                 raise RuntimeError("Canvas packaged direct KMS renewal failed")
     finally:
-        ca_file.unlink(missing_ok=True)
         if sidecar is not None:
             subprocess.run(
                 ["docker", "rm", "-f", sidecar],
                 capture_output=True, check=False, timeout=30,
             )
+        ca_file.unlink(missing_ok=True)
+        (ca_directory / ".ca.crt.tmp").unlink(missing_ok=True)
+        ca_directory.rmdir()
 
 
 if __name__ == "__main__":
