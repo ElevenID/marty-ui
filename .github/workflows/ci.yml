@@ -2164,7 +2164,10 @@ jobs:
             case "$name" in
               MARTY_OPENBAO_DIDCOMM_IMAGE)
                 export "$name=example.invalid/openbao-didcomm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" ;;
-              *_TLS_KMS_ADDR) export "$name=https://kms.example.invalid" ;;
+              KEYCLOAK_KMS_IMAGE_DIGEST)
+                export "$name=sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" ;;
+              KEYCLOAK_KMS_ADDR|*_TLS_KMS_ADDR) export "$name=https://kms.example.invalid" ;;
+              KEYCLOAK_KMS_KEY_VERSION) export "$name=1" ;;
               *_TLS_KMS_KEY_NAME) export "$name=ci-${name,,}" ;;
               *_TLS_KMS_KEY_VERSION) export "$name=1" ;;
               *_CERT_FILE|*_TOKEN_FILE|DEV_INTEGRATION_SECRET_CA_FILE)
@@ -3002,7 +3005,7 @@ jobs:
           # Bun also covers, until the upstream package can be replaced/patched.
           (cd ui && timed ui-audit bash -c 'bun install --frozen-lockfile --ignore-scripts && bun audit --ignore GHSA-vfj7-8cjw-p6xm && npm audit --omit=optional --package-lock-only --audit-level=low') &
           ui_audit_pid=$!
-          (cd tests && timed tests-audit npm audit --package-lock-only --audit-level=low) &
+          (cd tests && npm ci --ignore-scripts && timed tests-audit npm audit --package-lock-only --audit-level=low) &
           tests_audit_pid=$!
           (timed bandit bandit -r services/ packages/ -f json -o bandit-report.json || true) &
           bandit_pid=$!

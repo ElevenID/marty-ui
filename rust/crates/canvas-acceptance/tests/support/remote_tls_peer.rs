@@ -111,7 +111,7 @@ impl RemoteTlsPeer {
             &root,
             json!({"allow_any_name":true,"allow_localhost":true,"allow_ip_sans":true,
                    "server_flag":true,"client_flag":true,"key_type":"ec","key_bits":256,
-                   "max_ttl":"1h","use_csr_common_name":false}),
+                   "max_ttl":"1h","use_csr_common_name":false,"use_csr_sans":false}),
         )
         .await;
         let csr = post(
