@@ -20781,3 +20781,19 @@ bootstrap after OpenBao starts, carry its public certificates and scoped
 sign-only tokens to the five services, replace the edge with the staged Rust
 keyless edge, convert all active gRPC routes, then run the full protected
 passport journey against local paired images before pushing the grouped PR.
+
+2026-10-15 disposable OpenBao HTTPS bootstrap follow-up, staged in the
+grouped UI worktree: the protected infrastructure/bootstrap command now mounts
+the project public-CA volume read-only, sets `BAO_ADDR=https://openbao:8200`
+and `BAO_CACERT`, and the shell bootstrap rejects a missing, private-bearing
+or wrong CA before initializing Transit and policies. A local disposable
+pinned OpenBao live probe passed TLS startup, CA trust, the actual policy
+bootstrap and issuance of three distinct scoped service tokens. Source
+review found that the shell produced `notification_openbao_token` while the
+producer accepted only two tokens; the handoff and its cleanup inventory now
+accept all three and reject duplicates/root-token reuse. The focused
+infrastructure, protected producer and staging suite passed 63 tests with
+one skip. Python compilation, shell syntax and diff checks passed. This proves
+this isolated OpenBao/bootstrap component, not the full Compose passport
+journey: the five downstream BAO consumers still point to HTTP and do not
+mount the public CA, while workload/edge TLS keys and plaintext gRPC remain.
