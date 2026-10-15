@@ -22047,3 +22047,16 @@ mounts and reject them in rendered profiles. Qualify the full official OIDF
 runner and negative KMS/certificate/route cases before retiring the Nginx
 profile. This edge remains open; the current #1344 Keycloak and selfhost
 gates do not prove it.
+
+2026-10-15 grouped UI PR #1344 run `38770177194` follow-up: the Keycloak
+browser/CIBA/KMS-loss/PostgreSQL-custody gate and self-host lane passed on
+`b3af3715591972cffe3896b2c6278e50b139a6d6`; contracts failed in the
+Revocation Profile executable contract. That test starts plaintext loopback
+Organization and Revocation gRPC while setting `ENVIRONMENT=beta`, which the
+new production fail-closed config correctly rejects without
+`ORG_GRPC_CA_CERT`. The local correction sets `ENVIRONMENT=test` for this
+plaintext operational contract; separate production config tests continue to
+require HTTPS Organization CA and KMS-backed gRPC listener identity and reject
+private-key files. The OpenBao plugin and Canvas lanes were still running at
+inspection. This correction is not yet pushed or proven by hosted CI; batch it
+with any other terminal lane findings before the next PR head.
