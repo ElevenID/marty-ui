@@ -21346,3 +21346,19 @@ SPI and admin component paths, but arbitrary extensions, direct database
 writes, other Keycloak secret stores, installed artifact composition and
 deployed cutover remain to be audited. Do not equate this with whole-stack
 KMS-only enforcement.
+
+2026-10-15 K11/K12 deployment-boundary follow-up: the grouped, still
+unlanded UI worktree now requires a remote-Keycloak image variable for both
+the self-host server and configurator and mounts scoped OpenBao tokens,
+public RSA certificates, and the public OpenBao CA. The Keycloak cookie/CIBA
+token and certificate mounts use explicit `/run/secrets/...` paths matching
+the provider's lookup rules. The installed-runtime DAG verifier now checks
+all thirteen Keycloak secret bindings and their exact target paths, including
+the six renamed filenames. Its focused test suite passed (25 tests), and the
+rendered Compose model was exercised. This is staged source validation, not
+a published digest or installed qualification: the release transaction still
+tracks only four image roles and must gain a pinned Keycloak role. The fresh
+Marty database schema passed private-key table/content checks previously,
+but the existing self-host and beta Keycloak databases still had four
+`privateKey` and four generated `secret` rows each at last inspection; do not
+declare K10/K12 complete until the deployed cutover and SQL custody gate pass.
