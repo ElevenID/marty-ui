@@ -20534,3 +20534,19 @@ coordinated restore passed. Python compilation also passed. This repairs the
 required CI probe after the HTTPS-only client cutover without proving a
 single HTTPS Raft production graph. The self-host OpenBao and passport
 fixtures still need their own HTTPS cutover before hosted CI/push.
+
+2026-10-14 same-machine self-host HTTPS inventory: the active standalone
+OpenBao Compose and Raft HCL still advertise HTTP, its bootstrap CLI uses
+`http://openbao:8200`, the example application `BAO_ADDR` uses
+`http://host.docker.internal:18200`, and the operator health check probes
+HTTP. The Rust callers still constructing independent OpenBao clients include
+Signing Keys managed-holder/envelope/Transit paths, Issuance managed signing
+and passport artifact paths, Gateway and Flow signing-grant providers, and
+Notification webhook custody. Switching only the listener would break these
+consumers' CA trust. Move the listener, CA distribution, bootstrap, health
+check and all active OpenBao callers to authenticated HTTPS as one broad
+cutover; preserve Raft persistence and OpenBao-contained TLS key custody.
+During self-review the staged shared `marty-openbao-http` CA loader was
+bounded to 64 KiB before parsing, so an operator-supplied CA path cannot
+induce an unbounded allocation. The locked Rust crate tests passed. The existing same-machine scaffold remains HTTP
+until that coordinated change is implemented and locally qualified.
