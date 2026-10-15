@@ -41,7 +41,7 @@ import org.keycloak.services.Urls;
  *
  * <p>A authentication request can be serialized to a JWE so that it can be exchanged with authentication devices (AD)
  * to communicate and authorize the authentication request made by consumption devices (CDs).
- * 
+ *
  * @author <a href="mailto:takashi.norimatsu.ws@hitachi.com">Takashi Norimatsu</a>
  */
 public class CIBAAuthenticationRequest extends JsonWebToken {
