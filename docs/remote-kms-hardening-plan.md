@@ -22028,3 +22028,22 @@ Keycloak image job then advanced to coordinated PostgreSQL/Raft
 integration-secret recovery; the Canvas, contracts and selfhost lanes were
 still running. Do not infer full image-job or complete CI success from the
 single green step.
+
+K11 next deployed-profile boundary, source-audited on 2026-10-15: the OIDF
+conformance profile still publishes Nginx with a mounted `tls.key`
+(`docker-compose.profile.oidf.yml` and
+`services/oidf-tls-proxy/nginx.conf.template`), and
+`scripts/new-oidf-local-certificate.ps1` creates a test private key. Replace
+that complete path with a Rust keyless HTTPS edge backed by a scoped,
+versioned, non-exportable OpenBao Transit key and a bound public certificate.
+Preserve the official runner's single public HTTPS authority and route
+parity: `/realms/` to Keycloak, the enumerated UI paths to UI, and the
+remaining API paths to Gateway, including forwarded host/port/protocol,
+WebSocket behavior, and the isolated runner network. Share the existing
+remote TLS identity implementation with the passport edge rather than
+forking signing code. Replace local-certificate generation with remote
+certificate issuance and public CA export; remove all proxy private-key
+mounts and reject them in rendered profiles. Qualify the full official OIDF
+runner and negative KMS/certificate/route cases before retiring the Nginx
+profile. This edge remains open; the current #1344 Keycloak and selfhost
+gates do not prove it.
