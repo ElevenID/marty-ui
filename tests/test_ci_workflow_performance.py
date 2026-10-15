@@ -515,7 +515,7 @@ def test_remote_holder_live_kms_has_one_acceptance_owner_and_exact_ci_call() -> 
     )
     assert '"-p", "marty-service-acceptance",\n                    "--test", "holder_remote_live_kms"' in probe
     assert '"registration_provision_sign_and_deactivate_delete_remote_key"' in probe
-    assert '"test result: ok. 1 passed; 0 failed; 0 ignored;" not in result.stdout' in probe
+    assert "if not rust_test_succeeded(result):" in probe
 
 
 def test_python_service_job_retires_only_unused_fixture_provisioning() -> None:

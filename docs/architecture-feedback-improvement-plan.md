@@ -4224,6 +4224,26 @@ from the workspace or declared for a specific target. It prevents regression
 of this compile boundary; it does not claim that every A0 runtime or
 cross-repository obligation has been inventoried.
 
+The guard merged in [#1341](https://github.com/ElevenID/marty-ui/pull/1341)
+as `032e915ca` after review found and corrected a missed Cargo 2021 spelling:
+both `dev-dependencies` and `dev_dependencies` are now checked at the root and
+within target tables. All 152 local workflow-policy tests, exact-head CI and
+full [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38727240568)
+passed. This is regression prevention, not a measured speedup. The protected
+Canvas job took 21m51s, including 7m22s compiling reusable test executables
+and 10m08s in the isolated database group. These are one run's measurements,
+not a before/after attribution.
+
+October 15 A0 effective-execution audit: the disposable OpenBao policy probe
+invokes the Device Registration pairing Redis test and nineteen other focused
+Cargo test commands, but most previously checked only process exit status.
+Cargo can exit successfully when an ignored or filtered invocation selects
+zero tests. A focused candidate requires a Rust harness summary with at least
+one passed test for every one of those commands, preserving their current
+cases, disposable fixtures, and CI lanes. It changes no production behavior
+and claims no speedup; exact-head hosted execution and independent review are
+required before treating this audit gap as closed.
+
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
 disposable Redis to prove that unauthenticated and cross-tenant configuration

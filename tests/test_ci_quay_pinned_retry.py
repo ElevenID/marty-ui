@@ -78,6 +78,29 @@ def test_policy_probe_reuses_exact_local_image() -> None:
     docker.assert_called_once_with("image", "inspect", policy.IMAGE)
 
 
+@pytest.mark.parametrize(
+    "returncode,passed,expected",
+    [(0, 1, True), (0, 3, True), (0, 0, False), (1, 1, False)],
+)
+def test_policy_probe_requires_actual_rust_test_execution(
+    returncode: int, passed: int, expected: bool
+) -> None:
+    output = (
+        f"test result: ok. {passed} passed; 0 failed; 0 ignored; "
+        "0 measured; 4 filtered out; finished in 0.01s\n"
+    )
+    result = subprocess.CompletedProcess([], returncode, stdout=output)
+    assert policy.rust_test_succeeded(result) is expected
+
+
+def test_policy_probe_rejects_spoofed_non_summary_text() -> None:
+    result = subprocess.CompletedProcess(
+        [], 0, stdout="example: test result: ok. 1 passed; 0 failed; 0 ignored; "
+        "0 measured; 0 filtered out; finished in 0.01s\n"
+    )
+    assert not policy.rust_test_succeeded(result)
+
+
 def test_canvas_ci_uses_the_bounded_pinned_pull() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     steps = workflow["jobs"]["test-rust-services"]["steps"]
