@@ -180,6 +180,10 @@ func encryptContent(cek, iv, aad, plaintext []byte) ([]byte, []byte, error) {
 	defer clear(padded)
 	ciphertext := make([]byte, len(padded))
 	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
+	return ciphertext, contentTag(cek, iv, aad, ciphertext), nil
+}
+
+func contentTag(cek, iv, aad, ciphertext []byte) []byte {
 	mac := hmac.New(sha512.New, cek[:32])
 	_, _ = mac.Write(aad)
 	_, _ = mac.Write(iv)
@@ -187,7 +191,7 @@ func encryptContent(cek, iv, aad, plaintext []byte) ([]byte, []byte, error) {
 	var aadLength [8]byte
 	binary.BigEndian.PutUint64(aadLength[:], uint64(len(aad))*8)
 	_, _ = mac.Write(aadLength[:])
-	return ciphertext, mac.Sum(nil)[:32], nil
+	return mac.Sum(nil)[:32]
 }
 
 func concatKDF(z, algorithm, apu, apv, tag []byte, size int) []byte {

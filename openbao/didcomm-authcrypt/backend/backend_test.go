@@ -40,7 +40,7 @@ func (storage failMetadataStorage) BeginTx(ctx context.Context) (logical.Transac
 type failMetadataTransaction struct{ logical.Transaction }
 
 func (tx *failMetadataTransaction) Put(ctx context.Context, entry *logical.StorageEntry) error {
-	if strings.HasPrefix(entry.Key, "meta/") || strings.HasPrefix(entry.Key, "haip/meta/") {
+	if strings.HasPrefix(entry.Key, "meta/") || strings.HasPrefix(entry.Key, "haip/meta/") || strings.HasPrefix(entry.Key, "keycloak/meta/") {
 		return errors.New("injected metadata write failure")
 	}
 	return tx.Transaction.Put(ctx, entry)
@@ -61,6 +61,7 @@ func TestKeyLifecycleRequiresTransactionalStorage(t *testing.T) {
 			"sender_did": "did:example:alice", "sender_key_id": "did:example:alice#key-1",
 		}},
 		{"haip/keys/tenant_a/flow_a", nil},
+		{"keycloak/keys/11id/cookie", nil},
 	} {
 		response, err := engine.HandleRequest(ctx, &logical.Request{
 			Operation: logical.UpdateOperation, Path: test.path,
@@ -70,7 +71,7 @@ func TestKeyLifecycleRequiresTransactionalStorage(t *testing.T) {
 			t.Fatalf("non-transactional key creation succeeded: %s", test.path)
 		}
 	}
-	for _, prefix := range []string{"meta/", "secret/", "haip/meta/", "haip/secret/"} {
+	for _, prefix := range []string{"meta/", "secret/", "haip/meta/", "haip/secret/", "keycloak/meta/", "keycloak/secret/"} {
 		entries, err := storage.List(ctx, prefix)
 		if err != nil || len(entries) != 0 {
 			t.Fatalf("non-transactional storage retained %s: %v %v", prefix, entries, err)
@@ -92,10 +93,11 @@ func TestFailedMetadataWriteRollsBackVersionAndPointer(t *testing.T) {
 	}
 	for _, test := range []struct {
 		path, meta, versions string
-		data map[string]any
+		data                 map[string]any
 	}{
 		{senderPath, metadataPath("tenant_a", "sender"), "secret/tenant_a/sender/", senderData},
 		{"haip/keys/tenant_a/flow_a", haipMetaPath("tenant_a", "flow_a"), "haip/secret/tenant_a/flow_a/", nil},
+		{"keycloak/keys/11id/cookie", keycloakJWEMetaPath("11id", "cookie"), "keycloak/secret/11id/cookie/", nil},
 	} {
 		response, err := engine.HandleRequest(ctx, &logical.Request{
 			Operation: logical.UpdateOperation, Path: test.path,
