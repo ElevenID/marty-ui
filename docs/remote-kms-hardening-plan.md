@@ -22062,3 +22062,26 @@ inspection. The correction is local UI commit `abb8db931`; its contract target
 compiled with Rust 1.95, seven Revocation Profile config tests passed, and
 `git diff --check` passed. It is not yet pushed or proven by hosted CI; batch
 it with any other terminal lane findings before the next PR head.
+
+Run `38770177194` completed red on grouped UI head `b3af37155`: the OpenBao
+DIDComm plugin image, Keycloak browser/CIBA/KMS-loss/PostgreSQL custody,
+self-host, service-image and other independent jobs passed; contracts and
+Canvas failed, and CI Gate followed them. Contracts used a plaintext
+Revocation Profile runtime fixture with `ENVIRONMENT=beta` after deployed
+configuration began requiring HTTPS Organization CA and keyless gRPC identity;
+local UI commit `abb8db931` scopes that operational fixture to `test` while
+keeping production config tests. Canvas had six composition and two Flow
+failures: the base renderer still rejected the now-HTTPS disposable OpenBao
+URL, rendered/packaged Issuance omitted the public DIDComm KMS CA, and Flow's
+base fixture gave a production grant minter an HTTP OpenBao URL while its
+self-host synthetic KMS key versions were nonnumeric. Grouped local UI commit
+`ae081b825` binds Canvas Compose/Kubernetes and packaged Issuance to the
+public KMS CA, gives the Flow fixture an HTTPS address and public CA, supplies
+positive synthetic key versions, and adds bounded startup diagnostics. These
+are fixture corrections, not an assertion that synthetic Flow signing is a
+real KMS acceptance test. Local Python compilation, Compose Canvas/Flow
+renders, Flow keyless-config child, Rust 1.95 Canvas and Flow acceptance test
+compilation, Revocation Profile production config tests (7), formatting and
+diff checks passed. Docker-backed full replay was unavailable locally. The
+two commits remain to be pushed as one PR head and must pass exact-head hosted
+checks before merge or release qualification.
