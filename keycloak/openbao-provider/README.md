@@ -38,6 +38,16 @@ no local `SecretKey`. A remote AES cookie operation is required before browser
 login can pass; the default probe continues to cover the proven signing and
 refresh slice.
 
+Pinned 25.0.6 bytecode shows `RestartLoginCookie.encodeAndEncrypt` calls
+`KeyManager.getActiveKey(..., ENC, ...)` and `getActiveKey(..., SIG, ...)`,
+then passes both `SecretKey` objects directly to `TokenUtil.jweDirectEncode`.
+Its decode path similarly calls `TokenUtil.jweDirectVerifyAndDecode`.
+`DefaultKeycloakSession.keys()` constructs `DefaultKeyManager` directly.
+A `ContentEncryptionProvider` SPI override alone cannot intercept this
+cookie path. Preserve the no-export rule: qualify a pinned Keycloak source
+patch or a proven opaque remote JCE bridge for these operations rather than
+returning local AES/HMAC key bytes from the KeyProvider.
+
 The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
 may change between releases. Keycloak's Admin REST component representation
 omits secret config fields, so the acceptance gate must inspect the database
