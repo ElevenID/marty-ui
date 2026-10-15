@@ -228,6 +228,15 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         let rendered = RenderedBase::render(&spec);
         let native = &rendered.native_environment;
         let gateway = &rendered.gateway_environment;
+        for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
+            assert_eq!(native.get(name).map(String::as_str), Some(ca));
+        }
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE")
+                .map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
         assert_eq!(
             native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
             Some(expected_private_ips)

@@ -773,6 +773,43 @@ fn overlay(
         spec.grpc_ca_file.to_str().ok_or(ERROR)?.into(),
     );
     for name in [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ] {
+        require(native.contains_key(name))?;
+    }
+    for (name, value) in [
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            spec.grpc_tls_certificate_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            spec.grpc_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", spec.kms_url.as_str()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            spec.kms_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            spec.grpc_tls_token_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            spec.grpc_tls_key_name.as_str(),
+        ),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+    ] {
+        native.insert(name.into(), value.into());
+    }
+    for name in [
         "CREDENTIAL_TEMPLATE_SERVICE_URL",
         "REVOCATION_PROFILE_SERVICE_URL",
         "SIGNING_KEYS_INTERNAL_URL",
@@ -1115,6 +1152,21 @@ fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_pol
         assert_eq!(
             native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
             Some(ca_path)
+        );
+        for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
+            assert_eq!(native.get(name).map(String::as_str), Some(ca_path));
+        }
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE")
+                .map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME")
+                .map(String::as_str),
+            Some("canvas_grpc_tls_synthetic")
         );
         assert_eq!(
             native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
