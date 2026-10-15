@@ -4174,6 +4174,33 @@ handoff artifact; no external self-host support claim follows from the merge.
 
 October 15 A6 parallel self-host acceptance candidate: [#1338](https://github.com/ElevenID/marty-ui/pull/1338) merged the two-worker root release-contract suite after exact-head and protected CI, retaining 6,735 passed/25 skipped cases. Its protected root pytest step fell from 530.95s on #1335 to 356.49s on #1338; overall workflow wall time varied, so this is a step-level result only. In #1338's protected Canvas job, reusable test compilation took 376s, the public self-host image 386s, and the database group 485s. The existing self-host-only diagnostic owner proves an exact twelve-case test inventory and candidate image identity. A candidate now requires that owner as a parallel third lane for runtime PRs and protected merge groups, and omits only those twelve cases and the image build from Canvas. Worker, composition, Flow, database, full-qualification, and protected gates remain required. This change adds one standard public-repository runner; it does not claim a wall-time saving until exact-head and protected runs verify lane execution and comparable timings. The prior migrated-base database reuse pilot was slower in hosted runs and remains manual-only.
 
+October 15 A6 outcome: [#1339](https://github.com/ElevenID/marty-ui/pull/1339)
+merged as `416988bae` after 6,711 local root tests passed (53 Windows skips),
+independent review, exact-head CI, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38715290884). The
+new self-host lane passed its exact 12-case inventory in 83.77s, while Canvas
+and contracts passed independently. Compared with the preceding protected
+[#1338 run](https://github.com/ElevenID/marty-ui/actions/runs/38704320016),
+Canvas job time was 25m32s then 22m03s; total workflow time was 25m52s then
+25m17s. OpenBao qualification, not Canvas, was the later critical path at
+24m51s. These are two different combined heads and one observation each, not
+a general speed guarantee.
+
+The OpenBao recovery step in #1339 spent approximately 20 minutes in eight
+serial Cargo build/no-run invocations before its real PostgreSQL/OpenBao
+checks completed. The first normal Signing Keys binary build used the dev
+profile with line-table debug information; the following test targets used
+`CARGO_PROFILE_TEST_DEBUG=0`. A follow-up candidate aligns dev debug info to
+zero **for that CI step only**, matching the existing test override so Cargo
+can reuse compatible dependency outputs. It retains all target builds,
+database/KMS assertions, immutable image identity, and protected gates.
+Hosted before/after compile and workflow timings are required before claiming
+any further saving. Current main already owns the Canvas composition target
+in `marty-canvas-acceptance` and the cross-service Signing Keys cases in
+`marty-service-acceptance` ([#1332](https://github.com/ElevenID/marty-ui/pull/1332));
+the earlier A1 relocation candidates above are historical, not pending file
+moves.
+
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
 disposable Redis to prove that unauthenticated and cross-tenant configuration
