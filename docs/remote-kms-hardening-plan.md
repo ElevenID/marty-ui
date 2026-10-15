@@ -20941,3 +20941,16 @@ plaintext selectors are corrected; a real-Compose regression test covers
 that case. Next implement the isolated real Auth/Keycloak/Applicant dependency
 graph with scoped TLS bootstrap roles, then convert Gateway and prove a full
 local journey before submitting the grouped UI PR.
+
+2026-10-15 Auth TLS bootstrap preparation, staged in the grouped UI worktree:
+the Rust one-shot now issues separate Auth client and server certificates
+bound to distinct non-exportable OpenBao Transit P-256 keys, version 1 and
+individual sign-only tokens. The public-only handoff and disposable Compose
+secret inventory now include both, bringing the output set to fifteen roles.
+The same four focused suites passed 259 tests with two skips and the locked
+Rust bootstrap check passed. Fresh local Linux services image
+`sha256:6bd068e519b4b6f50d44622d5f33e3ff785ac483cad759060375a7033a38f573`
+passed the real HTTPS OpenBao/bootstrap/keyless-edge probe, including all
+fifteen public outputs and wrong-CA rejection. This provisions identities;
+it does not yet wire or run Auth, Keycloak or Applicant in the protected
+fixture, and does not qualify Gateway's full connected route.
