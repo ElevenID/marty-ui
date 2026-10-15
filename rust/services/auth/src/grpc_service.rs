@@ -52,7 +52,6 @@ pub struct AuthGrpcService {
 }
 
 impl AuthGrpcService {
-    #[must_use]
     pub fn new(
         application: Arc<dyn AuthSessionService>,
         service_token: Option<String>,

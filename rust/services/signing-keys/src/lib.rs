@@ -28,6 +28,10 @@ pub mod vc_api_holder_proof;
 extern crate self as marty_signing_keys;
 
 #[cfg(test)]
+#[path = "../tests/support/disposable_backends.rs"]
+mod disposable_backends;
+
+#[cfg(test)]
 mod managed_key_create_mock_contract;
 #[cfg(test)]
 mod public_config_resolve_mock_contract;

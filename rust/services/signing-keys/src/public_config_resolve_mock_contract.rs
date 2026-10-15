@@ -21,9 +21,7 @@ use std::sync::{
 };
 use tower::ServiceExt;
 
-#[path = "../tests/support/disposable_backends.rs"]
-mod disposable_backends;
-use disposable_backends::{disposable_openbao_envelope, disposable_redis_url};
+use crate::disposable_backends::{disposable_openbao_envelope, disposable_redis_url};
 
 async fn resolve(app: &Router, organization_id: &str, body: Value) -> (StatusCode, Value) {
     let response = app
