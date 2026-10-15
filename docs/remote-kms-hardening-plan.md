@@ -21102,4 +21102,5 @@ an acceptable custody check; use direct read-only database inspection.
 The proof module now has a pinned Maven build (`keycloak.version=25.0.6`,
 provided Keycloak dependencies); `mvn -B -q -DskipTests package` passed in
 the local Java 21 Maven container. This build success is compile evidence,
-not an OIDC feature acceptance test.
+not an OIDC feature acceptance test. Its isolated source commit on the
+grouped UI branch is `af7d188a9`; it has not been pushed or deployed.
