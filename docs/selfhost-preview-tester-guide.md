@@ -29,6 +29,7 @@ Keep a clean v1.1.247 source checkout, the downloaded assets, and the extracted
 installation in three separate directories:
 
 ```bash
+set -euo pipefail
 source_root=/path/to/clean/marty-ui-v1.1.247
 assets_dir=/path/to/downloaded-assets
 install_parent=/path/to/disposable-install-parent
@@ -50,7 +51,12 @@ The extracted `selfhost-prepared/README.md` describes the manual Compose,
 external OpenBao, environment, and secret-file setup. Its older release-status
 paragraph predates this preview; the exact digest-pinned images and the
 unqualified status in this guide and attached descriptor take precedence. The
-bundle contains placeholder secret files only; create real, disposable secrets
+README's plain `docker compose up -d` also starts an unprofiled Cloudflare
+tunnel. Do not use that command for a disposable local test; the installed
+journey runner selects only local roles and still requires isolated OpenBao
+and secret setup. There is no one-command local tester installer yet;
+[issue #1350](https://github.com/ElevenID/marty-ui/issues/1350) tracks it.
+The bundle contains placeholder secret files only; create real, disposable secrets
 outside the extracted directory. Never send passwords, tokens, private keys,
 or unredacted logs with feedback. Do not use `latest`, build images locally,
 or replace locked digests when reporting a result for this preview.

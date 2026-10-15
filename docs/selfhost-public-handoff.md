@@ -6,7 +6,7 @@ contains the signed Stack transaction and image evidence, but no self-host ZIP.
 Its opt-in job prepared an image-locked ZIP, lock, receipt, and product descriptor;
 the separate consumer checked the exact archive, Compose model, and anonymous
 image pulls. The exact prepared bytes are now separately available in the
-[experimental tester prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.1),
+[experimental tester prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.2),
 with an explicit [preview guide](selfhost-preview-tester-guide.md). That preview
 remains **unqualified and unsupported**: it has not passed an installed journey
 or KMS custody proof. It must not be presented as a supported installer or its
