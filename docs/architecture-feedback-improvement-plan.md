@@ -4236,13 +4236,20 @@ not a before/after attribution.
 
 October 15 A0 effective-execution audit: the disposable OpenBao policy probe
 invokes the Device Registration pairing Redis test and nineteen other focused
-Cargo test commands, but most previously checked only process exit status.
-Cargo can exit successfully when an ignored or filtered invocation selects
-zero tests. A focused candidate requires a Rust harness summary with at least
-one passed test for every one of those commands, preserving their current
-cases, disposable fixtures, and CI lanes. It changes no production behavior
-and claims no speedup; exact-head hosted execution and independent review are
-required before treating this audit gap as closed.
+Cargo test commands. Cargo can exit successfully when an ignored or filtered
+invocation selects zero tests. [#1342](https://github.com/ElevenID/marty-ui/pull/1342)
+merged as `9f827d30e` after adding a positive Rust harness-summary guard to
+all 20 calls; 164 focused local policy tests, independent review, exact-head
+CI, and full [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38734102251)
+passed. Existing cases, fixtures, and CI lanes remain unchanged. This closes
+that probe's false-green gap, not the wider A0 inventory, and claims no
+speedup. A subsequent audit of the same protected run found that the separate
+database-contract runner also trusts exit status for 29 direct libtest
+invocations. All 29 ran at least one passing test in that run, so a focused
+positive-summary guard can protect future selection drift without dropping
+current coverage. It still requires independent review and hosted validation.
+The independent code review found no regression issue; hosted validation is
+still pending.
 
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and

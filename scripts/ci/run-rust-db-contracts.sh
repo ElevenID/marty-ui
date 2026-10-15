@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-run_timed() {
-  local name="$1"
-  shift
-  local started ended status=0
-  started=$(python3 -c 'import time; print(time.monotonic_ns())')
-  "$@" || status=$?
-  ended=$(python3 -c 'import time; print(time.monotonic_ns())')
-  printf 'MARTY_CI_PHASE_V1 {"phase":"contract","name":"%s","duration_ms":%s,"status":"%s"}\n' \
-    "$name" "$(((ended - started) / 1000000))" "$([[ $status == 0 ]] && echo ok || echo failed)"
-  return "$status"
-}
+source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"
 resolve_contract_executable() {
   local target="$1"
   local artifacts="${RUNNER_TEMP:-}/rust-test-artifacts.json"
