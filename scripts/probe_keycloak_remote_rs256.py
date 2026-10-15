@@ -212,6 +212,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
         ca_dir.mkdir()
         cert_dir = root / "certs"
         cert_dir.mkdir()
+        jwe_token_dir = root / "jwe-tokens"
+        jwe_token_dir.mkdir()
         root_token = root / "root-token"
         scoped_token = root / "keycloak-token"
         root_token.write_text(secrets.token_hex(32), encoding="ascii")
@@ -235,6 +237,10 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 time.sleep(0.3)
             else:
                 raise RuntimeError("Disposable Keycloak PostgreSQL did not start")
+            plugin_environment = (
+                ["-e", 'BAO_LOCAL_CONFIG={"plugin_directory":"/plugins"}']
+                if require_browser else []
+            )
             run(
                 "docker", "run", "-d", "--name", bao_name,
                 "--network", network, "--network-alias", "openbao",
@@ -244,6 +250,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 "--mount", f"type=bind,src={root_token},dst=/run/secrets/bao_root_token,readonly",
                 "--mount", f"type=bind,src={ca_dir},dst=/bao/public-ca",
                 "-e", "PASSPORT_BAO_TLS_MODE=required",
+                *plugin_environment,
                 "--entrypoint", "/bin/sh", openbao_image,
                 "/usr/local/bin/passport-supported-openbao-start",
             )
@@ -282,6 +289,26 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 raise RuntimeError("OpenBao HTTPS did not become healthy")
 
             bao("secrets", "enable", "transit")
+            if require_browser:
+                digest = run("docker", "exec", bao_name, "sha256sum",
+                             "/plugins/openbao-didcomm-authcrypt").split()[0]
+                bao_api("sys/plugins/catalog/secret/openbao-didcomm-authcrypt", {
+                    "command": "openbao-didcomm-authcrypt", "sha256": digest,
+                })
+                bao_api("sys/mounts/didcomm", {"type": "openbao-didcomm-authcrypt"})
+                for realm in ("master", "11id"):
+                    reference = bao_api(f"didcomm/keycloak/keys/{realm}/cookie", {})["data"]
+                    version = reference["version"]
+                    policy = (
+                        f'path "didcomm/keycloak/keys/{realm}/cookie" {{ capabilities = ["read"] }}\n'
+                        f'path "didcomm/keycloak/jwe/encode/{realm}/cookie/{version}" {{ capabilities = ["update"] }}\n'
+                        f'path "didcomm/keycloak/jwe/decode/{realm}/cookie/{version}" {{ capabilities = ["update"] }}\n'
+                    )
+                    policy_name = f"keycloak-{realm}-cookie-probe"
+                    bao("policy", "write", policy_name, "-", input_text=policy)
+                    (jwe_token_dir / f"{realm}-cookie.token").write_text(
+                        bao("token", "create", f"-policy={policy_name}",
+                            "-ttl=1h", "-field=token"), encoding="ascii")
             bao_api("sys/mounts/pki", {"type": "pki"})
             ca = bao_api("pki/root/generate/internal", {
                 "common_name": "Marty disposable Keycloak CA", "ttl": "24h",
@@ -321,13 +348,17 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if not scoped_token.read_text().strip():
                 raise RuntimeError("Scoped OpenBao token is empty")
 
+            provider_mount = [] if require_browser else [
+                "--mount", f"type=bind,src={jar},dst=/opt/keycloak/providers/marty-kms-probe.jar,readonly",
+            ]
             run(
                 "docker", "run", "-d", "--name", kc_name,
                 "--network", network, "-p", "127.0.0.1::8080",
-                "--mount", f"type=bind,src={jar},dst=/opt/keycloak/providers/marty-kms-probe.jar,readonly",
+                *provider_mount,
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",
                 "--mount", f"type=bind,src={scoped_token},dst=/run/kms/token,readonly",
                 "--mount", f"type=bind,src={cert_dir},dst=/run/kms/certs,readonly",
+                "--mount", f"type=bind,src={jwe_token_dir},dst=/run/kms/jwe-tokens,readonly",
                 "-e", "KEYCLOAK_ADMIN=probe",
                 "-e", "KEYCLOAK_ADMIN_PASSWORD=synthetic-probe-only",
                 "-e", "KC_DB=postgres",
@@ -338,6 +369,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 "-e", "BAO_CACERT=/run/kms/ca.crt",
                 "-e", "BAO_TOKEN_FILE=/run/kms/token",
                 "-e", "MARTY_KEYCLOAK_RS256_CERT_DIR=/run/kms/certs",
+                "-e", "MARTY_KEYCLOAK_JWE_TOKEN_DIR=/run/kms/jwe-tokens",
+                "-e", "MARTY_KEYCLOAK_JWE_MOUNT=didcomm",
                 "-e", f"MARTY_KEYCLOAK_KMS_KEY_PREFIX={prefix}",
                 "-e", "MARTY_KEYCLOAK_KMS_KEY_VERSION=1",
                 keycloak_image, "start-dev",
@@ -426,6 +459,17 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         verify_jwt(browser_tokens[field], jwks_11id,
                                    f"{prefix}-11id-rs256-v1",
                                    base + "/realms/11id")
+                (jwe_token_dir / "11id-cookie.token").write_text(
+                    "invalid-disposable-token", encoding="ascii")
+                denied_browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                                              StopAtCallback(callback))
+                try:
+                    browser_code(denied_browser, base, callback, login=True)
+                except RuntimeError as error:
+                    if "HTTP 400" not in str(error) and "HTTP 500" not in str(error):
+                        raise RuntimeError("Unexpected browser KMS-loss result") from error
+                else:
+                    raise RuntimeError("Browser login succeeded without its remote cookie key")
             refreshed_tokens = {}
             for realm, issued, jwks_for_realm in (
                 ("master", master_tokens, jwks),
@@ -482,7 +526,8 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("OpenBao loss caused local key storage")
             verify_database_gate(pg_name)
-            print("Remote RS256 master/11id token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
+            browser_result = "browser/session, " if require_browser else ""
+            print(f"Remote RS256 master/11id {browser_result}token/refresh/JWKS, KMS-loss denial, and PostgreSQL custody gate passed")
         finally:
             if started_kc:
                 subprocess.run(["docker", "rm", "-f", kc_name], capture_output=True)

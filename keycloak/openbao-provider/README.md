@@ -1,68 +1,49 @@
-# Keycloak 25 KMS provider bootstrap proof
+﻿# Keycloak 25.0.6 remote KMS integration
 
-This module is an incomplete KMS-only OIDC integration, not a deployable
-provider. Four factories override Keycloak 25.0.6's generated key factories
-under their existing IDs with a higher `order()`. They never generate,
-import, or load a private key. RS256 and HS512 signing and verification use
-version-pinned, non-exportable OpenBao Transit keys. RSA-OAEP and AES remain
-fail closed until their remote operations are implemented and qualified.
+This pinned, unshipped Keycloak build removes generated realm private-key and
+secret custody. Four higher-order `keys` factories keep Keycloak's built-in
+provider IDs without creating local material. RS256 and HS512 use
+non-exportable OpenBao Transit keys. The RSA-OAEP and generic AES providers
+still fail closed; their dependent features remain to be qualified.
 
-On a fresh disposable Keycloak 25.0.6 instance, this JAR allowed the master
-realm to start with all four expected KeyProvider components and no
-`privateKey` or `secret` entries in `COMPONENT_CONFIG`. A live disposable
-PostgreSQL 15 and HTTPS OpenBao probe then created `11id` and issued RS256
-tokens in both realms. It checked realm issuers, distinct remote RSA public keys, and each
-signature against the corresponding Keycloak JWKS. Two successive refresh
-grants in each realm also issued independently verified RS256 tokens. Direct
-database scans after startup, realm creation, and issuance found zero private-key or
-generated-secret rows. The read-only PostgreSQL custody gate passed after
-issuance and again after KMS-loss denial. Invalidating the scoped OpenBao
-token made issuance fail with HTTP 500 in both realms; refresh grants failed closed with
-`invalid_grant`, and the database remained clear. The probe
-provisions its CA and leaf certificates inside OpenBao; only public
-certificates leave that boundary.
+Keycloak 25.0.6's `RestartLoginCookie` and CIBA request-ID classes directly
+request `SecretKey` objects and call `TokenUtil.jweDirectEncode`, which
+requires `Key.getEncoded()`. A provider SPI alone cannot make those calls
+remote. This module includes the two upstream Apache-2.0 source classes,
+patched to call `RemoteDirectJwe`. The Dockerfile builds the pinned provider
+JAR and replaces only those classes in the pinned `keycloak-services` JAR.
+The Java provider JAR excludes the duplicate upstream classes. The shared
+`BaoHttp` client requires CA-verified HTTPS and reads scoped tokens from
+files; it never reads an AES/HMAC CEK. The Go OpenBao plugin performs compact
+`dir` / `A256CBC-HS512` JWE with distinct realm and `cookie`/`ciba` keys.
 
-Do not add this JAR to a production Keycloak image or the protected passport
-fixture. The completed extension must cover remote RSA-OAEP and AES behavior
-required by Keycloak; handle versioned public keys and rotation; and pass the
-PostgreSQL custody verifier in the installed stack plus connected browser login and session tests
-for both realms. The two-realm direct-grant/refresh proof uses a disposable
-PostgreSQL database, not the product's browser login or installed stack.
+Build the two local images from the repository root:
 
-Run `python scripts/probe_keycloak_remote_rs256.py --require-browser` to
-exercise an authorization-code login with PKCE and silent session reuse in
-`11id`. This acceptance check currently fails closed at the initial login:
-Keycloak 25.0.6 reports `Error encoding cookie` and `Failed to find key:
-realm=11id algorithm=AES use=ENC`. The AES key provider intentionally returns
-no local `SecretKey`. A remote AES cookie operation is required before browser
-login can pass; the default probe continues to cover the proven signing and
-refresh slice.
+```sh
+docker build -f openbao/didcomm-authcrypt/Dockerfile -t marty-openbao-ha-probe:local .
+docker build -f keycloak/openbao-provider/Dockerfile -t marty-keycloak-openbao:local .
+```
 
-Pinned 25.0.6 bytecode shows `RestartLoginCookie.encodeAndEncrypt` calls
-`KeyManager.getActiveKey(..., ENC, ...)` and `getActiveKey(..., SIG, ...)`,
-then passes both `SecretKey` objects directly to `TokenUtil.jweDirectEncode`.
-Its decode path similarly calls `TokenUtil.jweDirectVerifyAndDecode`.
-`DefaultKeycloakSession.keys()` constructs `DefaultKeyManager` directly.
-`TokenUtil.jweDirectEncode(Key, Key, byte[])` also unconditionally calls
-`Key.getEncoded().length` before building the JWE. A
-`ContentEncryptionProvider` SPI override cannot intercept this cookie path,
-and an opaque `SecretKey` with `getEncoded() == null` cannot pass the current
-code. The implementation route for this pinned version is a
-source-built Keycloak change to route cookie JWE encode/decode to remote
-operations. Keep AES/HMAC bytes inside OpenBao; do not supply real or fake
-local key bytes to satisfy the old `SecretKey` API.
-The same services JAR also has direct JWE calls in
-`CIBAAuthenticationRequest` for CIBA `auth_req_id`; the source change must
-cover that path and preserve its existing validation semantics as well.
+Then run the disposable PostgreSQL 15, HTTPS OpenBao and Keycloak proof:
 
-The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
-may change between releases. Keycloak's Admin REST component representation
-omits secret config fields, so the acceptance gate must inspect the database
-directly; an empty Admin REST `config` map does not establish KMS custody.
+```sh
+python scripts/probe_keycloak_remote_rs256.py --require-browser \
+  --keycloak-image marty-keycloak-openbao:local \
+  --openbao-image marty-openbao-ha-probe:local
+```
 
-Build the proof module with `mvn -B -q -DskipTests package` in this directory
-using Java 17 or later. The pinned dependencies have `provided` scope; the
-resulting JAR contains only this module's classes and service registration.
-From the repository root, run `python scripts/probe_keycloak_remote_rs256.py`
-with Python's `cryptography` package and Docker available. The probe uses
-disposable Docker resources and prints neither tokens nor key material.
+The proof creates `master` and `11id` with separate RSA/HMAC identities,
+checks direct-grant and successive refresh-token signatures against each
+realm's JWKS, completes an `11id` authorization-code/PKCE browser login and
+silent session reuse, and denies a new browser login after revoking its
+separate OpenBao cookie token. Direct PostgreSQL scans and the read-only
+Keycloak custody gate find no `privateKey` or generated `secret` rows after
+bootstrap, realm creation, token issuance and KMS-loss denial. The probe
+exports only public certificates and cleans its disposable containers.
+
+This local proof does not qualify the installed stack. CIBA behavior has
+been patched but has no connected acceptance proof; RSA-OAEP and other AES
+flows may still fail closed. Master browser login, key rotation during
+active sessions, exact-image deployment, broad provider controls, and
+production cutover remain. Do not publish this image as fully KMS-only until
+those paths pass with the exact artifact and database gate.
