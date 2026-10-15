@@ -1,6 +1,8 @@
 package dev.marty.keycloak.kms;
 
 import java.util.List;
+import java.util.stream.Stream;
+import org.keycloak.crypto.KeyWrapper;
 import org.keycloak.component.ComponentModel;
 import org.keycloak.keys.KeyProvider;
 import org.keycloak.keys.KeyProviderFactory;
@@ -8,8 +10,8 @@ import org.keycloak.models.KeycloakSession;
 import org.keycloak.provider.ProviderConfigProperty;
 
 /**
- * Bootstrap probe: overrides Keycloak's generated providers without making
- * private material. Until remote operations are implemented, key use fails.
+ * Overrides generated providers without making private material. Unimplemented
+ * algorithms advertise no keys, causing callers to fail without local fallback.
  */
 abstract class FailClosedKeyFactory implements KeyProviderFactory<KeyProvider> {
     private final String id;
@@ -39,8 +41,7 @@ abstract class FailClosedKeyFactory implements KeyProviderFactory<KeyProvider> {
     }
 
     @Override
-    public final KeyProvider create(KeycloakSession session, ComponentModel model) {
-        throw new IllegalStateException(
-                "Remote KMS key provider is not configured; local keys are forbidden");
+    public KeyProvider create(KeycloakSession session, ComponentModel model) {
+        return () -> Stream.<KeyWrapper>empty();
     }
 }
