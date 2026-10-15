@@ -22817,3 +22817,22 @@ the PowerShell deployment script parsed. This commit is held for a broad
 test-fixture cleanup PR after #1344 lands; active image smoke and Canvas
 fixtures still need a real KMS-backed HTTPS replacement, not deletion of their
 round-trip coverage.
+
+Local Docker Desktop became available on 2026-10-15. The current source
+`keycloak/openbao-provider/Dockerfile` and
+`openbao/didcomm-authcrypt/Dockerfile` built successfully into disposable
+local images. Their real `probe_keycloak_remote_rs256.py --require-browser`
+run passed both realms' rotated browser/cookie sessions, CIBA,
+token/refresh/JWKS verification, KMS-loss denial, and the fresh PostgreSQL
+KMS-only custody gate; its three disposable containers were removed. An
+earlier attempt with the cached October 13 OpenBao plugin image failed 404 at
+the new DIDComm key endpoint, confirming that plugin and Keycloak images must
+be matched by source/release. The live installed beta and self-host stacks
+remain stock Keycloak 25.0. Read-only execution of
+`scripts/sql/keycloak-kms-only-verify.sql` against each installed `keycloak`
+database failed with exactly four `privateKey` and four generated `secret`
+rows across the two realms (zero unexpected, duplicate, or missing providers).
+The disposable success does not cleanse or qualify either installed database;
+do not delete those rows before an exact-image cutover and a recoverable
+clean-install/rollback procedure are ready. Merge-group CI for #1344 is still
+running at this checkpoint.
