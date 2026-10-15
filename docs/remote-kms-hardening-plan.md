@@ -20847,3 +20847,21 @@ diff checks passed. The nginx edge still mounts a private TLS key, and
 plaintext gRPC selectors still block the strict protected acceptance gate.
 Replace the edge and convert active gRPC routes before local paired-image
 acceptance and the grouped PR.
+
+2026-10-15 protected passport Rust edge cutover, staged in the grouped UI
+worktree: the disposable HTTPS edge now runs `marty-passport-keyless-edge`
+from the same signed services image as the Rust owners. It mounts its public
+certificate, a distinct scoped OpenBao signing token and the read-only public
+CA, with a project-bound non-exportable key name and pinned version. The
+nginx-only edge config, nginx image role/pin, local TLS key secret and the
+disposable OpenSSL private-key generator were removed. Model, live ownership,
+partial teardown, handoff and runtime-image checks now require the signed
+edge image and remote signer identity. The old collector test that generated
+TLS private keys was removed; the existing live Rust/OpenBao keyless edge probe
+carries the HTTPS behavior proof. Eight focused suites passed 338 tests with
+two skips; Python compilation and diff checks passed. The actual rendered
+base and selfhost Compose models are included. Protected acceptance remains
+blocked by `GRPC_INSECURE_ALLOWED=true` and plaintext service gRPC targets.
+The next slice must issue additional non-exportable workload identities for
+every active gRPC client/server, convert those routes together, then run the
+full paired-image passport journey locally before pushing the grouped UI PR.
