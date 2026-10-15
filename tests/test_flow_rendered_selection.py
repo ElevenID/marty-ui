@@ -49,8 +49,17 @@ def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_p
         result["profiles"]["selfhost"]["original_environment"][
             "ISSUANCE_GRPC_TARGET"
         ]
-        == "issuance-native:9005"
+        == "https://issuance-native:9005"
     )
+    assert not (tmp_path / "flow_workload_client_key").exists()
+    assert not (tmp_path / "flow_workload_server_key").exists()
+    for name in (
+        "flow_workload_client_cert",
+        "flow_workload_server_cert",
+        "openbao_tls_ca_cert",
+        "workload_identity_ca_cert",
+    ):
+        assert "PRIVATE KEY" not in (tmp_path / name).read_text(encoding="ascii")
 
 
 def test_flow_selfhost_additions_require_closed_interpolation():
@@ -76,6 +85,7 @@ def test_flow_selfhost_additions_require_closed_interpolation():
     [
         ("issuance:9005", "legacy_rpc"),
         ("issuance-native:9005", "native_rpc"),
+        ("https://issuance-native:9005", "native_rpc"),
     ],
 )
 def test_target_mapping_preserves_selection_and_all_unrelated_values(
@@ -88,7 +98,11 @@ def test_target_mapping_preserves_selection_and_all_unrelated_values(
     actual = GATE["mapped_environment"](original, inputs)
     expected = dict(original["environment"])
     expected.update(
-        ISSUANCE_GRPC_TARGET=inputs[target],
+        ISSUANCE_GRPC_TARGET=(
+            inputs[target].replace("http://", "https://", 1)
+            if owner.startswith("https://")
+            else inputs[target]
+        ),
         ISSUANCE_SERVICE_URL=inputs["legacy_http"],
         ISSUANCE_API_KEY_FILE=(tmp_path / "issuance_api_key").as_posix(),
         SIGNING_KEYS_INTERNAL_API_KEY_FILE=(tmp_path / "issuance_api_key").as_posix(),

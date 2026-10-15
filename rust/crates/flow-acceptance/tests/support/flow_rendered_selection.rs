@@ -5,8 +5,8 @@ use super::super::super::bounded_fixture_command;
 use super::{physical, server_with_rejection, snapshot, Ports, Seeds, TOKEN};
 use marty_flow::{
     FlowConfigError, FlowGrpcChannelFactories, FlowProviderError, FlowServiceConfig,
-    HttpPhysicalDocumentProvider, IssuanceInitiationRequest, IssuanceInitiationResult,
-    IssuanceProvider,
+    FlowWorkloadChannelFactory, HttpPhysicalDocumentProvider, IssuanceInitiationRequest,
+    IssuanceInitiationResult, IssuanceProvider,
 };
 use serde_json::{json, Value};
 use sqlx::postgres::PgPoolOptions;
@@ -28,13 +28,12 @@ const FILES: &[&str] = &[
     "marty_db_password",
     "flow_webhook_secret",
     "flow_application_event_hmac_key",
+    "flow_client_tls_kms_token",
+    "flow_server_tls_kms_token",
     "flow_workload_client_cert",
-    "flow_workload_client_key",
     "flow_workload_server_cert",
-    "flow_workload_server_key",
+    "openbao_tls_ca_cert",
     "workload_identity_ca_cert",
-    "ca.pem",
-    "server.key",
     "loader.sh",
     "flow.stdout",
     "flow.stderr",
@@ -214,14 +213,18 @@ pub(super) async fn child() {
     assert_eq!(config.workload_client_tls.is_some(), deployed);
     assert_eq!(config.workload_server_tls.is_some(), deployed);
     assert_eq!(config.redis_database, 3);
-    assert_eq!(config.organization_grpc_target, "http://organization:9002");
+    let scheme = if deployed { "https" } else { "http" };
+    assert_eq!(
+        config.organization_grpc_target,
+        format!("{scheme}://organization:9002")
+    );
     assert_eq!(
         config.credential_template_grpc_target,
-        "http://credential-template:9003"
+        format!("{scheme}://credential-template:9003")
     );
     assert_eq!(
         config.presentation_policy_grpc_target,
-        "http://presentation-policy:9009"
+        format!("{scheme}://presentation-policy:9009")
     );
     assert_eq!(config.signing_keys_url, "http://signing-keys:8017/internal");
     assert_eq!(config.issuance_api_key.as_deref(), Some(KEY));
@@ -231,6 +234,16 @@ pub(super) async fn child() {
     // Do not connect unrelated provider owners. All issuance calls below use
     // the actual factory and its rendered target/authentication decisions.
     let factories = FlowGrpcChannelFactories::from_config(&config).unwrap();
+    if action == "config" {
+        assert!(deployed);
+        assert!(config.issuance_grpc_target.starts_with("https://"));
+        assert!(matches!(
+            factories.issuance,
+            FlowWorkloadChannelFactory::Keyless { .. }
+        ));
+        println!("{PREFIX}{}", json!({"kind":"keyless-config"}));
+        return;
+    }
     let providers = factories
         .connect_lazy()
         .unwrap()
@@ -327,12 +340,13 @@ pub(super) async fn run(database_url: &str) {
     for (index, name) in ["base", "selfhost"].into_iter().enumerate() {
         let environment: BTreeMap<String, String> =
             serde_json::from_value(profiles[name]["environment"].clone()).unwrap();
-        assert_eq!(
-            environment["ISSUANCE_GRPC_TARGET"],
-            native.origin(),
-            "{name} must render the native Issuance RPC target"
-        );
         let deployed = name == "selfhost";
+        let expected_target = if deployed {
+            native.origin().replacen("http://", "https://", 1)
+        } else {
+            native.origin().to_owned()
+        };
+        assert_eq!(environment["ISSUANCE_GRPC_TARGET"], expected_target);
         let before_config = snapshot(&pool).await;
         let before_config_attempts = native.attempts();
         for missing in [
@@ -357,6 +371,17 @@ pub(super) async fn run(database_url: &str) {
                 assert_eq!(native.attempts(), before_config_attempts);
                 assert_eq!(snapshot(&pool).await, before_config);
             }
+        }
+        if deployed {
+            // This fixture has a plaintext synthetic RPC listener. Assert the
+            // rendered deployed configuration selects remote-key TLS, then
+            // leave the real TLS handshake to the OpenBao acceptance suite.
+            assert_eq!(
+                execute(&environment, &directory.0, "config", true).await["kind"],
+                "keyless-config"
+            );
+            assert_eq!(native.attempts(), before_config_attempts);
+            continue;
         }
         let before_auth = snapshot(&pool).await;
         let previous_attempts = native.attempts();
@@ -445,10 +470,10 @@ pub(super) async fn run(database_url: &str) {
         assert_eq!(native.attempts(), previous_attempts + missing_attempt + 4);
         assert_eq!(legacy.attempts(), 2, "no configured RPC fallback");
     }
-    physical.assert_health_requests(2);
+    physical.assert_health_requests(1);
     let stored = snapshot(&pool).await;
     native.close().await;
-    for name in ["base_native", "selfhost"] {
+    for name in ["base_native"] {
         let environment = serde_json::from_value(profiles[name]["environment"].clone()).unwrap();
         assert_eq!(
             execute(&environment, &directory.0, "normal", name == "selfhost").await["kind"],
@@ -457,7 +482,7 @@ pub(super) async fn run(database_url: &str) {
         assert_eq!(legacy.attempts(), 2);
         assert_eq!(snapshot(&pool).await, stored);
     }
-    physical.assert_health_requests(2);
+    physical.assert_health_requests(1);
     physical.close().await;
     legacy.close().await;
     pool.close().await;

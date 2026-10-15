@@ -31,13 +31,16 @@ SECRET_VALUES = {
     "flow_webhook_secret": "synthetic-flow-rendered-webhook-secret",
     "flow_application_event_hmac_key": "synthetic-flow-rendered-event-hmac-key",
     "sign_grant_mint_flow_wallet_token": "synthetic-flow-grant-mint-capability",
+    "flow_client_tls_kms_token": "synthetic-flow-client-tls-sign-capability",
+    "flow_server_tls_kms_token": "synthetic-flow-server-tls-sign-capability",
 }
 TLS_FILES = {
     "GRPC_WORKLOAD_TLS_CLIENT_CERT": "flow_workload_client_cert",
-    "GRPC_WORKLOAD_TLS_CLIENT_KEY": "flow_workload_client_key",
+    "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "openbao_tls_ca_cert",
     "GRPC_WORKLOAD_TLS_SERVER_CERT": "flow_workload_server_cert",
-    "GRPC_WORKLOAD_TLS_SERVER_KEY": "flow_workload_server_key",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "openbao_tls_ca_cert",
     "GRPC_WORKLOAD_TLS_CA_CERT": "workload_identity_ca_cert",
+    "BAO_CACERT": "openbao_tls_ca_cert",
 }
 
 
@@ -64,6 +67,7 @@ def mapped_environment(service, spec):
     environment["ISSUANCE_GRPC_TARGET"] = {
         "issuance:9005": spec["legacy_rpc"],
         "issuance-native:9005": spec["native_rpc"],
+        "https://issuance-native:9005": spec["native_rpc"].replace("http://", "https://", 1),
     }[original["ISSUANCE_GRPC_TARGET"]]
     assert original["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     environment["ISSUANCE_SERVICE_URL"] = spec["legacy_http"]
@@ -151,12 +155,13 @@ def render(spec, command):
         }
         for name, value in SECRET_VALUES.items():
             (directory / name).write_text(value, encoding="utf-8")
-        # Existing ephemeral certificate helper, not operator credential creation.
-        fixture = runpy.run_path(str(ROOT / "scripts/test_canvas_lti_https.py"))
-        certificate, key = fixture["create_loopback_certificate"](directory)
-        for name in TLS_FILES.values():
-            source = key if name.endswith("_key") else certificate
-            (directory / name).write_bytes(source.read_bytes())
+        public_certificate = (
+            ROOT / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+        ).read_bytes()
+        assert b"BEGIN CERTIFICATE" in public_certificate
+        assert b"PRIVATE KEY" not in public_certificate
+        for name in set(TLS_FILES.values()):
+            (directory / name).write_bytes(public_certificate)
         return {"schema": "marty.flow-rendered-selection/v1", "profiles": result}
 
 

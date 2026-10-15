@@ -165,7 +165,7 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         "credentials/{credential_id}/status}"
     )
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     for service_name in ("auth", "applicant", "presentation-policy"):
         assert "issuance-native" not in services[service_name].get("depends_on", {})
