@@ -4201,6 +4201,29 @@ in `marty-canvas-acceptance` and the cross-service Signing Keys cases in
 the earlier A1 relocation candidates above are historical, not pending file
 moves.
 
+October 15 A6 follow-up: [#1340](https://github.com/ElevenID/marty-ui/pull/1340)
+merged as `4770e86b0` after 150 focused workflow-policy tests, independent
+review, exact-head CI, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38721742848). The first
+test-target build after the normal Signing Keys binary fell from 5m33s to
+28.64s in the protected run, consistent with reuse under the aligned debug
+profiles. The complete OpenBao recovery step took 21m34s before and 18m35s
+after; total protected workflow time took 25m17s before and 22m26s after.
+Other compilation and runner variance remains, so this is a one-run observed
+improvement rather than a general guarantee. No Rust target, runtime
+assertion, OpenBao/PostgreSQL/Raft check, or protected gate was removed.
+
+October 15 A1 graph recheck: locked Cargo metadata on current UI main lists
+17 `rust/services/*` packages and **zero** service-to-service development
+dependency edges. The Canvas composition target and cross-service Signing Keys
+proofs have moved to acceptance packages, while service-owned unit and adapter
+tests remain with their services. The earlier A1 rows above described the
+state before those later moves. A lightweight manifest guard now rejects a
+new service-to-service dev edge, including renamed dependencies inherited
+from the workspace or declared for a specific target. It prevents regression
+of this compile boundary; it does not claim that every A0 runtime or
+cross-repository obligation has been inventoried.
+
 October 14 A0/A1 Gateway live-config ownership candidate: a previously
 ignored Gateway library test composes the real Signing Keys HTTP router and
 disposable Redis to prove that unauthenticated and cross-tenant configuration
