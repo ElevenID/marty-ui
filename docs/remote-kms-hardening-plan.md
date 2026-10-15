@@ -21915,3 +21915,10 @@ the selfhost acceptance executable compiled. The live loader and Canvas
 startup cannot run on this Windows host while its Docker daemon is
 unavailable, so both remain hosted retests. The grouped unpublished UI
 correction batch is `17b8ffeaa`, `30324cb7c`, and `5a4ac2200`.
+
+All three corrections were pushed together to UI PR #1344 at exact head
+`5a4ac220090196185f59d6d555159bbb6c7a95c3`. The new hosted
+qualification is [CI run `38764261250`](https://github.com/ElevenID/marty-ui/actions/runs/38764261250),
+queued at registration. PR #1344's body now describes that exact head,
+local checks, the four prior red lanes, and remaining release boundaries.
+Do not count run `38759939281` as a passing gate for this head.
