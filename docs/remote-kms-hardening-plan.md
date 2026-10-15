@@ -21969,3 +21969,25 @@ updated. Exact-head [CI run `38767505426`](https://github.com/ElevenID/marty-ui/
 was queued at inspection; policy had passed and CodeQL/organization gates
 were still live. The local Docker-backed Canvas/Keycloak corrections require
 this new hosted run; the previous red run does not qualify the new head.
+
+2026-10-15 exact-head run `38767505426` follow-up, before its other long
+lanes finished: release-contract tests passed, but the Keycloak plugin job
+failed a **baseline** master browser login before any cookie-key rotation.
+Keycloak logged that it could not find the authentication session and was
+trying the restart cookie; no remote-key denial was established. The
+disposable probe uses `http://127.0.0.1` over a host-only mapped port.
+Keycloak treats loopback as a secure context and can set `Secure` session
+cookies, while Python's default `http.cookiejar` does not return those over
+HTTP. Chromium's browser cookie tests explicitly allow Secure cookies on
+loopback HTTP. Local commit `f13973de8` gives only this disposable browser
+probe a narrow `127.0.0.1` Secure-cookie exception, with a positive and
+negative policy test (10 tests passed); it does not change production cookie
+policy or KMS custody. Local commit `694cf4cbb` bounds cookie metadata in
+failure diagnostics and rejects off-origin login form actions (nine focused
+tests passed before the additional test). Both remain unpushed pending the
+other lanes' results and a single next grouped CI run. The contracts lane's
+shared OpenBao dev fixture also lacked an enabled Transit mount; local
+commit `0fd80e0d9` enables that mount before creating/checking its
+non-exportable integration-secret key. The exact workflow assertion passed.
+The Keycloak cookie diagnosis is evidence-based but not yet confirmed by a
+live rerun; do not claim the browser gate is qualified.
