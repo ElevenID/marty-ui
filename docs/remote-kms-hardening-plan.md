@@ -22058,5 +22058,7 @@ new production fail-closed config correctly rejects without
 plaintext operational contract; separate production config tests continue to
 require HTTPS Organization CA and KMS-backed gRPC listener identity and reject
 private-key files. The OpenBao plugin and Canvas lanes were still running at
-inspection. This correction is not yet pushed or proven by hosted CI; batch it
-with any other terminal lane findings before the next PR head.
+inspection. The correction is local UI commit `abb8db931`; its contract target
+compiled with Rust 1.95, seven Revocation Profile config tests passed, and
+`git diff --check` passed. It is not yet pushed or proven by hosted CI; batch
+it with any other terminal lane findings before the next PR head.
