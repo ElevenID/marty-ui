@@ -21034,3 +21034,14 @@ KMS key names accepted. Four alias-negative cases were added to the existing
 Compose model tests; all nine tests in that module passed locally. The guard
 does not make the current Gateway fixture acceptable: it still lacks Auth
 and contains insecure graph edges. The grouped branch remains unlanded.
+
+2026-10-15 K11 self-host production policy, staged in the same branch: the
+shared runtime Compose environment still defaulted
+`GRPC_INSECURE_ALLOWED` to true and allowed a deployment override, even
+though its configured gRPC targets are HTTPS. It now sets `false` without
+an override. A focused parsed-Compose regression check confirms every
+self-host service environment with that setting resolves to `false`.
+The existing exact approved-model test module reports 71 fixture errors
+because the broad uncommitted TLS topology differs from its approved
+snapshot; that snapshot must be reviewed and updated for the grouped PR.
+This focused pass is not a connected full-stack TLS proof.
