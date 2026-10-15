@@ -89,7 +89,7 @@ def configuration(case, mode):
         "SIGNING_KEYS_INTERNAL_URL": "http://127.0.0.1:8017/internal/signing-keys",
         # Startup must exercise the managed grant path. This idle-only probe
         # has no mint authority: an unexpected sign cannot read this file.
-        "BAO_ADDR": "http://127.0.0.1:1",
+        "BAO_ADDR": "https://127.0.0.1:1",
         "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE": "/nonexistent/canvas-worker-image-grant",
         "INTEGRATION_SECRET_KMS_URL": "https://127.0.0.1:8017/internal",
         "INTEGRATION_SECRET_KMS_CA_FILE": "/synthetic-secrets/ca.crt",

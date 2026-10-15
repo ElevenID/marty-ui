@@ -2154,24 +2154,26 @@ jobs:
           PUBLIC_API_URL: https://beta.example.test
           PUBLIC_DOMAIN: beta.example.test
           MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE: /dev/null
-          PP_WORKLOAD_SERVER_CERT_FILE: /dev/null
-          PP_WORKLOAD_SERVER_KEY_FILE: /dev/null
-          FLOW_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          FLOW_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          FLOW_WORKLOAD_SERVER_CERT_FILE: /dev/null
-          FLOW_WORKLOAD_SERVER_KEY_FILE: /dev/null
-          AUTH_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          AUTH_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          APPLICANT_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          APPLICANT_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          VERIFICATION_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          VERIFICATION_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
-          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE: /dev/null
-          COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE: /dev/null
         run: |
           set -euo pipefail
+          # Render-only placeholders follow the public cert/token reference
+          # contract. A newly required non-KMS value remains an error.
+          for name in $(grep -hEo '\$\{[A-Z0-9_]+:\?' \
+            docker-compose.base.yml docker-compose.beta.yml \
+            docker-compose.profile.tunnel.yml docker-compose.profile.ghcr.yml \
+            | sed -E 's/^\$\{([^:]+):\?$/\1/' | sort -u); do
+            if [[ -v $name ]] && [[ -n "${!name}" ]]; then
+              continue
+            fi
+            case "$name" in
+              *_TLS_KMS_ADDR) export "$name=https://kms.example.invalid" ;;
+              *_TLS_KMS_KEY_NAME) export "$name=ci-${name,,}" ;;
+              *_TLS_KMS_KEY_VERSION) export "$name=1" ;;
+              *_CERT_FILE|*_TOKEN_FILE|DEV_INTEGRATION_SECRET_CA_FILE)
+                export "$name=/dev/null" ;;
+              *) echo "Missing non-KMS Compose render input: $name" >&2; exit 1 ;;
+            esac
+          done
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.profile.tunnel.yml \
@@ -2195,11 +2197,8 @@ jobs:
           grep -F 'ENVIRONMENT: beta' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert' <<<"$rendered"
-          grep -F 'GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert' <<<"$rendered"
           grep -F 'GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert' <<<"$rendered"
-          # Flow already has an explicit beta-only exception. Deployment and
-          # compliance add the other two while Organization remains plaintext.
-          test "$(grep -Fc 'GRPC_INSECURE_ALLOWED: "true"' <<<"$rendered")" -eq 3
+          ! grep -Fq 'GRPC_INSECURE_ALLOWED: "true"' <<<"$rendered"
           rendered="$(docker compose \
             --file docker-compose.base.yml \
             --file docker-compose.beta.yml \
@@ -2533,15 +2532,18 @@ jobs:
           container="$(docker run --detach \
             --env ENVIRONMENT=test \
             --env RATE_LIMIT_RPM=0 \
-            --env BAO_ADDR=http://127.0.0.1:8200 \
+            --env BAO_ADDR=https://127.0.0.1:8200 \
             --env GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE=/run/secrets/gateway-grant-mint-token \
             --env GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE=/run/secrets/issuer-csr-grant-mint-token \
             --volume "$token_dir:/run/secrets:ro" \
             --publish 127.0.0.1::8000 \
             marty-gateway:ci)"
-          port="$(docker inspect \
-            --format '{{(index (index .NetworkSettings.Ports "8000/tcp") 0).HostPort}}' \
-            "$container")"
+          port="$(docker port "$container" 8000/tcp 2>/dev/null || true)"
+          if [[ -z "$port" ]]; then
+            docker logs "$container"
+            exit 1
+          fi
+          port="${port##*:}"
           for _ in {1..40}; do
             if curl --fail --silent "http://127.0.0.1:${port}/health" \
               | grep --fixed-strings --quiet '"service":"api-gateway"'; then

@@ -112,7 +112,7 @@ docker run --detach \
   --env SIGNING_KEYS_INTERNAL_API_KEY="$secret_api_key" \
   --env SIGNING_KEYS_ISSUER_SIGN_KEY=ci-only-dedicated-issuer-sign-key-32-chars \
   --env SIGNING_KEYS_INTEGRATION_SECRET_KEY="$envelope_api_key" \
-  --env BAO_ADDR=http://127.0.0.1:1 \
+  --env BAO_ADDR=https://127.0.0.1:1 \
   --env ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-credential-grant \
   --env ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-canvas-grant \
   --env ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE=/nonexistent/issuance-readiness-grant \

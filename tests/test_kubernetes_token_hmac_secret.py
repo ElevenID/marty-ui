@@ -74,6 +74,8 @@ def harness(tmp_path):
     assert bash and Path(bash).is_file()
     empty_path = tmp_path / "empty-path"
     empty_path.mkdir()
+    keycloak_secret_dir = tmp_path / "keycloak-secret-dir"
+    keycloak_secret_dir.mkdir()
     operator_root = tmp_path / "operator"
     operator_scripts = operator_root / "scripts"
     operator_scripts.mkdir(parents=True)
@@ -168,6 +170,23 @@ tr() {
 }
 # The test-owned script models the Rust CLI output and failure status.
 command_not_found_handle() { printf 'Unexpected external command\n' >&2; return 91; }
+mktemp() {
+  [[ "$#" == 1 && "$1" == -d ]] || return 97
+  printf '%s\n' "$TEST_ROOT/keycloak-secret-dir"
+}
+rm() {
+  [[ "$1" == -f && "$2" == -- ]] || return 97
+  shift 2
+  local path
+  for path in "$@"; do
+    [[ "$path" == "$TEST_ROOT/keycloak-secret-dir/"* ]] || return 97
+  done
+  /usr/bin/rm -f -- "$@"
+}
+rmdir() {
+  [[ "$1" == -- && "$2" == "$TEST_ROOT/keycloak-secret-dir" ]] || return 97
+  /usr/bin/rmdir -- "$2"
+}
 kubectl() {
   case "$1:$2:${3:-}" in
     create:namespace:synthetic-owned-namespace) ;;

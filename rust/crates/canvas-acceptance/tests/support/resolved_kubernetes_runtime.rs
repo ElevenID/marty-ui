@@ -729,19 +729,19 @@ fn overlay(
     require(
         gateway["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
             && gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
-            && gateway["AUTH_GRPC_TARGET"] == "auth:9001",
+            && gateway["AUTH_GRPC_TARGET"] == "https://auth:9001",
     )?;
     // Parse the actual gateway configuration before using its supported default
     // organization target. No missing deployment dependency is fabricated.
     let actual = marty_gateway::config::GatewayConfig::from_values(&gateway).map_err(|_| ERROR)?;
     require(
-        actual.organization_grpc_target == "http://organization:9002"
-            && actual.event_stream_grpc_target == "http://event-stream:9015",
+        actual.organization_grpc_target == "https://organization:9002"
+            && actual.event_stream_grpc_target == "https://event-stream:9015",
     )?;
     for (name, expected) in [
-        ("ORG_GRPC_TARGET", "organization:9002"),
-        ("CT_GRPC_TARGET", "credential-template:9003"),
-        ("RP_GRPC_TARGET", "revocation-profile:9013"),
+        ("ORG_GRPC_TARGET", "https://organization:9002"),
+        ("CT_GRPC_TARGET", "https://credential-template:9003"),
+        ("RP_GRPC_TARGET", "https://revocation-profile:9013"),
         (
             "SIGNING_KEYS_INTERNAL_URL",
             "http://gateway:8000/internal/signing-keys",

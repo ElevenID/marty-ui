@@ -9,6 +9,7 @@ from http.cookiejar import CookieJar
 from html.parser import HTMLParser
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -38,6 +39,31 @@ def run(*args: str, input_text: str | None = None) -> str:
         raise RuntimeError(f"Disposable command failed: {args[0]} {args[1]}: "
                            f"{result.stderr[:300]}")
     return result.stdout.strip()
+
+
+def host_gateway_alias(network: str) -> str:
+    """Bind the host callback to this probe's exact disposable bridge."""
+    config = json.loads(run(
+        "docker", "network", "inspect", "--format", "{{json .IPAM.Config}}", network,
+    ))
+    if not isinstance(config, list) or not config:
+        raise RuntimeError("Disposable Keycloak network has no unique IPv4 gateway")
+    gateways = []
+    for entry in config:
+        if not isinstance(entry, dict):
+            raise RuntimeError("Disposable Keycloak network has no valid gateway")
+        try:
+            address = ipaddress.ip_address(entry["Gateway"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise RuntimeError("Disposable Keycloak network has no valid gateway") from error
+        if address.version == 4:
+            gateways.append(address)
+    if len(gateways) != 1:
+        raise RuntimeError("Disposable Keycloak network has no unique IPv4 gateway")
+    gateway = gateways[0]
+    if not gateway.is_private or gateway.is_loopback:
+        raise RuntimeError("Disposable Keycloak network gateway is not private IPv4")
+    return f"host.docker.internal:{gateway}"
 
 
 def http_json(url: str, body: dict[str, str] | None = None) -> dict:
@@ -416,7 +442,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             run(
                 "docker", "run", "-d", "--name", kc_name,
                 "--network", network, "-p", "127.0.0.1::8080",
-                *(["--add-host", "host.docker.internal:host-gateway"]
+                *(["--add-host", host_gateway_alias(network)]
                   if require_browser and os.name != "nt" else []),
                 *provider_mount,
                 "--mount", f"type=bind,src={ca_dir / 'ca.crt'},dst=/run/kms/ca.crt,readonly",

@@ -38,28 +38,41 @@ def disposable_openbao(tmp_path: Path) -> tuple[str, str, Path, str, str]:
     token = secrets.token_hex(32)
     token_file = tmp_path / "bao_root_token"
     token_file.write_text(token, encoding="ascii")
+    public_ca_dir = tmp_path / "public-ca"
+    public_ca_dir.mkdir()
     if os.name == "posix":
         token_file.chmod(0o600)
     try:
         docker("network", "create", "--internal", network)
         docker(
             "run", "--detach", "--rm", "--network", network,
-            "--network-alias", "openbao", "--name", name,
+            "--network-alias", "openbao", "--hostname", "openbao", "--name", name,
+            "--tmpfs", "/tmp/bao-tls:rw,mode=1777",
+            "--env", "PASSPORT_BAO_TLS_MODE=required",
             "--entrypoint", "/bin/sh",
             "--mount", "type=bind,src=" + str(ROOT / "scripts/passport_supported_openbao_start.sh")
             + ",dst=/usr/local/bin/passport-supported-openbao-start,readonly",
             "--mount", "type=bind,src=" + str(token_file)
             + ",dst=/run/secrets/bao_root_token,readonly",
+            "--mount", "type=bind,src=" + str(public_ca_dir)
+            + ",dst=/bao/public-ca",
             image, "/usr/local/bin/passport-supported-openbao-start", timeout=180,
         )
-        for _ in range(30):
-            status = subprocess.run([
-                "docker", "exec", name, "bao", "status",
-                "-address=http://127.0.0.1:8200",
-            ], capture_output=True, text=True, timeout=10)
-            if status.returncode == 0:
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            ca_file = public_ca_dir / "ca.crt"
+            if ca_file.is_file() and ca_file.stat().st_size:
+                status = subprocess.run([
+                    "docker", "run", "--rm", "--network", network,
+                    "--mount", f"type=bind,src={ca_file},dst=/ca.crt,readonly",
+                    "--entrypoint", "bao", image, "status",
+                    "-address=https://openbao:8200", "-ca-cert=/ca.crt",
+                ], capture_output=True, text=True, timeout=10)
+            else:
+                status = None
+            if status is not None and status.returncode == 0:
                 break
-            time.sleep(0.2)
+            time.sleep(0.25)
         else:
             pytest.fail("Disposable OpenBao did not become ready")
         yield name, network, token_file, token, image
@@ -84,6 +97,8 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
     disposable_openbao: tuple[str, str, Path, str, str], tmp_path: Path,
 ) -> None:
     name, network, token_file, root_token, image = disposable_openbao
+    ca_file = tmp_path / "public-ca" / "ca.crt"
+    assert b"PRIVATE KEY" not in ca_file.read_bytes()
     for index in range(2):
         output_dir = tmp_path / f"output-{index}"
         output_dir.mkdir()
@@ -94,7 +109,8 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
         try:
             result = docker(
                 "run", "--rm", *host_user, "--network", network, "--entrypoint", "/bin/sh",
-                "--env", "BAO_ADDR=http://openbao:8200",
+                "--env", "BAO_ADDR=https://openbao:8200",
+                "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
                 "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
                 + managed_key_reference(29876, "csca"),
                 "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
@@ -105,6 +121,8 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
                 + ",dst=/scripts/openbao-init.sh,readonly",
                 "--mount", "type=bind,src=" + str(token_file)
                 + ",dst=/run/secrets/bao_root_token,readonly",
+                "--mount", "type=bind,src=" + str(ca_file)
+                + ",dst=/bao/public-ca/ca.crt,readonly",
                 "--mount", "type=bind,src=" + str(output_dir) + ",dst=/work/secrets",
                 image, "/scripts/passport_supported_openbao_bootstrap.sh", timeout=180,
             )
@@ -142,7 +160,10 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
                 uuid.NAMESPACE_URL, source).hex[:20] + "-es256"
             probe = docker(
                 "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
-                "--env", "BAO_ADDR=http://openbao:8200",
+                "--env", "BAO_ADDR=https://openbao:8200",
+                "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
+                "--mount", "type=bind,src=" + str(ca_file)
+                + ",dst=/bao/public-ca/ca.crt,readonly",
                 "--mount", "type=bind,src=" + str(output_dir / "bao_token")
                 + ",dst=/run/secrets/bao_token,readonly",
                 image, "-c", "BAO_TOKEN=$(cat /run/secrets/bao_token); "
@@ -154,7 +175,10 @@ def test_disposable_openbao_bootstrap_mints_scoped_tokens(
             assert probe.stdout.splitlines() == ["ecdsa-p256", "false", "read"]
         inventory = docker(
             "run", "--rm", "--network", network, "--entrypoint", "/bin/sh",
-            "--env", "BAO_ADDR=http://openbao:8200",
+            "--env", "BAO_ADDR=https://openbao:8200",
+            "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
+            "--mount", "type=bind,src=" + str(ca_file)
+            + ",dst=/bao/public-ca/ca.crt,readonly",
             "--mount", "type=bind,src=" + str(token_file)
             + ",dst=/run/secrets/bao_root_token,readonly",
             image, "-c", "BAO_TOKEN=$(cat /run/secrets/bao_root_token); "
