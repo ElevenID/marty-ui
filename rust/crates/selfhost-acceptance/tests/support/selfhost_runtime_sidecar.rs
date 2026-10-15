@@ -556,8 +556,8 @@ impl<'a> OwnedNative<'a> {
         environment.insert("ISSUANCE_GRPC_ENABLED".into(), json!("false"));
         if case == SecretCase::RawAndFile {
             environment.insert(
-                "GRPC_SERVICE_TOKEN".into(),
-                json!("synthetic-conflicting-raw-service-token"),
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+                json!("synthetic-conflicting-raw-integration-key"),
             );
         }
         if case == SecretCase::MissingMount {
@@ -566,8 +566,8 @@ impl<'a> OwnedNative<'a> {
                 .ok_or(ERROR)?
                 .as_array_mut()
                 .ok_or(ERROR)?
-                .retain(|v| v["source"] != "grpc_service_token");
-            secrets.remove("grpc_service_token");
+                .retain(|v| v["source"] != "signing_keys_integration_secret_key");
+            secrets.remove("signing_keys_integration_secret_key");
         }
         let mut expected_environment = image.environment.clone();
         for (key, value) in model["services"][OWNER]["environment"]

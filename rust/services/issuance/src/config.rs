@@ -792,6 +792,15 @@ impl IssuanceServiceConfig {
                 "SIGNING_KEYS_INTEGRATION_SECRET_KEY must be distinct and at least 32 characters",
             ));
         }
+        if integration_secret_api_key
+            .as_deref()
+            .is_some_and(has_placeholder_prefix)
+        {
+            return Err(MmfError::new(
+                ErrorCode::Configuration,
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY must not be a placeholder",
+            ));
+        }
         if values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY")
             && values.contains_key("SIGNING_KEYS_ISSUER_SIGN_KEY_FILE")
         {
@@ -1662,6 +1671,19 @@ fn secret_value(values: &BTreeMap<String, String>, name: &str) -> Result<Option<
     Ok(Some(value.to_owned()))
 }
 
+fn has_placeholder_prefix(value: &str) -> bool {
+    let normalized = value.to_ascii_lowercase();
+    [
+        "change-me",
+        "change_me",
+        "changeme",
+        "replace-me",
+        "replace_me",
+    ]
+    .iter()
+    .any(|prefix| normalized.starts_with(prefix))
+}
+
 fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Result<(), MmfError> {
     if !grpc_enabled {
         return Ok(());
@@ -1672,17 +1694,7 @@ fn validate_grpc_service_token(token: Option<&str>, grpc_enabled: bool) -> Resul
             "GRPC_SERVICE_TOKEN is required when gRPC is enabled",
         )
     })?;
-    let normalized = token.to_ascii_lowercase();
-    if [
-        "change-me",
-        "change_me",
-        "changeme",
-        "replace-me",
-        "replace_me",
-    ]
-    .iter()
-    .any(|prefix| normalized.starts_with(prefix))
-    {
+    if has_placeholder_prefix(token) {
         return Err(MmfError::new(
             ErrorCode::Configuration,
             "GRPC_SERVICE_TOKEN must not be a placeholder",
@@ -2862,6 +2874,22 @@ mod tests {
             ErrorCode::Configuration
         );
         assert!(validate_grpc_service_token(None, false).is_ok());
+    }
+
+    #[test]
+    fn integration_secret_api_key_rejects_placeholder_when_grpc_is_disabled() {
+        let error = IssuanceServiceConfig::from_values(values(&[
+            ("ISSUANCE_GRPC_ENABLED", "false"),
+            (
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+                "change-me-synthetic-placeholder-integration-key",
+            ),
+        ]))
+        .expect_err("placeholder integration secret key must fail independently of gRPC");
+        assert_eq!(error.code, ErrorCode::Configuration);
+        assert!(error
+            .message
+            .contains("SIGNING_KEYS_INTEGRATION_SECRET_KEY"));
     }
 
     #[test]

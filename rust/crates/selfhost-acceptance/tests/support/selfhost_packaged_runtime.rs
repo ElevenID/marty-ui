@@ -294,16 +294,16 @@ fn expected_log(case: SecretCase) -> Option<LogExpectation<'static>> {
             value: "28P01",
         }),
         SecretCase::MissingMount | SecretCase::Directory => Some(LogExpectation::Contains(
-            "Secret file for GRPC_SERVICE_TOKEN is not a regular file",
+            "Secret file for SIGNING_KEYS_INTEGRATION_SECRET_KEY is not a regular file",
         )),
         SecretCase::Unreadable => Some(LogExpectation::Contains(
-            "Secret file for GRPC_SERVICE_TOKEN is not readable",
+            "Secret file for SIGNING_KEYS_INTEGRATION_SECRET_KEY is not readable",
         )),
         SecretCase::RawAndFile => Some(LogExpectation::Contains(
-            "Both GRPC_SERVICE_TOKEN and GRPC_SERVICE_TOKEN_FILE are set",
+            "Both SIGNING_KEYS_INTEGRATION_SECRET_KEY and SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE are set",
         )),
         SecretCase::Empty | SecretCase::Placeholder => {
-            Some(LogExpectation::Contains("GRPC_SERVICE_TOKEN"))
+            Some(LogExpectation::Contains("SIGNING_KEYS_INTEGRATION_SECRET_KEY"))
         }
         SecretCase::Correct | SecretCase::CrLf => None,
     }
@@ -619,19 +619,19 @@ fn write_synthetic_secrets(
         ),
     ];
     if matches!(case, SecretCase::Empty | SecretCase::Placeholder) {
-        let service_token = values
+        let integration_secret_key = values
             .iter_mut()
-            .find(|(name, _)| *name == "grpc_service_token")
-            .expect("synthetic service token fixture");
-        service_token.1 = if case == SecretCase::Empty {
+            .find(|(name, _)| *name == "signing_keys_integration_secret_key")
+            .expect("synthetic integration secret key fixture");
+        integration_secret_key.1 = if case == SecretCase::Empty {
             ""
         } else {
-            "change-me-synthetic-placeholder-service-token"
+            "change-me-synthetic-placeholder-integration-key"
         };
     }
     for (name, value) in &values {
         let path = directory.join(name);
-        if case == SecretCase::Directory && *name == "grpc_service_token" {
+        if case == SecretCase::Directory && *name == "signing_keys_integration_secret_key" {
             std::fs::create_dir(&path).map_err(|_| ERROR)?;
             continue;
         }
@@ -644,7 +644,9 @@ fn write_synthetic_secrets(
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mode = if case == SecretCase::Unreadable && *name == "grpc_service_token" {
+            let mode = if case == SecretCase::Unreadable
+                && *name == "signing_keys_integration_secret_key"
+            {
                 0
             } else {
                 0o444
