@@ -22087,3 +22087,18 @@ both commits were pushed together as PR #1344 head
 `ae081b825a5ce9b203b098fb396eb3ae61d60ce4`; the PR body names the exact
 head and failed predecessor. The new head must pass exact-head hosted checks
 before merge or release qualification.
+
+Current `main` advanced through CI positive-execution guard PRs #1343, #1345,
+#1346 and #1348 while grouped UI #1344 was in flight. GitHub marked the
+unmerged `ae081b825` head conflicting, so no checks started on that head.
+The workflow conflict was reconciled by retaining the HTTPS OpenBao grant
+probe and adding the positive Rust test-execution checks from `main` for the
+other focused cases. The new guard test was updated to recognize the HTTPS
+probe's own `rust_test_succeeded` positive-count check rather than requiring
+the retired HTTP step. Workflow YAML, shell syntax, diff checks, 168 of 169
+initial workflow/guard tests plus both focused follow-ups, and the new Canvas
+zero-selected-test preflight passed locally. The broad 233-case Canvas
+preflight suite was still running at inspection; no pass is claimed. Merge
+commit `fb28cf60f556f68dacb41227ebdd65e3d4a3cae9` is pushed on PR #1344;
+GitHub reports it mergeable, with [exact-head CI run `38776076785`](https://github.com/ElevenID/marty-ui/actions/runs/38776076785)
+in progress. Do not merge or publish until this head qualifies.
