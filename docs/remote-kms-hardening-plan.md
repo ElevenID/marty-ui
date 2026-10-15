@@ -22677,3 +22677,25 @@ identity, or configured native Issuance server TLS in the base profile. An
 Envoy container without the sidecar would fail its native upstream health
 check, which is the intended fail-closed behavior until packaging is wired.
 Do not push this local candidate or treat its source tests as runtime proof.
+
+2026-10-15 grouped UI follow-on (local, not pushed): `1ca1c8cf4` wires the
+Rust Envoy-to-Issuance keyless gRPC bridge into base Compose with a separate
+scoped remote TLS client identity, configures native Issuance server TLS and
+Flow's KMS-backed TLS client, and tightens beta preflight. Three Keycloak
+candidate commits (`2a4d8aac3`, `627729882`, `39a0b8ab0`) were cherry-picked
+into the same large feature branch: base/conformance require the pinned remote
+Keycloak image, HTTPS OpenBao and scoped public certificate/token inputs;
+setup uses that configurator. Local `f0683f3e0` fixes the inherited Compose
+test input model and an actual physical-provider callback signer regression:
+the base overlay had still selected HTTP OpenBao, which the production Rust
+provider refuses. It now selects verified HTTPS and mounts only the public
+OpenBao CA; the beta physical selector rejects HTTP, missing CA binding and
+missing CA mount. The selected Compose regression set passed locally (1,246
+passed, 3 skipped, 534 subtests), its focused follow-up passed (60 tests),
+and Ruff/diff hygiene passed. Docker Desktop is unavailable locally, so the
+Envoy/Issuance live mTLS composition and bundled Keycloak runtime remain
+unproved. Do not infer installed KMS-only status: existing self-host and beta
+Keycloak databases still contained four `privateKey` and four generated
+`secret` rows each at last inspection, and no cutover/SQL gate has passed on
+those installed databases. Hold the grouped UI push until remaining local
+review/provisioning work is batched, then use exact-head hosted runtime gates.
