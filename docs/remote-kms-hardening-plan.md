@@ -21862,3 +21862,15 @@ Both UI correction commits were pushed together to PR #1344 at exact head
 queued at registration. The PR body records the exact head, local gates and
 the remaining live Keycloak/selfhost qualification. The prior red run remains
 immutable evidence and does not qualify the new head.
+
+On run `38759939281`, the Keycloak/OpenBao image job failed again during
+master browser login after remote cookie-key rotation. Its filtered Java
+stack now identifies `RemoteDirectJwe.encode` at the current-key GET; the
+probe had already refreshed the scoped policy/token and directly read and
+encoded with both key versions. This narrows the denial to the Keycloak
+request path or mounted credential view, rather than proving remote rotation
+is broken. A local diagnostic change bounds and records only the OpenBao
+request path (never token or response bytes) on HTTP failure and compares
+the Keycloak-mounted token file digest with the host token file after
+rotation. It remains unpushed while the other lanes of the same CI run
+finish, and the underlying K12 issue remains unresolved.
