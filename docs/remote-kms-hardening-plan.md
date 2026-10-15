@@ -20865,3 +20865,19 @@ blocked by `GRPC_INSECURE_ALLOWED=true` and plaintext service gRPC targets.
 The next slice must issue additional non-exportable workload identities for
 every active gRPC client/server, convert those routes together, then run the
 full paired-image passport journey locally before pushing the grouped UI PR.
+
+2026-10-15 protected gRPC identity inventory and bootstrap expansion, staged
+in the grouped UI worktree: the active fixture has plaintext Organization,
+Event Stream, Revocation Profile, Credential Template and Issuance Native
+gRPC servers, plus a Gateway client identity required by deployed Gateway
+configuration. The Rust disposable OpenBao bootstrap now provisions these six
+additional non-exportable, versioned signer roles with distinct scoped tokens
+and SAN-bound public certificates, bringing the output set to eleven roles.
+The Python public-output guard and host/container probes share one expected
+prefix inventory, and the protected producer's public-only handoff accepts
+the expanded set. The four focused producer/Compose suites passed 149 tests
+with two skips; Rust edge unit test, bootstrap binary check and targeted
+rustfmt passed. This is identity provisioning code only: the new roles have
+not yet been exercised against a freshly built Linux image and the remaining
+gRPC services still need their TLS selectors, CA-verified HTTPS targets and
+full local runtime acceptance.
