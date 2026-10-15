@@ -22019,3 +22019,12 @@ new [CI run `38770177194`](https://github.com/ElevenID/marty-ui/actions/runs/387
 was queued at inspection; policy passed and CodeQL/organization checks were
 live. This head requires a fresh Keycloak browser, published Canvas, and
 contracts rerun before any merge or release claim.
+
+On that exact-head run, the `Qualify Keycloak browser, CIBA, KMS-loss, and
+PostgreSQL custody` step completed successfully. This is live confirmation
+that the disposable loopback browser-cookie correction restored the baseline
+and rotated browser journey without weakening production cookie policy. The
+Keycloak image job then advanced to coordinated PostgreSQL/Raft
+integration-secret recovery; the Canvas, contracts and selfhost lanes were
+still running. Do not infer full image-job or complete CI success from the
+single green step.
