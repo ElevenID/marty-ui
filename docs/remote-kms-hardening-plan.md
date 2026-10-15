@@ -22338,3 +22338,33 @@ is queued. PR #1344 now states the beta cutover gap as a merge/publication
 condition. The prior run `38785167966` is terminal failed evidence, not a
 qualification of the new head. The tracker was pushed through `7c7436337`
 before this CI-run annotation.
+
+2026-10-15 grouped UI PR #1344 follow-up: exact-head run
+[`38788256643`](https://github.com/ElevenID/marty-ui/actions/runs/38788256643)
+is still live. Its Release Contract lane failed 12 checks: nine rendered
+base-graph checks invoked Compose with `--no-interpolate`, which cannot parse
+bind mounts containing `${VAR:-default}`; three affected-Rust planner source
+markers still expected the old callback-signer Rust spelling/configuration.
+Rust Lint failed one `clippy::single_element_loop` in the Canvas synthetic
+TLS CA mapping. The local, unpushed batch fixes those issues. All five
+interpolated base/profile Compose graphs rendered and passed the custody
+assertions under WSL Docker Compose v5.4; 159 focused Python tests passed
+(one skipped), 534 planner subtests passed, targeted Rust 1.95 Canvas Clippy
+passed with `-D warnings`, Ruff and PowerShell parsing passed. Windows Docker
+CLI has no Compose plugin, so its direct run of the new graph module failed
+locally before assertions; the WSL render exercised the actual Linux Compose
+path. Canvas, contracts, self-host, image and OpenBao plugin CI lanes remain
+pending; collect their terminal outcomes before the next grouped push.
+
+The same local batch removes live beta release migration's dev-root-token
+read/HTTP Docker run and routes it through the base `db-migrate` service with
+its scoped token and public CA. The beta aggregate preflight/runtime checks
+now require the preserved OpenBao Raft volume and command, no dev/root-token
+environment, and the callback signer's HTTPS/CA/scoped-token file mounts.
+The disposable migration rehearsal now uses pinned OpenBao dev TLS with its
+private listener key in the fixture container's tmpfs. These are candidate
+changes only: no Docker daemon is available locally for the beta release
+rehearsal, and the currently installed dev-mode beta OpenBao will fail the
+new fail-closed Raft guard. A clean KMS-only beta reinstall/cutover and
+installed Keycloak row cleanup still require executable qualification before
+merging or publishing.
