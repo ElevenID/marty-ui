@@ -20639,3 +20639,23 @@ production and integration-test builds require HTTPS. Signing Keys production
 plugin/flow-envelope live path has not yet been rerun over HTTPS; the older
 all-in-one Signing Keys policy runner and other OpenBao callers remain HTTP
 and must be converted before the combined release gate can pass.
+
+2026-10-15 signing-grant and holder-proof HTTPS source cutover, staged in the
+same grouped UI worktree: `marty-signing-grant` now uses the shared
+`marty-openbao-http` client for every Transit HMAC/verify request, with its
+mounted endpoint required to be HTTPS and `BAO_CACERT` used for a private
+public CA. Its loopback HTTP Axum fixture is `cfg(test)` only. The Signing
+Keys VC-API holder-proof provider now rejects HTTP at construction; actual
+Transit operations already route through the Signing Keys KMS adapter. A
+new disposable HTTPS OpenBao profile provisioned a non-exportable HMAC key,
+separate short-lived mint/verify tokens and a guard marker, then the actual
+ignored `transit::tests::live_openbao_grant_key_enforces_mint_verify_separation`
+test passed CA-verified mint/verify, altered-input rejection and reciprocal
+token denial. The first command accidentally applied `--exact` to an
+unqualified test name and selected zero tests; it was rerun without that
+filter and executed one test successfully. Grant library tests passed 18
+with three ignored; Signing Keys library tests passed 197 with nine ignored;
+both production crates passed `cargo check --locked --offline`. The older
+all-in-one policy/Redis runner and its HTTP-asserting live tests still need
+coordinated HTTPS conversion. This local proof does not qualify the signed
+release artifact or the full grant replay flow.
