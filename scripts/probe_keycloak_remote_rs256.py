@@ -87,7 +87,8 @@ class PendingCibaDevice(BaseHTTPRequestHandler):
         pass
 
 
-def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
+def browser_code(opener, base: str, callback: str, realm: str,
+                 username: str, *, login: bool) -> dict:
     verifier = secrets.token_urlsafe(32)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()) \
         .rstrip(b"=").decode()
@@ -99,7 +100,7 @@ def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
     }
     if not login:
         params["prompt"] = "none"
-    url = base + "/realms/11id/protocol/openid-connect/auth?" + urlencode(params)
+    url = base + f"/realms/{realm}/protocol/openid-connect/auth?" + urlencode(params)
     location = ""
     try:
         with opener.open(url, timeout=8) as response:
@@ -109,7 +110,7 @@ def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
                 raise RuntimeError("Keycloak did not present the expected browser login")
             try:
                 opener.open(Request(form.action, data=urlencode({
-                    "username": "probe11", "password": "synthetic-probe-only",
+                    "username": username, "password": "synthetic-probe-only",
                 }).encode()), timeout=8)
             except HTTPError as callback_response:
                 if callback_response.code != 302:
@@ -127,7 +128,7 @@ def browser_code(opener, base: str, callback: str, *, login: bool) -> dict:
     query = parse_qs(urlparse(location).query)
     if query.get("state") != [state] or len(query.get("code", [])) != 1:
         raise RuntimeError("Keycloak browser flow did not return a valid code/state")
-    return http_json(base + "/realms/11id/protocol/openid-connect/token", {
+    return http_json(base + f"/realms/{realm}/protocol/openid-connect/token", {
         "client_id": "probe-browser", "grant_type": "authorization_code",
         "code": query["code"][0], "redirect_uri": callback,
         "code_verifier": verifier,
@@ -457,13 +458,14 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 raise RuntimeError("master and 11id reused one remote RSA key")
             if require_browser:
                 callback = base + "/probe-callback"
-                post_admin(base + "/admin/realms/11id/clients", token, {
-                    "clientId": "probe-browser", "enabled": True,
-                    "publicClient": True, "standardFlowEnabled": True,
-                    "directAccessGrantsEnabled": False,
-                    "protocol": "openid-connect", "redirectUris": [callback],
-                    "attributes": {"pkce.code.challenge.method": "S256"},
-                })
+                for realm in ("master", "11id"):
+                    post_admin(base + f"/admin/realms/{realm}/clients", token, {
+                        "clientId": "probe-browser", "enabled": True,
+                        "publicClient": True, "standardFlowEnabled": True,
+                        "directAccessGrantsEnabled": False,
+                        "protocol": "openid-connect", "redirectUris": [callback],
+                        "attributes": {"pkce.code.challenge.method": "S256"},
+                    })
                 post_admin(base + "/admin/realms/11id/clients", token, {
                     "clientId": "probe-ciba", "enabled": True,
                     "publicClient": False, "clientAuthenticatorType": "client-secret",
@@ -512,36 +514,41 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                         raise RuntimeError("CIBA key loss returned an unexpected status") from error
                 else:
                     raise RuntimeError("CIBA request succeeded without its remote key")
-                browser = build_opener(HTTPCookieProcessor(CookieJar()),
-                                       StopAtCallback(callback))
-                for login in (True, False):
+                for realm, username, realm_jwks in (
+                    ("master", "probe", jwks),
+                    ("11id", "probe11", jwks_11id),
+                ):
+                    browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                                           StopAtCallback(callback))
+                    for login in (True, False):
+                        try:
+                            browser_tokens = browser_code(browser, base, callback,
+                                                          realm, username, login=login)
+                        except Exception as error:
+                            observed = subprocess.run(["docker", "logs", "--tail", "120", kc_name],
+                                                      capture_output=True, text=True, timeout=10)
+                            lines = (observed.stdout + observed.stderr).splitlines()
+                            logs = "\n".join(line for line in lines
+                                             if "Failed to create fallback key" in line
+                                             or "Caused by:" in line
+                                             or "Error encoding cookie" in line)[:1200]
+                            raise RuntimeError(f"{realm} browser flow failed: {error}\n{logs}") from error
+                        for field in ("access_token", "id_token"):
+                            verify_jwt(browser_tokens[field], realm_jwks,
+                                       f"{prefix}-{realm}-rs256-v1",
+                                       base + f"/realms/{realm}")
+                    (jwe_token_dir / f"{realm}-cookie.token").write_text(
+                        "invalid-disposable-token", encoding="ascii")
+                    denied_browser = build_opener(HTTPCookieProcessor(CookieJar()),
+                                                  StopAtCallback(callback))
                     try:
-                        browser_tokens = browser_code(browser, base, callback,
-                                                      login=login)
-                    except Exception as error:
-                        observed = subprocess.run(["docker", "logs", "--tail", "120", kc_name],
-                                                  capture_output=True, text=True, timeout=10)
-                        lines = (observed.stdout + observed.stderr).splitlines()
-                        logs = "\n".join(line for line in lines
-                                         if "Failed to create fallback key" in line
-                                         or "Caused by:" in line
-                                         or "Error encoding cookie" in line)[:1200]
-                        raise RuntimeError(f"Browser flow failed: {error}\n{logs}") from error
-                    for field in ("access_token", "id_token"):
-                        verify_jwt(browser_tokens[field], jwks_11id,
-                                   f"{prefix}-11id-rs256-v1",
-                                   base + "/realms/11id")
-                (jwe_token_dir / "11id-cookie.token").write_text(
-                    "invalid-disposable-token", encoding="ascii")
-                denied_browser = build_opener(HTTPCookieProcessor(CookieJar()),
-                                              StopAtCallback(callback))
-                try:
-                    browser_code(denied_browser, base, callback, login=True)
-                except RuntimeError as error:
-                    if "HTTP 400" not in str(error) and "HTTP 500" not in str(error):
-                        raise RuntimeError("Unexpected browser KMS-loss result") from error
-                else:
-                    raise RuntimeError("Browser login succeeded without its remote cookie key")
+                        browser_code(denied_browser, base, callback,
+                                     realm, username, login=True)
+                    except RuntimeError as error:
+                        if "HTTP 400" not in str(error) and "HTTP 500" not in str(error):
+                            raise RuntimeError("Unexpected browser KMS-loss result") from error
+                    else:
+                        raise RuntimeError(f"{realm} browser login succeeded without its remote cookie key")
             refreshed_tokens = {}
             for realm, issued, jwks_for_realm in (
                 ("master", master_tokens, jwks),

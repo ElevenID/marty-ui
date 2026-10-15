@@ -34,11 +34,12 @@ python scripts/probe_keycloak_remote_rs256.py --require-browser \
 
 The proof creates `master` and `11id` with separate RSA/HMAC identities,
 checks direct-grant and successive refresh-token signatures against each
-realm's JWKS, completes an `11id` authorization-code/PKCE browser login and
-silent session reuse, and denies a new browser login after revoking its
-separate OpenBao cookie token. Direct PostgreSQL scans and the read-only
-Keycloak custody gate find no `privateKey` or generated `secret` rows after
-bootstrap, realm creation, token issuance and KMS-loss denial. The probe
+realm's JWKS, completes authorization-code/PKCE browser login and silent
+session reuse in both `master` and `11id`, and denies new browser logins
+after revoking each realm's separate OpenBao cookie token. Direct PostgreSQL
+scans and the read-only Keycloak custody gate find no `privateKey` or
+generated `secret` rows after bootstrap, realm creation, token issuance and
+KMS-loss denial. The probe
 exports only public certificates and cleans its disposable containers.
 
 The browser-mode proof also enables a disposable CIBA client and a local
@@ -49,8 +50,8 @@ token denies a new request. It does not simulate user approval or a completed
 CIBA authentication.
 
 This local proof does not qualify the installed stack. Completed CIBA
-authentication, RSA-OAEP and other AES flows may still fail closed. Master
-browser login, key rotation during active sessions, exact-image deployment,
+authentication, RSA-OAEP and other AES flows may still fail closed. Remote-key
+rotation during active sessions, exact-image deployment,
 broad provider controls, and production cutover remain. Do not publish this
 image as fully KMS-only until those paths pass with the exact artifact and
 database gate.
