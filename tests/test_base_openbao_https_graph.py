@@ -147,7 +147,11 @@ def rendered(*profiles):
     for profile in profiles:
         command.extend(["-f", profile])
     command.extend(["config", "--format", "json"])
-    selected = ("docker-compose.base.yml", *profiles)
+    selected = (
+        "docker-compose.base.yml",
+        "docker-compose.profile.issuance-native.yml",
+        *profiles,
+    )
     required = set()
     for name in selected:
         required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", (ROOT / name).read_text()))

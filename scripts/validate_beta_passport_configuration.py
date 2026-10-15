@@ -435,10 +435,15 @@ def validate_physical_model(model, files, provider_registry=None):
                        and service.get("network_mode") == "service:issuance"
                        and set(services.get("issuance", {}).get("networks", {}))
                        == {"marty-network"})
+        keyless_envoy_bridge = (name == "envoy-issuance-bridge"
+                                and service.get("network_mode") == "service:envoy"
+                                and set(services.get("envoy", {}).get("networks", {}))
+                                == {"marty-network"})
         isolated_kms_init = (name == "openbao-tls-init"
                              and service.get("network_mode") == "none"
                              and not service_networks)
         physical_require((not service.get("network_mode") or bridge_mode
+                          or keyless_envoy_bridge
                           or isolated_kms_init)
                          and not service.get("volumes_from"),
                          "Beta physical provider service inherited network or volumes")
@@ -663,7 +668,8 @@ def validate_physical_model(model, files, provider_registry=None):
                      == "/run/secrets/passport_callback_signer_api_key"
                      and signer.get("PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE")
                      == "/run/secrets/passport_callback_signer_bao_token"
-                     and signer.get("BAO_ADDR") == "http://openbao:8200"
+                     and signer.get("BAO_ADDR") == "https://openbao:8200"
+                     and signer.get("BAO_CACERT") == "/run/secrets/openbao_tls_ca_cert"
                      and not any(signer.get(name) for name in (
                          "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_INTERNAL_API_KEY_FILE",
                          "BAO_TOKEN", "BAO_TOKEN_FILE", "OPENBAO_SERVICE_TOKEN",
@@ -674,7 +680,8 @@ def validate_physical_model(model, files, provider_registry=None):
                          "PASSPORT_PROVIDER_HMAC_SOURCE_FILE"))
                      and physical_secret_sources(signer_service) == {
                          "passport_callback_signer_api_key",
-                         "passport_callback_signer_bao_token"},
+                         "passport_callback_signer_bao_token",
+                         "openbao_tls_ca_cert"},
                      "Beta physical provider signer is not isolated")
     physical_require(ingress.get("SERVICE_NAME") == "passport_provider_ingress"
                      and str(ingress.get("PASSPORT_PROVIDER_INGRESS_ENABLED", "false")).lower()

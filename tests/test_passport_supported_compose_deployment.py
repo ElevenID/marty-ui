@@ -31,8 +31,9 @@ def render(
 ) -> dict:
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose is unavailable")
-    source = (ROOT / base).read_text(encoding="utf-8") + (ROOT / overlay).read_text(
-        encoding="utf-8"
+    source = "".join(
+        (ROOT / name).read_text(encoding="utf-8")
+        for name in (base, overlay, "docker-compose.profile.issuance-native.yml")
     )
     environment = os.environ.copy()
     for name in re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", source):
@@ -100,10 +101,11 @@ def test_supported_compose_signing_boundary(consumer: str) -> None:
     assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in signer_env
     assert "PASSPORT_PROVIDER_WEBHOOK_SECRET_FILE" not in ingress_env
     assert "MARTY_DB_PASSWORD_FILE" not in signer_env
-    assert {secret["source"] for secret in signer["secrets"]} == {
+    signer_secrets = {secret["source"] for secret in signer["secrets"]}
+    assert signer_secrets == {
         "passport_callback_signer_api_key",
         "passport_callback_signer_bao_token",
-    }
+    } | ({"openbao_tls_ca_cert"} if consumer == "base" else set())
     assert {secret["source"] for secret in ingress["secrets"]} == {
         "passport_callback_signer_api_key",
         "marty_db_password",
@@ -116,7 +118,8 @@ def test_supported_compose_signing_boundary(consumer: str) -> None:
     if consumer == "base":
         assert "passport-provider-signing" in services["openbao"]["networks"]
         assert model["networks"]["passport-provider-signing"]["internal"] is True
-        assert signer_env["BAO_ADDR"] == "http://openbao:8200"
+        assert signer_env["BAO_ADDR"] == "https://openbao:8200"
+        assert signer_env["BAO_CACERT"] == "/run/secrets/openbao_tls_ca_cert"
     else:
         assert signer_env["BAO_ADDR"] == "https://bao.example.invalid"
         assert model["networks"]["passport-provider-signing"].get("internal") is not True

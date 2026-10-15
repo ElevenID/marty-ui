@@ -152,9 +152,11 @@ def model(tmp_path: Path) -> dict:
                     "/run/secrets/passport_callback_signer_api_key",
                 "PASSPORT_CALLBACK_SIGNER_BAO_TOKEN_FILE":
                     "/run/secrets/passport_callback_signer_bao_token",
-                "BAO_ADDR": "http://openbao:8200",
+                "BAO_ADDR": "https://openbao:8200",
+                "BAO_CACERT": "/run/secrets/openbao_tls_ca_cert",
             }, "secrets": ["passport_callback_signer_api_key",
-                            "passport_callback_signer_bao_token"]},
+                            "passport_callback_signer_bao_token",
+                            "openbao_tls_ca_cert"]},
         "passport-provider-ingress": {"image": IMAGE,
             "networks": {"marty-network": {}, "passport-provider-signing": {}},
             "environment": {
@@ -299,6 +301,12 @@ def test_physical_mode_plan_only_blocks_live_deploy_and_restore() -> None:
         PERSONALIZATION_BUREAU_API_KEY="raw-secret"),
     lambda candidate: candidate["services"]["passport-callback-signer-supported"][
         "environment"].update(BAO_TOKEN="dev-root-token"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].update(BAO_ADDR="http://openbao:8200"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "environment"].pop("BAO_CACERT"),
+    lambda candidate: candidate["services"]["passport-callback-signer-supported"][
+        "secrets"].remove("openbao_tls_ca_cert"),
     lambda candidate: candidate["services"]["passport-provider-ingress"]["environment"].update(
         PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="other-profile"),
     lambda candidate: candidate["services"]["passport-provider-ingress"].update(
@@ -469,6 +477,7 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "AUTH_WORKLOAD_SERVER_CERT_FILE", "AUTH_SERVER_TLS_KMS_TOKEN_FILE",
         "GATEWAY_WORKLOAD_CLIENT_CERT_FILE", "GATEWAY_TLS_KMS_TOKEN_FILE",
         "ISSUANCE_WORKLOAD_SERVER_CERT_FILE", "ISSUANCE_TLS_KMS_TOKEN_FILE",
+        "ENVOY_ISSUANCE_CLIENT_CERT_FILE", "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
         "DEV_INTEGRATION_SECRET_CA_FILE",
         "SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE",
         "SIGNING_KEYS_TLS_KMS_TOKEN_FILE",
@@ -504,6 +513,9 @@ def test_full_beta_compose_render_matches_physical_validator(tmp_path: Path) -> 
         "ISSUANCE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
         "ISSUANCE_TLS_KMS_KEY_NAME": "workload-tls-issuance-server",
         "ISSUANCE_TLS_KMS_KEY_VERSION": "1",
+        "ENVOY_ISSUANCE_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
+        "ENVOY_ISSUANCE_TLS_KMS_KEY_NAME": "workload-tls-envoy-issuance-client",
+        "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION": "1",
         "VERIFICATION_TLS_KMS_ADDR": "https://openbao.example.invalid:8200",
         "VERIFICATION_TLS_KMS_KEY_NAME": "workload-tls-verification-client",
         "VERIFICATION_TLS_KMS_KEY_VERSION": "1",

@@ -28,7 +28,7 @@ def test_conformance_compose_keeps_keycloak_in_remote_custody(tmp_path: Path) ->
         pytest.skip("Docker Compose is unavailable")
 
     required = set()
-    for name in FILES:
+    for name in (*FILES, "docker-compose.profile.issuance-native.yml"):
         required.update(re.findall(r"\$\{([A-Z][A-Z0-9_]*):\?", (ROOT / name).read_text()))
     environment = os.environ.copy()
     for name in required:
