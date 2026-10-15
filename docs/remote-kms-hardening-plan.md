@@ -21272,3 +21272,31 @@ and the browser image boots, but CIBA `auth_req_id` issuance/polling has not
 been exercised. RSA-OAEP and generic AES flows, master browser login,
 key/cookie rotation, provider bypass controls, production Compose/Kubernetes
 packaging, clean installed database and release qualification remain open.
+
+2026-10-15 K12 connected-flow and CI expansion, grouped UI commits
+`c84257406`, `5508bd552`, `66e66ea38` and `ceeabfb97`: the disposable pinned
+Keycloak image now passes browser authorization-code/PKCE login and silent
+session reuse in both `master` and `11id`, with each realm's separately
+scoped remote cookie key. A CIBA request uses the separate `11id` remote JWE
+key, first polls to `authorization_pending`, then a disposable authentication
+device callback approves it and Keycloak issues independently verified
+tokens for the expected user. Invalidating only the CIBA token denies new
+CIBA requests; invalidating either cookie token denies that realm's new
+browser login. Direct grants, repeated refresh, JWKS verification and the
+read-only PostgreSQL custody gate still pass. The device callback is
+simulated, so this is not physical-device acceptance. The probe now maps the
+host callback endpoint explicitly for Linux Docker CI.
+
+The grouped UI worktree also stages a change to the existing OpenBao CI lane
+to build the pinned Keycloak image and run this complete disposable probe
+from pull requests and merge groups. The change selector includes the
+Keycloak provider, probe and SQL gate paths. Workflow parser and focused
+selector/image-input tests passed locally (13 passed, 17 skipped; then 2/2
+targeted after the image-input inventory fix). This is staged, not hosted CI
+evidence: `.github/workflows/ci.yml` and
+`tests/test_ci_workflow_performance.py` are still uncommitted alongside the
+broader TLS branch edits. The stock Keycloak image remains in self-host,
+development/beta Compose and Oracle Kubernetes manifests, and the official
+release transaction does not publish the pinned Keycloak image. Those are
+the next packaging/cutover gates; do not infer deployment readiness from the
+local flow proof.
