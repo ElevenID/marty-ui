@@ -22313,8 +22313,9 @@ uses `network_mode: none`, avoiding a spurious default network in beta
 provider deployments. Local evidence: 397 selected Python checks passed (two
 skipped), Rust 1.95 Canvas/OIDF/callback targets compiled, Rust formatting,
 Ruff, Python compilation, shell syntax, Compose rendering, and diff checks
-passed. Hosted runtime acceptance is still required; do not push until the
-batch passes self-review and the beta release-path mismatch below is resolved.
+passed. Hosted runtime acceptance is still required. This grouped correction
+can be pushed to the existing PR for exact-head CI; do not merge or publish
+until the beta release-path mismatch below is resolved and qualified.
 
 Self-review found an actual beta compatibility defect masked by old tests:
 the beta callback signer still used HTTP and an inline OpenBao dev-root token,
