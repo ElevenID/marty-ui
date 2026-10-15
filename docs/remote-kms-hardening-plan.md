@@ -21598,3 +21598,24 @@ installed Keycloak/OpenBao cutover and lists the existing Keycloak rows,
 Canvas fixture keys, unprovisioned cloud/device acceptance, and missing
 post-merge local live rerun. Review hosted results and correct the same PR
 head in batches before merge.
+
+2026-10-15 PR #1344 first hosted gate review: Python ownership, workflow
+quality, dependency review, Rust feature probe, Rust workspace lint, Canvas
+and contracts tests, service-image configuration, OpenBao/Keycloak image
+probe and broad release contracts failed; several independent UI/security
+checks passed. Findings included an unapproved public-JWKS verification
+import, stale no-Canvas secret overlay, `export` assignment ShellCheck
+warnings, outdated standalone Rust probe lock, a Canvas DIDComm helper
+still calling the old remote-KMS constructor, a browser Keycloak probe that
+unnecessarily required a host Maven JAR despite testing the packaged image,
+and newly introduced Keycloak 25.0.6 affected by GHSA-93ww-43rr-79v3.
+The release lane reported 62 failures across 15 Python modules, mostly
+stale exact-shape expectations; classify and fix them in a local batch.
+Commit `ded3c9444` locally fixed the ownership allowance (public verify
+only), no-Canvas overlay, ShellCheck assignments, probe lock and packaged
+Keycloak probe precondition. It also moved the Keycloak compile target and
+digest-pinned base image to 26.8.0, implementing its new private-JWK-claim
+SPI methods. Maven packaging passed with Java 17, as did ownership,
+no-Canvas Compose rendering and locked probe metadata. This commit is
+deliberately unpushed while the Canvas and broad release failures are
+corrected; Keycloak 26.8.0 installed behavior is not yet qualified.
