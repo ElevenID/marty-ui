@@ -19,7 +19,7 @@ use tokio::{
     time::{timeout, Duration},
 };
 
-const UPSTREAM_HEADER_TIMEOUT: Duration = Duration::from_secs(10);
+const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct EdgeState {
@@ -176,12 +176,12 @@ async fn proxy(
         .parse::<Uri>()
         .expect("incoming origin-form path");
     let upstream_request = Request::from_parts(parts, body);
-    let Ok(Ok(stream)) = timeout(UPSTREAM_HEADER_TIMEOUT, TcpStream::connect(upstream)).await
+    let Ok(Ok(stream)) = timeout(UPSTREAM_CONNECT_TIMEOUT, TcpStream::connect(upstream)).await
     else {
         return failure(StatusCode::BAD_GATEWAY);
     };
     let Ok(Ok((mut sender, connection))) = timeout(
-        UPSTREAM_HEADER_TIMEOUT,
+        UPSTREAM_CONNECT_TIMEOUT,
         http1::handshake(TokioIo::new(stream)),
     )
     .await
@@ -191,12 +191,7 @@ async fn proxy(
     tokio::spawn(async move {
         let _ = connection.with_upgrades().await;
     });
-    let Ok(Ok(mut response)) = timeout(
-        UPSTREAM_HEADER_TIMEOUT,
-        sender.send_request(upstream_request),
-    )
-    .await
-    else {
+    let Ok(mut response) = sender.send_request(upstream_request).await else {
         return failure(StatusCode::BAD_GATEWAY);
     };
     if let Some(downstream) = downstream_upgrade {

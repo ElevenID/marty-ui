@@ -757,45 +757,48 @@ def test_oidf_runner_can_join_only_the_project_scoped_tls_proxy_bridge() -> None
     assert "oidf-runner-network:" in proxy
     assert "OIDF_CONFORMANCE_BRIDGE_ALIAS" in proxy
     assert "OIDF_INTERNAL_TLS_PORT" in proxy
-    assert "nginx.conf.template" in proxy
+    assert "OIDF_EDGE_BIND" in proxy
+    assert "OIDF_EDGE_TLS_KMS_TOKEN_FILE" in proxy
+    assert "tls.key" not in proxy
 
 
-def test_oidf_tls_proxy_refreshes_compose_upstream_addresses() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+def test_oidf_tls_edge_uses_live_upstream_dns_and_shared_service_image() -> None:
+    source = (
+        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
+    ).read_text(encoding="utf-8")
+    image = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    build = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
         encoding="utf-8"
     )
-
-    assert "resolver 127.0.0.11 valid=5s ipv6=off;" in config
-    assert "set $gateway_upstream http://gateway:8000;" in config
-    assert "set $keycloak_upstream http://keycloak:8080;" in config
-    assert "set $ui_upstream http://ui:80;" in config
-    assert "proxy_pass $gateway_upstream;" in config
-    assert "proxy_pass $keycloak_upstream;" in config
-    assert "proxy_pass $ui_upstream;" in config
-    assert "proxy_pass http://gateway:8000;" not in config
-    assert "proxy_pass http://keycloak:8080;" not in config
-    assert "proxy_pass http://ui:80;" not in config
-
-
-def test_oidf_tls_proxy_preserves_the_complete_public_authority() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+    released = (ROOT / "docker-compose.profile.ghcr.yml").read_text(
         encoding="utf-8"
     )
+    for peer in ("gateway:8000", "keycloak:8080", "ui:80"):
+        assert peer in source
+    assert "TcpStream::connect(upstream)" in source
+    assert "--bin marty-oidf-keyless-edge" in build
+    assert "/usr/local/bin/marty-oidf-keyless-edge" in image
+    assert "oidf-tls-proxy: *service-image" in released
 
-    # Nginx $host normalizes away a non-default port. DPoP signs the absolute
-    # target URI, so all upstream locations must use the original authority.
-    assert config.count("proxy_set_header Host $http_host;") == 3
-    assert config.count("proxy_set_header X-Forwarded-Host $http_host;") == 3
-    assert "proxy_set_header Host $host;" not in config
-    assert "proxy_set_header X-Forwarded-Host $host;" not in config
+
+def test_oidf_tls_edge_preserves_the_complete_public_authority() -> None:
+    source = (
+        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
+    ).read_text(encoding="utf-8")
+    # The Rust proxy test exercises a non-default public port through Gateway.
+    assert '"example.test:8443"' in source
+    assert 'headers.insert("x-forwarded-host", host)' in source
+    assert '"x-forwarded-port"' in source
+    assert '|8443|https|127.0.0.1|' in source
+    assert "gateway_upgrade_tunnels_bidirectional_bytes" in source
 
 
 def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
     profile = (ROOT / "docker-compose.profile.ghcr.yml").read_text(encoding="utf-8")
     oidf = (ROOT / "docker-compose.profile.oidf.yml").read_text(encoding="utf-8")
-    proxy = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
-        encoding="utf-8"
-    )
+    proxy = (
+        ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs"
+    ).read_text(encoding="utf-8")
 
     assert "image: ${MARTY_UI_IMAGE:?" in profile
     assert (
@@ -803,28 +806,28 @@ def test_released_conformance_stack_serves_the_exact_ui_artifact() -> None:
         in profile.split("  ui:\n", 1)[1].split("\n  db-migrate:\n", 1)[0]
     )
     assert "  ui:\n        condition: service_healthy" in oidf
-    assert "console(?:/|$)" in proxy
-    assert "locales/" in proxy
-    assert "config\\.json$" in proxy
-    assert "runtime-config\\.js$" in proxy
-    assert "startup\\.js$" in proxy
+    assert '"/console"' in proxy
+    assert '"/locales/"' in proxy
+    assert '"/config.json"' in proxy
+    assert '"/runtime-config.js"' in proxy
+    assert '"/startup.js"' in proxy
 
 
-def test_oidf_tls_proxy_rejects_legacy_tls12_cipher_suites() -> None:
-    config = (ROOT / "services" / "oidf-tls-proxy" / "nginx.conf.template").read_text(
+def test_oidf_tls_edge_requires_remote_nonexportable_signing_identity() -> None:
+    profile = (ROOT / "docker-compose.profile.oidf.yml").read_text(
         encoding="utf-8"
     )
-
-    cipher_line = next(
-        line.strip()
-        for line in config.splitlines()
-        if line.strip().startswith("ssl_ciphers ")
+    edge = (ROOT / "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs").read_text(
+        encoding="utf-8"
     )
-    assert "GCM" in cipher_line
-    assert "CHACHA20-POLY1305" in cipher_line
-    assert "CBC" not in cipher_line
-    assert "AES128-SHA" not in cipher_line
-    assert "ssl_prefer_server_ciphers on;" in config
+    shared = (ROOT / "rust/crates/passport-keyless-edge/src/lib.rs").read_text(
+        encoding="utf-8"
+    )
+    assert 'keyless_tls_config("OIDF_EDGE")' in edge
+    assert "OpenBaoTlsIdentityFiles" in shared
+    assert "keyless_https_server_config" in shared
+    assert "OIDF_EDGE_TLS_KMS_KEY_VERSION" in profile
+    assert "tls.key" not in profile
 
 
 def test_conformance_stack_exposes_timestamped_service_logs(
