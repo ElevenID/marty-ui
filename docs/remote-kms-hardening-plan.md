@@ -22611,3 +22611,14 @@ The source candidate is committed locally as `40bc747cd` with a fail-closed
 `.env.example` inventory. This is deliberately not pushed while PR #1344's
 long exact-head gates execute and while the base initializer's Keycloak
 references remain unprovisioned.
+
+2026-10-15 follow-up self-review found another active stock Keycloak path:
+`make setup-keycloak` launched `quay.io/keycloak/keycloak:25.0` directly on
+the tunnel network. Local candidate commit `fd864d07e` replaces that path
+with a one-shot run of the pinned `keycloak-configurator` Compose service,
+preserving the same setup script and service-network access. `make -n setup-keycloak`
+and diff hygiene pass. Three root YAML files named
+`selfhost-kms-only-model*.snapshot.yml` still contain stock-image entries,
+but no production script or test references them; retain them as historical
+snapshots rather than treating them as deployable graphs. The candidate is
+still local, with Keycloak reference provisioning and runtime acceptance open.
