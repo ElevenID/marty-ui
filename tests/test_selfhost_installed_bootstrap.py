@@ -14,9 +14,9 @@ import probe_selfhost_installed_bootstrap as bootstrap  # noqa: E402
 
 
 def result(
-    args: list[str], stdout: str = "", status: int = 0
+    args: list[str], stdout: str = "", status: int = 0, stderr: str = ""
 ) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(args, status, stdout, "")
+    return subprocess.CompletedProcess(args, status, stdout, stderr)
 
 
 def owned_model(
@@ -508,6 +508,8 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
         if args[:3] == ["docker", "exec", container_id]:
             if args[3] == "sha256sum":
                 return result(args, "a" * 64 + "  /plugins/openbao-didcomm-authcrypt\n")
+            if args[3] == "bao" and args[4] == "status":
+                return result(args, status=2, stderr="x509: certificate signed by unknown authority")
             return result(args)
         if args[:3] == ["docker", "exec", "--env"]:
             assert env.get("BAO_TOKEN", "synthetic-unset-token") not in args

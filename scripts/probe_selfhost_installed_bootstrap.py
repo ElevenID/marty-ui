@@ -319,6 +319,20 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                 raise migrations.QualificationError(
                     "Disposable OpenBao did not become ready"
                 )
+            untrusted = migrations.command(
+                [
+                    "docker", "exec", container_id, "bao", "status",
+                    "-address=https://127.0.0.1:8200",
+                ],
+                env,
+                10,
+            )
+            require(
+                untrusted.returncode != 0
+                and ("certificate" in untrusted.stderr.lower()
+                     or "x509" in untrusted.stderr.lower()),
+                "Disposable OpenBao accepted an untrusted HTTPS client",
+            )
             ca_file = Path(temporary) / "openbao-ca.crt"
             checked(
                 [
