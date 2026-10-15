@@ -22768,3 +22768,18 @@ is running. These checks have not yet established a published artifact or an
 installed KMS-only cutover. The generic Keycloak `COMPONENT_CONFIG` table must
 remain, but its existing four `privateKey` and four generated `secret` rows in
 each beta/self-host database still require removal and a read-only SQL gate.
+
+The 2026-10-15 private-key-file audit also found active CI test fixtures that
+still generate and mount RSA TLS private keys: `smoke-issuance-image.sh` and
+`test_canvas_worker_image_startup.py` both run the Python
+`synthetic_integration_secret_service.py` behind `ssl.load_cert_chain`.
+The former runs in Rust Service Images CI, and the latter is its Canvas image
+startup proof. `ensure-dev-integration-secret-tls.py` is still selected by the
+local beta runner. These are test/development paths, not accepted workload
+exceptions under the requested KMS-only target. Replace their synthetic HTTPS
+transport with a reusable remote-signer Rust test edge or the real Signing
+Keys/OpenBao service while retaining the secret-envelope round-trip and image
+startup coverage; then remove the old certificate/key generator and its
+private-key mounts. The three old `selfhost-kms-only-model*.snapshot.yml`
+files also still show retired `SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE`
+inputs and must be regenerated or retired after checking their consumers.
