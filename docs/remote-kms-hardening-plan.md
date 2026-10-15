@@ -22251,3 +22251,26 @@ to make these tests pass. The Ed25519 scoped fixture correction and the locally
 qualified base HTTPS/Raft graph were assembled on the grouped UI PR branch as
 `c1ae70f9c` and `4ce8fbe15`; the branch remains unpushed pending the Canvas
 correction and review. No exact-head hosted result exists for this new head.
+
+2026-10-15 grouped UI PR #1344 next head: `5fcb8b450` now includes the
+scoped Ed25519 Transit fixture correction (`c1ae70f9c`), the base Compose
+Raft/HTTPS and scoped-token graph (`4ce8fbe15`), and the Canvas keyless TLS
+fixture correction (`5fcb8b450`). The Canvas composition now provisions an
+OpenBao Transit ECDSA P-256 key with export and plaintext backup disabled,
+uses OpenBao's internal PKI to issue only public peer certificates, gives the
+runtime a scoped version-pinned TLS signer, and routes synthetic gRPC over
+HTTPS with an explicit public CA. The test-only process overlay also binds
+`BAO_ADDR`/`BAO_CACERT` to the disposable sidecar rather than deployment DNS
+and secrets. Separate HTTP peers continue to serve HTTP-only business routes.
+The grouped branch was pushed once after local batching. This is candidate
+code, not a live handshake claim; inspect the exact new hosted result.
+
+Local validation for this head: Rust 1.95 Canvas acceptance target compiled;
+rendered base fixture resolved exact HTTPS/KMS bindings; 25 focused Python
+checks passed; 12 selected base Compose models and the native DIDComm Compose
+gate passed; Ruff, Rust formatting and diff checks passed. The Windows-only
+run of the Kubernetes renderer test returned early by its Linux gate and is
+not acceptance. Both Windows Docker Desktop and WSL Docker were unavailable,
+so the OpenBao PKI, TLS handshake, Gateway/Issuance process composition, and
+Raft restart behavior require hosted Docker execution. Preserve run
+`38780095995` as immutable failed evidence.
