@@ -21500,3 +21500,13 @@ vet; the complete disposable Rust/PostgreSQL/OpenBao coordinated restore
 passed again against the renewed PEM format. CA rollover and trust-anchor
 redistribution remain a separate operational task before the five-year CA
 expires; live deployment and signed-image qualification remain pending.
+
+2026-10-15 broader fixture audit: `scripts/canvas-oss/generate-runtime-config.mjs`
+still creates three local RSA private JWKs plus symmetric Canvas OSS
+configuration keys for the separate Canvas portability acceptance stack.
+Those keys belong to the third-party Canvas OSS fixture, not a Marty service,
+but they do not satisfy the requested removal of private-key material from
+tests. Keep this as an explicit test-custody gap: qualify remote signing in
+that Canvas fixture or replace it with an equivalent KMS-only integration
+test before claiming all tests are keyless. Do not silently remove the LTI
+coverage or count the Marty-only database scan as proof for Canvas OSS.
