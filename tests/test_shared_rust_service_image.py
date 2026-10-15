@@ -39,7 +39,7 @@ UNROUTED_RUST_BINARIES = {
 }
 PROFILE_RUST_BINARIES = {
     "marty-canvas-sandbox", "marty-passport-keyless-edge",
-    "marty-passport-tls-bootstrap",
+    "marty-passport-tls-bootstrap", "marty-keyless-grpc-bridge",
 }
 ALL_RUST_BINARIES = (
     set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
