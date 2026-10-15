@@ -22653,3 +22653,15 @@ and validated server certificate, then run the actual Envoy composition gate.
 Do not bypass the health check or restore plaintext Issuance. Hold the next
 grouped UI push until that path and the local follow-on packaging work are
 reviewed together.
+
+Local UI commit `9ac2a4a3d` introduces a reusable Rust
+`marty-keyless-grpc-bridge`: it accepts Envoy gRPC only on a loopback socket,
+uses MMF's OpenBao-backed client certificate and versioned Transit signer for
+outbound mTLS, validates the upstream public CA/name, and bounds concurrent
+connections and handshake time. The disposable Envoy composition now routes
+its native cluster through this bridge rather than directly into a plaintext
+socket on the KMS-backed Issuance listener. Rust 1.95 bridge tests and Canvas
+compilation/fixture-projection check pass locally. Its exact-owned Linux
+runtime still needs a Docker gate; the bridge is not yet packaged or configured
+in Compose/Kubernetes, nor are its separate scoped client token/certificate
+provisioned. This local commit is not pushed as a completed K11 change.
