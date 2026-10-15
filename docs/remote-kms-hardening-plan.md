@@ -22793,3 +22793,14 @@ integration-secret recovery probe, so the whole run is not yet green.
 enabled under the repository merge queue; verify the queued merge and exact
 merged head before treating it as landed. No installed beta/self-host database
 cleanup or release artifact cutover is implied by these disposable CI passes.
+
+The completed [exact-head CI run 38815681551](https://github.com/ElevenID/marty-ui/actions/runs/38815681551)
+is now green, including its 23-minute OpenBao plugin lane and coordinated
+PostgreSQL/Raft integration-secret recovery step. Every PR check passed.
+One older Codex review thread still blocked required conversation resolution;
+the current harness already stubs `mktemp`, `rm`, and `rmdir`, and its focused
+`test_kubernetes_token_hmac_secret.py` suite passed locally (44 tests).
+After verifying this, the thread was resolved. PR #1344 is now clean and
+enqueued at position 1 in the protected merge queue. Merge-group CI and the
+resulting main commit remain pending; the clean PR head alone is not landing
+evidence.
