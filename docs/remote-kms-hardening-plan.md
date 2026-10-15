@@ -22635,3 +22635,21 @@ only; Docker Desktop's daemon is still unavailable. At this checkpoint, PR
 OpenBao plugin lane active; self-host, Rust images, security, packaging and
 release contracts have passed. Do not count a partially completed run as a
 green exact-head gate.
+
+Run `38802947432` is terminal failed solely at the Canvas job and dependent CI
+gate; its other required jobs, including OpenBao plugin recovery, passed.
+Canvas had 128 passes, three failures. Two direct-profile cases attempted the
+new CA-validated TLS peer `/health` probe but the shared disposable peer
+recorded it as an unvalidated request. Local UI commit `86170f748` makes that
+fixture validate and count the GET health request for all profiles. Rust 1.95
+format check, diff check and Windows compile/focused test passed; the focused
+test skips its exact-owned Linux/Docker runtime on Windows, so hosted Canvas
+proof still remains. The third failure is substantive: the exact-owned Envoy
+child recorded `cluster.issuance_native_grpc.membership_healthy=0` for 45
+seconds after the native Issuance test listener became KMS-backed TLS. Its
+upstream Envoy cluster still speaks plaintext gRPC. Preserve the TLS server
+and fix the Envoy-to-Issuance transport using a remotely held client identity
+and validated server certificate, then run the actual Envoy composition gate.
+Do not bypass the health check or restore plaintext Issuance. Hold the next
+grouped UI push until that path and the local follow-on packaging work are
+reviewed together.
