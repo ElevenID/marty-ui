@@ -21705,3 +21705,22 @@ The six affected Python modules passed 91 tests; `marty-flow-acceptance`
 test target compiled with Rust 1.95; `git diff --check` passed. Docker
 daemon did not answer a local `docker info` probe and it was interrupted,
 so no Docker-backed Flow acceptance was run.
+
+2026-10-15 local UI commit `fe405fe7f` (unlanded, grouped for PR #1344):
+the packaged external self-host OpenBao bootstrap helper now rejects HTTP
+addresses and requires a readable public CA file; it mounts only that CA
+read-only into its scoped-token initializer and uses CA-verified HTTPS. The
+installed-bundle bootstrap handoff probe now starts its disposable plugin
+image with OpenBao's [documented `-dev-tls` listener](https://openbao.org/docs/commands/server/), retains generated listener key
+files inside the OpenBao container's tmpfs, copies out only `vault-ca.pem`,
+verifies it contains no private-key marker, and places the helper in that
+node's network namespace to authenticate `https://127.0.0.1:8200`. Its
+cleanup inspection now accounts for all token output mounts and the public
+CA mount. Operator examples include `BAO_CACERT`. Local related Python
+suite passed 117 tests with six POSIX-only cases skipped on Windows; shell
+syntax, Python compilation and `git diff --check` passed. The real installed
+Docker handoff is still unqualified because Docker did not respond locally.
+The base development Compose graph still configures HTTP OpenBao on several
+services; changing only its DIDComm overlay would break those consumers.
+Its conversion must be graph-wide or use a separately scoped HTTPS KMS node
+and CA-only client mounts, with live acceptance before claiming closure.
