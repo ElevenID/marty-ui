@@ -22665,3 +22665,15 @@ compilation/fixture-projection check pass locally. Its exact-owned Linux
 runtime still needs a Docker gate; the bridge is not yet packaged or configured
 in Compose/Kubernetes, nor are its separate scoped client token/certificate
 provisioned. This local commit is not pushed as a completed K11 change.
+
+Local UI commit `6930cccc1` adds the bridge binary to the shared Rust service
+image and directs the canonical Envoy native Issuance cluster to loopback port
+19006. The closed Envoy renderer accepts that route and its legacy upgrade
+still binds its separate historical control to port 9005; all five renderer
+contract tests and the fixture projection check pass locally. This remains a
+work-in-progress production graph: Compose/Kubernetes have not yet started
+the bridge alongside Envoy, provisioned its separate non-exportable client
+identity, or configured native Issuance server TLS in the base profile. An
+Envoy container without the sidecar would fail its native upstream health
+check, which is the intended fail-closed behavior until packaging is wired.
+Do not push this local candidate or treat its source tests as runtime proof.
