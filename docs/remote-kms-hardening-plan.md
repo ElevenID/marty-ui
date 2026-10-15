@@ -22882,3 +22882,11 @@ pytest cases passed with two skips, Ruff, Bash syntax and diff checks passed.
 The temporary test OpenBao container owns only its bootstrap listener key;
 no workload TLS private-key file is generated or mounted. The installed
 Keycloak databases and exact `v1.1.248` release remain unqualified.
+
+Self-review follow-up `e9aac5526` on #1356 restricts the PKI CSR-SAN override
+to the new image fixture, preserving the established event-stream, Signing Keys
+restore, passport-edge, and OIDF-edge certificate behavior. It also retains a
+digest-pinned mirror fallback for Windows local image pulls. The current
+packaged Canvas startup check reran locally and all 16 cases passed; focused
+fixture tests and Ruff passed. PR-head CI is running and superseded head
+`669299845` must not be used as final evidence.
