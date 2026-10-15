@@ -20881,3 +20881,23 @@ rustfmt passed. This is identity provisioning code only: the new roles have
 not yet been exercised against a freshly built Linux image and the remaining
 gRPC services still need their TLS selectors, CA-verified HTTPS targets and
 full local runtime acceptance.
+
+2026-10-15 protected gRPC server transport slice, staged in the grouped UI
+worktree: Event Stream, Organization, Revocation Profile, Credential Template
+and Issuance Native now mount only their issued public certificates, scoped
+TLS signer tokens and read-only OpenBao public CA; each binds the exact
+project-scoped key name and version 1. The corresponding Organization-to-Event
+Stream, Revocation-to-Organization, Credential Template-to-Organization and
+Revocation, and Issuance-to-Credential Template and Revocation targets now
+use CA-verified HTTPS. The native Issuance plaintext override was removed.
+Model and live-container ownership checks require the remote server identity
+and scoped secret mounts. Seven focused passport suites passed 327 cases with
+two skips; Python compilation, targeted rustfmt and diff checks passed.
+A fresh local Linux services image, ID
+`sha256:7853fb747dab96c90779fe71a585c5e6f6430ccfe2372e079125dbc69d4c8ee0`,
+passed the disposable real-OpenBao container probe: all eleven output roles,
+public-only material, wrong-CA rejection and the remote-signed HTTPS edge
+callback. This is a staged local image, not the exact published release.
+Trust/Compliance/Deployment/Presentation Policy/Flow/Gateway clients and
+their remaining plaintext targets still need cutover; the full protected
+passport journey remains blocked.
