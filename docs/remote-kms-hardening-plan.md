@@ -22804,3 +22804,16 @@ After verifying this, the thread was resolved. PR #1344 is now clean and
 enqueued at position 1 in the protected merge queue. Merge-group CI and the
 resulting main commit remain pending; the clean PR head alone is not landing
 evidence.
+
+The protected combined head `3895776eff` entered merge-group CI run
+`38818654916` for #1344; it is still running. Separately, an unpushed
+follow-up branch `fix/kms-retire-test-tls-files-20261015` at `6615e0688`
+removes the unconditional local-beta call to the obsolete TLS private-key
+generator, deletes that generator and its private-key tests, and corrects the
+README to require public certificates and remote Transit signer references.
+No active Compose file referred to its generated directory. The beta selector
+and local release-runner suites passed (160, two skipped), Ruff passed, and
+the PowerShell deployment script parsed. This commit is held for a broad
+test-fixture cleanup PR after #1344 lands; active image smoke and Canvas
+fixtures still need a real KMS-backed HTTPS replacement, not deletion of their
+round-trip coverage.
