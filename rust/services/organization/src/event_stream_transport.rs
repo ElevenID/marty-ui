@@ -1,13 +1,17 @@
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use mmf_messaging::{
     DeliveryGuarantee, Message, MessageTransport, MessagingError, MessagingHealth,
     MessagingPattern, Subscription, TransportCapabilities,
 };
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
 use serde_json::Value;
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
+use tonic::{metadata::AsciiMetadataValue, Request};
 
 use crate::event_stream_proto::{
     event_stream_service_client::EventStreamServiceClient, DomainEvent, HealthCheckRequest,
@@ -17,6 +21,8 @@ use crate::event_stream_proto::{
 pub struct EventStreamTransport {
     endpoint: String,
     timeout: Duration,
+    ca_certificate: Option<PathBuf>,
+    service_token: Option<String>,
     client: Mutex<Option<EventStreamServiceClient<Channel>>>,
 }
 
@@ -32,8 +38,33 @@ impl EventStreamTransport {
         Self {
             endpoint,
             timeout,
+            ca_certificate: None,
+            service_token: None,
             client: Mutex::new(None),
         }
+    }
+
+    #[must_use]
+    pub fn with_ca_certificate(mut self, ca_certificate: Option<PathBuf>) -> Self {
+        self.ca_certificate = ca_certificate;
+        self
+    }
+
+    #[must_use]
+    pub fn with_service_token(mut self, service_token: Option<String>) -> Self {
+        self.service_token = service_token;
+        self
+    }
+
+    fn request<T>(&self, body: T) -> Result<Request<T>, MessagingError> {
+        let mut request = Request::new(body);
+        if let Some(token) = &self.service_token {
+            let value = AsciiMetadataValue::try_from(token.as_str()).map_err(|_| {
+                MessagingError::InvalidConfiguration("event-stream service token is invalid".into())
+            })?;
+            request.metadata_mut().insert("x-service-token", value);
+        }
+        Ok(request)
     }
 
     async fn connected_client(&self) -> Result<EventStreamServiceClient<Channel>, MessagingError> {
@@ -46,14 +77,14 @@ impl EventStreamTransport {
         &self,
         mut client: EventStreamServiceClient<Channel>,
     ) -> Result<(), MessagingError> {
-        let response =
-            tokio::time::timeout(self.timeout, client.health_check(HealthCheckRequest {}))
-                .await
-                .map_err(|_| {
-                    MessagingError::BackendUnavailable("event-stream health timed out".into())
-                })?
-                .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?
-                .into_inner();
+        let response = tokio::time::timeout(
+            self.timeout,
+            client.health_check(self.request(HealthCheckRequest {})?),
+        )
+        .await
+        .map_err(|_| MessagingError::BackendUnavailable("event-stream health timed out".into()))?
+        .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?
+        .into_inner();
         if response.status.eq_ignore_ascii_case("serving") {
             Ok(())
         } else {
@@ -73,9 +104,36 @@ impl MessageTransport for EventStreamTransport {
                 return Ok(());
             }
         }
-        let client = EventStreamServiceClient::connect(self.endpoint.clone())
-            .await
-            .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?;
+        let (security, trust, material) = if let Some(ca) = &self.ca_certificate {
+            (
+                GrpcTransportSecurity::ServerTls,
+                GrpcTrustMode::CustomCa,
+                GrpcTlsMaterial::from_ca_pem_file(Some(ca))
+                    .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?,
+            )
+        } else {
+            (
+                GrpcTransportSecurity::Plaintext,
+                GrpcTrustMode::NativeRoots,
+                GrpcTlsMaterial::default(),
+            )
+        };
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: self.endpoint.clone(),
+                security,
+                trust,
+                connect_timeout_ms: self.timeout.as_millis() as u64,
+                request_timeout_ms: self.timeout.as_millis() as u64,
+                ..GrpcChannelConfig::default()
+            },
+            material,
+        )
+        .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?
+        .connect()
+        .await
+        .map_err(|error| MessagingError::BackendUnavailable(error.to_string()))?;
+        let client = EventStreamServiceClient::new(channel);
         self.probe(client.clone()).await?;
         *self.client.lock().await = Some(client);
         Ok(())
@@ -91,7 +149,7 @@ impl MessageTransport for EventStreamTransport {
         let mut client = self.connected_client().await?;
         let response = tokio::time::timeout(
             self.timeout,
-            client.publish(PublishEventRequest { event: Some(event) }),
+            client.publish(self.request(PublishEventRequest { event: Some(event) })?),
         )
         .await
         .map_err(|_| MessagingError::BackendUnavailable("event-stream publish timed out".into()))?

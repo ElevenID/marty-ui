@@ -36,6 +36,7 @@ REQUIRED_IMAGE_ROLES = {
     "services": ("marty-ui", "services"),
     "migrations": ("marty-ui", "migrations"),
     "openbao_didcomm": ("marty-ui", "openbao-didcomm"),
+    "keycloak": ("marty-ui", "keycloak"),
     "issuance": ("marty-credentials-issuance", "marty-credentials-issuance"),
 }
 

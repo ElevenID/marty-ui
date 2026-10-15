@@ -172,7 +172,11 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
     let ca = directory.path().join("ca.pem");
     let policy = directory.path().join("didcomm-encryption-policy.json");
     let token = directory.path().join("openbao-token");
-    std::fs::write(&ca, b"synthetic CA fixture").unwrap();
+    std::fs::write(
+        &ca,
+        b"-----BEGIN CERTIFICATE-----\nsynthetic CA fixture\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
     std::fs::write(&policy, b"{}").unwrap();
     std::fs::write(&token, b"synthetic token fixture").unwrap();
     let ca = ca.to_str().unwrap();
@@ -205,10 +209,16 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
             "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
             "redis_url": "redis://127.0.0.1:16379",
             "peer_origin": "http://127.0.0.1:18001",
+            "grpc_peer_origin": "https://127.0.0.1:18003",
+            "grpc_ca_file": ca,
+            "grpc_tls_certificate_file": ca,
+            "grpc_tls_token_file": token,
+            "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
             "legacy_origin": "http://127.0.0.1:18002",
             "ca_file": ca,
             "policy_directory": directory.path(),
-            "kms_url": "http://127.0.0.1:18200",
+            "kms_url": "https://127.0.0.1:18200",
+            "kms_ca_file": ca,
             "kms_token_file": token,
             "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
             "integration_secret_kms_ca_file": ca,
@@ -218,6 +228,15 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         let rendered = RenderedBase::render(&spec);
         let native = &rendered.native_environment;
         let gateway = &rendered.gateway_environment;
+        for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
+            assert_eq!(native.get(name).map(String::as_str), Some(ca));
+        }
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE")
+                .map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
         assert_eq!(
             native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
             Some(expected_private_ips)
@@ -228,7 +247,11 @@ fn rendered_base_renewal_config_crosses_encryption_and_private_address_policy() 
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
-            Some("http://127.0.0.1:18200")
+            Some("https://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
+            Some(ca)
         );
         assert_eq!(
             native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),

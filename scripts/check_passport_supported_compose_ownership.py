@@ -19,13 +19,17 @@ from typing import Callable
 if __package__:
     from .check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        RUST_DEPENDENCIES, SELECTED,
+        PASSPORT_OPENBAO_CONSUMERS, PASSPORT_REMOTE_GRPC_CLIENTS,
+        PASSPORT_REMOTE_GRPC_SERVERS, RUST_DEPENDENCIES, SELECTED,
+        remote_grpc_client_environment, remote_grpc_server_environment,
     )
     from .passport_supported_infra_images import ROLES
 else:
     from check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        RUST_DEPENDENCIES, SELECTED,
+        PASSPORT_OPENBAO_CONSUMERS, PASSPORT_REMOTE_GRPC_CLIENTS,
+        PASSPORT_REMOTE_GRPC_SERVERS, RUST_DEPENDENCIES, SELECTED,
+        remote_grpc_client_environment, remote_grpc_server_environment,
     )
     from passport_supported_infra_images import ROLES
 
@@ -47,34 +51,47 @@ COMPLETED_INIT = frozenset({
     "revocation-profile-migrate", "keycloak-configurator", "openbao-init",
 })
 SECRET_MOUNTS = {
-    "edge": ("passport_edge_tls_cert", "passport_edge_tls_key"),
+    "edge": ("passport_edge_tls_cert", "passport_edge_tls_kms_token"),
     "postgres": ("marty_db_password",),
     "redis": (),
     "openbao": ("bao_root_token",),
     "db-migrate": ("marty_db_password", "bao_token", "notification_openbao_token"),
     "issuance-migrations": ("marty_db_password",),
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key", "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key", "signing_keys_integration_secret_key",
-                     "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
+                     "signing_keys_workload_server_cert", "signing_keys_workload_server_kms_token",
                      "workload_identity_ca_cert"),
     "revocation-profile-migrate": ("marty_db_password",),
-    "revocation-profile": ("marty_db_password", "grpc_service_token"),
-    "event-stream": (),
-    "organization": ("marty_db_password", "grpc_service_token"),
+    "revocation-profile": ("marty_db_password", "grpc_service_token",
+                           "workload_identity_ca_cert", "rp_workload_server_cert",
+                           "rp_workload_server_kms_token"),
+    "event-stream": ("es_workload_server_cert", "es_workload_server_kms_token"),
+    "organization": ("marty_db_password", "grpc_service_token",
+                     "workload_identity_ca_cert", "org_workload_server_cert",
+                     "org_workload_server_kms_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
-                            "signing_keys_internal_api_key"),
-    "compliance-profile": ("marty_db_password", "grpc_service_token"),
+                            "signing_keys_internal_api_key", "workload_identity_ca_cert",
+                            "ct_workload_server_cert", "ct_workload_server_kms_token"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token",
+                            "workload_identity_ca_cert", "compliance_profile_workload_client_cert",
+                            "compliance_profile_workload_client_kms_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
-                      "signing_keys_internal_api_key"),
+                      "signing_keys_internal_api_key", "workload_identity_ca_cert"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
-                            "issuance_api_key"),
-    "deployment-profile": ("marty_db_password", "grpc_service_token"),
+                            "issuance_api_key", "workload_identity_ca_cert",
+                            "pp_workload_server_cert", "pp_workload_server_kms_token"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token",
+                           "workload_identity_ca_cert", "deployment_profile_workload_client_cert",
+                           "deployment_profile_workload_client_kms_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key", "signing_keys_issuer_sign_key", "signing_keys_integration_secret_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "passport_beta_reconciliation_operator_token",
-                        "workload_identity_ca_cert"),
+                        "workload_identity_ca_cert", "issuance_workload_server_cert",
+                        "issuance_workload_server_kms_token"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "signing_keys_issuer_sign_key",
              "issuance_api_key", "grpc_service_token",
-             "flow_application_event_hmac_key"),
+             "flow_application_event_hmac_key", "workload_identity_ca_cert",
+             "flow_workload_client_cert", "flow_workload_client_kms_token",
+             "flow_workload_server_cert", "flow_workload_server_kms_token"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -87,7 +104,8 @@ DATA_MOUNTS = {
     "redis": (("redis_data", "/data"),),
     "openbao": (("openbao_data", "/bao/data"),
                 ("openbao_file", "/openbao/file"),
-                ("openbao_logs", "/openbao/logs")),
+                ("openbao_logs", "/openbao/logs"),
+                ("openbao_public_ca", "/bao/public-ca")),
 }
 
 
@@ -164,7 +182,8 @@ def _organization_environment(actual: object, record: dict) -> None:
             "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
         "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-        "ES_GRPC_TARGET": "event-stream:9015",
+        "ES_GRPC_TARGET": "https://event-stream:9015",
+        "ES_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
         "PASSPORT_ACCEPTANCE_PROJECT": record["project"],
         "PASSPORT_ACCEPTANCE_RUN_ID": record["run_id"],
@@ -190,7 +209,8 @@ def _revocation_environment(actual: object, status_origin: str) -> None:
         "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
         "REDIS_URL": "redis://redis:6379/4",
-        "ORG_GRPC_TARGET": "organization:9002",
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
         "PUBLIC_API_URL": "http://gateway:8000",
         "STATUS_LIST_BASE_URL": status_origin,
         "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
@@ -203,7 +223,7 @@ def _revocation_environment(actual: object, status_origin: str) -> None:
 
 
 def _support_environment(actual: object, service: str, status_origin: str,
-                         surface: str) -> None:
+                         surface: str, project: str) -> None:
     environment = _runtime_environment(actual, service)
     database = "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"
     common = {
@@ -211,13 +231,14 @@ def _support_environment(actual: object, service: str, status_origin: str,
         "DATABASE_URL_TEMPLATE": database,
         "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-        "ORG_GRPC_TARGET": "organization:9002",
+        "ORG_GRPC_TARGET": "https://organization:9002",
     }
     public_origin = status_origin
     expected = {
         "compliance-profile": {
             **common, "SERVICE_NAME": "compliance_profile",
             "COMPLIANCE_PROFILE_SERVICE_PORT": "8008",
+            **remote_grpc_client_environment("compliance-profile", project),
         },
         "trust-profile": {
             **common, "SERVICE_NAME": "trust_profile", "TRUST_PROFILE_SERVICE_PORT": "8004",
@@ -230,11 +251,15 @@ def _support_environment(actual: object, service: str, status_origin: str,
             "MARTY_ORG_SLUG": "marty",
             "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
+            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
         },
         "credential-template": {
             **common, "SERVICE_NAME": "credential_template",
             "CREDENTIAL_TEMPLATE_SERVICE_PORT": "8003", "CT_GRPC_PORT": "9003",
-            "RP_GRPC_TARGET": "revocation-profile:9013",
+            "ORG_GRPC_TARGET": "https://organization:9002",
+            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            "RP_GRPC_TARGET": "https://revocation-profile:9013",
+            "RP_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
             "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
             "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
                 "/run/secrets/signing_keys_internal_api_key",
@@ -254,17 +279,23 @@ def _support_environment(actual: object, service: str, status_origin: str,
             "DID_RESOLUTION_BASE_URL": "http://gateway:8000",
             "PUBLIC_DOMAIN": f"localhost:{status_origin.rsplit(':', 1)[1]}",
             "MARTY_ORG_SLUG": "marty",
+            "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
         },
         "deployment-profile": {
             **common, "SERVICE_NAME": "deployment_profile",
             "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
+            **remote_grpc_client_environment("deployment-profile", project),
         },
     }[service]
-    if service == "presentation-policy" and surface == "selfhost":
+    if service == "presentation-policy":
         expected.update({
-            "ENVIRONMENT": "production",
+            **({"ENVIRONMENT": "production"} if surface == "selfhost" else {}),
             "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
-            "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/pp_workload_server_key",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/pp_workload_server_kms_token",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{project}-pp-server",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
             "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
         })
     require(all(environment.get(key) == value for key, value in expected.items())
@@ -283,7 +314,7 @@ def _issuer_origin_environment(actual: object, service: str,
             f"{service} issuer origin differs from disposable Gateway")
 
 
-def _flow_surface_environment(actual: object, surface: str) -> None:
+def _flow_surface_environment(actual: object, surface: str, project: str) -> None:
     environment = _runtime_environment(actual, "Flow")
     require(environment.get("FLOW_APPLICATION_EVENT_HMAC_KEY_FILE")
             == "/run/secrets/flow_application_event_hmac_key",
@@ -295,21 +326,33 @@ def _flow_surface_environment(actual: object, surface: str) -> None:
         "FLOW_WEBHOOK_SECRET_FILE": "/run/secrets/flow_webhook_secret",
         "FLOW_CALLBACK_CA_CERT_FILE": "/run/secrets/workload_identity_ca_cert",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY": "/run/secrets/flow_workload_client_key",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": "https://openbao:8200",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE": "/run/secrets/flow_workload_client_kms_token",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME": f"{project}-flow-client",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION": "1",
         "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
-        "GRPC_WORKLOAD_TLS_SERVER_KEY": "/run/secrets/flow_workload_server_key",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/flow_workload_server_kms_token",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{project}-flow-server",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
         "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
     }
-    require((surface == "selfhost"
-             and environment.get("ENVIRONMENT") == "production"
-             and all(environment.get(key) == value for key, value in expected.items()))
-            or (surface == "base"
-                and environment.get("ENVIRONMENT") == "development"
-                and not any(key in environment for key in expected)),
+    require(environment.get("ENVIRONMENT") == (
+                "production" if surface == "selfhost" else "development")
+            and all(environment.get(key) == value for key, value in expected.items()
+                    if key not in {"FLOW_CALLBACK_DESTINATIONS", "FLOW_WEBHOOK_SECRET_FILE",
+                                   "FLOW_CALLBACK_CA_CERT_FILE"})
+            and (surface != "selfhost" or all(
+                environment.get(key) == expected[key] for key in
+                ("FLOW_CALLBACK_DESTINATIONS", "FLOW_WEBHOOK_SECRET_FILE",
+                 "FLOW_CALLBACK_CA_CERT_FILE"))),
             "Disposable Flow callback or workload TLS runtime differs from surface")
 
 
-def _ceremony_environment(actual: object, service: str, surface: str) -> None:
+def _ceremony_environment(actual: object, service: str, surface: str,
+                          project: str) -> None:
     environment = _runtime_environment(actual, service)
     credentials = {
         "SIGNING_KEYS_DSC_ISSUE_GATEWAY_KEY_FILE": "/run/secrets/dsc_issue_gateway_key",
@@ -333,8 +376,16 @@ def _ceremony_environment(actual: object, service: str, surface: str) -> None:
     if service == "signing-keys":
         require(environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE")
                 == "/run/secrets/signing_keys_workload_server_cert"
-                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE")
-                == "/run/secrets/signing_keys_workload_server_key",
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR")
+                == "https://openbao:8200"
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE")
+                == "/bao/public-ca/ca.crt"
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE")
+                == "/run/secrets/signing_keys_workload_server_kms_token"
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME")
+                == f"{project}-signing-keys-server"
+                and environment.get("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION")
+                == "1",
                 "Disposable signing-key remote-secret TLS listener differs")
 
 
@@ -371,12 +422,20 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
         return {
             ("bind", str(disposable_root / "secrets" / "bao_root_token"),
              "/run/secrets/bao_root_token", False),
+            ("volume", f"{project}_openbao_public_ca", "/bao/public-ca", False),
             ("bind", str(disposable_root / "bootstrap-output"),
              "/work/secrets", True),
             ("bind", str(source / "scripts/passport_supported_openbao_bootstrap.sh"),
              "/scripts/passport_supported_openbao_bootstrap.sh", False),
             ("bind", str(source / "docker/openbao-init.sh"),
              "/scripts/openbao-init.sh", False),
+        }
+    if service == "passport-tls-bootstrap":
+        return {
+            ("bind", str(disposable_root / "secrets" / "bao_root_token"),
+             "/run/secrets/bao_root_token", False),
+            ("volume", f"{project}_openbao_public_ca", "/bao/public-ca", False),
+            ("bind", str(disposable_root / "tls-output"), "/work/output", True),
         }
     expected = {
         ("bind", str(disposable_root / "secrets" / secret),
@@ -385,28 +444,21 @@ def _expected_mounts(service: str, project: str, disposable_root: Path,
                        + (BASE_CEREMONY_MOUNTS if (surface == "base" or ceremony)
                           and service in {"gateway", "signing-keys"} else ()))
     }
-    if surface == "selfhost":
-        extra = {
-            "flow": ("flow_webhook_secret",
-                     "flow_workload_client_cert", "flow_workload_client_key",
-                     "flow_workload_server_cert", "flow_workload_server_key",
-                     "workload_identity_ca_cert"),
-            "presentation-policy": ("pp_workload_server_cert", "pp_workload_server_key",
-                                    "workload_identity_ca_cert"),
-        }.get(service, ())
-        expected.update(("bind", str(disposable_root / "secrets" / name),
-                         f"/run/secrets/{name}", False) for name in extra)
+    if surface == "selfhost" and service == "flow":
+        expected.add(("bind", str(disposable_root / "secrets" / "flow_webhook_secret"),
+                      "/run/secrets/flow_webhook_secret", False))
     if service == "openbao":
         expected.add(("bind", str(Path(__file__).resolve().parents[1]
                                    / "scripts/passport_supported_openbao_start.sh"),
                       "/usr/local/bin/passport-supported-openbao-start", False))
-    if service == "edge":
-        expected.add(("bind", str(Path(__file__).resolve().parents[1]
-                                   / "scripts/passport_supported_edge.conf"),
-                      "/etc/nginx/conf.d/default.conf", False))
     if service in DATA_MOUNTS:
         expected.update(("volume", f"{project}_{name}", destination, True)
                         for name, destination in DATA_MOUNTS[service])
+    if service in (set(PASSPORT_OPENBAO_CONSUMERS) | set(PASSPORT_REMOTE_GRPC_SERVERS)
+                   | set(PASSPORT_REMOTE_GRPC_CLIENTS)
+                   | {"edge", "flow", "presentation-policy"}):
+        expected.add(("volume", f"{project}_openbao_public_ca",
+                      "/bao/public-ca", False))
     return expected
 
 
@@ -414,12 +466,14 @@ def _expected_image(record: dict, service: str) -> str | None:
     """Use the same plan-bound image role for live and partial ownership."""
     if service == "passport-openbao-bootstrap":
         return record.get("infra_images", {}).get("openbao")
+    if service == "passport-tls-bootstrap":
+        return record.get("services_reference")
     if service in {"passport-certificate-bootstrap", "passport-bureau-poll"}:
         return record.get("migrations_reference")
     return (record.get("migrations_reference") if service == "db-migrate" else
             record.get("services_reference") if service == "issuance-migrations" else
             record.get("services_reference")
-            if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
+            if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys", "edge"} else
             record.get("infra_images", {}).get(service))
 
 
@@ -533,6 +587,33 @@ def verify(record: dict, surface: str, now: datetime,
         _labels(labels, record, project)
         require(labels.get("com.docker.compose.service") == service,
                 "Disposable container service identity changed")
+        if service == "edge":
+            environment = _runtime_environment(config.get("Env"), "edge")
+            require(config.get("Entrypoint") == [
+                "/usr/local/bin/marty-passport-keyless-edge"]
+                and environment.get("PASSPORT_EDGE_BIND") == "0.0.0.0:8443"
+                and environment.get("PASSPORT_EDGE_TLS_CERT_FILE")
+                == "/run/secrets/passport_edge_tls_cert"
+                and environment.get("PASSPORT_EDGE_TLS_KMS_ADDR")
+                == "https://openbao:8200"
+                and environment.get("PASSPORT_EDGE_TLS_KMS_CA_CERT_FILE")
+                == "/bao/public-ca/ca.crt"
+                and environment.get("PASSPORT_EDGE_TLS_KMS_TOKEN_FILE")
+                == "/run/secrets/passport_edge_tls_kms_token"
+                and environment.get("PASSPORT_EDGE_TLS_KMS_KEY_NAME")
+                == f"{project}-passport-edge"
+                and environment.get("PASSPORT_EDGE_TLS_KMS_KEY_VERSION") == "1",
+                "Disposable edge remote TLS signer differs from plan")
+        if service in PASSPORT_REMOTE_GRPC_SERVERS:
+            environment = _runtime_environment(config.get("Env"), service)
+            require(all(environment.get(key) == value for key, value in
+                        remote_grpc_server_environment(service, project).items()),
+                    "Disposable remote gRPC server identity differs from plan")
+        if service in PASSPORT_REMOTE_GRPC_CLIENTS:
+            environment = _runtime_environment(config.get("Env"), service)
+            require(all(environment.get(key) == value for key, value in
+                        remote_grpc_client_environment(service, project).items()),
+                    "Disposable remote gRPC client identity differs from plan")
         if service == "issuance-migrations":
             migration_environment = _runtime_environment(config.get("Env"), service)
             require(config.get("Entrypoint") == ["/bin/sh", "-c"]
@@ -554,7 +635,7 @@ def verify(record: dict, surface: str, now: datetime,
         if service == "organization":
             _organization_environment(config.get("Env"), record)
         elif service in {"gateway", "signing-keys"}:
-            _ceremony_environment(config.get("Env"), service, surface)
+            _ceremony_environment(config.get("Env"), service, surface, project)
             environment = _runtime_environment(config.get("Env"), service)
             require(environment.get("PUBLIC_DOMAIN")
                     == f"localhost:{status_origin.rsplit(':', 1)[1]}",
@@ -576,12 +657,12 @@ def verify(record: dict, surface: str, now: datetime,
                     and "PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN" not in native_environment,
                     "Disposable native batch authorization is invalid")
         elif service == "flow":
-            _flow_surface_environment(config.get("Env"), surface)
+            _flow_surface_environment(config.get("Env"), surface, project)
         elif service == "revocation-profile":
             _revocation_environment(config.get("Env"), status_origin)
         elif service in {"credential-template", "compliance-profile", "trust-profile",
                          "presentation-policy", "deployment-profile"}:
-            _support_environment(config.get("Env"), service, status_origin, surface)
+            _support_environment(config.get("Env"), service, status_origin, surface, project)
         elif service == "revocation-profile-migrate":
             migration_env = _runtime_environment(config.get("Env"), "Revocation migration")
             require(migration_env.get("STATUS_LIST_BASE_URL") == status_origin,

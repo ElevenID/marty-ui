@@ -37,6 +37,71 @@ def test_generated_override_only_replaces_default_native_envoy_config():
     )
 
 
+def test_native_envoy_requires_local_keyless_bridge_and_remote_server_identity():
+    base = yaml.safe_load(
+        (ROOT / "docker-compose.base.yml").read_text(encoding="utf-8")
+    )
+    profile = yaml.safe_load(
+        (ROOT / "docker-compose.profile.issuance-native.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    canonical = yaml.safe_load(
+        (ROOT / "config/envoy/envoy.yaml").read_text(encoding="utf-8")
+    )
+    cluster = next(
+        value
+        for value in canonical["static_resources"]["clusters"]
+        if value["name"] == "issuance_native_grpc"
+    )
+    socket = cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"][
+        "address"
+    ]["socket_address"]
+    assert socket == {"address": "127.0.0.1", "port_value": 19006}
+
+    bridge = base["services"]["envoy-issuance-bridge"]
+    assert bridge["entrypoint"] == ["/usr/local/bin/marty-keyless-grpc-bridge"]
+    assert "-p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge" in (
+        ROOT / "scripts/build-rust-service-binaries.sh"
+    ).read_text(encoding="utf-8")
+    assert "target/release/marty-keyless-grpc-bridge" in (
+        ROOT / "services/Dockerfile"
+    ).read_text(encoding="utf-8")
+    assert bridge["network_mode"] == "service:envoy"
+    assert bridge["environment"]["KEYLESS_BRIDGE_LISTEN"] == "127.0.0.1:19006"
+    assert bridge["environment"]["KEYLESS_BRIDGE_UPSTREAM_HOST"] == "issuance-native"
+    assert bridge["environment"]["KEYLESS_BRIDGE_UPSTREAM_PORT"] == "9005"
+    assert bridge["secrets"] == [
+        "workload_identity_ca_cert",
+        "envoy_issuance_client_cert",
+        "openbao_tls_ca_cert",
+        "envoy_issuance_tls_kms_token",
+    ]
+    assert all(
+        "PRIVATE_KEY" not in key and not key.endswith("_KEY_FILE")
+        for key in bridge["environment"]
+    )
+    assert (
+        "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE"
+        in base["secrets"]["envoy_issuance_tls_kms_token"]["file"]
+    )
+
+    native = profile["services"]["issuance-native"]
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_CERT"]
+        == "/run/secrets/issuance_workload_server_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_CA_CERT"]
+        == "/run/secrets/workload_identity_ca_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE"]
+        == "/run/secrets/issuance_tls_kms_token"
+    )
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY" not in native["environment"]
+
+
 def fixture(path):
     baseline = {
         "services": {
@@ -126,7 +191,12 @@ def assert_registration(source, runner, workflow):
         matches = re.findall(
             r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
         )
-        assert matches == ["#[tokio::test]\n"], name
+        attribute = (
+            '#[tokio::test(flavor = "multi_thread")]\n'
+            if name == "base_profile_envoy_composition_child"
+            else "#[tokio::test]\n"
+        )
+        assert matches == [attribute], name
         assert f"'{name}: test'" in runner, name
     assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner
@@ -162,7 +232,8 @@ def assert_registration(source, runner, workflow):
 def registration_inputs():
     return (
         (
-            ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+            ROOT
+            / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
         ).read_text(encoding="utf-8"),
         (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text(
             encoding="utf-8"
@@ -177,9 +248,9 @@ def test_actual_envoy_gate_is_mandatory_and_unignored():
 
 def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
     name = "feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers"
-    renderer = (
-        ROOT / "rust/crates/release-evidence/src/envoy_config.rs"
-    ).read_text(encoding="utf-8")
+    renderer = (ROOT / "rust/crates/release-evidence/src/envoy_config.rs").read_text(
+        encoding="utf-8"
+    )
     runtime = (
         ROOT / "rust/services/issuance/tests/support/envoy_runtime_sidecar.rs"
     ).read_text(encoding="utf-8")
@@ -188,7 +259,10 @@ def test_scalar_yaml_contract_has_fast_renderer_owner_and_real_envoy_gate():
     )
     assert f"#[test]\n    fn {name}()" in renderer
     assert name not in runtime
-    assert 'serde_json = { workspace = true, features = ["arbitrary_precision"] }' in manifest
+    assert (
+        'serde_json = { workspace = true, features = ["arbitrary_precision"] }'
+        in manifest
+    )
     assert_registration(*registration_inputs())
 
 

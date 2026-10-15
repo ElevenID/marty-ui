@@ -196,13 +196,16 @@ def _bootstrap_args(plan: dict, root: Path, output_dir: Path,
           for argument in ("--label", f"{key}={value}")),
         "--mount", ("type=bind,src=" + str(root / "secrets" / "bao_root_token")
                     + ",dst=/run/secrets/bao_root_token,readonly"),
+        "--mount", ("type=volume,src=" + project
+                    + "_openbao_public_ca,dst=/bao/public-ca,readonly"),
         "--mount", ("type=bind,src=" + str(output_dir)
                     + ",dst=/work/secrets"),
         "--mount", ("type=bind,src=" + str(script)
                     + ",dst=/scripts/passport_supported_openbao_bootstrap.sh,readonly"),
         "--mount", ("type=bind,src=" + str(initializer)
                     + ",dst=/scripts/openbao-init.sh,readonly"),
-        "--env", "BAO_ADDR=http://openbao:8200",
+        "--env", "BAO_ADDR=https://openbao:8200",
+        "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
         "--env", "PASSPORT_ACCEPTANCE_CSCA_KEY_REFERENCE="
         + managed_key_reference(gateway_port, "csca"),
         "--env", "PASSPORT_ACCEPTANCE_DSC_KEY_REFERENCE="
@@ -217,7 +220,8 @@ def _accept_bootstrap_files(root: Path, output_dir: Path) -> None:
     secret_dir = root / "secrets"
     root_token = (secret_dir / "bao_root_token").read_text(encoding="ascii")
     issued = []
-    for name in ("bao_token", "callback_signer_bao_token"):
+    names = ("bao_token", "callback_signer_bao_token", "notification_openbao_token")
+    for name in names:
         path = output_dir / name
         if path.is_symlink() or not path.is_file():
             raise ProducerError("Disposable OpenBao token file is missing")
@@ -225,13 +229,11 @@ def _accept_bootstrap_files(root: Path, output_dir: Path) -> None:
         if TOKEN.fullmatch(value) is None or value == root_token:
             raise ProducerError("Disposable OpenBao token file is invalid")
         issued.append(value)
-    if issued[0] == issued[1]:
+    if len(set(issued)) != len(issued):
         raise ProducerError("Disposable OpenBao tokens are not distinct")
-    if {path.name for path in output_dir.iterdir()} != {
-        "bao_token", "callback_signer_bao_token",
-    }:
+    if {path.name for path in output_dir.iterdir()} != set(names):
         raise ProducerError("Disposable OpenBao output directory is invalid")
-    for name in ("bao_token", "callback_signer_bao_token"):
+    for name in names:
         destination = secret_dir / name
         if destination.exists() or destination.is_symlink():
             raise ProducerError("Disposable OpenBao token destination exists")
@@ -245,8 +247,8 @@ def _remove_bootstrap_output(output_dir: Path) -> None:
         raise ProducerError("Disposable OpenBao output directory changed identity")
     for path in output_dir.iterdir():
         if re.fullmatch(
-            r"(?:bao_token|callback_signer_bao_token|"
-            r"\.(?:bao_token|callback_signer_bao_token)\.[A-Za-z0-9]{6})",
+            r"(?:bao_token|callback_signer_bao_token|notification_openbao_token|"
+            r"\.(?:bao_token|callback_signer_bao_token|notification_openbao_token)\.[A-Za-z0-9]{6})",
             path.name,
         ) is None:
             raise ProducerError("Disposable OpenBao output has an unexpected file")

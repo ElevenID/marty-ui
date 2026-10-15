@@ -10,7 +10,8 @@ use axum::{
 };
 use marty_signing_keys::validation::{validate, ValidationRequest};
 use serde_json::{json, Value};
-use tokio::{net::TcpListener, sync::oneshot};
+#[path = "support/https_stub.rs"]
+mod https_stub;
 
 #[derive(Debug)]
 struct CapturedRequest {
@@ -55,27 +56,16 @@ async fn transit_stub(State(state): State<StubState>, request: Request<Body>) ->
 
 #[tokio::test]
 async fn tenant_token_and_namespace_reach_every_custom_transit_probe() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind provider stub");
-    let address = listener.local_addr().expect("stub address");
     let captured = Arc::new(tokio::sync::Mutex::new(Vec::new()));
     let app = Router::new()
         .fallback(any(transit_stub))
         .with_state(StubState(Arc::clone(&captured)));
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-            .expect("provider stub server");
-    });
+    let peer = https_stub::TestHttpsServer::start(app).await;
 
     let request: ValidationRequest = serde_json::from_value(json!({
         "service_type": "custom-transit-compatible",
-        "endpoint": format!("http://{address}"),
+        "endpoint": peer.endpoint.clone(),
+        "ca_cert_file": peer.ca_file.path(),
         "mount": "transit",
         "namespace": "tenant-a",
         "auth_mode": "token",
@@ -86,8 +76,10 @@ async fn tenant_token_and_namespace_reach_every_custom_transit_probe() {
     .expect("validation request");
     let result = validate(request).await;
 
-    let _ = shutdown_tx.send(());
-    assert!(result.ok, "custom transit validation should pass");
+    assert!(
+        result.ok,
+        "custom transit validation should pass: {result:?}"
+    );
     let requests = captured.lock().await;
     assert_eq!(requests.len(), 3);
     assert_eq!(

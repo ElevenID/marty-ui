@@ -31,7 +31,7 @@ To avoid cross-domain redirect and OIDC drift between environments, use the scop
 - Trust-profile and issuance use an operator-managed external Vault/OpenBao endpoint instead of an in-stack bootstrap vault
 - Docker Compose secrets mount files into `/run/secrets/*`, and the self-host wrappers load them into the exact processes that need them
 - Docker Compose bind-mounts the runtime state from `SELFHOST_STATE_DIR`, so the database, Redis append-only data, and applicant storage stay portable on the host filesystem
-- The standalone OpenBao compose project bind-mounts its file backend and recovery material from `SELFHOST_OPENBAO_STATE_DIR`, so it survives reboot and ordinary Docker cleanup the same way
+- The standalone OpenBao compose project bind-mounts its Raft state, KMS-owned TLS identity and recovery material from `SELFHOST_OPENBAO_STATE_DIR`, so they survive reboot and ordinary Docker cleanup
 - The self-host startup scripts fail fast if required secret files still contain placeholder `change-me` values
 - The self-host application and migration containers validate the signed license before startup and default to requiring `plan_tier=system`
 - Only the scoped vault service token is mounted into application containers; bootstrap or root credentials stay outside the stack
@@ -77,6 +77,7 @@ That writes `dist/selfhost-bundle` with the runtime assets, secret templates, Ke
 
 ```bash
 BAO_ADDR=https://vault.example.com \
+BAO_CACERT=/path/to/public-vault-ca.crt \
 BAO_TOKEN_FILE=/path/to/bootstrap.token \
 SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 ./scripts/bootstrap-selfhost-vault.sh
@@ -137,23 +138,41 @@ Create these files under `SELFHOST_SECRET_DIR`:
 - `device_registration_gateway_key` (distinct random value, at least 32 characters)
 - `device_registration_signing_keys_key` (separate random value, at least 32 characters)
 - `workload_identity_ca_cert`
+- `org_workload_server_cert`
+- `org_tls_kms_token` (scoped to metadata and sign on the Organization TLS Transit key)
+- `rp_workload_server_cert`
+- `rp_tls_kms_token` (scoped to metadata and sign on the Revocation Profile TLS Transit key)
+- `ct_workload_server_cert`
+- `ct_tls_kms_token` (scoped to metadata and sign on the Credential Template TLS Transit key)
+- `openbao_tls_ca_cert` (public CA for the HTTPS OpenBao TLS signer endpoint)
+- `signing_keys_tls_kms_token` (scoped to metadata and sign on the Signing Keys TLS Transit key)
 - `pp_workload_server_cert`
-- `pp_workload_server_key`
+- `pp_tls_kms_token` (scoped to metadata and sign on the Presentation Policy TLS Transit key)
 - `flow_workload_client_cert`
-- `flow_workload_client_key`
+- `flow_client_tls_kms_token` (scoped to metadata and sign on the Flow client TLS Transit key)
 - `flow_workload_server_cert`
-- `flow_workload_server_key`
+- `flow_server_tls_kms_token` (scoped to metadata and sign on the Flow server TLS Transit key)
 - `auth_workload_client_cert`
-- `auth_workload_client_key`
-- `applicant_workload_client_cert`
-- `applicant_workload_client_key`
+- `auth_tls_kms_token` (scoped to metadata and sign on the Auth TLS Transit key)
 - `verification_workload_client_cert`
-- `verification_workload_client_key`
+- `verification_tls_kms_token` (scoped to metadata and sign on the Verification TLS Transit key)
+- `deployment_profile_workload_client_cert` and `deployment_profile_tls_kms_token` (scoped signer)
+- `compliance_profile_workload_client_cert` and `compliance_profile_tls_kms_token` (scoped signer)
 - `openbao_service_token`
 - `cloudflare_tunnel_token`
 - `cloudflare_beta_tunnel_token` when you enable the optional `beta-tunnel` compose profile
 
 The stack will refuse to start if any required secret file still contains a placeholder value such as `change-me-postgres`.
+
+The Signing Keys integration-secret TLS listener requires a public certificate
+whose P-256 key matches `SIGNING_KEYS_TLS_KMS_KEY_NAME` at the pinned
+`SIGNING_KEYS_TLS_KMS_KEY_VERSION`. Set `SIGNING_KEYS_TLS_KMS_ADDR` to a trusted
+HTTPS OpenBao origin; the standalone self-host OpenBao endpoint now serves
+HTTPS with a public CA distributed to application containers. The TLS signing
+key must be non-exportable and disallow
+plaintext backup. Organization, Revocation Profile, and Credential Template
+gRPC listeners use the same non-exportable signer model with separate scoped
+Transit keys and public server certificates. Supply no TLS private-key files.
 
 The workload certificates secure the verification-to-policy boundary. Their
 required SANs, key usages, and rotation constraints are documented in
@@ -199,7 +218,7 @@ This is the state you should preserve for reboot recovery, host migration, and f
 
 ## Persistent OpenBao state
 
-The standalone OpenBao deployment keeps its file backend and recovery material in `SELFHOST_OPENBAO_STATE_DIR`.
+The standalone OpenBao deployment keeps its Raft state, KMS-owned TLS identity and recovery material in `SELFHOST_OPENBAO_STATE_DIR`.
 
 - Keep that directory on durable storage
 - Treat it as production-secret material because it contains init, root-token, and unseal-key data
@@ -252,6 +271,6 @@ docker compose --env-file .env.selfhost.production.local -f docker-compose.selfh
 
 This stack no longer runs an in-cluster bootstrap vault. The operator-managed Vault/OpenBao endpoint at `BAO_ADDR` must already be initialized, unsealed, and reachable from the Docker network before trust-profile and issuance start.
 
-For the same-machine production scaffold, the recommended path is the standalone compose project in [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md), which publishes OpenBao on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}` and keeps `BAO_ADDR=http://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}` for the application containers.
+For the same-machine production scaffold, the recommended path is the standalone compose project in [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md), which publishes HTTPS OpenBao on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}` and uses `BAO_ADDR=https://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}` for the application containers. Bootstrap publishes the public OpenBao CA to `SELFHOST_SECRET_DIR/openbao_tls_ca_cert`.
 
 Use `scripts/bootstrap-selfhost-vault.sh` when you want the repo to configure the required transit, PKI, KV, and `credential-service` policy against another existing external Vault/OpenBao instance and mint the scoped runtime token into `SELFHOST_SECRET_DIR/openbao_service_token`. The bootstrap credential used for that helper should stay outside the stack and outside the tracked secret directory.

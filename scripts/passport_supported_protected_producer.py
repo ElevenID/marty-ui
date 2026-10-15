@@ -42,11 +42,13 @@ if __package__:
     )
     from .passport_supported_provisioning_producer import (
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        _tls_bootstrap_args,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
+    from .passport_remote_tls import accept_remote_tls
     from .qualify_selfhost_migrations import (
         PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
     )
@@ -74,11 +76,13 @@ else:
     )
     from passport_supported_provisioning_producer import (
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        _tls_bootstrap_args,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
+    from passport_remote_tls import accept_remote_tls
     from qualify_selfhost_migrations import (
         PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
     )
@@ -241,6 +245,7 @@ def produce_disposable_receipt(
         raise ProducerError("Disposable plan has insufficient teardown lease")
     root, env_file = stage_disposable_inputs(plan, gateway_port, now=current)
     output_dir = root / "bootstrap-output"
+    tls_output_dir = root / "tls-output"
     batch_state_dir = root.parent / f"{plan['project']}-native-batch-state"
     batch_state_path = batch_state_dir / "pending.json"
     batch_state_created = False
@@ -269,6 +274,13 @@ def produce_disposable_receipt(
         if not run(_bootstrap_args(plan, root, output_dir, gateway_port), staged_env, 180):
             raise ProducerError("Disposable OpenBao bootstrap failed")
         _accept_bootstrap_files(root, output_dir)
+        _prepare_bootstrap_output(tls_output_dir)
+        if not run(_tls_bootstrap_args(plan, root, tls_output_dir), staged_env, 180):
+            raise ProducerError("Disposable remote TLS bootstrap failed")
+        accept_remote_tls(
+            tls_output_dir, root / "secrets",
+            (root / "secrets" / "bao_root_token").read_text(encoding="ascii"),
+        )
         if plan["surface"] == "selfhost":
             overlay = ROOT / "docker-compose.passport-supported-disposable-selfhost-ceremony.yml"
             if not overlay.is_file():

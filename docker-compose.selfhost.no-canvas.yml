@@ -19,6 +19,7 @@ services:
       - token_hmac_key
       - grpc_service_token
       - didcomm_issuance_openbao_token
+      - openbao_tls_ca_cert
       - sign_grant_mint_issuance_credential_token
       - sign_grant_mint_issuance_canvas_token
       - sign_grant_mint_issuance_readiness_token
@@ -43,3 +44,6 @@ services:
       - sign_grant_mint_issuance_readiness_token
       - sign_grant_mint_issuance_passport_token
       - workload_identity_ca_cert
+      - issuance_workload_server_cert
+      - openbao_tls_ca_cert
+      - issuance_tls_kms_token

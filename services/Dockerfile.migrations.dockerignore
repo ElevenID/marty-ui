@@ -58,6 +58,7 @@ rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs
 rust/crates/canvas-acceptance/tests/support/didcomm_unkeyed_grpc_initiation.rs
 rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs
 rust/crates/canvas-acceptance/tests/support/remote_didcomm_sender.rs
+rust/crates/canvas-acceptance/tests/support/remote_tls_peer.rs
 rust/crates/canvas-acceptance/tests/support/rendered_base_process.rs
 rust/crates/canvas-acceptance/tests/support/renewal_binding_postgres.rs
 rust/crates/canvas-acceptance/tests/support/renewal_canvas_binding.rs
@@ -83,5 +84,6 @@ rust/crates/service-acceptance/tests/passport_gateway_postgres.rs
 rust/crates/service-acceptance/tests/gateway_signing_acceptance.rs
 rust/crates/service-acceptance/tests/holder_remote_live_kms.rs
 rust/crates/service-acceptance/tests/csca_capability_contract.rs
+rust/crates/service-acceptance/tests/tls_openbao_keyless.rs
 rust/services/signing-keys/tests/csca_lifecycle_behavior.rs
 rust/services/signing-keys/tests/csca_lifecycle_storage_contract.rs

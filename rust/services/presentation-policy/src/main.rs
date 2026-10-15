@@ -1,4 +1,4 @@
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{error::Error, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use marty_presentation_policy::{
     migrate_presentation_policy_schema,
@@ -14,6 +14,7 @@ use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{net::TcpListener, sync::watch};
 use tokio_stream::wrappers::TcpListenerStream;
+use tokio_stream::StreamExt;
 use tonic::transport::Server;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
@@ -42,14 +43,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     validate_presentation_policy_schema(&pool).await?;
     runtime.mark_healthy(PresentationPolicyDependency::Schema)?;
 
-    let control = Arc::new(NativePresentationControlPlane::connect_lazy(
-        &config.organization_grpc_target,
-        &config.trust_profile_url,
-        &config.credential_status_url_template,
-        config.service_token.as_deref(),
-        config.issuance_api_key.as_deref(),
-        config.dependency_timeout,
-    )?);
+    let control = Arc::new(if let Some(ca) = &config.organization_grpc_ca_cert {
+        NativePresentationControlPlane::connect_with_ca(
+            &config.organization_grpc_target,
+            ca,
+            &config.trust_profile_url,
+            &config.credential_status_url_template,
+            config.service_token.as_deref(),
+            config.issuance_api_key.as_deref(),
+            config.dependency_timeout,
+        )
+        .await?
+    } else {
+        NativePresentationControlPlane::connect_lazy(
+            &config.organization_grpc_target,
+            &config.trust_profile_url,
+            &config.credential_status_url_template,
+            config.service_token.as_deref(),
+            config.issuance_api_key.as_deref(),
+            config.dependency_timeout,
+        )?
+    });
     runtime.mark_healthy(PresentationPolicyDependency::ControlPlane)?;
 
     let store = Arc::new(PostgresPolicyStore::new(pool));
@@ -91,22 +105,38 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .layer(TraceLayer::new_for_http());
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
     let grpc_server = PresentationPolicyServiceServer::new(grpc_service);
-    let mut grpc_builder = Server::builder();
-    if let Some(tls) = grpc_security.server_tls_config() {
-        grpc_builder = grpc_builder.tls_config(tls)?;
-    }
+    let tls_acceptor = grpc_security.server_tls_acceptor().await?;
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut http_shutdown = shutdown_rx.clone();
     let mut grpc_shutdown = shutdown_rx;
     let http = axum::serve(http_listener, http_app).with_graceful_shutdown(async move {
         wait_for_shutdown(&mut http_shutdown).await;
     });
-    let grpc = grpc_builder
+    let router = Server::builder()
         .add_service(health_service)
-        .add_service(grpc_server)
-        .serve_with_incoming_shutdown(TcpListenerStream::new(grpc_listener), async move {
-            wait_for_shutdown(&mut grpc_shutdown).await;
-        });
+        .add_service(grpc_server);
+    let grpc: Pin<Box<dyn Future<Output = Result<(), tonic::transport::Error>> + Send>> =
+        if let Some(acceptor) = tls_acceptor {
+            let incoming = TcpListenerStream::new(grpc_listener).then(move |connection| {
+                let acceptor = acceptor.clone();
+                async move {
+                    match connection {
+                        Ok(stream) => acceptor.accept(stream).await,
+                        Err(error) => Err(error),
+                    }
+                }
+            });
+            Box::pin(router.serve_with_incoming_shutdown(incoming, async move {
+                wait_for_shutdown(&mut grpc_shutdown).await;
+            }))
+        } else {
+            Box::pin(
+                router.serve_with_incoming_shutdown(
+                    TcpListenerStream::new(grpc_listener),
+                    async move { wait_for_shutdown(&mut grpc_shutdown).await },
+                ),
+            )
+        };
     runtime.activate()?;
     health_reporter
         .set_serving::<PresentationPolicyServiceServer<PresentationPolicyGrpcService>>()

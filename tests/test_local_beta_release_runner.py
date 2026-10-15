@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,8 +34,8 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "--verify-only" in script
     assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=true") == 2
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert '"BAO_TOKEN"' in script
+    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
     assert "CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid" in script
     assert '"did:web:${betaHost}:orgs:marty"' in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" not in script
@@ -774,21 +775,79 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert '"FLOW_APPLICATION_EVENT_HMAC_KEY"' in deploy
     assert '"FLOW_WEBHOOK_SECRET"' in deploy
     assert 'Invoke-Checked -FilePath openssl -Arguments @("verify"' in deploy
-    assert "spiffe://marty.internal/service/auth" in initializer
-    assert "spiffe://marty.internal/service/applicant" in initializer
-    assert "spiffe://marty.internal/service/flow" in initializer
-    assert "private keys and certificate contents were not displayed" in initializer
+    assert "spiffe://marty.internal/service/auth" in deploy
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert "the private signer remains in KMS" in initializer
+    assert 'SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in initializer
+    assert '"${role}_TLS_KMS_KEY_VERSION"' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in deploy
+    assert "Beta workload TLS private-key files are retired" in deploy
+    assert "openssl genpkey" not in initializer
+    assert '"ENVOY_ISSUANCE_CLIENT_CERT_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE"' in initializer
+    assert "spiffe://marty.internal/service/envoy-issuance-bridge" in initializer
     assert (
         "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert" in beta
     )
     assert (
         "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert" in beta
     )
-    assert (
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert"
-        in beta
-    )
+    assert "applicant_workload_client_key" not in beta
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key" not in beta
+    assert "pp_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token" in beta
+    assert 'PP_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token" in beta
+    assert 'AUTH_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token" in beta
+    assert 'VERIFICATION_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "spiffe://marty.internal/service/verification" in deploy
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token" in beta
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert 'Flow server certificate must contain the flow DNS SAN' in deploy
+    assert 'FLOW_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'FLOW_WORKLOAD_SERVER_KEY_FILE' in initializer
+
+
+def test_beta_identity_helper_rejects_retired_signing_keys_file() -> None:
+    shell = shutil.which("powershell")
+    if shell is None:
+        pytest.skip("PowerShell is unavailable")
+    with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+        fixture = Path(directory) / "beta.env"
+        fixture.write_text(
+            "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE=retired.pem\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                shell,
+                "-NoProfile",
+                "-File",
+                str(ROOT / "scripts/ensure-beta-workload-identity.ps1"),
+                "-GeneratedEnvFile",
+                str(fixture),
+                "-OutputDirectory",
+                directory,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE is retired" in (
+            result.stdout + result.stderr
+        )
 
 
 def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> None:
@@ -857,22 +916,26 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
 def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert (
-        'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' in script
-    )
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' not in script
     assert (
         "$rehearsalContainers = "
         "@($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
     ) in script
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
-    assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
+    assert '"BAO_ADDR=https://localhost:8200"' in script
+    assert '"${copyOpenBaoContainer}:/tmp/bao-tls/vault-ca.pem"' in script
+    assert '-ca-cert=/tmp/bao-tls/vault-ca.pem' in script
+    assert '"--network", "container:$copyOpenBaoContainer"' in script
+    assert '"--mount", $copyCaMount' in script
+    assert '"BAO_CACERT=/bao-public-ca/ca.crt"' in script
     assert '"BAO_TOKEN=$copyBaoToken"' in script
     assert '"NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken"' in script
-    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' in script
-    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 2
-    assert "$env:BAO_TOKEN = $baoDevRootToken" in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert script.count('"--env", "BAO_TOKEN"') == 1
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
+    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 1
+    assert "$env:BAO_TOKEN = $baoDevRootToken" not in script
+    assert '"db-migrate", "/usr/local/bin/marty-migration-bootstrap"' in script
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
+    assert script.count('"--env", "BAO_TOKEN"') == 0
     assert '"dev-only-token"' not in script
 
 
@@ -884,7 +947,7 @@ def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
     assert "'${MARTY_SERVICES_IMAGE}'" in helper
     assert 'UseRustIssuance' not in script
     assert '"pull", $env:MARTY_ISSUANCE_IMAGE' not in script
-    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage))' in script
+    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_KEYCLOAK_KMS_IMAGE))' in script
     assert '"pull", $image' in script
     assert '"    entrypoint: [/usr/local/bin/marty-issuance-service]"' in helper
     assert "$imageRef = [string]$imageEvidence.inspect_reference" in script

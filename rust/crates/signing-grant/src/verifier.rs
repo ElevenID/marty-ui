@@ -117,16 +117,24 @@ mod tests {
     async fn live_grant_verification_is_one_use_before_kms_signing() {
         let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
         let parsed = reqwest::Url::parse(&endpoint).expect("OpenBao URL");
-        assert_eq!(parsed.scheme(), "http");
+        assert_eq!(parsed.scheme(), "https");
         assert_eq!(parsed.host_str(), Some("127.0.0.1"));
         assert_eq!(
             std::env::var("BAO_ADDR").ok().as_deref(),
             Some(endpoint.as_str())
         );
         let root = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("root guard token");
+        let ca_file = std::env::var("BAO_CACERT").expect("disposable OpenBao CA path");
+        let ca = reqwest::Certificate::from_pem(&std::fs::read(ca_file).expect("public CA"))
+            .expect("OpenBao CA certificate");
+        let guard_client = reqwest::Client::builder()
+            .add_root_certificate(ca)
+            .no_proxy()
+            .build()
+            .expect("CA-verified guard client");
         let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("guard nonce");
         assert!(nonce.len() >= 16);
-        let marker: Value = reqwest::Client::new()
+        let marker: Value = guard_client
             .get(format!(
                 "{endpoint}/v1/secret/data/marty-test-disposable-guard"
             ))

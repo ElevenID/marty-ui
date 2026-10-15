@@ -18,7 +18,10 @@ use uuid::Uuid;
 async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
-    assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert!(parsed.scheme() == "https" && parsed.host_str() == Some("127.0.0.1"));
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA file");
+    let ca_pem = std::fs::read(ca_file).expect("read disposable public CA");
+    let ca = reqwest::Certificate::from_pem(&ca_pem).expect("parse disposable public CA");
     assert_eq!(
         std::env::var("BAO_ADDR").ok().as_deref(),
         Some(endpoint.as_str()),
@@ -36,7 +39,13 @@ async fn managed_key_create_rotate_and_read_use_scoped_provider_only() {
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
         .expect("pre-provisioned disposable OpenBao sentinel");
     assert!(nonce.len() >= 16);
-    let marker = reqwest::Client::new()
+    let marker = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .expect("guarded HTTPS client")
         .get(format!(
             "{}/v1/secret/data/marty-test-disposable-guard",
             endpoint.trim_end_matches('/')

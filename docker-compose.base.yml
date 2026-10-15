@@ -11,6 +11,12 @@
 x-native-issuance-grpc-auth: &native_issuance_grpc_auth
   GRPC_SERVICE_TOKEN: ${GRPC_SERVICE_TOKEN:-dev-grpc-service-token-change-before-production}
 
+x-openbao-plugin-image: &openbao_plugin_image
+  image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:-marty-openbao-didcomm:dev}
+  build:
+    context: .
+    dockerfile: openbao/didcomm-authcrypt/Dockerfile
+
 services:
   # ==========================================================================
   # Infrastructure
@@ -71,7 +77,7 @@ services:
           memory: 64M
 
   keycloak:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     command:
       - start-dev
       - --features=organization
@@ -95,6 +101,29 @@ services:
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       MARTY_API_CLIENT_SECRET: ${MARTY_API_CLIENT_SECRET:-marty-api-secret-change-in-production}
+      BAO_ADDR: ${KEYCLOAK_KMS_ADDR:?KEYCLOAK_KMS_ADDR must identify HTTPS OpenBao}
+      BAO_CACERT: /run/secrets/openbao_tls_ca_cert
+      BAO_TOKEN_FILE: /run/secrets/keycloak_signing_kms_token
+      MARTY_KEYCLOAK_RS256_CERT_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_TOKEN_DIR: /run/secrets
+      MARTY_KEYCLOAK_JWE_MOUNT: didcomm
+      MARTY_KEYCLOAK_KMS_KEY_PREFIX: keycloak
+      MARTY_KEYCLOAK_KMS_KEY_VERSION: ${KEYCLOAK_KMS_KEY_VERSION:?KEYCLOAK_KMS_KEY_VERSION must pin a remote Keycloak version}
+    secrets:
+      - openbao_tls_ca_cert
+      - keycloak_signing_kms_token
+      - source: keycloak_master_rs256_cert
+        target: /run/secrets/keycloak-master-rs256.crt
+      - source: keycloak_11id_rs256_cert
+        target: /run/secrets/keycloak-11id-rs256.crt
+      - source: keycloak_master_cookie_token
+        target: /run/secrets/master-cookie.token
+      - source: keycloak_master_ciba_token
+        target: /run/secrets/master-ciba.token
+      - source: keycloak_11id_cookie_token
+        target: /run/secrets/11id-cookie.token
+      - source: keycloak_11id_ciba_token
+        target: /run/secrets/11id-ciba.token
     depends_on:
       postgres:
         condition: service_healthy
@@ -124,7 +153,7 @@ services:
   # that cannot be embedded in the realm JSON. Idempotent — safe to run on
   # every 'docker compose up'.
   keycloak-configurator:
-    image: quay.io/keycloak/keycloak:25.0
+    image: ghcr.io/elevenid/marty-ui-oss/keycloak@${KEYCLOAK_KMS_IMAGE_DIGEST:?KEYCLOAK_KMS_IMAGE_DIGEST must pin the remote-key Keycloak image}
     entrypoint: ["/bin/bash", "/scripts/setup-keycloak.sh"]
     environment:
       KC_URL: http://keycloak:8080
@@ -176,20 +205,20 @@ services:
       - marty-network
 
   openbao:
-    image: quay.io/openbao/openbao:2
+    <<: *openbao_plugin_image
     cap_add:
       - IPC_LOCK
     ports:
       - "127.0.0.1:8200:8200"
-    environment:
-      BAO_DEV_ROOT_TOKEN_ID: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
-      BAO_DEV_LISTEN_ADDRESS: "0.0.0.0:8200"
-      BAO_ADDR: "http://127.0.0.1:8200"
-    command: server -dev
+    command: ["server", "-config=/bao/config/openbao.hcl"]
+    depends_on:
+      openbao-tls-init:
+        condition: service_completed_successfully
     volumes:
       - openbao_data:/bao/data
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost.hcl:/bao/config/openbao.hcl:ro
     healthcheck:
-      test: ["CMD", "bao", "status", "-address=http://127.0.0.1:8200"]
+      test: ["CMD-SHELL", "bao status -address=https://127.0.0.1:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -206,13 +235,30 @@ services:
           cpus: '0.25'
           memory: 128M
 
+  openbao-tls-init:
+    <<: *openbao_plugin_image
+    entrypoint: ["/usr/local/bin/selfhost-tls-init"]
+    volumes:
+      - openbao_data:/bao/data
+    network_mode: none
+    restart: "no"
+
   openbao-init:
-    image: quay.io/openbao/openbao:2
+    <<: *openbao_plugin_image
     user: "0:0"
-    entrypoint: ["/bin/sh", "/scripts/openbao-init.sh"]
+    entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
     environment:
-      BAO_ADDR: "http://openbao:8200"
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_ADDR: "https://openbao:8200"
+      BAO_CACERT: /bao/data/tls/ca.crt
+      BAO_PUBLIC_CA_FILE: /bao/public-ca/ca.crt
+      BAO_SERVICE_TOKEN_FILE: /bao/service-token/token
+      BAO_BOOTSTRAP_TOKEN_FILE: /bao/bootstrap-token/token
+      BAO_SIGNING_KEYS_TOKEN_FILE: /bao/signing-keys-token/token
+      BAO_DIDCOMM_ISSUANCE_TOKEN_FILE: /bao/didcomm-issuance-token/token
+      BAO_HAIP_TOKEN_FILE: /bao/haip-token/token
+      BAO_HAIP_POLICY_FILE: /scripts/openbao-haip-workload-policy.hcl
+      BAO_GRANT_TOKEN_DIR: /bao/grant-tokens
+      DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
       BAO_FLOW_GRANT_TOKEN_FILE: /bao/flow-grant/token
       BAO_VERIFY_GRANT_TOKEN_FILE: /bao/verify-grant/token
       BAO_GATEWAY_GRANT_TOKEN_FILE: /bao/gateway-grant/token
@@ -224,9 +270,19 @@ services:
       BAO_NOTIFICATION_TOKEN_FILE: /bao/notification/token
     depends_on:
       openbao:
-        condition: service_healthy
+        condition: service_started
     volumes:
+      - openbao_data:/bao/data
+      - openbao_public_ca:/bao/public-ca
+      - openbao_service_token:/bao/service-token
+      - openbao_bootstrap_token:/bao/bootstrap-token
+      - openbao_signing_keys_token:/bao/signing-keys-token
+      - openbao_didcomm_issuance_token:/bao/didcomm-issuance-token
+      - openbao_haip_token:/bao/haip-token
+      - openbao_grant_tokens:/bao/grant-tokens
       - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
+      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro
       - openbao_flow_grant:/bao/flow-grant
       - openbao_verify_grant:/bao/verify-grant
       - openbao_gateway_grant:/bao/gateway-grant
@@ -288,10 +344,13 @@ services:
       REDIS_URL: redis://redis:6379
       REDIS_DB_GATEWAY: "2"
       MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      BAO_TOKEN_FILE: /bao/bootstrap-token/token
       NOTIFICATION_OPENBAO_TOKEN_FILE: /bao/notification/token
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_bootstrap_token:/bao/bootstrap-token:ro
       - openbao_notification:/bao/notification:ro
     depends_on:
       revocation-profile-migrate:
@@ -413,12 +472,14 @@ services:
       OID4VP_ISSUER_DID: ${OID4VP_ISSUER_DID:-}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
       HSM_PROVIDER: openbao
       SIGNING_KEY_SOURCE: openbao-transit
       GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE: /bao/gateway-grant/token
       GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE: /bao/gateway-grant/issuer-csr-token
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
       - openbao_gateway_grant:/bao/gateway-grant:ro
     ports:
       - "127.0.0.1:${GATEWAY_HOST_PORT:-8000}:8000"
@@ -659,8 +720,6 @@ services:
       NOTIFICATION_SERVICE_URL: http://notification:8007
       NOTIFICATION_EVENT_PRODUCER_ID: applicant
       NOTIFICATION_APPLICANT_EVENT_TOKEN: ${NOTIFICATION_APPLICANT_EVENT_TOKEN:-dev-notification-applicant-event-token}
-      ORG_GRPC_TARGET: organization:9002
-      FLOW_GRPC_TARGET: flow:9011
       ES_GRPC_TARGET: event-stream:9015
     ports:
       - "127.0.0.1:8006:8006"
@@ -699,8 +758,13 @@ services:
       NOTIFICATION_WEBHOOK_OUTBOX_LEASE_SECONDS: ${NOTIFICATION_WEBHOOK_OUTBOX_LEASE_SECONDS:-30}
       NOTIFICATION_WEBHOOK_OUTBOX_POLL_MILLISECONDS: ${NOTIFICATION_WEBHOOK_OUTBOX_POLL_MILLISECONDS:-1000}
       NOTIFICATION_WEBHOOK_OUTBOX_BATCH_SIZE: ${NOTIFICATION_WEBHOOK_OUTBOX_BATCH_SIZE:-25}
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      NOTIFICATION_OPENBAO_TOKEN_FILE: /bao/notification/token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/ca.crt
+    volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_notification:/bao/notification:ro
     ports:
       - "127.0.0.1:8007:8007"
       - "127.0.0.1:9007:9007"
@@ -824,7 +888,11 @@ services:
     environment:
       SIGNING_KEYS_SERVICE_PORT: "8017"
       SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/dev_integration_secret_server_cert
-      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE: /run/secrets/dev_integration_secret_server_key
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR: ${SIGNING_KEYS_TLS_KMS_ADDR:?SIGNING_KEYS_TLS_KMS_ADDR must be set}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE: /run/secrets/signing_keys_tls_kms_token
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME: ${SIGNING_KEYS_TLS_KMS_KEY_NAME:?SIGNING_KEYS_TLS_KMS_KEY_NAME must be set}
+      SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION: ${SIGNING_KEYS_TLS_KMS_KEY_VERSION:?SIGNING_KEYS_TLS_KMS_KEY_VERSION must be set}
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
       SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY: ${SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY:-dev-signing-keys-service-sign-gateway-key}
@@ -833,15 +901,20 @@ services:
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /bao/verify-grant/token
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      BAO_TOKEN_FILE: /bao/signing-keys-token/token
       MARTY_RELEASE_VERSION: ${MARTY_RELEASE_VERSION:-development}
       MARTY_UI_SHA: ${MARTY_UI_SHA:-unknown}
       RUST_LOG: info
     secrets:
       - dev_integration_secret_server_cert
-      - dev_integration_secret_server_key
+      - dev_integration_secret_ca
+      - openbao_tls_ca_cert
+      - signing_keys_tls_kms_token
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_signing_keys_token:/bao/signing-keys-token:ro
       - openbao_verify_grant:/bao/verify-grant:ro
     depends_on:
       db-migrate:
@@ -851,9 +924,9 @@ services:
       openbao-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8017/health >/dev/null && curl -fsS --cacert /run/secrets/dev_integration_secret_ca https://signing-keys:8018/health >/dev/null"]
       interval: 10s
-      timeout: 5s
+      timeout: 8s
       retries: 3
     networks:
       - marty-network
@@ -874,7 +947,14 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
-      ISSUANCE_GRPC_TARGET: issuance-native:9005
+      ISSUANCE_GRPC_TARGET: https://issuance-native:9005
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:?FLOW_CLIENT_TLS_KMS_ADDR must be HTTPS OpenBao}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:?FLOW_CLIENT_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:?FLOW_CLIENT_TLS_KMS_KEY_VERSION must be set}
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
@@ -895,7 +975,8 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
       FLOW_SIGN_GRANT_MINT_TOKEN_FILE: /bao/flow-grant/token
       PERSONALIZATION_BUREAU_URL: ${PERSONALIZATION_BUREAU_URL:-}
       REDIS_URL: redis://redis:6379
@@ -908,7 +989,13 @@ services:
       - "127.0.0.1:8011:8011"
       - "127.0.0.1:9011:9011"
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
       - openbao_flow_grant:/bao/flow-grant:ro
+    secrets:
+      - workload_identity_ca_cert
+      - flow_workload_client_cert
+      - openbao_tls_ca_cert
+      - flow_client_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -948,6 +1035,7 @@ services:
       SERVICE_NAME: issuance_native
       MARTY_SCHEMA_STARTUP_MODE: validate
       ISSUANCE_SERVICE_PORT: "8005"
+      ISSUANCE_GRPC_ENABLED: "false"
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       DATABASE_URL: postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}@postgres:5432/marty
@@ -977,8 +1065,9 @@ services:
       REVOCATION_PROFILE_SERVICE_URL: http://revocation-profile:8013
       ISSUANCE_GRPC_PORT: "9005"
       # OpenBao KMS for credential signing
-      BAO_ADDR: http://openbao:8200
-      BAO_TOKEN: ${BAO_DEV_ROOT_TOKEN:-dev-only-token}
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
+      BAO_TOKEN_FILE: /bao/service-token/token
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
       ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-credential-grant/token
       ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
@@ -1037,13 +1126,14 @@ services:
       # stack-owned gateway, never by caller-selected or public-network URLs.
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
+      - openbao_service_token:/bao/service-token:ro
       - openbao_issuance_credential_grant:/bao/issuance-credential-grant:ro
       - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
       - openbao_issuance_readiness_grant:/bao/issuance-readiness-grant:ro
       - openbao_issuance_passport_grant:/bao/issuance-passport-grant:ro
     ports:
       - "127.0.0.1:8005:8005"
-      - "127.0.0.1:9005:9005"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1094,7 +1184,8 @@ services:
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/public-ca/ca.crt
       ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE: /bao/issuance-canvas-grant/token
       CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID: ${CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID:-}
       CANVAS_LTI_TOOL_ISSUER_DID: ${CANVAS_LTI_TOOL_ISSUER_DID:-}
@@ -1120,6 +1211,7 @@ services:
     secrets:
       - dev_integration_secret_ca
     volumes:
+      - openbao_public_ca:/bao/public-ca:ro
       - openbao_issuance_canvas_grant:/bao/issuance-canvas-grant:ro
     depends_on:
       db-migrate:
@@ -1326,13 +1418,76 @@ services:
       - marty-network
     restart: unless-stopped
 
+  # Shares Envoy's loopback namespace. Only this Rust process holds the scoped
+  # OpenBao token; it presents a remote-held client key to Issuance mTLS.
+  envoy-issuance-bridge:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: envoy-issuance-bridge
+    entrypoint: ["/usr/local/bin/marty-keyless-grpc-bridge"]
+    environment:
+      KEYLESS_BRIDGE_LISTEN: 127.0.0.1:19006
+      KEYLESS_BRIDGE_UPSTREAM_HOST: issuance-native
+      KEYLESS_BRIDGE_UPSTREAM_PORT: "9005"
+      KEYLESS_BRIDGE_SERVER_CA_FILE: /run/secrets/workload_identity_ca_cert
+      KEYLESS_BRIDGE_CLIENT_CERT_FILE: /run/secrets/envoy_issuance_client_cert
+      KEYLESS_BRIDGE_KMS_ADDR: ${ENVOY_ISSUANCE_TLS_KMS_ADDR:?ENVOY_ISSUANCE_TLS_KMS_ADDR must be HTTPS OpenBao}
+      KEYLESS_BRIDGE_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      KEYLESS_BRIDGE_KMS_TOKEN_FILE: /run/secrets/envoy_issuance_tls_kms_token
+      KEYLESS_BRIDGE_KMS_KEY_NAME: ${ENVOY_ISSUANCE_TLS_KMS_KEY_NAME:?ENVOY_ISSUANCE_TLS_KMS_KEY_NAME must be set}
+      KEYLESS_BRIDGE_KMS_KEY_VERSION: ${ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION:?ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION must be set}
+    secrets:
+      - workload_identity_ca_cert
+      - envoy_issuance_client_cert
+      - openbao_tls_ca_cert
+      - envoy_issuance_tls_kms_token
+    network_mode: service:envoy
+    depends_on:
+      envoy:
+        condition: service_started
+      issuance-native:
+        condition: service_healthy
+    restart: unless-stopped
+
 secrets:
+  keycloak_signing_kms_token:
+    file: ${KEYCLOAK_SIGNING_KMS_TOKEN_FILE:?KEYCLOAK_SIGNING_KMS_TOKEN_FILE must be set}
+  keycloak_master_rs256_cert:
+    file: ${KEYCLOAK_MASTER_RS256_CERT_FILE:?KEYCLOAK_MASTER_RS256_CERT_FILE must be set}
+  keycloak_11id_rs256_cert:
+    file: ${KEYCLOAK_11ID_RS256_CERT_FILE:?KEYCLOAK_11ID_RS256_CERT_FILE must be set}
+  keycloak_master_cookie_token:
+    file: ${KEYCLOAK_MASTER_COOKIE_TOKEN_FILE:?KEYCLOAK_MASTER_COOKIE_TOKEN_FILE must be set}
+  keycloak_master_ciba_token:
+    file: ${KEYCLOAK_MASTER_CIBA_TOKEN_FILE:?KEYCLOAK_MASTER_CIBA_TOKEN_FILE must be set}
+  keycloak_11id_cookie_token:
+    file: ${KEYCLOAK_11ID_COOKIE_TOKEN_FILE:?KEYCLOAK_11ID_COOKIE_TOKEN_FILE must be set}
+  keycloak_11id_ciba_token:
+    file: ${KEYCLOAK_11ID_CIBA_TOKEN_FILE:?KEYCLOAK_11ID_CIBA_TOKEN_FILE must be set}
   dev_integration_secret_ca:
-    file: ./.dev-integration-secret-tls/ca.crt
+    file: ${DEV_INTEGRATION_SECRET_CA_FILE:?DEV_INTEGRATION_SECRET_CA_FILE must be set}
   dev_integration_secret_server_cert:
-    file: ./.dev-integration-secret-tls/tls.crt
-  dev_integration_secret_server_key:
-    file: ./.dev-integration-secret-tls/tls.key
+    file: ${SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE:?SIGNING_KEYS_WORKLOAD_SERVER_CERT_FILE must be set}
+  openbao_tls_ca_cert:
+    file: ${OPENBAO_TLS_CA_CERT_FILE:?OPENBAO_TLS_CA_CERT_FILE must be set}
+  signing_keys_tls_kms_token:
+    file: ${SIGNING_KEYS_TLS_KMS_TOKEN_FILE:?SIGNING_KEYS_TLS_KMS_TOKEN_FILE must be set}
+  workload_identity_ca_cert:
+    file: ${MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE:?MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE must be set}
+  issuance_workload_server_cert:
+    file: ${ISSUANCE_WORKLOAD_SERVER_CERT_FILE:?ISSUANCE_WORKLOAD_SERVER_CERT_FILE must be set}
+  issuance_tls_kms_token:
+    file: ${ISSUANCE_TLS_KMS_TOKEN_FILE:?ISSUANCE_TLS_KMS_TOKEN_FILE must be set}
+  envoy_issuance_client_cert:
+    file: ${ENVOY_ISSUANCE_CLIENT_CERT_FILE:?ENVOY_ISSUANCE_CLIENT_CERT_FILE must be set}
+  envoy_issuance_tls_kms_token:
+    file: ${ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE:?ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE must be set}
+  flow_workload_client_cert:
+    file: ${FLOW_WORKLOAD_CLIENT_CERT_FILE:?FLOW_WORKLOAD_CLIENT_CERT_FILE must be set}
+  flow_client_tls_kms_token:
+    file: ${FLOW_CLIENT_TLS_KMS_TOKEN_FILE:?FLOW_CLIENT_TLS_KMS_TOKEN_FILE must be set}
 
 volumes:
   postgres_data:
@@ -1340,6 +1495,13 @@ volumes:
   applicant_data:
   envoy_proto_descriptor:
   openbao_data:
+  openbao_public_ca:
+  openbao_service_token:
+  openbao_bootstrap_token:
+  openbao_signing_keys_token:
+  openbao_didcomm_issuance_token:
+  openbao_haip_token:
+  openbao_grant_tokens:
   openbao_flow_grant:
   openbao_verify_grant:
   openbao_gateway_grant:

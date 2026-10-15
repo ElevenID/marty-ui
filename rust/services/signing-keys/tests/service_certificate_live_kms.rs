@@ -127,6 +127,11 @@ async fn public_config_rejects_private_material_without_changing_registry() {
 async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
     let redis_url = std::env::var("MARTY_TEST_REDIS_URL").expect("disposable Redis URL");
     let bao_url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+    assert_eq!(
+        reqwest::Url::parse(&bao_url).expect("OpenBao URL").scheme(),
+        "https"
+    );
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable OpenBao CA path");
     let bao_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable OpenBao token");
     let mint_token =
         std::env::var("MARTY_TEST_GRANT_MINT_TOKEN").expect("scoped Gateway mint token");
@@ -143,7 +148,13 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
     let key_name = format!("marty-service-csr-{suffix}");
     let organization_id = format!("test-service-csr-{suffix}");
 
-    let kms_client = reqwest::Client::new();
+    let ca = reqwest::Certificate::from_pem(&std::fs::read(&ca_file).expect("public CA"))
+        .expect("OpenBao CA certificate");
+    let kms_client = reqwest::Client::builder()
+        .add_root_certificate(ca)
+        .no_proxy()
+        .build()
+        .expect("CA-verified KMS client");
     let mount = kms_client
         .get(format!("{bao_url}/v1/sys/mounts/transit"))
         .header("X-Vault-Token", &bao_token)
@@ -187,6 +198,7 @@ async fn registered_service_csr_is_signed_by_kms_through_public_rust_route() {
             "id": "service-a", "name": "Test Passport Signer",
             "service_type": "openbao-transit", "endpoint": bao_url,
             "mount": "transit", "auth_mode": "token", "auth_reference": bao_token,
+            "ca_cert_file": ca_file,
             "key_reference": key_name, "algorithms": ["ES256"],
             "key_purposes": ["vc_jwt_issuer", "x509_doc_signer"],
             "credential_formats": ["dc+sd-jwt", "ICAO_EMRTD"]

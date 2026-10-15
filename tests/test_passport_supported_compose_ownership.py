@@ -15,7 +15,9 @@ from scripts.check_passport_supported_compose_ownership import (
     OwnershipError, verify,
 )
 from scripts.check_passport_supported_rust_model import (
-    DISPOSABLE_SERVICES, RUST_DEPENDENCIES, SELECTED,
+    DISPOSABLE_SERVICES, PASSPORT_OPENBAO_CONSUMERS, PASSPORT_REMOTE_GRPC_CLIENTS,
+    PASSPORT_REMOTE_GRPC_SERVERS, RUST_DEPENDENCIES, SELECTED,
+    remote_grpc_client_environment, remote_grpc_server_environment,
 )
 
 
@@ -23,7 +25,6 @@ PROJECT = "marty-passport-acceptance-base-abcdef"
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
 INFRA = {
-    "edge": "docker.io/library/nginx@sha256:" + "4" * 64,
     "postgres": "docker.io/library/postgres@sha256:" + "1" * 64,
     "redis": "docker.io/library/redis@sha256:" + "2" * 64,
     "openbao": "quay.io/openbao/openbao@sha256:" + "3" * 64,
@@ -37,8 +38,23 @@ LABELS = {
     "com.marty.passport.acceptance.services-image": IMAGE,
 }
 ROOT = Path(tempfile.gettempdir()) / PROJECT
+
+
+def test_partial_tls_bootstrap_accepts_only_signed_image_and_scoped_mounts() -> None:
+    record = {"services_reference": IMAGE}
+    assert ownership_module._expected_image(record, "passport-tls-bootstrap") == IMAGE
+    assert ownership_module._expected_mounts(
+        "passport-tls-bootstrap", PROJECT, ROOT, "base",
+    ) == {
+        ("bind", str(ROOT / "secrets" / "bao_root_token"),
+         "/run/secrets/bao_root_token", False),
+        ("volume", f"{PROJECT}_openbao_public_ca", "/bao/public-ca", False),
+        ("bind", str(ROOT / "tls-output"), "/work/output", True),
+    }
+
+
 SECRETS = {
-    "edge": ("passport_edge_tls_cert", "passport_edge_tls_key"),
+    "edge": ("passport_edge_tls_cert", "passport_edge_tls_kms_token"),
     "postgres": ("marty_db_password",),
     "redis": (),
     "openbao": ("bao_root_token",),
@@ -47,7 +63,7 @@ SECRETS = {
     "signing-keys": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                      "signing_keys_service_sign_gateway_key", "signing_keys_issuer_sign_key", "signing_keys_integration_secret_key",
                      "dsc_issue_gateway_key", "csca_issue_gateway_key",
-                     "signing_keys_workload_server_cert", "signing_keys_workload_server_key",
+                     "signing_keys_workload_server_cert", "signing_keys_workload_server_kms_token",
                      "workload_identity_ca_cert"),
     "revocation-profile-migrate": ("marty_db_password",),
     "revocation-profile": ("marty_db_password", "grpc_service_token"),
@@ -55,19 +71,27 @@ SECRETS = {
     "organization": ("marty_db_password", "grpc_service_token"),
     "credential-template": ("marty_db_password", "grpc_service_token",
                             "signing_keys_internal_api_key"),
-    "compliance-profile": ("marty_db_password", "grpc_service_token"),
+    "compliance-profile": ("marty_db_password", "grpc_service_token",
+                           "workload_identity_ca_cert", "compliance_profile_workload_client_cert",
+                           "compliance_profile_workload_client_kms_token"),
     "trust-profile": ("marty_db_password", "grpc_service_token",
-                      "signing_keys_internal_api_key"),
+                      "signing_keys_internal_api_key", "workload_identity_ca_cert"),
     "presentation-policy": ("marty_db_password", "grpc_service_token",
-                            "issuance_api_key"),
-    "deployment-profile": ("marty_db_password", "grpc_service_token"),
+                            "issuance_api_key", "workload_identity_ca_cert",
+                            "pp_workload_server_cert", "pp_workload_server_kms_token"),
+    "deployment-profile": ("marty_db_password", "grpc_service_token",
+                           "workload_identity_ca_cert", "deployment_profile_workload_client_cert",
+                           "deployment_profile_workload_client_kms_token"),
     "issuance-native": ("marty_db_password", "bao_token", "signing_keys_internal_api_key",
                         "signing_keys_issuer_sign_key", "signing_keys_integration_secret_key",
                         "issuance_api_key", "grpc_service_token", "token_hmac_key",
                         "passport_beta_reconciliation_operator_token",
                         "workload_identity_ca_cert"),
     "flow": ("marty_db_password", "signing_keys_internal_api_key", "signing_keys_issuer_sign_key", "issuance_api_key",
-             "grpc_service_token", "flow_application_event_hmac_key"),
+             "grpc_service_token", "flow_application_event_hmac_key",
+             "workload_identity_ca_cert", "flow_workload_client_cert",
+             "flow_workload_client_kms_token", "flow_workload_server_cert",
+             "flow_workload_server_kms_token"),
     "passport-callback-signer": ("callback_signer_bao_token", "callback_signer_api_key"),
     "passport-beta-bureau": ("bureau_database_url", "grpc_service_token",
                              "callback_signer_api_key"),
@@ -75,12 +99,17 @@ SECRETS = {
                 "grpc_service_token", "device_registration_gateway_key",
                 "dsc_issue_gateway_key", "csca_issue_gateway_key"),
 }
+for _service, (_prefix, _) in PASSPORT_REMOTE_GRPC_SERVERS.items():
+    SECRETS[_service] += (f"{_prefix}_cert", f"{_prefix}_kms_token")
+    if _service in {"organization", "revocation-profile", "credential-template"}:
+        SECRETS[_service] += ("workload_identity_ca_cert",)
 DATA = {
     "postgres": ("postgres_data", "/var/lib/postgresql/data"),
     "redis": ("redis_data", "/data"),
     "openbao": ("openbao_data", "/bao/data"),
     "openbao-file": ("openbao_file", "/openbao/file"),
     "openbao-logs": ("openbao_logs", "/openbao/logs"),
+    "openbao-public-ca": ("openbao_public_ca", "/bao/public-ca"),
 }
 
 
@@ -96,20 +125,17 @@ def mounts_for(service: str) -> list[dict]:
             "Destination": "/usr/local/bin/passport-supported-openbao-start",
             "RW": False,
         })
-    if service == "edge":
-        mounts.append({
-            "Type": "bind",
-            "Source": str(Path(__file__).resolve().parents[1]
-                          / "scripts/passport_supported_edge.conf"),
-            "Destination": "/etc/nginx/conf.d/default.conf",
-            "RW": False,
-        })
     for key in ((service,) if service != "openbao" else
-                ("openbao", "openbao-file", "openbao-logs")):
+                ("openbao", "openbao-file", "openbao-logs", "openbao-public-ca")):
         if key in DATA:
             name, destination = DATA[key]
             mounts.append({"Type": "volume", "Name": f"{PROJECT}_{name}",
                            "Destination": destination, "RW": True})
+    if service in (set(PASSPORT_OPENBAO_CONSUMERS) | set(PASSPORT_REMOTE_GRPC_SERVERS)
+                   | set(PASSPORT_REMOTE_GRPC_CLIENTS)
+                   | {"edge", "flow", "presentation-policy"}):
+        mounts.append({"Type": "volume", "Name": f"{PROJECT}_openbao_public_ca",
+                       "Destination": "/bao/public-ca", "RW": False})
     return mounts
 
 
@@ -173,7 +199,7 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
             "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
             "REDIS_URL": "redis://redis:6379/4",
-            "ORG_GRPC_TARGET": "organization:9002",
+            "ORG_GRPC_TARGET": "https://organization:9002",
             "PUBLIC_API_URL": "http://gateway:8000",
             "STATUS_LIST_BASE_URL": "https://localhost:29876",
             "MARTY_ORG_ID": "00000000-0000-0000-0000-000000000001",
@@ -203,15 +229,20 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        "SIGNING_KEYS_BETA_CSCA_ISSUANCE_ENABLED": "true",
                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
                            "/run/secrets/signing_keys_workload_server_cert",
-                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE":
-                           "/run/secrets/signing_keys_workload_server_key"}
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR": "https://openbao:8200",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE":
+                           "/run/secrets/signing_keys_workload_server_kms_token",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME":
+                           f"{PROJECT}-signing-keys-server",
+                       "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION": "1"}
         support_common = {
             "ENVIRONMENT": "development",
             "DATABASE_URL_TEMPLATE": (
                 "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD}@postgres:5432/marty"),
             "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
             "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
-            "ORG_GRPC_TARGET": "organization:9002",
+            "ORG_GRPC_TARGET": "https://organization:9002",
         }
         support_env = {
             "compliance-profile": {
@@ -257,7 +288,16 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                 "DEPLOYMENT_PROFILE_SERVICE_PORT": "8010",
             },
         }
-        runtime_env = (organization_env if service == "organization" else
+        runtime_env = ({
+            "PASSPORT_EDGE_BIND": "0.0.0.0:8443",
+            "PASSPORT_EDGE_TLS_CERT_FILE": "/run/secrets/passport_edge_tls_cert",
+            "PASSPORT_EDGE_TLS_KMS_ADDR": "https://openbao:8200",
+            "PASSPORT_EDGE_TLS_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
+            "PASSPORT_EDGE_TLS_KMS_TOKEN_FILE": "/run/secrets/passport_edge_tls_kms_token",
+            "PASSPORT_EDGE_TLS_KMS_KEY_NAME": f"{PROJECT}-passport-edge",
+            "PASSPORT_EDGE_TLS_KMS_KEY_VERSION": "1",
+        } if service == "edge" else
+                       organization_env if service == "organization" else
                        {"MARTY_ISSUER_BASE_URL": "https://localhost:29876",
                         "MARTY_ISSUER_DID": "did:web:localhost%3A29876:orgs:marty",
                         "PUBLIC_DOMAIN": "localhost:29876"}
@@ -278,6 +318,56 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        {**signing_env, "PUBLIC_DOMAIN": "localhost:29876"}
                        if service == "signing-keys" else
                        support_env.get(service, {}))
+        if service in PASSPORT_REMOTE_GRPC_SERVERS:
+            runtime_env.update(remote_grpc_server_environment(service, PROJECT))
+        if service in PASSPORT_REMOTE_GRPC_CLIENTS:
+            runtime_env.update(remote_grpc_client_environment(service, PROJECT))
+        if service == "trust-profile":
+            runtime_env["ORG_GRPC_CA_CERT"] = "/run/secrets/workload_identity_ca_cert"
+        if service == "presentation-policy":
+            runtime_env.update({
+                "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE":
+                    "/run/secrets/pp_workload_server_kms_token",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{PROJECT}-pp-server",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
+                "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+                "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            })
+        if service == "flow":
+            runtime_env.update({
+                "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": "https://openbao:8200",
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE":
+                    "/run/secrets/flow_workload_client_kms_token",
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME": f"{PROJECT}-flow-client",
+                "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION": "1",
+                "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE":
+                    "/run/secrets/flow_workload_server_kms_token",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{PROJECT}-flow-server",
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
+                "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            })
+        if service == "organization":
+            runtime_env.update(ES_GRPC_TARGET="https://event-stream:9015",
+                               ES_GRPC_CA_CERT="/run/secrets/workload_identity_ca_cert")
+        if service == "revocation-profile":
+            runtime_env.update(ORG_GRPC_TARGET="https://organization:9002",
+                               ORG_GRPC_CA_CERT="/run/secrets/workload_identity_ca_cert")
+        if service == "credential-template":
+            runtime_env.update(ORG_GRPC_TARGET="https://organization:9002",
+                               ORG_GRPC_CA_CERT="/run/secrets/workload_identity_ca_cert",
+                               RP_GRPC_TARGET="https://revocation-profile:9013",
+                               RP_GRPC_CA_CERT="/run/secrets/workload_identity_ca_cert")
+        if service == "issuance-native":
+            runtime_env.update(RP_GRPC_TARGET="https://revocation-profile:9013",
+                               CT_GRPC_TARGET="https://credential-template:9003")
         edge_binding = [{"HostIp": "127.0.0.1", "HostPort": "29876"}]
         primary_network = (callback_network_name if service == "passport-callback-signer"
                            else ingress_network_name if service == "edge" else network_name)
@@ -299,13 +389,15 @@ def fixture() -> tuple[dict, dict[tuple[str, ...], str]]:
                        "Health": {"Status": "healthy"}}),
             "Config": {"Labels": {**LABELS, "com.docker.compose.service": service},
                        "Env": [f"{key}={value}" for key, value in runtime_env.items()],
-                       **({"Entrypoint": ["/bin/sh", "-c"],
+                       **({"Entrypoint": ["/usr/local/bin/marty-passport-keyless-edge"]}
+                          if service == "edge" else
+                          {"Entrypoint": ["/bin/sh", "-c"],
                             "Cmd": [". /app/load-secrets-env.sh\n"
                                     "exec /usr/local/bin/marty-issuance-service migrate\n"]}
                           if service == "issuance-migrations" else {}),
                        "Image": (MIGRATIONS if service == "db-migrate" else
                                  IMAGE if service == "issuance-migrations" else
-                                 IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys"} else
+                                 IMAGE if service in SELECTED | RUST_DEPENDENCIES | {"signing-keys", "edge"} else
                                  INFRA[service])},
             "NetworkSettings": {"Networks": attached_networks,
                                 "Ports": {"8443/tcp": edge_binding}
@@ -473,7 +565,7 @@ def test_organization_runtime_environment_must_match_protected_run(mutation) -> 
     item = json.loads(calls[key])
     mutation(item[0]["Config"]["Env"])
     calls[key] = json.dumps(item)
-    with pytest.raises(OwnershipError, match="Organization runtime identity"):
+    with pytest.raises(OwnershipError, match="Organization runtime identity|duplicate environment keys"):
         run(record, calls)
 
 
@@ -495,7 +587,7 @@ def test_revocation_runtime_environment_stays_disposable(mutation) -> None:
     item = json.loads(calls[key])
     mutation(item[0]["Config"]["Env"])
     calls[key] = json.dumps(item)
-    with pytest.raises(OwnershipError, match="Revocation Profile runtime identity"):
+    with pytest.raises(OwnershipError, match="Revocation Profile runtime identity|duplicate environment keys"):
         run(record, calls)
 
 

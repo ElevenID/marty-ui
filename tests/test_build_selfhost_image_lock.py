@@ -25,6 +25,8 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
     (tmp_path / "base.yml").write_text(
         "services:\n"
         "  postgres: {image: 'postgres:15-alpine'}\n"
+        f"  keycloak: {{image: '{reference('keycloak', '9')}'}}\n"
+        f"  keycloak-configurator: {{image: '{reference('keycloak', '9')}'}}\n"
         "  db-migrate: {build: '.'}\n"
         "  gateway: {build: '.'}\n"
         "  issuance-migrations: {build: '.'}\n"
@@ -73,9 +75,12 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "services": "sha256:" + "2" * 64,
         "migrations": "sha256:" + "3" * 64,
         "openbao_didcomm": "sha256:" + "7" * 64,
+        "keycloak": "sha256:" + "9" * 64,
     }, build_run_id="92")
     model = {"services": {
         "postgres": {"image": "postgres:15-alpine"},
+        "keycloak": {"image": reference("keycloak", "9")},
+        "keycloak-configurator": {"image": reference("keycloak", "9")},
         "db-migrate": {"image": f"{PREFIX}/db-migrate:1.2.3"},
         "gateway": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance-migrations": {"image": f"{PREFIX}/services:1.2.3"},
@@ -112,6 +117,7 @@ def test_deterministic_exact_role_mapping(tmp_path: Path) -> None:
     assert result["schema"] == "marty.selfhost-image-lock/v1"
     assert result["release"] == "marty-ui@1.2.3"
     assert result["openbao_didcomm_image"] == reference("openbao-didcomm", "7")
+    assert result["services"]["keycloak"] == result["services"]["keycloak-configurator"] == reference("keycloak", "9")
     assert result["services"]["gateway"] == reference("services", "2")
     assert result["services"]["issuance"] == result["services"]["issuance-migrations"] == reference("services", "2")
     assert result["services"]["db-migrate"] == reference("migrations", "3")
@@ -133,6 +139,13 @@ def test_early_external_preflight_reuses_lock_identity_rules(tmp_path: Path) -> 
     ):
         with pytest.raises(builder.ImageLockError):
             builder.preflight_external_images(model, invalid, base, override)
+
+
+def test_rejects_keycloak_image_outside_transaction(tmp_path: Path) -> None:
+    model, *_ = inputs(tmp_path)
+    model["services"]["keycloak"]["image"] = reference("keycloak", "8")
+    with pytest.raises(builder.ImageLockError, match="Keycloak"):
+        build(tmp_path, model=model)
 
 
 def test_current_compose_source_ownership_is_closed() -> None:

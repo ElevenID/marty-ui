@@ -23,6 +23,19 @@ use std::io::Write;
 use tower::ServiceExt;
 use uuid::Uuid;
 
+fn disposable_openbao_client() -> reqwest::Client {
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+    let ca_pem = std::fs::read(ca_file).expect("read public OpenBao CA");
+    let ca = reqwest::Certificate::from_pem(&ca_pem).expect("parse public OpenBao CA");
+    reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .expect("guarded OpenBao HTTPS client")
+}
+
 #[tokio::test]
 #[ignore = "requires marked disposable OpenBao and managed signing token"]
 async fn managed_openbao_rs256_signature_matches_jose_pkcs1_profile() {
@@ -140,7 +153,7 @@ async fn disposable_redis_url() -> String {
 async fn disposable_openbao() -> (String, String) {
     let url = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&url).expect("disposable OpenBao URL syntax");
-    assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert!(parsed.scheme() == "https" && parsed.host_str() == Some("127.0.0.1"));
     assert_eq!(
         std::env::var("BAO_ADDR").ok().as_deref(),
         Some(url.as_str()),
@@ -160,7 +173,7 @@ async fn disposable_openbao() -> (String, String) {
         nonce.len() >= 16,
         "disposable OpenBao sentinel is too short"
     );
-    let client = reqwest::Client::new();
+    let client = disposable_openbao_client();
     let marker = client
         .get(
             parsed
@@ -594,7 +607,7 @@ async fn live_managed_provider_rejects_foreign_profile_for_explicit_and_default_
     let redis_url = disposable_redis_url().await;
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("disposable OpenBao URL syntax");
-    assert!(parsed.scheme() == "http" && parsed.host_str() == Some("127.0.0.1"));
+    assert!(parsed.scheme() == "https" && parsed.host_str() == Some("127.0.0.1"));
     let scoped_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
     assert_eq!(
         std::env::var("BAO_TOKEN").ok().as_deref(),
@@ -603,7 +616,7 @@ async fn live_managed_provider_rejects_foreign_profile_for_explicit_and_default_
     let root_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("root guard token");
     assert_ne!(root_token, scoped_token);
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("guard nonce");
-    let marker: Value = reqwest::Client::new()
+    let marker: Value = disposable_openbao_client()
         .get(format!(
             "{endpoint}/v1/secret/data/marty-test-disposable-guard"
         ))
@@ -724,7 +737,7 @@ async fn public_service_sign_uses_registered_kms_key_and_rejects_unbound_selecti
         .to_string();
     let key_name = format!("cred-issuer-{namespace}-default-es256");
     let profile_key_name = format!("cred-issuer-{namespace}-profile-es256");
-    let client = reqwest::Client::new();
+    let client = disposable_openbao_client();
     let created = client
         .post(format!("{bao_url}/v1/transit/keys/{key_name}"))
         .header("X-Vault-Token", &bao_token)

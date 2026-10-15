@@ -88,10 +88,17 @@ def model(tmp_path, enabled=True):
             "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
             "SIGNING_KEYS_SERVICE_PORT": "8018",
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "BAO_ADDR": "http://openbao:8200",
-            "BAO_TOKEN": "synthetic-existing-openbao-token",
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/public-ca/ca.crt",
+            "BAO_TOKEN_FILE": "/bao/passport-callback/token",
         },
         "networks": {"passport-callback-signing": None},
+        "volumes": [
+            {"type": "volume", "source": "openbao_public_ca",
+             "target": "/bao/public-ca", "read_only": True},
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True},
+        ],
     }
     services["passport-beta-bureau"] = {
         "image": IMAGE,
@@ -328,6 +335,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "callback_signer_disabled",
         "callback_signer_image",
         "callback_signer_key_mismatch",
+        "callback_signer_token_mount_leak",
         "callback_signer_extra_member",
     ),
 )
@@ -523,6 +531,11 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
         services["passport-callback-signer"]["environment"][
             "SIGNING_KEYS_INTERNAL_API_KEY"
         ] = "another-key"
+    elif mutation == "callback_signer_token_mount_leak":
+        services["gateway"]["volumes"] = [
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True}
+        ]
     elif mutation == "callback_signer_extra_member":
         services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
@@ -740,6 +753,7 @@ def test_compose_call_is_read_only_and_closed(tmp_path):
         files=[PROFILE],
         passport_enabled=True,
         runner=run,
+        keycloak_validator=lambda model, **_: None,
     )
     command, kwargs = calls[0]
     assert command[-3:] == ["config", "--format", "json"]
@@ -894,8 +908,17 @@ def synthetic_beta_compose_env(tmp_path):
     for name in required:
         if name.endswith("_FILE"):
             fixture = tmp_path / name.lower()
-            fixture.write_text("synthetic-workload-material", encoding="utf-8")
+            if (name.startswith("KEYCLOAK_") and name.endswith("CERT_FILE")) or name == "OPENBAO_TLS_CA_CERT_FILE":
+                content = "-----BEGIN CERTIFICATE-----\ncHVibGlj\n-----END CERTIFICATE-----\n"
+            elif name.startswith("KEYCLOAK_") and name.endswith("TOKEN_FILE"):
+                content = f"synthetic-scoped-{name}-token-value"
+            else:
+                content = "synthetic-workload-material"
+            fixture.write_text(content, encoding="utf-8")
             values[name] = str(fixture)
+    values["KEYCLOAK_KMS_IMAGE_DIGEST"] = "sha256:" + "c" * 64
+    values["KEYCLOAK_KMS_ADDR"] = "https://openbao:8200"
+    values["KEYCLOAK_KMS_KEY_VERSION"] = "1"
     values["GRPC_SERVICE_TOKEN"] = TOKEN
     values["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = RECONCILIATION_TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE

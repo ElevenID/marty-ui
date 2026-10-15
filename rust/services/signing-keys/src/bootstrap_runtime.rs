@@ -1,8 +1,9 @@
 //! PostgreSQL, OpenBao, and Redis adapters for the shared bootstrap engine.
 
-use std::{collections::BTreeMap, env, fs, time::Duration};
+use std::{collections::BTreeMap, env, fs, path::Path, time::Duration};
 
 use chrono::{SecondsFormat, Utc};
+use marty_openbao_http::OpenBaoHttp;
 use redis::AsyncCommands;
 use reqwest::{Client, Method, StatusCode};
 use serde_json::{json, Value};
@@ -60,16 +61,30 @@ pub async fn run(verify_only: bool) -> Result<(), RunError> {
         environment,
         verify_only,
     };
-    bootstrap_engine::run(&config, &mut LiveBackend::default()).await
+    let address = config.get("BAO_ADDR");
+    let ca_file = env::var("BAO_CACERT").ok();
+    let transport = OpenBaoHttp::connect(
+        address,
+        ca_file.as_deref().map(Path::new),
+        Duration::from_secs(8),
+    )
+    .map_err(RunError::Identity)?;
+    bootstrap_engine::run(&config, &mut LiveBackend::new(transport.client().clone())).await
 }
 
-#[derive(Default)]
 struct LiveBackend {
     client: Client,
     redis: Option<redis::aio::MultiplexedConnection>,
 }
 
 impl LiveBackend {
+    fn new(client: Client) -> Self {
+        Self {
+            client,
+            redis: None,
+        }
+    }
+
     async fn bao(
         &self,
         method: Method,
@@ -137,6 +152,13 @@ impl LiveBackend {
         self.redis
             .as_mut()
             .ok_or_else(|| "Redis connection was not established".into())
+    }
+}
+
+#[cfg(test)]
+impl Default for LiveBackend {
+    fn default() -> Self {
+        Self::new(Client::new())
     }
 }
 
@@ -392,9 +414,41 @@ fn decode_json_document(bytes: Option<&[u8]>) -> Option<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::{decode_json_document, LiveBackend};
+    use super::{decode_json_document, LiveBackend, OpenBaoHttp};
     use crate::bootstrap_engine::{Backend, StampKind};
+    use reqwest::Method;
     use serde_json::json;
+    use std::{env, path::Path, time::Duration};
+
+    #[tokio::test]
+    #[ignore = "requires a guarded disposable HTTPS OpenBao instance"]
+    async fn live_migration_openbao_transport_is_ca_verified() {
+        let address = env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+        let parsed = reqwest::Url::parse(&address).expect("disposable OpenBao URL syntax");
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("127.0.0.1"));
+        assert_eq!(env::var("BAO_ADDR").as_deref(), Ok(address.as_str()));
+        let ca_file = env::var("BAO_CACERT").expect("disposable OpenBao public CA");
+        let transport =
+            OpenBaoHttp::connect(&address, Some(Path::new(&ca_file)), Duration::from_secs(8))
+                .expect("CA-verified OpenBao transport");
+        let adapter = LiveBackend::new(transport.client().clone());
+        let root_token = env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("disposable guard token");
+        let nonce =
+            env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("disposable guard nonce");
+        assert!(nonce.len() >= 16);
+        let marker = adapter
+            .bao(
+                Method::GET,
+                &address,
+                &root_token,
+                "secret/data/marty-test-disposable-guard",
+                None,
+            )
+            .await
+            .expect("read disposable guard through migration adapter");
+        assert_eq!(marker["data"]["data"]["nonce"], nonce);
+    }
 
     #[test]
     fn malformed_or_non_utf8_redis_documents_use_seed_default() {

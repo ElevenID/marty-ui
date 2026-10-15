@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, net::SocketAddr, time::Duration};
+use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf, time::Duration};
 
 use thiserror::Error;
 use url::Url;
@@ -11,11 +11,14 @@ pub struct CredentialTemplateServiceConfig {
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
+    pub grpc_server_tls: Option<CredentialTemplateGrpcServerTls>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub service_token: Option<String>,
     pub organization_grpc_target: String,
+    pub organization_grpc_ca_cert: Option<PathBuf>,
     pub revocation_grpc_target: String,
+    pub revocation_grpc_ca_cert: Option<PathBuf>,
     pub signing_keys_internal_url: String,
     pub signing_keys_internal_api_key: Option<String>,
     pub trust_profile_service_url: String,
@@ -25,6 +28,16 @@ pub struct CredentialTemplateServiceConfig {
     pub dependency_timeout: Duration,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CredentialTemplateGrpcServerTls {
+    pub certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -98,6 +111,36 @@ impl CredentialTemplateServiceConfig {
             )?;
         }
         let public_api_origin = public_origin(&values, environment)?;
+        let organization_grpc_target = target(&values, "ORG_GRPC_TARGET", "organization:9002")?;
+        let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        let revocation_grpc_target = target(&values, "RP_GRPC_TARGET", "revocation-profile:9013")?;
+        let revocation_grpc_ca_cert = value(&values, "RP_GRPC_CA_CERT").map(PathBuf::from);
+        if environment_is_deployed(environment) && organization_grpc_ca_cert.is_none() {
+            return Err(CredentialTemplateConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT",
+            });
+        }
+        if organization_grpc_ca_cert.is_some() && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
+        if environment_is_deployed(environment) && revocation_grpc_ca_cert.is_none() {
+            return Err(CredentialTemplateConfigError::Missing {
+                name: "RP_GRPC_CA_CERT",
+            });
+        }
+        if revocation_grpc_ca_cert.is_some() && !revocation_grpc_target.starts_with("https://") {
+            return Err(invalid("RP_GRPC_TARGET"));
+        }
+        if organization_grpc_ca_cert.is_some() != revocation_grpc_ca_cert.is_some() {
+            return Err(invalid("RP_GRPC_CA_CERT"));
+        }
+        let grpc_server_tls = grpc_server_tls(&values)?;
+        if environment_is_deployed(environment) && grpc_server_tls.is_none() {
+            return Err(CredentialTemplateConfigError::Missing {
+                name: "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            });
+        }
         let marty_organization_id = value(&values, "MARTY_ORG_ID")
             .unwrap_or("00000000-0000-0000-0000-000000000001")
             .parse()
@@ -116,11 +159,14 @@ impl CredentialTemplateServiceConfig {
             environment,
             http_addr,
             grpc_addr,
+            grpc_server_tls,
             database_url: parsed_database.to_string(),
             database_max_connections,
             service_token,
-            organization_grpc_target: target(&values, "ORG_GRPC_TARGET", "organization:9002")?,
-            revocation_grpc_target: target(&values, "RP_GRPC_TARGET", "revocation-profile:9013")?,
+            organization_grpc_target,
+            organization_grpc_ca_cert,
+            revocation_grpc_target,
+            revocation_grpc_ca_cert,
             signing_keys_internal_url: http_url(
                 &values,
                 "SIGNING_KEYS_INTERNAL_URL",
@@ -153,6 +199,58 @@ impl CredentialTemplateServiceConfig {
     pub const fn service_authentication_required(&self) -> bool {
         environment_is_deployed(self.environment)
     }
+}
+
+fn grpc_server_tls(
+    values: &BTreeMap<String, String>,
+) -> Result<Option<CredentialTemplateGrpcServerTls>, CredentialTemplateConfigError> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
+    }
+    const NAMES: [&str; 6] = [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ];
+    let present = NAMES
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if present == 0 {
+        return Ok(None);
+    }
+    if present != NAMES.len() {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
+    }
+    let endpoint = value(values, NAMES[1]).unwrap_or_default();
+    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid(NAMES[1]));
+    }
+    let version = value(values, NAMES[5])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| invalid(NAMES[5]))?;
+    Ok(Some(CredentialTemplateGrpcServerTls {
+        certificate: PathBuf::from(value(values, NAMES[0]).unwrap_or_default()),
+        kms_endpoint: endpoint.into(),
+        kms_ca_certificate: PathBuf::from(value(values, NAMES[2]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, NAMES[3]).unwrap_or_default()),
+        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
+        kms_key_version: version,
+    }))
 }
 
 const fn environment_is_deployed(environment: RuntimeEnvironment) -> bool {
@@ -347,6 +445,128 @@ mod tests {
             CredentialTemplateConfigError::Missing {
                 name: "PUBLIC_API_URL"
             }
+        );
+    }
+
+    #[test]
+    fn deployed_control_plane_channels_require_public_ca_and_explicit_https() {
+        let mut beta = values("beta");
+        beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        beta.insert("SIGNING_KEYS_INTERNAL_API_KEY".into(), "k".repeat(16));
+        beta.insert("PUBLIC_API_URL".into(), "https://issuer.example".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta.clone()),
+            Err(CredentialTemplateConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT"
+            })
+        );
+        beta.insert("ORG_GRPC_CA_CERT".into(), "public-ca.pem".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta.clone()),
+            Err(CredentialTemplateConfigError::Invalid {
+                name: "ORG_GRPC_TARGET"
+            })
+        );
+        beta.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta.clone()),
+            Err(CredentialTemplateConfigError::Missing {
+                name: "RP_GRPC_CA_CERT"
+            })
+        );
+        beta.insert("RP_GRPC_CA_CERT".into(), "revocation-ca.pem".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta.clone()),
+            Err(CredentialTemplateConfigError::Invalid {
+                name: "RP_GRPC_TARGET"
+            })
+        );
+        beta.insert(
+            "RP_GRPC_TARGET".into(),
+            "https://revocation-profile:9013".into(),
+        );
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta.clone()),
+            Err(CredentialTemplateConfigError::Missing {
+                name: "GRPC_WORKLOAD_TLS_SERVER_CERT"
+            })
+        );
+        beta.extend([
+            ("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "server.crt".into()),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+                "https://openbao:8200".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+                "kms-ca.crt".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+                "kms.token".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+                "credential-template-server".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+                "1".into(),
+            ),
+        ]);
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(beta)
+                .unwrap()
+                .revocation_grpc_ca_cert,
+            Some(PathBuf::from("revocation-ca.pem"))
+        );
+    }
+
+    #[test]
+    fn workload_server_tls_rejects_private_key_file_and_http_kms() {
+        let mut development = values("development");
+        development.insert("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "server.key".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(development.clone()),
+            Err(CredentialTemplateConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_SERVER_KEY"
+            })
+        );
+        development.remove("GRPC_WORKLOAD_TLS_SERVER_KEY");
+        development.insert("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "server.crt".into());
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(development.clone()),
+            Err(CredentialTemplateConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_SERVER_CERT"
+            })
+        );
+        development.extend([
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+                "http://openbao:8200".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT".into(),
+                "kms-ca.crt".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE".into(),
+                "kms.token".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME".into(),
+                "credential-template-server".into(),
+            ),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION".into(),
+                "1".into(),
+            ),
+        ]);
+        assert_eq!(
+            CredentialTemplateServiceConfig::from_values(development),
+            Err(CredentialTemplateConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR"
+            })
         );
     }
 

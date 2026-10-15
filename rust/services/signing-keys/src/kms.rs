@@ -1,6 +1,6 @@
 //! Provider-native signing, public-key discovery, and connectivity probes.
 
-use std::{env, fs, time::Duration};
+use std::{env, fs, path::Path, time::Duration};
 
 use aws_config::BehaviorVersion;
 use aws_credential_types::Credentials;
@@ -13,6 +13,7 @@ use axum::Json;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use marty_crypto::jwk::{public_key_der_to_jwk, public_key_pem_to_jwk, PublicJwk};
+use marty_openbao_http::OpenBaoHttp;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -240,6 +241,28 @@ pub(crate) fn provider_http_client() -> Result<Client, KmsError> {
         .map_err(|_| KmsError::Provider("KMS HTTP client is unavailable.".into()))
 }
 
+pub(crate) fn transit_http_client(config: &Value) -> Result<Client, KmsError> {
+    let endpoint = string(config, "endpoint")
+        .ok_or_else(|| KmsError::InvalidConfig("Transit endpoint is required".into()))?;
+    #[cfg(test)]
+    if reqwest::Url::parse(endpoint)
+        .ok()
+        .is_some_and(|url| test_loopback_http(&url))
+    {
+        // Unit tests exercise response handling with an in-process Axum mock.
+        // This branch is absent from production and integration-test builds.
+        return provider_http_client();
+    }
+    let ca_file = if string(config, "auth_mode") == Some("service_token") {
+        env::var("BAO_CACERT").ok()
+    } else {
+        string(config, "ca_cert_file").map(str::to_owned)
+    };
+    OpenBaoHttp::connect(endpoint, ca_file.as_deref().map(Path::new), HTTP_TIMEOUT)
+        .map(|transport| transport.client().clone())
+        .map_err(|_| KmsError::InvalidConfig("Transit HTTPS client is unavailable".into()))
+}
+
 fn cloud_http_client() -> Result<Client, KmsError> {
     provider_http_client()
 }
@@ -260,6 +283,7 @@ pub(crate) fn validate_transit_auth_config(config: &Value) -> Result<(), KmsErro
                 KmsError::InvalidConfig("Managed OpenBao endpoint is unavailable.".into())
             })?;
             let endpoint = string(config, "endpoint").unwrap_or_default();
+            validate_external_transit_endpoint(config)?;
             if string(config, "id") != Some("managed-openbao-transit")
                 || string(config, "service_type") != Some("openbao-transit")
                 || configured.trim_end_matches('/') != endpoint.trim_end_matches('/')
@@ -286,10 +310,11 @@ fn validate_external_transit_endpoint(config: &Value) -> Result<(), KmsError> {
     let url = reqwest::Url::parse(endpoint)
         .map_err(|_| KmsError::InvalidConfig("External Transit endpoint is invalid.".into()))?;
     let host = url.host_str().unwrap_or_default();
-    let local_debug = cfg!(debug_assertions)
-        && url.scheme() == "http"
-        && matches!(host, "127.0.0.1" | "localhost" | "::1");
-    if !(url.scheme() == "https" || local_debug)
+    #[cfg(test)]
+    let test_http = test_loopback_http(&url);
+    #[cfg(not(test))]
+    let test_http = false;
+    if !(url.scheme() == "https" || test_http)
         || host.is_empty()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -302,6 +327,17 @@ fn validate_external_transit_endpoint(config: &Value) -> Result<(), KmsError> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+fn test_loopback_http(url: &reqwest::Url) -> bool {
+    url.scheme() == "http"
+        && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"))
+        && url.path() == "/"
+        && url.query().is_none()
+        && url.fragment().is_none()
+        && url.username().is_empty()
+        && url.password().is_none()
 }
 
 pub async fn sign(request: SignRequest) -> Result<SignResponse, KmsError> {
@@ -400,8 +436,9 @@ async fn list_managed_openbao_key_names_with_token(
     endpoint: &str,
     token: &str,
 ) -> Result<Vec<String>, KmsError> {
+    let transport_config = json!({"endpoint": endpoint, "auth_mode": "service_token"});
     let response = match send_json(
-        provider_http_client()?
+        transit_http_client(&transport_config)?
             .get(format!(
                 "{}/v1/transit/keys",
                 endpoint.trim_end_matches('/')
@@ -470,7 +507,7 @@ pub async fn openbao_latest_version(request: ProviderRequest) -> Result<u64, Kms
     let mount = string(config, "mount")
         .unwrap_or("transit")
         .trim_matches('/');
-    let mut read = provider_http_client()?
+    let mut read = transit_http_client(config)?
         .get(format!(
             "{}/v1/{mount}/keys/{key_reference}",
             endpoint.trim_end_matches('/')
@@ -524,7 +561,7 @@ pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError>
         "{}/v1/{mount}/keys/{key_reference}",
         endpoint.trim_end_matches('/')
     );
-    let rotate = provider_http_client()?
+    let rotate = transit_http_client(config)?
         .post(format!("{url}/rotate"))
         .timeout(HTTP_TIMEOUT)
         .header("X-Vault-Token", &token);
@@ -534,7 +571,7 @@ pub async fn rotate_openbao(request: ProviderRequest) -> Result<Value, KmsError>
         rotate
     };
     send_json_or_empty(rotate).await?;
-    let read = provider_http_client()?
+    let read = transit_http_client(config)?
         .get(url)
         .timeout(HTTP_TIMEOUT)
         .header("X-Vault-Token", &token);
@@ -634,7 +671,7 @@ async fn sign_openbao(config: &Value, payload: &[u8]) -> Result<Vec<u8>, KmsErro
         endpoint.trim_end_matches('/')
     );
     let response = send_json(
-        provider_http_client()?
+        transit_http_client(config)?
             .post(url)
             .timeout(HTTP_TIMEOUT)
             .header("X-Vault-Token", transit_token(config)?)
@@ -681,7 +718,7 @@ async fn openbao_key_data(config: &Value) -> Result<Value, KmsError> {
         .unwrap_or("transit")
         .trim_matches('/');
     let response = send_json(
-        provider_http_client()?
+        transit_http_client(config)?
             .get(format!(
                 "{}/v1/{mount}/keys/{key_reference}",
                 endpoint.trim_end_matches('/')
@@ -901,7 +938,7 @@ pub async fn delete_managed_openbao(request: ProviderRequest) -> Result<(), KmsE
         "{}/v1/{mount}/keys/{key_reference}",
         endpoint.trim_end_matches('/')
     );
-    let client = provider_http_client()?;
+    let client = transit_http_client(config)?;
     send_json_or_empty(
         client
             .post(format!("{key_url}/config"))
@@ -942,7 +979,7 @@ async fn create_managed_openbao_key(config: &Value) -> Result<(), KmsError> {
             "Managed OpenBao access is not configured for the signing service.".into(),
         ));
     }
-    let client = provider_http_client()?;
+    let client = transit_http_client(config)?;
     let create = || {
         send_json_or_empty(
             client
@@ -1020,7 +1057,7 @@ async fn verify_openbao(config: &Value) -> CapabilityResult {
         .unwrap_or("transit")
         .trim_matches('/');
     let key_reference = string(config, "key_reference").unwrap_or_default();
-    let client = match provider_http_client() {
+    let client = match transit_http_client(config) {
         Ok(client) => client,
         Err(_) => return CapabilityResult::fail("Connectivity", "KMS HTTP client is unavailable"),
     };
@@ -2710,10 +2747,7 @@ mod tests {
                 "accepted {endpoint}"
             );
         }
-        assert_eq!(
-            validate_transit_auth_config(&config("http://127.0.0.1:8200")).is_ok(),
-            cfg!(debug_assertions)
-        );
+        assert!(validate_transit_auth_config(&config("http://127.0.0.1:8200")).is_ok());
     }
 
     #[test]

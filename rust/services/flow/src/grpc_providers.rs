@@ -1,9 +1,9 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, path::PathBuf};
 
 use async_trait::async_trait;
 use mmf_platform::{
     GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
-    PlatformError,
+    KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles, PlatformError,
 };
 use mmf_security::{SecurityError, TenantMembership, TenantMembershipProvider};
 use serde::de::DeserializeOwned;
@@ -36,22 +36,106 @@ const USER_ID_HEADER: &str = "x-user-id";
 
 #[derive(Clone)]
 pub struct FlowGrpcChannelFactories {
-    pub organization: GrpcChannelFactory,
-    pub credential_template: GrpcChannelFactory,
-    pub presentation_policy: GrpcChannelFactory,
-    pub issuance: GrpcChannelFactory,
+    pub organization: FlowWorkloadChannelFactory,
+    pub credential_template: FlowWorkloadChannelFactory,
+    pub presentation_policy: FlowWorkloadChannelFactory,
+    pub issuance: FlowWorkloadChannelFactory,
+}
+
+#[derive(Clone)]
+pub enum FlowWorkloadChannelFactory {
+    Ordinary(GrpcChannelFactory),
+    ServerTls {
+        target: String,
+        ca_certificate: PathBuf,
+    },
+    Keyless {
+        target: String,
+        files: crate::WorkloadClientTlsFiles,
+    },
+}
+
+impl From<GrpcChannelFactory> for FlowWorkloadChannelFactory {
+    fn from(factory: GrpcChannelFactory) -> Self {
+        Self::Ordinary(factory)
+    }
+}
+
+impl FlowWorkloadChannelFactory {
+    fn connect_lazy(&self) -> Result<Channel, PlatformError> {
+        match self {
+            Self::Ordinary(factory) => factory.connect_lazy(),
+            Self::ServerTls {
+                target,
+                ca_certificate,
+            } => server_tls_factory(target, ca_certificate)?.connect_lazy(),
+            Self::Keyless { .. } => Err(PlatformError::InvalidConfiguration(
+                "keyless workload channels require asynchronous KMS setup".into(),
+            )),
+        }
+    }
+
+    async fn connect(&self) -> Result<Channel, PlatformError> {
+        match self {
+            Self::Ordinary(factory) => factory.connect().await,
+            Self::ServerTls {
+                target,
+                ca_certificate,
+            } => server_tls_factory(target, ca_certificate)?.connect().await,
+            Self::Keyless { target, files } => {
+                let identity = OpenBaoTlsIdentityFiles {
+                    certificate_chain_file: files.certificate.clone(),
+                    kms_ca_cert_file: files.kms_ca_certificate.clone(),
+                    kms_endpoint: files.kms_endpoint.clone(),
+                    kms_token_file: files.kms_token_file.clone(),
+                    kms_key_name: files.kms_key_name.clone(),
+                    kms_key_version: files.kms_key_version,
+                    request_timeout: std::time::Duration::from_secs(10),
+                    max_concurrent_signs: 64,
+                };
+                identity
+                    .grpc_channel_connected(
+                        target,
+                        &files.ca_certificate,
+                        KeylessGrpcTransportOptions::default(),
+                    )
+                    .await
+            }
+        }
+    }
+
+    fn is_keyless(&self) -> bool {
+        matches!(self, Self::Keyless { .. })
+    }
 }
 
 impl FlowGrpcChannelFactories {
     pub fn from_config(config: &FlowServiceConfig) -> Result<Self, PlatformError> {
         Ok(Self {
-            organization: ordinary_factory(&config.organization_grpc_target)?,
-            credential_template: ordinary_factory(&config.credential_template_grpc_target)?,
+            organization: if let Some(files) = &config.workload_client_tls {
+                FlowWorkloadChannelFactory::ServerTls {
+                    target: config.organization_grpc_target.clone(),
+                    ca_certificate: files.ca_certificate.clone(),
+                }
+            } else {
+                ordinary_factory(&config.organization_grpc_target)?.into()
+            },
+            credential_template: if let Some(files) = &config.workload_client_tls {
+                FlowWorkloadChannelFactory::ServerTls {
+                    target: config.credential_template_grpc_target.clone(),
+                    ca_certificate: files.ca_certificate.clone(),
+                }
+            } else {
+                ordinary_factory(&config.credential_template_grpc_target)?.into()
+            },
             presentation_policy: workload_factory(
                 &config.presentation_policy_grpc_target,
                 config.workload_client_tls.as_ref(),
             )?,
-            issuance: ordinary_factory(&config.issuance_grpc_target)?,
+            issuance: workload_factory(
+                &config.issuance_grpc_target,
+                config.workload_client_tls.as_ref(),
+            )?,
         })
     }
 
@@ -80,7 +164,7 @@ impl FlowGrpcChannelFactories {
     }
 
     pub(crate) fn presentation_policy_workload_transport(&self) -> bool {
-        self.presentation_policy.config().security == GrpcTransportSecurity::MutualTls
+        self.presentation_policy.is_keyless()
     }
 }
 
@@ -100,32 +184,37 @@ fn ordinary_factory(target: &str) -> Result<GrpcChannelFactory, PlatformError> {
     )
 }
 
-fn workload_factory(
+fn server_tls_factory(
     target: &str,
-    files: Option<&crate::WorkloadClientTlsFiles>,
+    ca_certificate: &std::path::Path,
 ) -> Result<GrpcChannelFactory, PlatformError> {
-    let Some(files) = files else {
-        return ordinary_factory(target);
-    };
-    let target = if let Some(authority) = target.strip_prefix("http://") {
-        format!("https://{authority}")
-    } else {
-        target.into()
-    };
-    let material = GrpcTlsMaterial::from_pem_files(
-        Some(&files.ca_certificate),
-        Some(&files.certificate),
-        Some(&files.private_key),
-    )?;
     GrpcChannelFactory::new(
         GrpcChannelConfig {
-            target,
-            security: GrpcTransportSecurity::MutualTls,
+            target: target.into(),
+            security: GrpcTransportSecurity::ServerTls,
             trust: GrpcTrustMode::CustomCa,
             ..GrpcChannelConfig::default()
         },
-        material,
+        GrpcTlsMaterial::from_ca_pem_file(Some(ca_certificate))?,
     )
+}
+
+fn workload_factory(
+    target: &str,
+    files: Option<&crate::WorkloadClientTlsFiles>,
+) -> Result<FlowWorkloadChannelFactory, PlatformError> {
+    let Some(files) = files else {
+        return ordinary_factory(target).map(FlowWorkloadChannelFactory::Ordinary);
+    };
+    if !target.starts_with("https://") {
+        return Err(PlatformError::InvalidConfiguration(
+            "keyless workload target must be an explicit HTTPS origin".into(),
+        ));
+    }
+    Ok(FlowWorkloadChannelFactory::Keyless {
+        target: target.into(),
+        files: files.clone(),
+    })
 }
 
 #[derive(Clone)]
@@ -690,6 +779,105 @@ fn nonempty(value: String) -> Option<String> {
 mod tests {
     use super::*;
 
+    fn flow_issuance_fixture(name: &str) -> String {
+        std::env::var(format!("MARTY_TEST_FLOW_ISSUANCE_{name}"))
+            .unwrap_or_else(|_| panic!("missing disposable Flow/Issuance {name} fixture"))
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[ignore = "requires scripts/with_disposable_event_stream_kms.py --profile flow-issuance"]
+    async fn flow_issuance_channel_requires_remote_key_mutual_tls() {
+        use std::time::Duration;
+        use tokio::{net::TcpListener, sync::oneshot};
+        use tokio_stream::{wrappers::TcpListenerStream, StreamExt};
+        use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Server};
+
+        let ca = PathBuf::from(flow_issuance_fixture("WORKLOAD_CA"));
+        let server_identity = OpenBaoTlsIdentityFiles {
+            certificate_chain_file: PathBuf::from(flow_issuance_fixture("ISSUANCE_SERVER_CERT")),
+            kms_ca_cert_file: PathBuf::from(flow_issuance_fixture("KMS_CA")),
+            kms_endpoint: flow_issuance_fixture("KMS_URL"),
+            kms_token_file: PathBuf::from(flow_issuance_fixture("ISSUANCE_SERVER_KMS_TOKEN_FILE")),
+            kms_key_name: flow_issuance_fixture("ISSUANCE_SERVER_KMS_KEY_NAME"),
+            kms_key_version: 1,
+            request_timeout: Duration::from_secs(10),
+            max_concurrent_signs: 16,
+        };
+        let acceptor = server_identity
+            .grpc_acceptor(&ca, 16, Duration::from_secs(10))
+            .await
+            .expect("Issuance must load its remote TLS signer");
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (stop, stopped) = oneshot::channel::<()>();
+        let incoming = TcpListenerStream::new(listener).then(move |connection| {
+            let acceptor = acceptor.clone();
+            async move {
+                match connection {
+                    Ok(stream) => acceptor.accept(stream).await,
+                    Err(error) => Err(error),
+                }
+            }
+        });
+        let (_, health_service) = tonic_health::server::health_reporter();
+        let server = tokio::spawn(async move {
+            Server::builder()
+                .add_service(health_service)
+                .serve_with_incoming_shutdown(incoming, async {
+                    let _ = stopped.await;
+                })
+                .await
+        });
+        let target = format!("https://localhost:{port}");
+        let public_ca_only = Endpoint::from_shared(target.clone())
+            .unwrap()
+            .tls_config(
+                ClientTlsConfig::new()
+                    .ca_certificate(Certificate::from_pem(std::fs::read(&ca).unwrap())),
+            )
+            .unwrap()
+            .connect_timeout(Duration::from_secs(5))
+            .connect()
+            .await;
+        if let Ok(channel) = public_ca_only {
+            let response = tonic_health::pb::health_client::HealthClient::new(channel)
+                .check(tonic::Request::new(tonic_health::pb::HealthCheckRequest {
+                    service: String::new(),
+                }))
+                .await;
+            assert!(
+                response.is_err(),
+                "Issuance must reject a client without its certificate"
+            );
+        }
+        let factory = FlowWorkloadChannelFactory::Keyless {
+            target: target.clone(),
+            files: crate::WorkloadClientTlsFiles {
+                certificate: PathBuf::from(flow_issuance_fixture("FLOW_CLIENT_CERT")),
+                ca_certificate: ca.clone(),
+                kms_endpoint: flow_issuance_fixture("KMS_URL"),
+                kms_ca_certificate: PathBuf::from(flow_issuance_fixture("KMS_CA")),
+                kms_token_file: PathBuf::from(flow_issuance_fixture("FLOW_CLIENT_KMS_TOKEN_FILE")),
+                kms_key_name: flow_issuance_fixture("FLOW_CLIENT_KMS_KEY_NAME"),
+                kms_key_version: 1,
+            },
+        };
+        let channel = factory
+            .connect()
+            .await
+            .expect("Flow keyless channel must connect");
+        let response = tonic_health::pb::health_client::HealthClient::new(channel)
+            .check(tonic::Request::new(tonic_health::pb::HealthCheckRequest {
+                service: String::new(),
+            }))
+            .await
+            .expect("Flow must complete an RPC over mutual keyless TLS")
+            .into_inner();
+        assert_eq!(response.status, 1);
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+
     #[test]
     fn typed_oid4vp_transport_serializes_without_promoting_proof() {
         let query = serde_json::json!({"credentials": [{"id": "member"}]});
@@ -737,10 +925,10 @@ mod tests {
     async fn configured_plaintext_policy_channel_reaches_provider_without_workload_transport() {
         let factory = || ordinary_factory("http://127.0.0.1:9009").unwrap();
         let factories = FlowGrpcChannelFactories {
-            organization: factory(),
-            credential_template: factory(),
-            presentation_policy: factory(),
-            issuance: factory(),
+            organization: factory().into(),
+            credential_template: factory().into(),
+            presentation_policy: factory().into(),
+            issuance: factory().into(),
         };
         assert!(!factories.presentation_policy_workload_transport());
         let clients = factories.connect_lazy().unwrap();

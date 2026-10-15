@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 import os
 from pathlib import Path
@@ -606,8 +605,8 @@ def verify_render_plan(recorded: dict[str, Any]) -> dict[str, Any]:
             "ui_render_sha256": fresh["ui_render_sha256"]}
 
 
-def verify_preserved_openbao_token(recorded: dict[str, Any]) -> dict[str, Any]:
-    """Match the new signer token to the still-running beta OpenBao without logging it."""
+def verify_preserved_openbao_custody(recorded: dict[str, Any]) -> dict[str, Any]:
+    """Bind the next signer to the preserved Raft state without reading a secret."""
     verify_render_plan(recorded)
     rendered, _, _ = render_candidate(recorded)
     old = recorded.get("old_container_ids_by_service")
@@ -621,16 +620,30 @@ def verify_preserved_openbao_token(recorded: dict[str, Any]) -> dict[str, Any]:
             and isinstance(raw_env, list)
             and all(isinstance(value, str) and "=" in value for value in raw_env),
             "Preserved OpenBao environment is invalid")
-    token_rows = [value.split("=", 1)[1] for value in raw_env
-                  if value.startswith("BAO_DEV_ROOT_TOKEN_ID=")]
     services = rendered.get("services")
+    require(isinstance(services, dict), "Rendered beta service graph is invalid")
     signer = services.get("passport-callback-signer") if isinstance(services, dict) else None
-    signer_token = environment(signer).get("BAO_TOKEN") if isinstance(signer, dict) else None
-    require(len(token_rows) == 1 and bool(token_rows[0])
-            and isinstance(signer_token, str) and bool(signer_token)
-            and hmac.compare_digest(token_rows[0], signer_token),
-            "New callback signer token differs from preserved OpenBao")
-    return {"schema": "marty.passport-beta-openbao-token-check/v1", "verified": True,
+    bootstrap = services.get("openbao-init")
+    require(isinstance(signer, dict) and isinstance(bootstrap, dict),
+            "Rendered beta KMS roles are incomplete")
+    signer_env = environment(signer)
+    bootstrap_env = environment(bootstrap)
+    require(not any(row.startswith(("BAO_DEV_ROOT_TOKEN_ID=", "BAO_TOKEN=", "VAULT_TOKEN="))
+                    for row in raw_env)
+            and config.get("Cmd") == ["server", "-config=/bao/config/openbao.hcl"]
+            and any(isinstance(mount, dict)
+                    and mount.get("Type") == "volume"
+                    and mount.get("Destination") == "/bao/data"
+                    and mount.get("Name") == "elevenid-beta_openbao_data"
+                    for mount in bao.get("Mounts", []))
+            and signer_env.get("BAO_ADDR") == "https://openbao:8200"
+            and signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and not signer_env.get("BAO_TOKEN")
+            and bootstrap_env.get("BAO_PASSPORT_CALLBACK_TOKEN_FILE")
+                == "/bao/passport-callback/token",
+            "Preserved OpenBao is not the scoped Raft callback KMS")
+    return {"schema": "marty.passport-beta-openbao-custody-check/v1", "verified": True,
             "source_commit": recorded["source_commit"]}
 
 
@@ -924,7 +937,7 @@ def main() -> None:
     parser.add_argument("--preflight-maintenance-docs-image")
     parser.add_argument("--verify-plan", type=Path)
     parser.add_argument("--verify-render-plan", type=Path)
-    parser.add_argument("--verify-openbao-token", type=Path)
+    parser.add_argument("--verify-openbao-custody", type=Path)
     parser.add_argument("--verify-resume-plan", type=Path)
     args = parser.parse_args()
     try:
@@ -960,13 +973,13 @@ def main() -> None:
             result = verify_resume_plan(recorded, intent, args.stack_manifest,
                                         args.fence_receipt, args.maintenance_receipt,
                                         args.native_receipt)
-        elif args.verify_openbao_token:
+        elif args.verify_openbao_custody:
             require(all((args.fence_receipt, args.maintenance_receipt,
                          args.native_receipt)),
                     "Aggregate Compose receipts are absent")
-            recorded = json.loads(args.verify_openbao_token.read_text(encoding="utf-8"))
+            recorded = json.loads(args.verify_openbao_custody.read_text(encoding="utf-8"))
             require(isinstance(recorded, dict), "Recorded Compose plan is invalid")
-            result = verify_preserved_openbao_token(recorded)
+            result = verify_preserved_openbao_custody(recorded)
         elif args.verify_render_plan:
             require(all((args.fence_receipt, args.maintenance_receipt,
                          args.native_receipt)),

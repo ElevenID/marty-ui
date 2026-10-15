@@ -61,9 +61,24 @@ pub(super) struct RemoteIssuerSigner {
     verifying_key: VerifyingKey,
 }
 
+pub(super) fn canvas_openbao_client(ca_file: &std::path::Path) -> reqwest::Client {
+    let pem = std::fs::read(ca_file).expect("disposable OpenBao public CA");
+    let certificate = reqwest::Certificate::from_pem(&pem).expect("OpenBao CA certificate");
+    reqwest::Client::builder()
+        .no_proxy()
+        .add_root_certificate(certificate)
+        .build()
+        .unwrap()
+}
+
 impl RemoteIssuerSigner {
-    pub(super) async fn create(base_url: &str, root_token: &str) -> Self {
-        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    pub(super) async fn create(
+        base_url: &str,
+        root_token: &str,
+        ca_file: &std::path::Path,
+    ) -> Self {
+        assert!(base_url.starts_with("https://127.0.0.1:"));
+        let client = canvas_openbao_client(ca_file);
         let key_name = format!("canvas_issuer_{}", uuid::Uuid::new_v4().simple());
         client
             .post(format!("{base_url}/v1/transit/keys/{key_name}"))
@@ -235,7 +250,7 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
     }
     let bytes = to_bytes(request.into_body(), 128 * 1024).await.unwrap();
     let response = match path.as_str() {
-        "/health" | "/health/ready" if state.base_gateway => {
+        "/health" | "/health/ready" => {
             assert_eq!(method, "GET");
             assert!(bytes.is_empty());
             Json(json!({"status":"healthy"})).into_response()
@@ -485,14 +500,15 @@ async fn peer(State(state): State<PeerState>, request: Request<Body>) -> Respons
     response
 }
 
+pub(super) fn peer_router(state: PeerState) -> Router {
+    Router::new()
+        .fallback(peer)
+        .with_state(state)
+        .merge(super::issuance_process::remote_integration_secret::router_for(ENVELOPE_KEY))
+}
+
 pub(super) async fn start_peers(state: PeerState) -> OwnedHttp {
-    OwnedHttp::start(
-        Router::new()
-            .fallback(peer)
-            .with_state(state)
-            .merge(super::issuance_process::remote_integration_secret::router_for(ENVELOPE_KEY)),
-    )
-    .await
+    OwnedHttp::start(peer_router(state)).await
 }
 
 pub(super) fn counts(values: &[String]) -> BTreeMap<&str, usize> {

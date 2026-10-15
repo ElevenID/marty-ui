@@ -113,6 +113,7 @@ fn normalize_payload(body: &Value) -> Value {
         "namespace": trimmed(body.get("namespace")).unwrap_or_default(),
         "auth_mode": trimmed(body.get("auth_mode")).unwrap_or_default(),
         "auth_reference": trimmed(body.get("auth_reference")).unwrap_or_default(),
+        "ca_cert_file": trimmed(body.get("ca_cert_file")).unwrap_or_default(),
         "key_reference": trimmed(body.get("key_reference")).unwrap_or_default(),
         "key_aliases": dedupe(string_list(body.get("key_aliases"))),
         "algorithms": algorithms,
@@ -386,8 +387,18 @@ async fn validate_custom_transit(payload: &Value, checks: &mut Vec<ValidationChe
     let key_reference = string(payload, "key_reference");
     let token = transit_token(payload);
     let namespace = string(payload, "namespace");
-    let Some(client) = provider_client(checks) else {
-        return;
+    let client = match kms::transit_http_client(payload) {
+        Ok(client) => client,
+        Err(_) => {
+            add(
+                checks,
+                "Provider connectivity",
+                "fail",
+                "Transit HTTPS client is unavailable.",
+                "live",
+            );
+            return;
+        }
     };
     let mut health = client
         .get(format!("{}/v1/sys/health", endpoint.trim_end_matches('/')))

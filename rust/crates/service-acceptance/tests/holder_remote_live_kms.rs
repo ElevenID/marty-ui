@@ -61,13 +61,22 @@ impl MembershipAuthorizer for SwitchMembership {
 async fn registration_provision_sign_and_deactivate_delete_remote_key() {
     let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let parsed = reqwest::Url::parse(&endpoint).expect("OpenBao URL syntax");
-    assert_eq!(parsed.scheme(), "http");
+    assert_eq!(parsed.scheme(), "https");
     assert_eq!(parsed.host_str(), Some("127.0.0.1"));
     let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
     let root_token = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("root guard token");
     assert_ne!(token, root_token);
     let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("guard nonce");
-    let marker = reqwest::Client::new()
+    let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+    let ca_pem = std::fs::read(ca_file).expect("read public OpenBao CA");
+    let ca = reqwest::Certificate::from_pem(&ca_pem).expect("parse public OpenBao CA");
+    let marker = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_certs_only([ca])
+        .build()
+        .expect("guarded OpenBao HTTPS client")
         .get(format!(
             "{endpoint}/v1/secret/data/marty-test-disposable-guard"
         ))
@@ -574,7 +583,7 @@ async fn registration_provision_sign_and_deactivate_delete_remote_key() {
             "id":"managed-openbao-transit", "service_type":"openbao-transit",
             "endpoint":endpoint, "mount":"transit",
             "key_reference":key.provider_reference, "algorithm":"EdDSA",
-            "auth_reference":token
+            "auth_mode":"service_token"
         }),
     })
     .await;

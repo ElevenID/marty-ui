@@ -26,6 +26,7 @@ hyper.workspace = true
 marty-didcomm = { workspace = true, features = ["did_web", "encrypted-envelope"] }
 marty-gateway = { path = "../../services/gateway" }
 marty-issuance-service = { path = "../../services/issuance" }
+marty-keyless-grpc-bridge = { path = "../keyless-grpc-bridge" }
 marty-oid4vci = { workspace = true, features = ["lti"] }
 marty-release-evidence = { path = "../release-evidence" }
 marty-signing-grant = { path = "../signing-grant" }

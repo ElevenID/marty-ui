@@ -53,6 +53,18 @@ def worker(value):
     return value["spec"]["template"]["spec"]["containers"][0]
 
 
+def keycloak_deployment():
+    documents = yaml.safe_load_all(
+        (ROOT / "k8s/oracle/05-keycloak.yaml").read_text(encoding="utf-8")
+    )
+    value = next(item for item in documents if item.get("kind") == "Deployment")
+    value["metadata"]["namespace"] = NAMESPACE
+    value["spec"]["template"]["spec"]["containers"][0]["image"] = (
+        "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "a" * 64
+    )
+    return value
+
+
 @pytest.mark.parametrize("args", [None, []])
 def test_exact_native_launch_accepts_absent_or_empty_args(args):
     value = deployment()
@@ -215,6 +227,7 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
     if case == "legacy":
         worker(candidate)["command"] = ["python"]
     raw = "" if case == "missing" else json.dumps(candidate)
+    keycloak_raw = json.dumps(keycloak_deployment())
     env = {
         # Absolute Bash/Python only; even a future `command kubectl` bypass
         # cannot reach the operator's installed cluster client.
@@ -226,6 +239,8 @@ def test_actual_bash_guard_precedes_every_image_write(case, tmp_path):
         "IMAGE_TAG": "synthetic-tag",
         "IMAGE_REGISTRY": "synthetic.invalid/owned",
         "FIXTURE_JSON": raw,
+        "KEYCLOAK_FIXTURE_JSON": keycloak_raw,
+        "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "a" * 64,
         "PRIVATE_DIAGNOSTIC": PRIVATE,
         "GET_EXIT": "1" if case == "get-failed" else "0",
         "TEST_CATALOG_FAIL": "1" if case == "catalog-failed" else "0",
@@ -263,7 +278,12 @@ kubectl() {
       printf '{}'
       return 0 ;;
     get:deployment)
-      [[ $# == 8 && "$3" == canvas-sync-worker && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
+      [[ $# == 8 && "$4" == -n && "$5" == "$NAMESPACE" && "$6" == -o && "$7" == json && "$8" == --request-timeout=10s ]] || return 92
+      if [[ "$3" == keycloak ]]; then
+        printf '%s' "$KEYCLOAK_FIXTURE_JSON"
+        return 0
+      fi
+      [[ "$3" == canvas-sync-worker ]] || return 92
       printf '%s\n' "$PRIVATE_DIAGNOSTIC" >&2
       printf '%s' "$FIXTURE_JSON"
       return "$GET_EXIT" ;;
@@ -303,6 +323,8 @@ native_check() {
     if case == "native":
         assert result.returncode == 0, result.stderr
         assert result.stdout.splitlines() == [
+            "WRITE:deployment/keycloak",
+            "ROLLOUT",
             "WRITE:deployment/signing-keys",
             "ROLLOUT",
             "WRITE:deployment/issuance-native",

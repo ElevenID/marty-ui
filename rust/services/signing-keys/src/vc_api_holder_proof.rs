@@ -4,10 +4,11 @@
 //! deleted before a proof is returned, preserving the bridge's ephemeral
 //! holder identity without placing private material in Gateway or this service.
 
-use std::{env, time::Duration};
+use std::{env, path::Path, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::Utc;
+use marty_openbao_http::OpenBaoHttp;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -72,7 +73,7 @@ impl OpenBaoHolderProofProvider {
     ) -> Result<Self, HolderProofError> {
         let endpoint_url = Url::parse(&endpoint).map_err(|_| HolderProofError::Unavailable)?;
         let issuer_url = Url::parse(&issuer_base_url).map_err(|_| HolderProofError::Unavailable)?;
-        if !matches!(endpoint_url.scheme(), "https" | "http") {
+        if endpoint_url.scheme() != "https" {
             return Err(HolderProofError::Unavailable);
         }
         if !matches!(issuer_url.scheme(), "https" | "http")
@@ -166,7 +167,12 @@ impl OpenBaoHolderProofProvider {
     /// Keys younger than one hour may still belong to an in-flight request.
     pub async fn reap_stale_keys(&self) -> Result<usize, HolderProofError> {
         self.validate_mounted_token()?;
-        let client = kms::provider_http_client().map_err(|_| HolderProofError::Provider)?;
+        let ca_file = env::var("BAO_CACERT").ok();
+        let client =
+            OpenBaoHttp::connect(&self.endpoint, ca_file.as_deref().map(Path::new), TIMEOUT)
+                .map_err(|_| HolderProofError::Provider)?
+                .client()
+                .clone();
         let response = client
             .get(format!("{}/v1/transit/keys?list=true", self.endpoint))
             .timeout(TIMEOUT)
@@ -312,7 +318,7 @@ mod tests {
     #[test]
     fn request_scope_rejects_foreign_issuer_and_unbounded_nonce() {
         let provider = OpenBaoHolderProofProvider::new(
-            "http://127.0.0.1:8200".into(),
+            "https://127.0.0.1:8200".into(),
             "disposable".into(),
             "https://issuer.example".into(),
         )
@@ -335,6 +341,12 @@ mod tests {
 
     #[test]
     fn provider_rejects_url_credentials_and_paths() {
+        assert!(OpenBaoHolderProofProvider::new(
+            "http://127.0.0.1:8200".into(),
+            "token".into(),
+            "https://issuer.example".into(),
+        )
+        .is_err());
         assert!(OpenBaoHolderProofProvider::new(
             "https://user:password@bao.example".into(),
             "token".into(),

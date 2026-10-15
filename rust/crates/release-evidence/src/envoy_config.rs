@@ -112,7 +112,7 @@ pub fn render(bytes: &[u8], descriptor: &[u8]) -> Result<Value, &'static str> {
         )?;
         require(
             native["load_assignment"]
-                == json!({"cluster_name":NATIVE_CLUSTER,"endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"issuance-native","port_value":9005}}}}]}]}),
+                == json!({"cluster_name":NATIVE_CLUSTER,"endpoints":[{"lb_endpoints":[{"endpoint":{"address":{"socket_address":{"address":"127.0.0.1","port_value":19006}}}}]}]}),
             "Envoy native issuance endpoint changed",
         )?;
         require(
@@ -193,7 +193,7 @@ pub fn render(bytes: &[u8], descriptor: &[u8]) -> Result<Value, &'static str> {
     native["name"] = json!(NATIVE_CLUSTER);
     native["load_assignment"]["cluster_name"] = json!(NATIVE_CLUSTER);
     native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
-        ["socket_address"]["address"] = json!("issuance-native");
+        ["socket_address"] = json!({"address":"127.0.0.1","port_value":19006});
     clusters.push(native);
     let routes = model
         .pointer_mut(&format!("{HCM}{ROUTES}"))

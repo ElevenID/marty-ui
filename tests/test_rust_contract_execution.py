@@ -26,8 +26,8 @@ else:
         ("Test native Canvas AGS/NRPS over real HTTPS", 1),
         ("Test native passport Gateway signed webhook on PostgreSQL", 1),
         ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
+        ("Exercise OIDF keyless HTTPS edge against disposable OpenBao", 1),
         ("Exercise live Signing Keys public contracts on disposable Redis", 1),
-        ("Exercise Gateway CSR and managed passport chain with disposable OpenBao", 7),
         ("Test beta passport reconciliation and native batch on PostgreSQL", 1),
     ],
 )
@@ -47,6 +47,33 @@ def test_focused_rust_ci_cases_require_positive_execution(
             [BASH, "-n", "-c", script], capture_output=True, text=True, check=False
         )
         assert syntax.returncode == 0, syntax.stderr
+
+
+def test_https_grant_probe_requires_positive_rust_execution() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    [step] = [
+        entry for entry in steps
+        if entry.get("name")
+        == "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
+    ]
+    assert step["run"] == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
+        encoding="utf-8"
+    )
+    assert "def rust_test_succeeded(" in probe
+    assert "([1-9][0-9]*) passed; 0 failed" in probe
+    for case in (
+        "authenticated_gateway_reaches_remaining_rust_signing_handlers",
+        "authenticated_gateway_rotates_only_a_dedicated_signing_service",
+        "authenticated_gateway_generates_profile_scoped_passport_csrs_in_openbao",
+        "authenticated_gateway_generates_a_dedicated_service_csr_in_openbao",
+        "authenticated_gateway_issues_dsc_with_operator_grant_and_dedicated_key",
+        "managed_passport_chain_issues_and_verifies_sod_without_exporting_private_keys",
+    ):
+        assert case in probe
 
 
 def test_database_runner_uses_positive_execution_guard() -> None:

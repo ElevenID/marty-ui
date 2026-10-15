@@ -170,7 +170,8 @@ def validate_model(
             and len(env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"].strip()) >= 32
             and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
             != env.get("SIGNING_KEYS_INTERNAL_API_KEY")
-            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"] != env.get("ISSUANCE_API_KEY"),
+            and env["SIGNING_KEYS_INTEGRATION_SECRET_KEY"]
+            != env.get("ISSUANCE_API_KEY"),
             "Native remote integration-secret credential is incomplete",
         )
         require(
@@ -315,7 +316,11 @@ def validate_model(
             and mounts[1]["bind"]["create_host_path"] is False,
             "Native CA mount is not paired",
         )
-        POLICY["validate_model"](model, authcrypt_enabled=authcrypt)
+        POLICY["validate_model"](
+            model,
+            authcrypt_enabled=authcrypt,
+            base_https="openbao-tls-init" in model["services"],
+        )
         image = native.get("image", "")
         if local_build:
             require(

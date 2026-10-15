@@ -20,15 +20,17 @@ from typing import NoReturn
 SCHEMA = "elevenid.stack-release-transaction/v1"
 STACK_LOCK_SCHEMA = "marty.stack-lock/v1"
 RELEASE_ELIGIBLE_STATE = "eligible"
-REQUIRED_IMAGE_ROLES = ("ui", "services", "migrations", "openbao_didcomm")
+REQUIRED_IMAGE_ROLES = ("ui", "services", "migrations", "openbao_didcomm", "keycloak")
 REQUIRED_GATE_ROLES = (
     "public_stack", "verifier_differential", "native_schema", "didcomm_plugin",
+    "keycloak_kms",
 )
 IMAGE_URIS = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
     "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+    "keycloak": "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -392,7 +394,7 @@ def validate_resume(
 def _validated_digest_map(digests: dict[str, str]) -> dict[str, dict[str, str]]:
     _require(
         tuple(sorted(digests)) == tuple(sorted(REQUIRED_IMAGE_ROLES)),
-        "image digest roles must be exactly ui, services, migrations and openbao_didcomm",
+        "image digest roles must be exactly ui, services, migrations, openbao_didcomm and keycloak",
     )
     evidence: dict[str, dict[str, str]] = {}
     for role in REQUIRED_IMAGE_ROLES:

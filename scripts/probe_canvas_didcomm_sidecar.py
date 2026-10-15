@@ -7,17 +7,28 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import uuid
 
-from probe_didcomm_openbao_ha import IMAGE, docker, prepare_image, require_status
+from probe_didcomm_openbao_ha import IMAGE, docker, prepare_image
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def startup_diagnostic(stderr: str) -> str:
+    return next(
+        (line[:1000] for line in stderr.splitlines()
+         if line.startswith("Canvas OpenBao startup: ")),
+        "no sanitized startup diagnostics",
+    )
 
 
 def run() -> None:
     prepare_image()
     anchor = f"canvas-kms-anchor-{uuid.uuid4().hex[:12]}"
     sidecar: str | None = None
+    ca_directory = Path(tempfile.mkdtemp(prefix="canvas-kms-ca-"))
+    ca_file = ca_directory / "ca.crt"
     anchor_started = False
     try:
         docker(
@@ -33,6 +44,7 @@ def run() -> None:
                 str(ROOT / "scripts/ci/start-canvas-didcomm-openbao.py"),
                 "--namespace-postgres-id",
                 anchor_id,
+                "--ca-output", str(ca_file),
             ],
             env={**os.environ, "MARTY_CANVAS_OPENBAO_IMAGE": IMAGE},
             capture_output=True,
@@ -41,13 +53,19 @@ def run() -> None:
             timeout=150,
         )
         if result.returncode:
-            raise RuntimeError("Disposable Canvas namespace plugin startup failed")
+            raise RuntimeError(
+                "Disposable Canvas namespace plugin startup failed: "
+                + startup_diagnostic(result.stderr)
+            )
         response = json.loads(result.stdout)
         sidecar = response["container"]
-        if response["url"] != "http://127.0.0.1:8200":
+        if response["url"] != "https://127.0.0.1:8200":
             raise RuntimeError("Canvas sidecar did not bind the borrowed loopback")
+        if response["ca_cert_file"] != str(ca_file):
+            raise RuntimeError("Canvas sidecar returned an unexpected public CA path")
         cli = (
             "exec", "--env", f"BAO_ADDR={response['url']}",
+            "--env", "BAO_CACERT=/tmp/bao-tls/vault-ca.pem",
             "--env", f"BAO_TOKEN={response['root_token']}", sidecar, "bao",
         )
         mounts = json.loads(docker(*cli, "secrets", "list", "-format=json"))
@@ -70,13 +88,19 @@ def run() -> None:
                 ["docker", "rm", "-f", anchor],
                 capture_output=True, check=False, timeout=30,
             )
+        ca_file.unlink(missing_ok=True)
+        (ca_directory / ".ca.crt.tmp").unlink(missing_ok=True)
+        ca_directory.rmdir()
 
 
 def run_host() -> None:
     sidecar: str | None = None
+    ca_directory = Path(tempfile.mkdtemp(prefix="canvas-kms-ca-"))
+    ca_file = ca_directory / "ca.crt"
     try:
         result = subprocess.run(
-            [sys.executable, str(ROOT / "scripts/ci/start-canvas-didcomm-openbao.py")],
+            [sys.executable, str(ROOT / "scripts/ci/start-canvas-didcomm-openbao.py"),
+             "--ca-output", str(ca_file)],
             env={**os.environ, "MARTY_CANVAS_OPENBAO_IMAGE": IMAGE},
             capture_output=True,
             text=True,
@@ -84,19 +108,25 @@ def run_host() -> None:
             timeout=150,
         )
         if result.returncode:
-            raise RuntimeError("Disposable Canvas host plugin startup failed")
+            raise RuntimeError(
+                "Disposable Canvas host plugin startup failed: "
+                + startup_diagnostic(result.stderr)
+            )
         response = json.loads(result.stdout)
         sidecar = response["container"]
-        if not response["url"].startswith("http://127.0.0.1:"):
+        if not response["url"].startswith("https://127.0.0.1:"):
             raise RuntimeError("Canvas host plugin is not bound to loopback")
-        created = require_status(
-            response["url"], "POST", "didcomm/keys/synthetic-org/issuer",
-            response["root_token"],
-            {
-                "sender_did": "did:web:issuer.example",
-                "sender_key_id": "did:web:issuer.example#key-1",
-            },
+        if response["ca_cert_file"] != str(ca_file):
+            raise RuntimeError("Canvas host plugin returned an unexpected public CA path")
+        cli = (
+            "exec", "--env", "BAO_ADDR=https://127.0.0.1:8200",
+            "--env", "BAO_CACERT=/tmp/bao-tls/vault-ca.pem",
+            "--env", f"BAO_TOKEN={response['root_token']}", sidecar, "bao",
         )
+        created = json.loads(docker(*cli, "write", "-format=json",
+                                    "didcomm/keys/synthetic-org/issuer",
+                                    "sender_did=did:web:issuer.example",
+                                    "sender_key_id=did:web:issuer.example#key-1"))
         if len(created["data"]["version"]) != 32:
             raise RuntimeError("Canvas host plugin did not create a versioned sender")
         print("PASS disposable Canvas host-loopback plugin created a sender key")
@@ -110,6 +140,7 @@ def run_host() -> None:
                 "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST": "1",
                 "MARTY_CANVAS_OPENBAO_URL": response["url"],
                 "MARTY_CANVAS_OPENBAO_ROOT_TOKEN": response["root_token"],
+                "MARTY_CANVAS_OPENBAO_CA_CERT_FILE": str(ca_file),
                 "MARTY_ISSUANCE_TEST_BINARY": str(binary),
                 "MARTY_DIDCOMM_TEST_PYTHON": sys.executable,
             }
@@ -130,6 +161,9 @@ def run_host() -> None:
                 ["docker", "rm", "-f", sidecar],
                 capture_output=True, check=False, timeout=30,
             )
+        ca_file.unlink(missing_ok=True)
+        (ca_directory / ".ca.crt.tmp").unlink(missing_ok=True)
+        ca_directory.rmdir()
 
 
 if __name__ == "__main__":

@@ -3,10 +3,11 @@
 //! The caller supplies a mounted, operation-scoped token for each call. No
 //! local HMAC or private-key implementation exists in this client.
 
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use reqwest::{redirect::Policy, Client, Url};
+use marty_openbao_http::OpenBaoHttp;
+use reqwest::{Client, Url};
 use serde_json::{json, Value};
 use thiserror::Error;
 
@@ -44,9 +45,7 @@ impl TransitGrantClient {
         self.origin
     }
 
-    /// `endpoint` must be the exact mounted `BAO_ADDR` root origin. Internal
-    /// deployments may use their operator-configured HTTP service endpoint;
-    /// external Transit callers must use a separate HTTPS-only adapter.
+    /// `endpoint` must be the exact mounted HTTPS `BAO_ADDR` root origin.
     fn for_managed_openbao(
         endpoint: &str,
         key_name: &str,
@@ -57,7 +56,12 @@ impl TransitGrantClient {
             return Err(TransitGrantError::InvalidConfig);
         }
         let url = Url::parse(endpoint).map_err(|_| TransitGrantError::InvalidConfig)?;
-        if !matches!(url.scheme(), "http" | "https")
+        #[cfg(test)]
+        let test_http = url.scheme() == "http"
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "::1"));
+        #[cfg(not(test))]
+        let test_http = false;
+        if !(url.scheme() == "https" || test_http)
             || url.host_str().is_none()
             || !url.username().is_empty()
             || url.password().is_some()
@@ -72,11 +76,33 @@ impl TransitGrantClient {
         {
             return Err(TransitGrantError::InvalidConfig);
         }
-        let http = Client::builder()
-            .redirect(Policy::none())
-            .timeout(TIMEOUT)
-            .build()
-            .map_err(|_| TransitGrantError::Unavailable)?;
+        #[cfg(test)]
+        let http = if test_http {
+            Client::builder()
+                .no_proxy()
+                .redirect(reqwest::redirect::Policy::none())
+                .timeout(TIMEOUT)
+                .build()
+                .map_err(|_| TransitGrantError::Unavailable)?
+        } else {
+            OpenBaoHttp::connect(
+                endpoint,
+                std::env::var("BAO_CACERT").ok().as_deref().map(Path::new),
+                TIMEOUT,
+            )
+            .map_err(|_| TransitGrantError::InvalidConfig)?
+            .client()
+            .clone()
+        };
+        #[cfg(not(test))]
+        let http = OpenBaoHttp::connect(
+            endpoint,
+            std::env::var("BAO_CACERT").ok().as_deref().map(Path::new),
+            TIMEOUT,
+        )
+        .map_err(|_| TransitGrantError::InvalidConfig)?
+        .client()
+        .clone();
         Ok(Self {
             endpoint: url,
             key_name: key_name.to_owned(),
@@ -339,7 +365,7 @@ mod tests {
     async fn live_openbao_grant_key_enforces_mint_verify_separation() {
         let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
         let url = Url::parse(&endpoint).expect("OpenBao URL");
-        assert_eq!(url.scheme(), "http");
+        assert_eq!(url.scheme(), "https");
         assert_eq!(url.host_str(), Some("127.0.0.1"));
         assert_eq!(
             std::env::var("BAO_ADDR").ok().as_deref(),
@@ -348,7 +374,11 @@ mod tests {
         let root = std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("root guard token");
         let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE").expect("guard nonce");
         assert!(nonce.len() >= 16);
-        let marker: Value = Client::new()
+        let ca = std::env::var("BAO_CACERT").expect("public disposable OpenBao CA");
+        let marker_client = OpenBaoHttp::connect(&endpoint, Some(Path::new(&ca)), TIMEOUT)
+            .expect("disposable HTTPS marker client");
+        let marker: Value = marker_client
+            .client()
             .get(format!(
                 "{endpoint}/v1/secret/data/marty-test-disposable-guard"
             ))

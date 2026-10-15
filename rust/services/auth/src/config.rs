@@ -59,15 +59,14 @@ pub struct AuthServiceConfig {
 pub struct AuthWorkloadClientTlsFiles {
     pub ca_certificate: PathBuf,
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthWorkloadServerTlsFiles {
-    pub ca_certificate: PathBuf,
-    pub certificate: PathBuf,
-    pub private_key: PathBuf,
-}
+pub type AuthWorkloadServerTlsFiles = AuthWorkloadClientTlsFiles;
 
 #[derive(Debug, Error)]
 pub enum AuthConfigError {
@@ -85,9 +84,17 @@ impl AuthServiceConfig {
     ) -> Result<Self, AuthConfigError> {
         let values = values.into_iter().collect::<HashMap<_, _>>();
         let get = |name: &str| values.get(name).map(String::as_str);
-        let environment = get("ENVIRONMENT")
+        let environment = match get("ENVIRONMENT")
             .unwrap_or("production")
-            .to_ascii_lowercase();
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "production" | "prod" => "production",
+            "beta" => "beta",
+            "development" | "dev" | "local" | "test" => "development",
+            _ => return Err(invalid("ENVIRONMENT is invalid")),
+        }
+        .to_owned();
         let realm = required(get("KEYCLOAK_REALM"), "KEYCLOAK_REALM")?;
         let ui_base = get("UI_BASE_URL").unwrap_or("http://localhost:3000");
         let ui_additional = get("UI_ALLOWED_ORIGINS")
@@ -131,8 +138,11 @@ impl AuthServiceConfig {
         if session_ttl_seconds <= 0 {
             return Err(invalid("SESSION_TTL_SECONDS must be positive"));
         }
-        let allow_plaintext_grpc =
-            boolean(get("ALLOW_PLAINTEXT_GRPC"), environment != "production")?;
+        let deployed = matches!(environment.as_str(), "production" | "beta");
+        let allow_plaintext_grpc = boolean(get("ALLOW_PLAINTEXT_GRPC"), !deployed)?;
+        if deployed && allow_plaintext_grpc {
+            return Err(invalid("deployed Auth cannot enable plaintext gRPC"));
+        }
         let (workload_client_tls, workload_server_tls) = workload_tls(&values, &environment)?;
         let flow_grpc_target = grpc_target(
             get("FLOW_GRPC_TARGET").unwrap_or("flow:9011"),
@@ -142,10 +152,20 @@ impl AuthServiceConfig {
             get("ORG_GRPC_TARGET").unwrap_or("organization:9002"),
             allow_plaintext_grpc,
         )?;
+        if workload_client_tls.is_some() && !organization_grpc_target.starts_with("https://") {
+            return Err(invalid(
+                "ORG_GRPC_TARGET must use HTTPS with a remote workload identity",
+            ));
+        }
         let event_stream_grpc_target = grpc_target(
             get("ES_GRPC_TARGET").unwrap_or("event-stream:9015"),
             allow_plaintext_grpc,
         )?;
+        if workload_client_tls.is_some() && !event_stream_grpc_target.starts_with("https://") {
+            return Err(invalid(
+                "ES_GRPC_TARGET must use HTTPS with a remote workload identity",
+            ));
+        }
         let grpc_service_token = minimum_secret(get("GRPC_SERVICE_TOKEN"), "GRPC_SERVICE_TOKEN")?;
         AsciiMetadataValue::try_from(grpc_service_token.as_str())
             .map_err(|_| invalid("GRPC_SERVICE_TOKEN is not valid gRPC metadata"))?;
@@ -471,51 +491,65 @@ fn workload_tls(
             .filter(|value| !value.is_empty())
     };
     let client_names = [
-        "GRPC_WORKLOAD_TLS_CA_CERT",
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
     ];
     let server_names = [
         "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
-    let client_present = client_names
-        .iter()
-        .filter(|name| value(name).is_some())
-        .count();
-    let server_present = server_names
-        .iter()
-        .filter(|name| value(name).is_some())
-        .count();
-    if client_present != 0 && client_present != client_names.len() {
-        return Err(invalid(
-            "workload client TLS requires CA and client certificate/key",
-        ));
-    }
-    if server_present != 0 && server_present != server_names.len() {
-        return Err(invalid(
-            "workload server TLS requires server certificate/key",
-        ));
-    }
-    if environment == "production"
-        && (client_present != client_names.len() || server_present != server_names.len())
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY")
+        || values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY")
     {
+        return Err(invalid("workload TLS private-key files are not supported"));
+    }
+    let ca = value("GRPC_WORKLOAD_TLS_CA_CERT");
+    let parse_role =
+        |names: [&'static str; 6]| -> Result<Option<AuthWorkloadClientTlsFiles>, AuthConfigError> {
+            let configured = names.iter().filter(|name| value(name).is_some()).count();
+            if configured == 0 {
+                return Ok(None);
+            }
+            if configured != names.len() || ca.is_none() {
+                return Err(invalid(format!(
+                    "{} requires public certificate, CA and remote KMS identity",
+                    names[0]
+                )));
+            }
+            let version = value(names[5])
+                .unwrap_or_default()
+                .parse::<u32>()
+                .ok()
+                .filter(|version| *version > 0)
+                .ok_or_else(|| invalid(format!("{} is invalid", names[5])))?;
+            Ok(Some(AuthWorkloadClientTlsFiles {
+                ca_certificate: PathBuf::from(ca.unwrap_or_default()),
+                certificate: PathBuf::from(value(names[0]).unwrap_or_default()),
+                kms_endpoint: value(names[1]).unwrap_or_default().into(),
+                kms_ca_certificate: PathBuf::from(value(names[2]).unwrap_or_default()),
+                kms_token_file: PathBuf::from(value(names[3]).unwrap_or_default()),
+                kms_key_name: value(names[4]).unwrap_or_default().into(),
+                kms_key_version: version,
+            }))
+        };
+    let client = parse_role(client_names)?;
+    let server = parse_role(server_names)?;
+    if ca.is_some() && client.is_none() && server.is_none() {
+        return Err(invalid("workload TLS CA requires a remote identity"));
+    }
+    if matches!(environment, "production" | "beta") && (client.is_none() || server.is_none()) {
         return Err(invalid(
-            "production workload TLS requires outbound client identity and inbound server identity",
+            "deployed workload TLS requires outbound client identity and inbound server identity",
         ));
     }
-    let client = (client_present == client_names.len()).then(|| AuthWorkloadClientTlsFiles {
-        ca_certificate: PathBuf::from(value(client_names[0]).expect("client TLS values checked")),
-        certificate: PathBuf::from(value(client_names[1]).expect("client TLS values checked")),
-        private_key: PathBuf::from(value(client_names[2]).expect("client TLS values checked")),
-    });
-    let server = (server_present == server_names.len()).then(|| AuthWorkloadServerTlsFiles {
-        ca_certificate: PathBuf::from(
-            value(client_names[0]).expect("server TLS requires the workload CA"),
-        ),
-        certificate: PathBuf::from(value(server_names[0]).expect("server TLS values checked")),
-        private_key: PathBuf::from(value(server_names[1]).expect("server TLS values checked")),
-    });
     Ok((client, server))
 }
 

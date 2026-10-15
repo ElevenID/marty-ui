@@ -1,11 +1,11 @@
-use std::{collections::BTreeMap, path::Path, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use mmf_data::{CacheBackend, CacheConfig, CacheStore, RedisCache};
 use mmf_messaging::{MessageTransport, PostgresOutboxStore};
 use mmf_platform::{
-    GrpcChannelConfig, GrpcChannelFactory, GrpcServerTlsMaterial, GrpcTlsMaterial,
-    GrpcTransportSecurity, GrpcTrustMode, OutboundHttpClient, OutboundHttpMethod,
-    OutboundHttpRequest, ReqwestOutboundHttpClient,
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+    KeylessGrpcTlsAcceptor, KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles,
+    OutboundHttpClient, OutboundHttpMethod, OutboundHttpRequest, ReqwestOutboundHttpClient,
 };
 use mmf_security::RedisRateLimiter;
 use sqlx::{postgres::PgPoolOptions, PgPool};
@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use crate::{
     event_stream_proto::event_stream_service_client::EventStreamServiceClient, migrate_auth_schema,
-    validate_auth_schema, AuthDependency, AuthGrpcChannelFactories, AuthRuntime, AuthServiceConfig,
-    AuthWorkloadClientTlsFiles, GrpcEventStreamTransport, KeycloakOidcProvider,
+    validate_auth_schema, AuthDependency, AuthGrpcClients, AuthRuntime, AuthServiceConfig,
+    GrpcEventStreamTransport, KeycloakOidcProvider,
 };
 
 const HEALTH_RESPONSE_LIMIT: usize = 64 * 1024;
@@ -102,19 +102,48 @@ impl AuthConnections {
             .map_err(|error| AuthConnectionError::Oidc(error.to_string()))?;
         runtime_health(runtime, AuthDependency::Oidc)?;
 
-        let flow = workload_channel_factory(
-            &config.flow_grpc_target,
-            config.workload_client_tls.as_ref(),
-        )?;
-        let organization = workload_channel_factory(&config.organization_grpc_target, None)?;
-        let grpc_clients = AuthGrpcChannelFactories {
-            flow,
-            organization,
-            service_token: config.grpc_service_token.clone(),
-        }
-        .connect()
-        .await
-        .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?;
+        let flow_channel = if let Some(tls) = &config.workload_client_tls {
+            let target = config.flow_grpc_target.replacen("http://", "https://", 1);
+            openbao_identity(tls)
+                .grpc_channel_connected(
+                    &target,
+                    &tls.ca_certificate,
+                    KeylessGrpcTransportOptions::default(),
+                )
+                .await
+                .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        } else {
+            workload_channel_factory(&config.flow_grpc_target)?
+                .connect()
+                .await
+                .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        };
+        let organization_channel = if let Some(tls) = &config.workload_client_tls {
+            GrpcChannelFactory::new(
+                GrpcChannelConfig {
+                    target: config.organization_grpc_target.clone(),
+                    security: GrpcTransportSecurity::ServerTls,
+                    trust: GrpcTrustMode::CustomCa,
+                    ..GrpcChannelConfig::default()
+                },
+                GrpcTlsMaterial::from_ca_pem_file(Some(&tls.ca_certificate))
+                    .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?,
+            )
+            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+            .connect()
+            .await
+            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        } else {
+            workload_channel_factory(&config.organization_grpc_target)?
+                .connect()
+                .await
+                .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        };
+        let grpc_clients = AuthGrpcClients::new(
+            flow_channel,
+            organization_channel,
+            config.grpc_service_token.clone(),
+        );
         runtime_health(runtime, AuthDependency::Flow)?;
         runtime_health(runtime, AuthDependency::Organization)?;
 
@@ -147,12 +176,30 @@ impl AuthConnections {
             .map_err(|error| AuthConnectionError::Outbox(error.to_string()))?;
         runtime_health(runtime, AuthDependency::EventOutbox)?;
 
-        let event_channel = workload_channel_factory(&config.event_stream_grpc_target, None)?
+        let event_channel = if let Some(tls) = &config.workload_client_tls {
+            GrpcChannelFactory::new(
+                GrpcChannelConfig {
+                    target: config.event_stream_grpc_target.clone(),
+                    security: GrpcTransportSecurity::ServerTls,
+                    trust: GrpcTrustMode::CustomCa,
+                    ..GrpcChannelConfig::default()
+                },
+                GrpcTlsMaterial::from_ca_pem_file(Some(&tls.ca_certificate))
+                    .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?,
+            )
+            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
             .connect()
             .await
-            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?;
+            .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        } else {
+            workload_channel_factory(&config.event_stream_grpc_target)?
+                .connect()
+                .await
+                .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?
+        };
         let event_transport = Arc::new(GrpcEventStreamTransport::new(
             EventStreamServiceClient::new(event_channel),
+            config.grpc_service_token.clone(),
         ));
         event_transport
             .connect()
@@ -173,27 +220,8 @@ impl AuthConnections {
     }
 }
 
-pub fn workload_channel_factory(
-    target: &str,
-    tls: Option<&AuthWorkloadClientTlsFiles>,
-) -> Result<GrpcChannelFactory, AuthConnectionError> {
-    let mut target = target.to_owned();
-    let (security, trust, material) = if let Some(tls) = tls {
-        if let Some(authority) = target.strip_prefix("http://") {
-            target = format!("https://{authority}");
-        }
-        let material = GrpcTlsMaterial::from_pem_files(
-            Some(tls.ca_certificate.as_path()),
-            Some(tls.certificate.as_path()),
-            Some(tls.private_key.as_path()),
-        )
-        .map_err(|error| AuthConnectionError::Grpc(error.to_string()))?;
-        (
-            GrpcTransportSecurity::MutualTls,
-            GrpcTrustMode::CustomCa,
-            material,
-        )
-    } else if target.starts_with("https://") {
+pub fn workload_channel_factory(target: &str) -> Result<GrpcChannelFactory, AuthConnectionError> {
+    let (security, trust, material) = if target.starts_with("https://") {
         (
             GrpcTransportSecurity::ServerTls,
             GrpcTrustMode::NativeRoots,
@@ -208,7 +236,7 @@ pub fn workload_channel_factory(
     };
     GrpcChannelFactory::new(
         GrpcChannelConfig {
-            target,
+            target: target.to_owned(),
             security,
             trust,
             ..GrpcChannelConfig::default()
@@ -218,23 +246,30 @@ pub fn workload_channel_factory(
     .map_err(|error| AuthConnectionError::Grpc(error.to_string()))
 }
 
-pub fn workload_server_tls(
+pub async fn workload_server_tls(
     config: &AuthServiceConfig,
-) -> Result<Option<GrpcServerTlsMaterial>, AuthConnectionError> {
-    config
-        .workload_server_tls
-        .as_ref()
-        .map(|tls| server_tls_from_files(&tls.ca_certificate, &tls.certificate, &tls.private_key))
-        .transpose()
+) -> Result<Option<KeylessGrpcTlsAcceptor>, AuthConnectionError> {
+    let Some(tls) = &config.workload_server_tls else {
+        return Ok(None);
+    };
+    openbao_identity(tls)
+        .grpc_acceptor(&tls.ca_certificate, 64, Duration::from_secs(15))
+        .await
+        .map(Some)
+        .map_err(|error| AuthConnectionError::Grpc(error.to_string()))
 }
 
-fn server_tls_from_files(
-    ca_certificate: &Path,
-    certificate: &Path,
-    private_key: &Path,
-) -> Result<GrpcServerTlsMaterial, AuthConnectionError> {
-    GrpcServerTlsMaterial::from_pem_files(ca_certificate, certificate, private_key)
-        .map_err(|error| AuthConnectionError::Grpc(error.to_string()))
+fn openbao_identity(tls: &crate::AuthWorkloadClientTlsFiles) -> OpenBaoTlsIdentityFiles {
+    OpenBaoTlsIdentityFiles {
+        certificate_chain_file: tls.certificate.clone(),
+        kms_ca_cert_file: tls.kms_ca_certificate.clone(),
+        kms_endpoint: tls.kms_endpoint.clone(),
+        kms_token_file: tls.kms_token_file.clone(),
+        kms_key_name: tls.kms_key_name.clone(),
+        kms_key_version: tls.kms_key_version,
+        request_timeout: Duration::from_secs(10),
+        max_concurrent_signs: 64,
+    }
 }
 
 async fn probe_http_health(

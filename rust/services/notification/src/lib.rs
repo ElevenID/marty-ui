@@ -1,6 +1,7 @@
 pub mod delivery;
 pub mod domain;
 pub mod grpc;
+pub mod grpc_tls;
 pub mod http;
 pub mod migration;
 pub mod outbox;

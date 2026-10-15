@@ -28,7 +28,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     run_migrations(&pool).await?;
     runtime.mark_healthy(ComplianceDependency::Schema)?;
     runtime.mark_healthy(ComplianceDependency::SystemCatalog)?;
-    let membership = tenant_membership_provider(&c)?;
+    let membership = tenant_membership_provider(&c).await?;
     runtime.mark_healthy(ComplianceDependency::Organization)?;
     let repo: Arc<dyn ComplianceRepository> = Arc::new(PostgresComplianceRepository::new(pool));
     let service = Arc::new(ComplianceService::new(repo, membership));

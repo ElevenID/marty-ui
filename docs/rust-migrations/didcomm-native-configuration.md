@@ -72,7 +72,8 @@ policy fails closed; the Rust parser rejects private-key fields.
 
 `docker-compose.profile.didcomm-native-conformance.yml` additionally requires the
 existing project-isolation conformance overlay. It is for disposable tests only:
-it trusts the generated `${OIDF_TLS_CERT_DIR}/root-ca.pem` through an exact
+it trusts the public `${OIDF_TLS_CERT_DIR}/root-ca.pem` for the KMS-backed
+OIDF certificate through an exact
 read-only file mount, enables private wallet endpoints, and provides
 `host.docker.internal:host-gateway` only to native issuance. It neither creates a
 standalone native service nor isolates an entire project by itself.

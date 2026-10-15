@@ -35,7 +35,7 @@ use marty_passport_auth::PassportTenantCredentialSource;
 use marty_passport_auth::PassportTenantKeyring;
 use marty_signing_grant::{
     ceremony::{IssuerCsrIntent, ServiceCsrIntent},
-    minter::GrantMinter,
+    minter::{GrantMinter, GrantMinting},
     GrantBinding, GrantError, SigningOrigin,
 };
 use mmf_platform::{
@@ -105,8 +105,8 @@ pub struct GatewayRuntimeState {
     pub default_organization_id: Option<String>,
     pub signing_service_api_key: String,
     pub service_sign_gateway_key: Option<String>,
-    pub service_sign_grant_minter: Option<GrantMinter>,
-    pub issuer_csr_grant_minter: Option<GrantMinter>,
+    pub service_sign_grant_minter: Option<Arc<dyn GrantMinting>>,
+    pub issuer_csr_grant_minter: Option<Arc<dyn GrantMinting>>,
     pub issuer_sign_key: Option<String>,
     pub dsc_issue_gateway_key: Option<String>,
     pub csca_issue_gateway_key: Option<String>,
@@ -301,12 +301,12 @@ impl GatewayRuntimeState {
     }
 
     pub fn with_service_sign_grant_minter(mut self, minter: GrantMinter) -> Self {
-        self.service_sign_grant_minter = Some(minter);
+        self.service_sign_grant_minter = Some(Arc::new(minter));
         self
     }
 
     pub fn with_issuer_csr_grant_minter(mut self, minter: GrantMinter) -> Self {
-        self.issuer_csr_grant_minter = Some(minter);
+        self.issuer_csr_grant_minter = Some(Arc::new(minter));
         self
     }
 
@@ -5144,6 +5144,7 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
         sync::atomic::{AtomicBool, Ordering},
@@ -5162,6 +5163,39 @@ mod tests {
         providers::HttpGatewayProvider,
         registry::StaticServiceRegistry,
     };
+
+    // Exercise Gateway's authorization and forwarding contract without a
+    // plaintext KMS endpoint. Transit mint/verify has connected OpenBao tests.
+    struct ContractGrantMinter(SigningOrigin);
+
+    #[async_trait]
+    impl GrantMinting for ContractGrantMinter {
+        async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
+            if binding.origin != self.0 {
+                return Err(GrantError::BindingMismatch);
+            }
+            let now = Utc::now().timestamp();
+            Ok(GrantEnvelope {
+                claims: GrantClaims {
+                    version: 1,
+                    origin: binding.origin,
+                    operation_id: binding.operation_id.to_owned(),
+                    organization_id: binding.organization_id.to_owned(),
+                    route: binding.route.to_owned(),
+                    service_id: binding.service_id.map(str::to_owned),
+                    issuer_did: binding.issuer_did.map(str::to_owned),
+                    key_reference: binding.key_reference.map(str::to_owned),
+                    key_purpose: binding.key_purpose.to_owned(),
+                    algorithm: binding.algorithm.to_owned(),
+                    payload_sha256_b64: marty_signing_grant::payload_digest(binding.payload),
+                    issued_at: now,
+                    expires_at: now + 30,
+                    nonce: "contract-only-nonce".into(),
+                },
+                hmac: "not-a-production-hmac".into(),
+            })
+        }
+    }
 
     #[test]
     fn gateway_originated_management_uses_the_selected_native_owner() {
@@ -8095,61 +8129,13 @@ mod tests {
 
     #[tokio::test]
     async fn public_service_signing_mints_exact_scoped_grant_and_discards_caller_grant() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("disposable OpenBao listener");
-        let endpoint = format!("http://{}", listener.local_addr().unwrap());
-        let bao = Router::new()
-            .route(
-                "/v1/transit/hmac/marty-sign-grant-gateway-service-v1/sha2-256",
-                axum::routing::post(|| async {
-                    Json(json!({"data": {"hmac": format!(
-                        "vault:v1:{}", STANDARD.encode([7_u8; 32])
-                    )}}))
-                }),
-            )
-            .route(
-                "/v1/transit/hmac/marty-sign-grant-gateway-issuer-did-v1/sha2-256",
-                axum::routing::post(|| async {
-                    Json(json!({"data": {"hmac": format!(
-                        "vault:v1:{}", STANDARD.encode([8_u8; 32])
-                    )}}))
-                }),
-            );
-        let bao_task = tokio::spawn(async move { axum::serve(listener, bao).await.unwrap() });
-        let token_file = std::env::temp_dir().join(format!(
-            "marty-gateway-grant-{}.token",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&token_file, "scoped-gateway-token\n").unwrap();
-        let issuer_token_file = std::env::temp_dir().join(format!(
-            "marty-gateway-issuer-grant-{}.token",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::write(&issuer_token_file, "scoped-issuer-csr-token\n").unwrap();
-        let previous_bao_addr = std::env::var_os("BAO_ADDR");
-        std::env::set_var("BAO_ADDR", &endpoint);
-        let minter = GrantMinter::for_managed_openbao(
-            &endpoint,
-            SigningOrigin::GatewayService,
-            token_file.clone(),
-        )
-        .unwrap();
-        let issuer_minter = GrantMinter::for_managed_openbao(
-            &endpoint,
-            SigningOrigin::GatewayIssuerDid,
-            issuer_token_file.clone(),
-        )
-        .unwrap();
-        if let Some(previous) = previous_bao_addr {
-            std::env::set_var("BAO_ADDR", previous);
-        } else {
-            std::env::remove_var("BAO_ADDR");
-        }
         let recorder = Arc::new(ActorRecordingUpstream::default());
         let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
-        Arc::get_mut(&mut state).unwrap().service_sign_grant_minter = Some(minter);
-        Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = Some(issuer_minter);
+        Arc::get_mut(&mut state).unwrap().service_sign_grant_minter =
+            Some(Arc::new(ContractGrantMinter(SigningOrigin::GatewayService)));
+        Arc::get_mut(&mut state).unwrap().issuer_csr_grant_minter = Some(Arc::new(
+            ContractGrantMinter(SigningOrigin::GatewayIssuerDid),
+        ));
         let router = gateway_router(state);
         let body = json!({
             "payload_hex": "7061796c6f6164",
@@ -8294,9 +8280,6 @@ mod tests {
             Some("dedicated-issuer-sign-key-000001")
         );
         drop(calls);
-        std::fs::remove_file(token_file).unwrap();
-        std::fs::remove_file(issuer_token_file).unwrap();
-        bao_task.abort();
     }
 
     #[tokio::test]

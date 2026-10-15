@@ -32,6 +32,8 @@ fn historical_legacy_model_upgrades_both_complete_prefixes() {
         native["load_assignment"]["cluster_name"] = json!("issuance_grpc");
         native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
             ["socket_address"]["address"] = json!("issuance");
+        native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
+            ["socket_address"]["port_value"] = json!(9005);
         for route in model.pointer_mut(ROUTES).unwrap().as_array_mut().unwrap() {
             if route["route"]["cluster"] == NATIVE_CLUSTER {
                 route["route"]["cluster"] = json!("issuance_grpc");

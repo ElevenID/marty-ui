@@ -1024,18 +1024,24 @@ mod tests {
                 "run only inside the disposable KMS probe"
             );
             assert!(matches!(key_prefix, "lti-tool" | "cred-issuer"));
-            let base_url = reqwest::Url::parse(
-                &std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL"),
-            )
-            .expect("valid disposable OpenBao URL");
-            assert_eq!(base_url.scheme(), "http");
+            let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+            let base_url = reqwest::Url::parse(&endpoint).expect("valid disposable OpenBao URL");
+            assert_eq!(base_url.scheme(), "https");
             assert!(matches!(
                 base_url.host_str(),
                 Some("127.0.0.1" | "localhost")
             ));
             let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
             let key_name = format!("{key_prefix}-readiness-{}", uuid::Uuid::new_v4().simple());
-            let client = reqwest::Client::new();
+            let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+            let client = marty_openbao_http::OpenBaoHttp::connect(
+                &endpoint,
+                Some(std::path::Path::new(&ca_file)),
+                std::time::Duration::from_secs(10),
+            )
+            .expect("CA-verified OpenBao HTTPS client")
+            .client()
+            .clone();
             let key_url = base_url
                 .join(&format!("/v1/transit/keys/{key_name}"))
                 .expect("remote key URL");

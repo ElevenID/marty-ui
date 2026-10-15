@@ -1,5 +1,6 @@
 //! Scoped OpenBao Transit HMAC minting for an authorized signing operation.
 
+use async_trait::async_trait;
 use std::path::PathBuf;
 
 use crate::{
@@ -40,6 +41,21 @@ impl GrantMinter {
             .await
             .map_err(|_| GrantError::MinterUnavailable)?;
         mint_bound(&self.client, &token, binding).await
+    }
+}
+
+/// Mint a grant for an operation authorized by the calling service.
+/// Production uses OpenBao; callers can supply a contract-test implementation
+/// without enabling plaintext KMS transport in the production client.
+#[async_trait]
+pub trait GrantMinting: Send + Sync {
+    async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError>;
+}
+
+#[async_trait]
+impl GrantMinting for GrantMinter {
+    async fn mint(&self, binding: &GrantBinding<'_>) -> Result<GrantEnvelope, GrantError> {
+        GrantMinter::mint(self, binding).await
     }
 }
 

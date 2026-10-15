@@ -26,9 +26,12 @@ def inputs():
 
 def required(source, runner, workflow):
     for name in NAMES:
+        attribute = ("#[tokio::test]\n"
+                     if name == "kubernetes_profile_gateway_composition_isolated"
+                     else '#[tokio::test(flavor = "multi_thread")]\n')
         assert re.findall(
             r"((?:#\[[^\n]+\]\s*)+)async fn " + name + r"\(\)\s*\{", source
-        ) == ["#[tokio::test]\n"]
+        ) == [attribute]
         assert runner.count(f"'{name}: test'") == 1
     assert "preflight_skips=()" in runner
     assert 'if [[ "$mode" == full-after-preflights ]]; then' in runner

@@ -132,6 +132,9 @@ def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
     assert env["NOTIFICATION_OPENBAO_TOKEN_FILE"]["value"] == (
         "/run/secrets/notification_openbao_token"
     )
+    assert env["NOTIFICATION_OPENBAO_CA_CERT_FILE"]["value"] == (
+        "/run/secrets/openbao_tls_ca_cert"
+    )
     assert container["volumeMounts"] == [
         {
             "name": "notification-openbao-token",
@@ -143,7 +146,11 @@ def test_notification_runtime_receives_openbao_token_as_a_secret_file() -> None:
         {
             "key": "NOTIFICATION_OPENBAO_TOKEN",
             "path": "notification_openbao_token",
-        }
+        },
+        {
+            "key": "OPENBAO_TLS_CA_CERT",
+            "path": "openbao_tls_ca_cert",
+        },
     ]
 
 

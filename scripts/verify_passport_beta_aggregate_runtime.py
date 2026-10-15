@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import hmac
 import json
 from pathlib import Path
 import re
@@ -349,14 +348,31 @@ def verify(plan: dict[str, Any], intent: dict[str, Any],
     signer_env = observed["passport-callback-signer"]["Config"].get("Env")
     require(isinstance(bao_env, list) and isinstance(signer_env, list),
             "Aggregate callback KMS environment is invalid")
-    bao_tokens = [value.split("=", 1)[1] for value in bao_env
-                  if isinstance(value, str) and value.startswith("BAO_DEV_ROOT_TOKEN_ID=")]
-    signer_tokens = [value.split("=", 1)[1] for value in signer_env
-                     if isinstance(value, str) and value.startswith("BAO_TOKEN=")]
-    require(len(bao_tokens) == 1 and len(signer_tokens) == 1
-            and bool(bao_tokens[0])
-            and hmac.compare_digest(bao_tokens[0], signer_tokens[0]),
-            "Aggregate callback signer token differs from preserved OpenBao")
+    signer_values = dict(value.split("=", 1) for value in signer_env
+                         if isinstance(value, str) and "=" in value)
+    def mounted(container, name, destination, writable):
+        return any(isinstance(mount, dict)
+                   and mount.get("Type") == "volume"
+                   and mount.get("Name") == f"elevenid-beta_{name}"
+                   and mount.get("Destination") == destination
+                   and mount.get("RW") is writable
+                   for mount in container.get("Mounts", []))
+    require(not any(isinstance(value, str) and
+                    value.startswith(("BAO_DEV_ROOT_TOKEN_ID=", "BAO_TOKEN=", "VAULT_TOKEN="))
+                    for value in bao_env)
+            and observed["openbao"]["Config"].get("Cmd")
+                == ["server", "-config=/bao/config/openbao.hcl"]
+            and mounted(observed["openbao"], "openbao_data", "/bao/data", True)
+            and signer_values.get("BAO_ADDR") == "https://openbao:8200"
+            and signer_values.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
+            and signer_values.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and not any(signer_values.get(name) for name in
+                        ("BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
+            and mounted(observed["passport-callback-signer"], "openbao_public_ca",
+                        "/bao/public-ca", False)
+            and mounted(observed["passport-callback-signer"], "openbao_passport_callback",
+                        "/bao/passport-callback", False),
+            "Aggregate callback signer is not bound to scoped Raft KMS custody")
     require(not observed["passport-callback-signer"].get(
         "HostConfig", {}).get("PortBindings"),
         "Aggregate callback signer publishes a host port")

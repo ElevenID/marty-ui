@@ -8,7 +8,7 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 - `SELFHOST_OPENBAO_EXPORT_DIR` stores zipped export archives created with `scripts/export-selfhost-openbao.py`
 - `SELFHOST_SECRET_DIR/openbao_service_token` is the runtime token the main self-host stack consumes
 
-The OpenBao state directory contains highly sensitive material, including the init JSON, the root token, and the unseal key written by the bootstrap flow. Treat that directory like a top-tier secret.
+The OpenBao state directory contains highly sensitive material, including the init JSON, the root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them.
 
 ## Start The Standalone OpenBao Stack
 
@@ -22,12 +22,21 @@ Or use the GNU make target in [Makefile](Makefile):
 make selfhost-prod-openbao-up
 ```
 
-This stack does two things:
+This stack does three things:
 
+- `openbao-tls-init` creates or verifies the OpenBao listener certificate and CA entirely in `SELFHOST_OPENBAO_STATE_DIR/tls`
 - `openbao` runs the standalone server on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}`
-- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, and writes a fresh `openbao_service_token` into `SELFHOST_SECRET_DIR` if the current file is missing, still a placeholder, rejected by OpenBao, or unable to sign the credential issuer key
+- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, publishes only the public TLS CA as `SELFHOST_SECRET_DIR/openbao_tls_ca_cert`, and writes a fresh `openbao_service_token` if the current file is missing, still a placeholder, rejected by OpenBao, or unable to sign the credential issuer key
 
-For the main self-host application stack on the same machine, `BAO_ADDR` should stay set to `http://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}` so the app containers can reach the external OpenBao service through the host-published port.
+For the main self-host application stack on the same machine, set `BAO_ADDR=https://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}`. The certificate covers that host name, and application containers use the published public CA. The TLS private keys stay within the KMS state volume.
+
+The initializer renews a listener certificate that has less than 30 days left
+whenever it starts. The certificate and key occupy one owner-only PEM file, so
+replacement is atomic and keeps the same public CA. To rotate the listener
+identity while OpenBao is running, use `make selfhost-prod-openbao-rotate-tls`;
+the target renews the PEM, restarts OpenBao, and reruns bootstrap to unseal it.
+Plan a separate CA and client-trust cutover before the KMS-owned CA expires;
+listener renewal cannot extend the CA lifetime.
 
 ## Recovery
 
@@ -67,5 +76,7 @@ The command requests an authenticated Raft snapshot from the running local OpenB
 - `recovery/selfhost-init.json`, `recovery/root.token`, and `recovery/unseal.key`
 - the current `openbao-selfhost.hcl`
 - a manifest with the snapshot SHA-256
+
+The exporter verifies the loopback HTTPS server with `SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt`. It does not include OpenBao's TLS private keys in the archive. A cold snapshot restore on a new node must establish a new TLS identity and redistribute its public CA before application traffic resumes. Copying the entire stopped state directory retains the existing TLS identity; protect that copy as KMS key material.
 
 The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. Because the archive contains root-token and unseal-key material, protect it like production secrets.

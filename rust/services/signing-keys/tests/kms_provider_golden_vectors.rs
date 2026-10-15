@@ -13,6 +13,9 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio::sync::{oneshot, Mutex, OnceCell};
 
+#[path = "support/https_stub.rs"]
+mod https_stub;
+
 static AZURE_IDENTITY: OnceCell<()> = OnceCell::const_new();
 static GCP_METADATA: OnceCell<()> = OnceCell::const_new();
 
@@ -219,16 +222,31 @@ async fn capture(State(state): State<StubState>, request: Request<Body>) -> Resp
 async fn spawn_stub(
     status: StatusCode,
     response: Value,
+    https: bool,
 ) -> (
     String,
     Arc<Mutex<Option<CapturedRequest>>>,
-    oneshot::Sender<()>,
+    Option<https_stub::TestHttpsServer>,
+    Option<oneshot::Sender<()>>,
 ) {
+    let captured = Arc::new(Mutex::new(None));
+    if https {
+        let peer = https_stub::TestHttpsServer::start_with(|endpoint| {
+            let response = serde_json::from_str(&response.to_string().replace("$STUB", endpoint))
+                .expect("substituted provider response");
+            Router::new().fallback(any(capture)).with_state(StubState {
+                status,
+                response,
+                captured: Arc::clone(&captured),
+            })
+        })
+        .await;
+        return (peer.endpoint.clone(), captured, Some(peer), None);
+    }
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind provider stub");
     let address = listener.local_addr().expect("stub address");
-    let captured = Arc::new(Mutex::new(None));
     let endpoint = format!("http://{address}");
     let response = serde_json::from_str(&response.to_string().replace("$STUB", &endpoint))
         .expect("substituted provider response");
@@ -247,7 +265,7 @@ async fn spawn_stub(
             .await
             .expect("provider stub server");
     });
-    (endpoint, captured, shutdown_tx)
+    (endpoint, captured, None, Some(shutdown_tx))
 }
 
 async fn managed_transit_stub(
@@ -320,30 +338,19 @@ async fn managed_transit_stub(
 
 #[tokio::test]
 async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mount() {
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind managed transit stub");
-    let address = listener.local_addr().expect("stub address");
     let requests = Arc::new(Mutex::new(Vec::new()));
     let app = Router::new()
         .fallback(any(managed_transit_stub))
         .with_state(ManagedTransitState {
             requests: Arc::clone(&requests),
         });
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-            .expect("managed transit stub server");
-    });
+    let peer = https_stub::TestHttpsServer::start(app).await;
 
     let service_config = serde_json::json!({
         "id": "managed-openbao-transit",
         "service_type": "openbao-transit",
-        "endpoint": format!("http://{address}"),
+        "endpoint": peer.endpoint.clone(),
+        "ca_cert_file": peer.ca_file.path(),
         "mount": "transit",
         "auth_mode": "token",
         "auth_reference": "service-token",
@@ -356,7 +363,6 @@ async fn managed_openbao_runtime_operations_do_not_recreate_a_missing_key_or_mou
     })
     .await;
     let public_key = kms::public_key(ProviderRequest { service_config }).await;
-    let _ = shutdown_tx.send(());
     assert!(
         matches!(signed, Err(kms::KmsError::ProviderStatus { status, .. }) if status.as_u16() == 404)
     );
@@ -385,8 +391,12 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
     assert_eq!(fixture.schema_version, 1);
 
     for mut case in fixture.sign_cases {
-        let (endpoint, captured, shutdown) =
-            spawn_stub(StatusCode::OK, case.provider_response).await;
+        let https = matches!(
+            case.service_config["service_type"].as_str(),
+            Some("openbao-transit" | "hashicorp-vault-transit")
+        );
+        let (endpoint, captured, https_peer, shutdown) =
+            spawn_stub(StatusCode::OK, case.provider_response, https).await;
         if let Some(reference) = case.service_config["key_reference"].as_str() {
             if reference.starts_with("$STUB/") {
                 case.service_config["key_reference"] =
@@ -394,6 +404,10 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
             }
         }
         case.service_config["endpoint"] = Value::String(endpoint);
+        if let Some(peer) = &https_peer {
+            case.service_config["ca_cert_file"] =
+                Value::String(peer.ca_file.path().display().to_string());
+        }
         let response = kms::sign(SignRequest {
             service_config: case.service_config,
             payload_b64: case.payload_b64,
@@ -437,7 +451,9 @@ async fn provider_signing_matches_language_neutral_http_vectors() {
                 case.name
             );
         }
-        let _ = shutdown.send(());
+        if let Some(shutdown) = shutdown {
+            let _ = shutdown.send(());
+        }
     }
 }
 
@@ -446,9 +462,17 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
     setup_azure_identity().await;
     setup_gcp_metadata().await;
     for mut case in fixture().public_key_cases {
-        let (endpoint, captured, shutdown) =
-            spawn_stub(StatusCode::OK, case.provider_response).await;
+        let https = matches!(
+            case.service_config["service_type"].as_str(),
+            Some("openbao-transit" | "hashicorp-vault-transit")
+        );
+        let (endpoint, captured, https_peer, shutdown) =
+            spawn_stub(StatusCode::OK, case.provider_response, https).await;
         case.service_config["endpoint"] = Value::String(endpoint);
+        if let Some(peer) = &https_peer {
+            case.service_config["ca_cert_file"] =
+                Value::String(peer.ca_file.path().display().to_string());
+        }
         let response = kms::public_key(ProviderRequest {
             service_config: case.service_config,
         })
@@ -485,7 +509,9 @@ async fn public_key_discovery_matches_language_neutral_http_vectors() {
                 case.name
             );
         }
-        let _ = shutdown.send(());
+        if let Some(shutdown) = shutdown {
+            let _ = shutdown.send(());
+        }
     }
 }
 
@@ -495,8 +521,17 @@ async fn connectivity_probes_match_language_neutral_http_vectors() {
     setup_gcp_metadata().await;
     for mut case in fixture().verify_cases {
         let status = StatusCode::from_u16(case.provider_status).expect("fixture HTTP status");
-        let (endpoint, captured, shutdown) = spawn_stub(status, case.provider_response).await;
+        let https = matches!(
+            case.service_config["service_type"].as_str(),
+            Some("openbao-transit" | "hashicorp-vault-transit")
+        );
+        let (endpoint, captured, https_peer, shutdown) =
+            spawn_stub(status, case.provider_response, https).await;
         case.service_config["endpoint"] = Value::String(endpoint);
+        if let Some(peer) = &https_peer {
+            case.service_config["ca_cert_file"] =
+                Value::String(peer.ca_file.path().display().to_string());
+        }
         let response = kms::verify(ProviderRequest {
             service_config: case.service_config,
         })
@@ -532,7 +567,9 @@ async fn connectivity_probes_match_language_neutral_http_vectors() {
                 case.name
             );
         }
-        let _ = shutdown.send(());
+        if let Some(shutdown) = shutdown {
+            let _ = shutdown.send(());
+        }
     }
 }
 

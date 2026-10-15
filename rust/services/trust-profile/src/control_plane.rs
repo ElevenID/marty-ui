@@ -42,16 +42,32 @@ impl NativeTrustProfileControlPlane {
         if timeout.is_zero() {
             return Err(TrustAuthorizationError::Unavailable);
         }
+        // Reject invalid metadata before connect_lazy requires a Tokio reactor.
+        service_token
+            .map(str::parse::<AsciiMetadataValue>)
+            .transpose()
+            .map_err(|_| TrustAuthorizationError::Unavailable)?;
         let endpoint = Endpoint::from_shared(organization_target.to_owned())
             .map_err(|_| TrustAuthorizationError::Unavailable)?
             .connect_timeout(timeout)
             .timeout(timeout);
+        Self::from_channel(endpoint.connect_lazy(), service_token, timeout)
+    }
+
+    pub fn from_channel(
+        channel: Channel,
+        service_token: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, TrustAuthorizationError> {
+        if timeout.is_zero() {
+            return Err(TrustAuthorizationError::Unavailable);
+        }
         let service_token = service_token
             .map(str::parse)
             .transpose()
             .map_err(|_| TrustAuthorizationError::Unavailable)?;
         Ok(Self {
-            organizations: OrganizationServiceClient::new(endpoint.connect_lazy()),
+            organizations: OrganizationServiceClient::new(channel),
             service_token,
             timeout,
         })
@@ -80,14 +96,7 @@ impl NativeTrustProfileControlPlane {
             .await
         {
             Ok(_) => Ok(()),
-            Err(status)
-                if matches!(
-                    status.code(),
-                    Code::NotFound | Code::InvalidArgument | Code::Unknown
-                ) =>
-            {
-                Ok(())
-            }
+            Err(status) if status.code() == Code::NotFound => Ok(()),
             Err(_) => Err(TrustAuthorizationError::Unavailable),
         }
     }

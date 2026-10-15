@@ -261,7 +261,7 @@ pub struct RegistryStore {
 
 const AUTH_ENVELOPE_FIELD: &str = "auth_reference_envelope";
 const AUTH_ENVELOPE_PURPOSE: &str = "signing-service-auth";
-pub(crate) const AUTH_CONNECTION_FIELDS: [&str; 8] = [
+pub(crate) const AUTH_CONNECTION_FIELDS: [&str; 9] = [
     "provider",
     "service_type",
     "protocol",
@@ -270,6 +270,7 @@ pub(crate) const AUTH_CONNECTION_FIELDS: [&str; 8] = [
     "auth_mode",
     "mount",
     "namespace",
+    "ca_cert_file",
 ];
 
 fn auth_secret_id(service: &Value) -> Result<String, RegistryError> {
@@ -1563,6 +1564,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         "key_version": service.get("key_version").cloned().unwrap_or(Value::Null),
         "auth_mode": auth_mode,
         "auth_reference": string_or(service.get("auth_reference"), ""),
+        "ca_cert_file": string_or(service.get("ca_cert_file"), ""),
     });
     kms::validate_service_auth_config(&auth_config)
         .map_err(|error| RegistryError::Invalid(error.to_string()))?;
@@ -1637,6 +1639,7 @@ fn normalize_service_value(service: &Value) -> Result<Option<Value>, RegistryErr
         "namespace": string_or(service.get("namespace"), ""),
         "auth_mode": auth_mode,
         "auth_reference": string_or(service.get("auth_reference"), ""),
+        "ca_cert_file": string_or(service.get("ca_cert_file"), ""),
         "key_reference": string_or(service.get("key_reference"), ""),
         "country_code": string_or(service.get("country_code"), ""),
         "authority_name": string_or(service.get("authority_name"), ""),
@@ -2330,15 +2333,27 @@ mod tests {
             parsed.host_str(),
             Some("127.0.0.1" | "localhost" | "::1")
         ));
+        assert_eq!(parsed.scheme(), "https");
         let token = std::env::var("BAO_TOKEN").expect("disposable OpenBao token");
+        let root_token =
+            std::env::var("MARTY_TEST_OPENBAO_ROOT_TOKEN").expect("disposable guard token");
+        assert_ne!(root_token, token, "application token must be scoped");
+        let ca_file = std::env::var("BAO_CACERT").expect("disposable OpenBao CA path");
+        let ca = reqwest::Certificate::from_pem(&std::fs::read(ca_file).expect("public CA"))
+            .expect("OpenBao CA certificate");
+        let guard_client = reqwest::Client::builder()
+            .add_root_certificate(ca)
+            .no_proxy()
+            .build()
+            .expect("CA-verified guard client");
         let nonce = std::env::var("MARTY_TEST_OPENBAO_DISPOSABLE_NONCE")
             .expect("disposable OpenBao sentinel value");
         assert!(nonce.len() >= 16);
-        let marker = reqwest::Client::new()
+        let marker = guard_client
             .get(format!(
                 "{bao_url}/v1/secret/data/marty-test-disposable-guard"
             ))
-            .header("X-Vault-Token", &token)
+            .header("X-Vault-Token", &root_token)
             .send()
             .await
             .unwrap()

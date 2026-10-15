@@ -1,0 +1,15 @@
+[package]
+name = "marty-keyless-grpc-bridge"
+version = "0.1.0"
+description = "Local Envoy-to-Issuance gRPC bridge with OpenBao-held mTLS identity"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+mmf-platform.workspace = true
+rustls.workspace = true
+tokio = { workspace = true, features = ["io-util"] }
+tokio-rustls.workspace = true

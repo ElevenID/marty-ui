@@ -102,12 +102,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         format!("http://{target}")
     };
-    let memberships: Arc<dyn MembershipAuthorizer> =
+    let organization_ca = env::var("ORG_GRPC_CA_CERT")
+        .ok()
+        .filter(|value| !value.trim().is_empty());
+    if deployed && organization_ca.is_none() {
+        return Err("ORG_GRPC_CA_CERT is required in deployed environments".into());
+    }
+    if deployed && !target.starts_with("https://") {
+        return Err("ORG_GRPC_TARGET must be explicit HTTPS in deployed environments".into());
+    }
+    let timeout = Duration::from_secs(env_value("ORG_GRPC_TIMEOUT_SECONDS", "5").parse()?);
+    let memberships: Arc<dyn MembershipAuthorizer> = if let Some(ca) = organization_ca {
+        Arc::new(
+            OrganizationMembershipClient::connect_with_ca(
+                &target,
+                std::path::Path::new(&ca),
+                token.as_deref(),
+                timeout,
+            )
+            .await?,
+        )
+    } else {
         Arc::new(OrganizationMembershipClient::connect_lazy(
             &target,
             token.as_deref(),
-            Duration::from_secs(env_value("ORG_GRPC_TIMEOUT_SECONDS", "5").parse()?),
-        )?);
+            timeout,
+        )?)
+    };
     let pairing_tickets =
         Arc::new(RedisPairingTickets::connect(&required("REDIS_URL")?, 300).await?);
     let wallet_issuer_trust = match token.as_ref() {

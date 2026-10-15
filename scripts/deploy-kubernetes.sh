@@ -158,6 +158,9 @@ apply_manifest() {
 # require the native owner and reject a disabled selector.
 require_kubernetes_services_release() {
   [[ -n "${MARTY_STACK_MANIFEST:-}" ]] || { error "Set MARTY_STACK_MANIFEST to the signed Rust-only release manifest."; return 1; }
+  [[ -n "${MARTY_KEYCLOAK_KMS_IMAGE:-}" ]] || { error "Set MARTY_KEYCLOAK_KMS_IMAGE to the signed Keycloak digest."; return 1; }
+  [[ "${KEYCLOAK_KMS_ADDR:-}" =~ ^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$ ]] || { error "KEYCLOAK_KMS_ADDR must identify a trusted HTTPS OpenBao origin."; return 1; }
+  [[ "${KEYCLOAK_KMS_KEY_VERSION:-}" =~ ^[1-9][0-9]*$ ]] || { error "KEYCLOAK_KMS_KEY_VERSION must pin a positive remote key version."; return 1; }
   local source_sha checked_root checked_manifests relative_manifests manifest_file relative_file
   checked_root="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)" || return 1
   [[ "$(cd "$checked_root" && pwd -P)" == "$REPO_ROOT" ]] || { error "Kubernetes release checkout identity changed."; return 1; }
@@ -183,6 +186,7 @@ require_kubernetes_services_release() {
   source_sha="$(git -C "$REPO_ROOT" rev-parse --verify HEAD^{commit})" || return 1
   "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_services_release.py" \
     --manifest "$MARTY_STACK_MANIFEST" --image "$MARTY_SERVICES_IMAGE" \
+    --keycloak-image "$MARTY_KEYCLOAK_KMS_IMAGE" \
     --source-sha "$source_sha"
 }
 
@@ -305,20 +309,30 @@ cmd_setup_secrets() {
   create_image_pull_secret
 
   local postgres_password keycloak_db_password marty_db_password keycloak_admin_password
+  local keycloak_signing_kms_token keycloak_master_rs256_cert keycloak_11id_rs256_cert
+  local keycloak_master_cookie_token keycloak_master_ciba_token keycloak_11id_cookie_token keycloak_11id_ciba_token
   local marty_api_client_secret rabbitmq_password rabbitmq_erlang_cookie
   local google_client_id google_client_secret smtp_username smtp_password
   local issuance_api_key token_hmac_key grpc_service_token device_registration_gateway_key device_registration_signing_keys_key service_sign_gateway_key flow_webhook_secret flow_application_event_hmac_key
   local notification_webhook_secret notification_applicant_event_token notification_openbao_token
   local canvas_credentials_shared_secret openbao_service_token openbao_bootstrap_token signing_keys_openbao_token didcomm_issuance_openbao_token
   local flow_sign_grant_mint_token gateway_issuer_csr_grant_mint_token signing_keys_grant_verify_token
-  local workload_identity_ca_cert pp_workload_server_cert pp_workload_server_key
-  local flow_workload_client_cert flow_workload_client_key
-  local flow_workload_server_cert flow_workload_server_key
-  local auth_workload_client_cert auth_workload_client_key
-  local applicant_workload_client_cert applicant_workload_client_key
-  local verification_workload_client_cert verification_workload_client_key
-  local deployment_profile_workload_client_cert deployment_profile_workload_client_key
-  local compliance_profile_workload_client_cert compliance_profile_workload_client_key
+  local workload_identity_ca_cert pp_workload_server_cert pp_tls_kms_token
+  local org_workload_server_cert org_tls_kms_token
+  local es_workload_server_cert es_tls_kms_token
+  local rp_workload_server_cert rp_tls_kms_token
+  local ct_workload_server_cert ct_tls_kms_token
+  local service
+  local signing_keys_workload_server_cert
+  local openbao_tls_ca_cert signing_keys_tls_kms_token
+  local flow_workload_client_cert flow_client_tls_kms_token
+  local flow_workload_server_cert flow_server_tls_kms_token
+  local auth_workload_client_cert auth_tls_kms_token
+  local auth_workload_server_cert auth_server_tls_kms_token
+  local gateway_workload_client_cert gateway_tls_kms_token
+  local verification_workload_client_cert verification_tls_kms_token
+  local deployment_profile_workload_client_cert deployment_profile_tls_kms_token
+  local compliance_profile_workload_client_cert compliance_profile_tls_kms_token
   local session_secret_key
   local cloudflare_tunnel_token
 
@@ -326,6 +340,18 @@ cmd_setup_secrets() {
   keycloak_db_password="$(resolve_secret_input KEYCLOAK_DB_PASSWORD)"
   marty_db_password="$(resolve_secret_input MARTY_DB_PASSWORD)"
   keycloak_admin_password="$(resolve_secret_input KEYCLOAK_ADMIN_PASSWORD)"
+  keycloak_signing_kms_token="$(resolve_secret_input KEYCLOAK_SIGNING_KMS_TOKEN)"
+  keycloak_master_rs256_cert="$(resolve_secret_input KEYCLOAK_MASTER_RS256_CERT)"
+  keycloak_11id_rs256_cert="$(resolve_secret_input KEYCLOAK_11ID_RS256_CERT)"
+  keycloak_master_cookie_token="$(resolve_secret_input KEYCLOAK_MASTER_COOKIE_TOKEN)"
+  keycloak_master_ciba_token="$(resolve_secret_input KEYCLOAK_MASTER_CIBA_TOKEN)"
+  keycloak_11id_cookie_token="$(resolve_secret_input KEYCLOAK_11ID_COOKIE_TOKEN)"
+  keycloak_11id_ciba_token="$(resolve_secret_input KEYCLOAK_11ID_CIBA_TOKEN)"
+  for service in KEYCLOAK_SIGNING_KMS_TOKEN KEYCLOAK_MASTER_RS256_CERT KEYCLOAK_11ID_RS256_CERT \
+                 KEYCLOAK_MASTER_COOKIE_TOKEN KEYCLOAK_MASTER_CIBA_TOKEN \
+                 KEYCLOAK_11ID_COOKIE_TOKEN KEYCLOAK_11ID_CIBA_TOKEN; do
+    require_resolved_secret "$service" "$(resolve_secret_input "$service")"
+  done
   marty_api_client_secret="$(resolve_secret_input MARTY_API_CLIENT_SECRET)"
   rabbitmq_password="$(resolve_secret_input RABBITMQ_PASSWORD)"
   rabbitmq_erlang_cookie="$(resolve_secret_input RABBITMQ_ERLANG_COOKIE)"
@@ -376,26 +402,61 @@ cmd_setup_secrets() {
   notification_applicant_event_token="$(resolve_secret_input NOTIFICATION_APPLICANT_EVENT_TOKEN)"
   workload_identity_ca_cert="$(resolve_secret_input MARTY_WORKLOAD_IDENTITY_CA_CERT)"
   require_resolved_secret MARTY_WORKLOAD_IDENTITY_CA_CERT "$workload_identity_ca_cert"
+  org_workload_server_cert="$(resolve_secret_input ORG_WORKLOAD_SERVER_CERT)"
+  org_tls_kms_token="$(resolve_secret_input ORG_TLS_KMS_TOKEN)"
+  es_workload_server_cert="$(resolve_secret_input ES_WORKLOAD_SERVER_CERT)"
+  es_tls_kms_token="$(resolve_secret_input ES_TLS_KMS_TOKEN)"
+  rp_workload_server_cert="$(resolve_secret_input RP_WORKLOAD_SERVER_CERT)"
+  rp_tls_kms_token="$(resolve_secret_input RP_TLS_KMS_TOKEN)"
+  ct_workload_server_cert="$(resolve_secret_input CT_WORKLOAD_SERVER_CERT)"
+  ct_tls_kms_token="$(resolve_secret_input CT_TLS_KMS_TOKEN)"
+  require_resolved_secret ORG_WORKLOAD_SERVER_CERT "$org_workload_server_cert"
+  require_resolved_secret ORG_TLS_KMS_TOKEN "$org_tls_kms_token"
+  require_resolved_secret ES_WORKLOAD_SERVER_CERT "$es_workload_server_cert"
+  require_resolved_secret ES_TLS_KMS_TOKEN "$es_tls_kms_token"
+  require_resolved_secret RP_WORKLOAD_SERVER_CERT "$rp_workload_server_cert"
+  require_resolved_secret RP_TLS_KMS_TOKEN "$rp_tls_kms_token"
+  require_resolved_secret CT_WORKLOAD_SERVER_CERT "$ct_workload_server_cert"
+  require_resolved_secret CT_TLS_KMS_TOKEN "$ct_tls_kms_token"
   signing_keys_workload_server_cert="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_CERT)"
-  signing_keys_workload_server_key="$(resolve_secret_input SIGNING_KEYS_WORKLOAD_SERVER_KEY)"
   require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_CERT "$signing_keys_workload_server_cert"
-  require_resolved_secret SIGNING_KEYS_WORKLOAD_SERVER_KEY "$signing_keys_workload_server_key"
+  openbao_tls_ca_cert="$(resolve_secret_input OPENBAO_TLS_CA_CERT)"
+  signing_keys_tls_kms_token="$(resolve_secret_input SIGNING_KEYS_TLS_KMS_TOKEN)"
+  require_resolved_secret OPENBAO_TLS_CA_CERT "$openbao_tls_ca_cert"
+  require_resolved_secret SIGNING_KEYS_TLS_KMS_TOKEN "$signing_keys_tls_kms_token"
   pp_workload_server_cert="$(resolve_secret_input PP_WORKLOAD_SERVER_CERT)"
-  pp_workload_server_key="$(resolve_secret_input PP_WORKLOAD_SERVER_KEY)"
+  pp_tls_kms_token="$(resolve_secret_input PP_TLS_KMS_TOKEN)"
+  require_resolved_secret PP_TLS_KMS_TOKEN "$pp_tls_kms_token"
   flow_workload_client_cert="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_CERT)"
-  flow_workload_client_key="$(resolve_secret_input FLOW_WORKLOAD_CLIENT_KEY)"
+  flow_client_tls_kms_token="$(resolve_secret_input FLOW_CLIENT_TLS_KMS_TOKEN)"
+  require_resolved_secret FLOW_CLIENT_TLS_KMS_TOKEN "$flow_client_tls_kms_token"
   flow_workload_server_cert="$(resolve_secret_input FLOW_WORKLOAD_SERVER_CERT)"
-  flow_workload_server_key="$(resolve_secret_input FLOW_WORKLOAD_SERVER_KEY)"
+  flow_server_tls_kms_token="$(resolve_secret_input FLOW_SERVER_TLS_KMS_TOKEN)"
+  require_resolved_secret FLOW_SERVER_TLS_KMS_TOKEN "$flow_server_tls_kms_token"
   auth_workload_client_cert="$(resolve_secret_input AUTH_WORKLOAD_CLIENT_CERT)"
-  auth_workload_client_key="$(resolve_secret_input AUTH_WORKLOAD_CLIENT_KEY)"
-  applicant_workload_client_cert="$(resolve_secret_input APPLICANT_WORKLOAD_CLIENT_CERT)"
-  applicant_workload_client_key="$(resolve_secret_input APPLICANT_WORKLOAD_CLIENT_KEY)"
+  auth_tls_kms_token="$(resolve_secret_input AUTH_TLS_KMS_TOKEN)"
+  require_resolved_secret AUTH_TLS_KMS_TOKEN "$auth_tls_kms_token"
+  auth_workload_server_cert="$(resolve_secret_input AUTH_WORKLOAD_SERVER_CERT)"
+  auth_server_tls_kms_token="$(resolve_secret_input AUTH_SERVER_TLS_KMS_TOKEN)"
+  require_resolved_secret AUTH_WORKLOAD_SERVER_CERT "$auth_workload_server_cert"
+  require_resolved_secret AUTH_SERVER_TLS_KMS_TOKEN "$auth_server_tls_kms_token"
+  gateway_workload_client_cert="$(resolve_secret_input GATEWAY_WORKLOAD_CLIENT_CERT)"
+  gateway_tls_kms_token="$(resolve_secret_input GATEWAY_TLS_KMS_TOKEN)"
+  require_resolved_secret GATEWAY_WORKLOAD_CLIENT_CERT "$gateway_workload_client_cert"
+  require_resolved_secret GATEWAY_TLS_KMS_TOKEN "$gateway_tls_kms_token"
+  issuance_workload_server_cert="$(resolve_secret_input ISSUANCE_WORKLOAD_SERVER_CERT)"
+  issuance_tls_kms_token="$(resolve_secret_input ISSUANCE_TLS_KMS_TOKEN)"
+  require_resolved_secret ISSUANCE_WORKLOAD_SERVER_CERT "$issuance_workload_server_cert"
+  require_resolved_secret ISSUANCE_TLS_KMS_TOKEN "$issuance_tls_kms_token"
   verification_workload_client_cert="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_CERT)"
-  verification_workload_client_key="$(resolve_secret_input VERIFICATION_WORKLOAD_CLIENT_KEY)"
+  verification_tls_kms_token="$(resolve_secret_input VERIFICATION_TLS_KMS_TOKEN)"
+  require_resolved_secret VERIFICATION_TLS_KMS_TOKEN "$verification_tls_kms_token"
   deployment_profile_workload_client_cert="$(resolve_secret_input DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT)"
-  deployment_profile_workload_client_key="$(resolve_secret_input DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY)"
+  deployment_profile_tls_kms_token="$(resolve_secret_input DEPLOYMENT_PROFILE_TLS_KMS_TOKEN)"
+  require_resolved_secret DEPLOYMENT_PROFILE_TLS_KMS_TOKEN "$deployment_profile_tls_kms_token"
   compliance_profile_workload_client_cert="$(resolve_secret_input COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT)"
-  compliance_profile_workload_client_key="$(resolve_secret_input COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY)"
+  compliance_profile_tls_kms_token="$(resolve_secret_input COMPLIANCE_PROFILE_TLS_KMS_TOKEN)"
+  require_resolved_secret COMPLIANCE_PROFILE_TLS_KMS_TOKEN "$compliance_profile_tls_kms_token"
   flow_webhook_secret="$(resolve_secret_input FLOW_WEBHOOK_SECRET)"
   flow_application_event_hmac_key="$(resolve_secret_input FLOW_APPLICATION_EVENT_HMAC_KEY)"
   canvas_credentials_shared_secret="$(resolve_secret_input CANVAS_CREDENTIALS_SHARED_SECRET)"
@@ -503,66 +564,169 @@ cmd_setup_secrets() {
     --from-literal=GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN="$gateway_issuer_csr_grant_mint_token" \
     --from-literal=SIGNING_KEYS_GRANT_VERIFY_TOKEN="$signing_keys_grant_verify_token" \
     --from-literal=NOTIFICATION_OPENBAO_TOKEN="$notification_openbao_token" \
+    --from-literal=OPENBAO_TLS_CA_CERT="$openbao_tls_ca_cert" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Application secrets created/updated"
+
+  (
+    umask 077
+    local keycloak_secret_dir
+    keycloak_secret_dir="$(mktemp -d)" || return 1
+    trap 'rm -f -- "$keycloak_secret_dir"/openbao_tls_ca_cert "$keycloak_secret_dir"/keycloak_signing_kms_token "$keycloak_secret_dir"/keycloak-master-rs256.crt "$keycloak_secret_dir"/keycloak-11id-rs256.crt "$keycloak_secret_dir"/master-cookie.token "$keycloak_secret_dir"/master-ciba.token "$keycloak_secret_dir"/11id-cookie.token "$keycloak_secret_dir"/11id-ciba.token; rmdir -- "$keycloak_secret_dir"' EXIT
+    printf '%s' "$openbao_tls_ca_cert" > "$keycloak_secret_dir/openbao_tls_ca_cert"
+    printf '%s' "$keycloak_signing_kms_token" > "$keycloak_secret_dir/keycloak_signing_kms_token"
+    printf '%s' "$keycloak_master_rs256_cert" > "$keycloak_secret_dir/keycloak-master-rs256.crt"
+    printf '%s' "$keycloak_11id_rs256_cert" > "$keycloak_secret_dir/keycloak-11id-rs256.crt"
+    printf '%s' "$keycloak_master_cookie_token" > "$keycloak_secret_dir/master-cookie.token"
+    printf '%s' "$keycloak_master_ciba_token" > "$keycloak_secret_dir/master-ciba.token"
+    printf '%s' "$keycloak_11id_cookie_token" > "$keycloak_secret_dir/11id-cookie.token"
+    printf '%s' "$keycloak_11id_ciba_token" > "$keycloak_secret_dir/11id-ciba.token"
+    kubectl create secret generic keycloak-kms \
+      --namespace="$NAMESPACE" \
+      --from-file=openbao_tls_ca_cert="$keycloak_secret_dir/openbao_tls_ca_cert" \
+      --from-file=keycloak_signing_kms_token="$keycloak_secret_dir/keycloak_signing_kms_token" \
+      --from-file=keycloak-master-rs256.crt="$keycloak_secret_dir/keycloak-master-rs256.crt" \
+      --from-file=keycloak-11id-rs256.crt="$keycloak_secret_dir/keycloak-11id-rs256.crt" \
+      --from-file=master-cookie.token="$keycloak_secret_dir/master-cookie.token" \
+      --from-file=master-ciba.token="$keycloak_secret_dir/master-ciba.token" \
+      --from-file=11id-cookie.token="$keycloak_secret_dir/11id-cookie.token" \
+      --from-file=11id-ciba.token="$keycloak_secret_dir/11id-ciba.token" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  )
 
   kubectl create secret generic signing-keys-integration-secret-server-tls \
     --namespace="$NAMESPACE" \
     --from-literal=tls.crt="$signing_keys_workload_server_cert" \
-    --from-literal=tls.key="$signing_keys_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic signing-keys-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$signing_keys_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic signing-keys-integration-secret-ca \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --dry-run=client -o yaml | kubectl apply -f -
 
+  for service in org rp ct es; do
+    local certificate token
+    case "$service" in
+      org) certificate="$org_workload_server_cert"; token="$org_tls_kms_token" ;;
+      rp) certificate="$rp_workload_server_cert"; token="$rp_tls_kms_token" ;;
+      ct) certificate="$ct_workload_server_cert"; token="$ct_tls_kms_token" ;;
+      es) certificate="$es_workload_server_cert"; token="$es_tls_kms_token" ;;
+    esac
+    kubectl create secret generic "$service-workload-tls" \
+      --namespace="$NAMESPACE" \
+      --from-literal=ca.crt="$workload_identity_ca_cert" \
+      --from-literal=tls.crt="$certificate" \
+      --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create secret generic "$service-tls-kms" \
+      --namespace="$NAMESPACE" \
+      --from-literal=ca.crt="$openbao_tls_ca_cert" \
+      --from-literal=token="$token" \
+      --dry-run=client -o yaml | kubectl apply -f -
+  done
+
   kubectl create secret generic presentation-policy-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$pp_workload_server_cert" \
-    --from-literal=tls.key="$pp_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic pp-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$pp_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic flow-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$flow_workload_client_cert" \
-    --from-literal=tls.key="$flow_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic flow-client-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$flow_client_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic flow-server-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$flow_workload_server_cert" \
-    --from-literal=tls.key="$flow_workload_server_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic flow-server-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$flow_server_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic auth-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$auth_workload_client_cert" \
-    --from-literal=tls.key="$auth_workload_client_key" \
     --dry-run=client -o yaml | kubectl apply -f -
-  kubectl create secret generic applicant-workload-tls \
+  kubectl create secret generic auth-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$auth_tls_kms_token" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic auth-server-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
-    --from-literal=tls.crt="$applicant_workload_client_cert" \
-    --from-literal=tls.key="$applicant_workload_client_key" \
+    --from-literal=tls.crt="$auth_workload_server_cert" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic auth-server-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$auth_server_tls_kms_token" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic gateway-auth-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$gateway_workload_client_cert" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic gateway-auth-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$gateway_tls_kms_token" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic issuance-server-tls \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$workload_identity_ca_cert" \
+    --from-literal=tls.crt="$issuance_workload_server_cert" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic issuance-server-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$issuance_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic verification-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$verification_workload_client_cert" \
-    --from-literal=tls.key="$verification_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic verification-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$verification_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic deployment-profile-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$deployment_profile_workload_client_cert" \
-    --from-literal=tls.key="$deployment_profile_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic deployment-profile-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$deployment_profile_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   kubectl create secret generic compliance-profile-workload-tls \
     --namespace="$NAMESPACE" \
     --from-literal=ca.crt="$workload_identity_ca_cert" \
     --from-literal=tls.crt="$compliance_profile_workload_client_cert" \
-    --from-literal=tls.key="$compliance_profile_workload_client_key" \
+    --dry-run=client -o yaml | kubectl apply -f -
+  kubectl create secret generic compliance-profile-tls-kms \
+    --namespace="$NAMESPACE" \
+    --from-literal=ca.crt="$openbao_tls_ca_cert" \
+    --from-literal=token="$compliance_profile_tls_kms_token" \
     --dry-run=client -o yaml | kubectl apply -f -
   success "Workload identity secrets created/updated"
 
@@ -610,9 +774,16 @@ cmd_update_images() {
     error "Canvas worker image update refused; apply the reviewed full-manifest cutover first."
     return 1
   fi
+  if ! kubectl get deployment keycloak -n "$NAMESPACE" -o json --request-timeout=10s 2>/dev/null \
+    | "$PYTHON_BIN" "$REPO_ROOT/scripts/check_kubernetes_keycloak_update.py" --namespace "$NAMESPACE"; then
+    error "Keycloak image update refused; apply the reviewed KMS-only manifest first."
+    return 1
+  fi
   local app_services
   app_services="$(catalog_services app)" || { error "Deployment catalog service lookup failed."; return 1; }
   [[ -n "$app_services" ]] || { error "Deployment catalog returned no app services."; return 1; }
+  kubectl set image deployment/keycloak "keycloak=${MARTY_KEYCLOAK_KMS_IMAGE}" -n "$NAMESPACE" || return 1
+  kubectl rollout status deployment/keycloak -n "$NAMESPACE" --timeout=360s || return 1
   step "Rolling image update — tag: ${IMAGE_TAG}"
   if [[ "${K8S_ISSUANCE_NATIVE_ENABLED-true}" == true ]]; then
     kubectl set image deployment/signing-keys "signing-keys=${MARTY_SERVICES_IMAGE}" -n "$NAMESPACE" || return 1

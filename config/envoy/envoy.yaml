@@ -66,7 +66,7 @@ static_resources:
                             cluster: credential_template_grpc
                             timeout: 30s
 
-                        # Native Issuance Service → issuance-native:9005
+                        # Native Issuance through the local keyless mTLS bridge.
                         - match:
                             prefix: "/marty.ui.issuance.v1.IssuanceService/"
                           route:
@@ -133,7 +133,7 @@ static_resources:
                             cluster: credential_template_grpc
                             timeout: 30s
 
-                        # Native Issuance Service REST → issuance-native:9005
+                        # Native Issuance REST through the local keyless mTLS bridge.
                         - match:
                             prefix: "/v1/issuance/"
                           route:
@@ -327,8 +327,8 @@ static_resources:
           grpc_health_check:
             service_name: "marty.ui.credential_template.v1.CredentialTemplateService"
 
-    # Native issuance owns the complete twelve-method gRPC surface. The eleven
-    # retained Python routes have no gRPC methods and remain gateway-owned.
+    # Native issuance owns the complete twelve-method gRPC surface. The local
+    # Rust bridge presents a KMS-held client identity to its mTLS listener.
     - name: issuance_native_grpc
       connect_timeout: 5s
       type: STRICT_DNS
@@ -345,8 +345,8 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: issuance-native
-                      port_value: 9005
+                       address: 127.0.0.1
+                       port_value: 19006
       health_checks:
         - timeout: 3s
           interval: 10s

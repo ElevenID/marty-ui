@@ -8,6 +8,7 @@ import ipaddress
 import json
 import os
 import re
+import ssl
 import subprocess
 import sys
 import urllib.error
@@ -44,6 +45,30 @@ def validate_openbao_plugin_image(env_values: dict[str, str]) -> str:
     if not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", reference):
         raise CheckError("MARTY_OPENBAO_DIDCOMM_IMAGE must be a reviewed immutable image digest.")
     return reference
+
+
+def validate_kms_transport(env_values: dict[str, str]) -> str:
+    image = env_values.get("MARTY_KEYCLOAK_KMS_IMAGE", "").strip()
+    if re.fullmatch(
+        r"ghcr\.io/elevenid/marty-ui-oss/keycloak@sha256:[0-9a-f]{64}", image
+    ) is None:
+        raise CheckError("MARTY_KEYCLOAK_KMS_IMAGE must pin the released Keycloak digest.")
+    origins = {key: value for key, value in env_values.items()
+               if key in {"BAO_ADDR", "KEYCLOAK_KMS_ADDR"} or key.endswith("_TLS_KMS_ADDR")}
+    if "BAO_ADDR" not in origins or "KEYCLOAK_KMS_ADDR" not in origins:
+        raise CheckError("Self-host KMS HTTPS origins are incomplete.")
+    for name, origin in origins.items():
+        try:
+            parsed = urllib.parse.urlsplit(origin.strip())
+            port = parsed.port
+        except ValueError as error:
+            raise CheckError(f"{name} must be a trusted HTTPS OpenBao origin.") from error
+        if (parsed.scheme != "https" or not parsed.hostname
+                or port == 0
+                or parsed.username is not None or parsed.password is not None
+                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+            raise CheckError(f"{name} must be a trusted HTTPS OpenBao origin.")
+    return f"keycloak_image=immutable https_origins={len(origins)}"
 
 
 class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -1255,9 +1280,17 @@ def validate_openbao(env_values: dict[str, str], secret_dir: Path, env_file: Pat
         raise CheckError(f"Standalone OpenBao health is {openbao_service.get('Health')}.")
 
     host_port = int(env_values.get("SELFHOST_OPENBAO_HOST_PORT", "18200"))
-    health_url = f"http://127.0.0.1:{host_port}/v1/sys/health?standbyok=true&perfstandbyok=true"
+    health_url = f"https://127.0.0.1:{host_port}/v1/sys/health?standbyok=true&perfstandbyok=true"
+    ca_file = secret_dir / "openbao_tls_ca_cert"
     try:
-        with urllib.request.urlopen(health_url, timeout=5) as response:  # noqa: S310 - localhost operator health check
+        ca_pem = ca_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise CheckError(f"OpenBao public TLS CA is unavailable: {exc}") from exc
+    if "-----BEGIN CERTIFICATE-----" not in ca_pem or "PRIVATE KEY" in ca_pem:
+        raise CheckError("OpenBao public TLS CA is invalid or contains private material.")
+    tls_context = ssl.create_default_context(cafile=str(ca_file))
+    try:
+        with urllib.request.urlopen(health_url, timeout=5, context=tls_context) as response:  # noqa: S310 - localhost operator health check
             payload = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace").strip()
@@ -1363,6 +1396,7 @@ def main() -> int:
 
     compose_config_results = [
         run_check("openbao-plugin-image", lambda: validate_openbao_plugin_image(env_values)),
+        run_check("kms-transport", lambda: validate_kms_transport(env_values)),
         run_check("openbao-compose-config", lambda: (ensure_compose_config(env_file, openbao_compose_file) or openbao_compose_file.name)),
         run_check("prod-compose-config", lambda: (ensure_compose_config(env_file, prod_compose_file) or prod_compose_file.name)),
     ]

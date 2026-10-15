@@ -179,7 +179,66 @@ def assert_native_kms_policy(model):
         raise DidcommConfigurationError("Invalid DIDComm owner model") from None
 
 
-def validate_model(model, *, authcrypt_enabled):
+def assert_base_https_native_kms(model):
+    services = model["services"]
+    native = services["issuance-native"]
+    environment = environment_mapping(native["environment"])
+    expected = {
+        "DIDCOMM_KMS_ADDR": "https://openbao:8200",
+        "DIDCOMM_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
+        "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
+    }
+    if any(environment.get(key) != value for key, value in expected.items()):
+        raise DidcommConfigurationError("Native HTTPS DIDComm custody is incomplete")
+    mounts = {item.get("target"): item for item in native.get("volumes", [])}
+    for source, target in (
+        ("openbao_public_ca", "/bao/public-ca"),
+        ("openbao_didcomm_issuance_token", "/bao/didcomm-issuance-token"),
+    ):
+        mount = mounts.get(target)
+        if not isinstance(mount, dict) or any(
+            mount.get(key) != value
+            for key, value in (
+                ("type", "volume"),
+                ("source", source),
+                ("read_only", True),
+            )
+        ):
+            raise DidcommConfigurationError(
+                "Native HTTPS DIDComm CA or token mount is incomplete"
+            )
+    policy_file = environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE")
+    if policy_file is None and POLICY_FILE in mounts:
+        raise DidcommConfigurationError("Native DIDComm policy mount lacks a selector")
+    if policy_file is not None:
+        if policy_file != POLICY_FILE:
+            raise DidcommConfigurationError(
+                "Native DIDComm reference policy path is invalid"
+            )
+        policy_mount = mounts.get(POLICY_FILE)
+        if (
+            not isinstance(policy_mount, dict)
+            or policy_mount.get("type") != "bind"
+            or policy_mount.get("read_only") is not True
+            or policy_mount.get("bind", {}).get("create_host_path") is not False
+            or not str(policy_mount.get("source", ""))
+            .replace("\\", "/")
+            .endswith("/didcomm-encryption-policy.json")
+        ):
+            raise DidcommConfigurationError(
+                "Native DIDComm reference policy mount is incomplete"
+            )
+        for name, service in services.items():
+            if name != "issuance-native" and any(
+                isinstance(item, dict) and item.get("target") == POLICY_FILE
+                for item in service.get("volumes", [])
+            ):
+                raise DidcommConfigurationError(
+                    "DIDComm policy is mounted outside native issuance"
+                )
+
+
+def validate_model(model, *, authcrypt_enabled, base_https=False):
     try:
         legacy_environment = environment_mapping(
             model["services"]["issuance"]["environment"]
@@ -215,7 +274,10 @@ def validate_model(model, *, authcrypt_enabled):
             raise DidcommConfigurationError(
                 "Configured DIDComm policy requires explicit beta opt-in"
             )
-        assert_native_kms_policy(model)
+        if base_https:
+            assert_base_https_native_kms(model)
+        else:
+            assert_native_kms_policy(model)
     except (KeyError, TypeError):
         raise DidcommConfigurationError("Invalid DIDComm owner model") from None
 

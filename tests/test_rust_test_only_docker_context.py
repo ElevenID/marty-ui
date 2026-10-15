@@ -64,6 +64,7 @@ CANVAS_COMPOSITION_TEST_FILES = (
     "support/didcomm_unkeyed_grpc_initiation.rs",
     "support/owned_cleanup.rs",
     "support/remote_didcomm_sender.rs",
+    "support/remote_tls_peer.rs",
     "support/rendered_base_process.rs",
     "support/renewal_binding_postgres.rs",
     "support/renewal_canvas_binding.rs",
@@ -102,11 +103,12 @@ SELFHOST_TEST_FILES = (
 )
 SERVICE_ACCEPTANCE_TEST_ROOT = "rust/crates/service-acceptance/tests/"
 SERVICE_ACCEPTANCE_TARGETS = (
-    "passport_managed_kms_chain",
-    "passport_gateway_postgres",
+    "csca_capability_contract",
     "gateway_signing_acceptance",
     "holder_remote_live_kms",
-    "csca_capability_contract",
+    "passport_gateway_postgres",
+    "passport_managed_kms_chain",
+    "tls_openbao_keyless",
 )
 SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"
 SIGNING_CSCA_TEST_FILES = (

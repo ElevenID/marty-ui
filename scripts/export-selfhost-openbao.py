@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import os
+import ssl
 import tempfile
 import urllib.error
 import urllib.request
@@ -55,12 +56,12 @@ def build_parser(repo_root: Path) -> argparse.ArgumentParser:
 
 def snapshot_url(value: str) -> str:
     parsed = urlsplit(value)
-    if parsed.scheme != "http" or parsed.hostname not in (
+    if parsed.scheme != "https" or parsed.hostname not in (
         "127.0.0.1",
         "localhost",
         "::1",
     ):
-        raise ValueError("self-host OpenBao snapshot URL must use local loopback HTTP")
+        raise ValueError("self-host OpenBao snapshot URL must use local loopback HTTPS")
     if (
         not parsed.port
         or parsed.username
@@ -75,9 +76,14 @@ def snapshot_url(value: str) -> str:
     return value.rstrip("/") + "/v1/sys/storage/raft/snapshot"
 
 
-def stream_snapshot(url: str, token: str, output: Path) -> str:
+def stream_snapshot(url: str, token: str, output: Path, ca_file: Path) -> str:
     request = urllib.request.Request(url, headers={"X-Vault-Token": token})
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
+    tls_context = ssl.create_default_context(cafile=str(ca_file))
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=tls_context),
+        NoRedirect(),
+    )
     digest = hashlib.sha256()
     size = 0
     try:
@@ -119,6 +125,9 @@ def export(state_dir: Path, export_dir: Path, config_file: Path, bao_url: str) -
     if not token:
         raise ValueError("OpenBao root token file is empty")
     url = snapshot_url(bao_url)
+    ca_file = state_dir / "tls" / "ca.crt"
+    if not ca_file.is_file() or ca_file.is_symlink():
+        raise ValueError("OpenBao public TLS CA is missing from KMS state")
     export_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     archive = export_dir / f"openbao-raft-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
@@ -126,7 +135,7 @@ def export(state_dir: Path, export_dir: Path, config_file: Path, bao_url: str) -
     try:
         with tempfile.TemporaryDirectory() as temp:
             snapshot = Path(temp) / "raft.snap"
-            snapshot_sha256 = stream_snapshot(url, token, snapshot)
+            snapshot_sha256 = stream_snapshot(url, token, snapshot, ca_file)
             manifest = {
                 "created_at": datetime.now(timezone.utc)
                 .isoformat()
@@ -168,7 +177,7 @@ def main() -> int:
             "SELFHOST_OPENBAO_STATE_DIR and SELFHOST_OPENBAO_EXPORT_DIR are required"
         )
     port = env_values.get("SELFHOST_OPENBAO_HOST_PORT", "18200")
-    bao_url = args.bao_url or f"http://127.0.0.1:{port}"
+    bao_url = args.bao_url or f"https://127.0.0.1:{port}"
     try:
         archive = export(
             Path(state_dir), Path(export_dir), Path(args.config_file), bao_url

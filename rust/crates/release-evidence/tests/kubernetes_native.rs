@@ -167,18 +167,18 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         .as_object_mut()
                         .unwrap();
                     let volumes = pod["volumes"].as_array_mut().unwrap();
-                    assert_eq!(volumes.len(), 3);
-                    assert_eq!(volumes[0]["name"], "issuance-sign-grants");
-                    let added_volumes = volumes.split_off(1);
+                    assert_eq!(volumes.len(), 4);
+                    assert_eq!(volumes[1]["name"], "issuance-sign-grants");
+                    let added_volumes = volumes.split_off(2);
                     for volume in &added_volumes {
                         assert_eq!(volume["secret"]["optional"], false);
                         assert_eq!(volume["secret"]["defaultMode"], 292);
                     }
                     let legacy_owner = owner_mut(value);
                     let mounts = legacy_owner["volumeMounts"].as_array_mut().unwrap();
-                    assert_eq!(mounts.len(), 3);
-                    assert_eq!(mounts[0]["name"], "issuance-sign-grants");
-                    let added_mounts = mounts.split_off(1);
+                    assert_eq!(mounts.len(), 4);
+                    assert_eq!(mounts[1]["name"], "issuance-sign-grants");
+                    let added_mounts = mounts.split_off(2);
                     assert!(added_mounts.iter().all(|v| v["readOnly"] == true));
                     let entries = legacy_owner["env"].as_array_mut().unwrap();
                     assert_eq!(entries.pop().unwrap()["name"], "DIDCOMM_TLS_CA_FILE");
@@ -187,17 +187,17 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
                     let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
-                    assert_eq!(native_mounts.len(), 5);
-                    assert_eq!(native_mounts[2]["name"], "issuance-sign-grants");
-                    assert_eq!(native_mounts[3..], added_mounts);
+                    assert_eq!(native_mounts.len(), 7);
+                    assert_eq!(native_mounts[4]["name"], "issuance-sign-grants");
+                    assert_eq!(native_mounts[5..], added_mounts);
                     let native_volumes = native_owner
                         .pointer("/spec/template/spec/volumes")
                         .unwrap()
                         .as_array()
                         .unwrap();
-                    assert_eq!(native_volumes.len(), 5);
-                    assert_eq!(native_volumes[2]["name"], "issuance-sign-grants");
-                    assert_eq!(native_volumes[3..], added_volumes);
+                    assert_eq!(native_volumes.len(), 7);
+                    assert_eq!(native_volumes[4]["name"], "issuance-sign-grants");
+                    assert_eq!(native_volumes[5..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -237,8 +237,8 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     .iter_mut()
                     .find(|entry| entry["name"] == "ISSUANCE_GRPC_TARGET")
                     .unwrap();
-                assert_eq!(grpc["value"], "issuance-native:9005");
-                grpc["value"] = json!("issuance-native:9005");
+                assert_eq!(grpc["value"], "https://issuance-native:9005");
+                grpc["value"] = json!("https://issuance-native:9005");
             }
         }
         assert_eq!(
@@ -273,7 +273,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     );
     assert_eq!(
         recovery_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     );
 
     let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
@@ -293,7 +293,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     let selected_flow = env(&selected[index(selected, "Deployment", "flow")]);
     assert_eq!(
         selected_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     );
     assert_eq!(
         selected_flow["ISSUANCE_SERVICE_URL"],
@@ -545,7 +545,7 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
     let deployment = index(&template, "Deployment", "issuance-native");
     for (path, value) in [
         (
-            "/spec/template/spec/volumes/0/secret/items/0/key",
+            "/spec/template/spec/volumes/2/secret/items/0/key",
             json!("OPENBAO_SERVICE_TOKEN"),
         ),
         (
@@ -684,7 +684,9 @@ fn api_defaults(model: &Value) -> Value {
                     owner[name][key] = json!(value);
                 }
             }
-            owner[name]["httpGet"]["scheme"] = json!("HTTP");
+            if owner[name].get("httpGet").is_some() {
+                owner[name]["httpGet"]["scheme"] = json!("HTTP");
+            }
         }
         let service = index(rows, "Service", selected);
         let allocated = match selected {
@@ -1148,13 +1150,16 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         );
     }
     let legacy = index(&baseline, "Deployment", "issuance");
-    assert!(!env(&baseline[legacy]).contains_key("RP_GRPC_TARGET"));
+    assert_eq!(
+        env(&baseline[legacy])["RP_GRPC_TARGET"],
+        json!({"name":"RP_GRPC_TARGET","value":"https://revocation-profile:9013"})
+    );
     let model = native::compose(&baseline, &template, &ready, &values).unwrap();
     let rows = model["items"].as_array().unwrap();
     let selected = index(rows, "Deployment", "issuance-native");
     assert_eq!(
         env(&rows[selected])["RP_GRPC_TARGET"],
-        json!({"name":"RP_GRPC_TARGET","value":"revocation-profile:9013"})
+        json!({"name":"RP_GRPC_TARGET","value":"https://revocation-profile:9013"})
     );
 }
 
@@ -1283,6 +1288,31 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
             "{fault}"
         );
     }
+}
+
+#[test]
+fn signing_template_refuses_tls_private_key_file_and_missing_remote_signer() {
+    let (baseline, template, ready, values) = fixtures();
+    let signing = index(&template, "Deployment", "signing-keys");
+    let mut with_file = template.clone();
+    owner_mut(&mut with_file[signing])["env"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE","value":"/run/secrets/integration-secret-tls/tls.key"}));
+    assert_eq!(
+        native::compose(&baseline, &with_file, &ready, &values),
+        Err(REFUSAL)
+    );
+
+    let mut without_signer = template.clone();
+    owner_mut(&mut without_signer[signing])["env"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|entry| entry["name"] != "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME");
+    assert_eq!(
+        native::compose(&baseline, &without_signer, &ready, &values),
+        Err(REFUSAL)
+    );
 }
 
 #[test]
@@ -1611,6 +1641,10 @@ cmd_update_images
             )
             .env("NAMESPACE", "marty-prod")
             .env("PYTHON_BIN", "controlled_canvas_guard")
+            .env(
+                "MARTY_KEYCLOAK_KMS_IMAGE",
+                format!("ghcr.io/elevenid/keycloak@sha256:{}", "b".repeat(64)),
+            )
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
@@ -1653,26 +1687,26 @@ cmd_update_images
             .filter(|v| v.starts_with("set image "))
             .collect();
         if fault == "none" || fault == "absent" {
-            assert_eq!(writes.len(), 6);
+            assert_eq!(writes.len(), 7);
             assert!(writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
         } else if fault == "rollout" {
             assert_eq!(
                 writes.len(),
-                2,
+                3,
                 "No sibling writes after native rollout failure"
             );
         } else if fault == "issuance-rollout" {
             assert_eq!(
                 writes.len(),
-                3,
+                4,
                 "No sibling writes after issuance rollout failure"
             );
         } else if fault == "signing-rollout" {
             assert_eq!(
                 writes.len(),
-                1,
+                2,
                 "No native or sibling writes after signing rollout failure"
             );
         } else {
@@ -1691,7 +1725,7 @@ cmd_update_images
         }
         if fault == "none" || fault == "absent" || fault == "rollout" {
             assert_eq!(
-                writes[1],
+                writes[2],
                 format!(
                     "set image deployment/issuance-native issuance-native={} -n marty-prod",
                     values["MARTY_SERVICES_IMAGE"]
@@ -1699,7 +1733,7 @@ cmd_update_images
             );
             if fault != "rollout" {
                 assert_eq!(
-                    writes[2],
+                    writes[3],
                     format!(
                         "set image deployment/issuance issuance={} -n marty-prod",
                         values["MARTY_SERVICES_IMAGE"]

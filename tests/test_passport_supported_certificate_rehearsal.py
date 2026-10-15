@@ -87,6 +87,8 @@ def test_certificate_rehearsal_calls_setup_after_signer_and_cleans(
             (output_dir / "bao_token").write_text("hvs.disposable-service-token")
             (output_dir / "callback_signer_bao_token").write_text(
                 "hvs.disposable-callback-token")
+            (output_dir / "notification_openbao_token").write_text(
+                "hvs.disposable-notification-token")
         return True
 
     def setup(*args, **kwargs) -> dict:
@@ -139,6 +141,8 @@ def test_failed_certificate_setup_forces_teardown(tmp_path: Path) -> None:
             (output_dir / "bao_token").write_text("hvs.disposable-service-token")
             (output_dir / "callback_signer_bao_token").write_text(
                 "hvs.disposable-callback-token")
+            (output_dir / "notification_openbao_token").write_text(
+                "hvs.disposable-notification-token")
         return True
 
     with pytest.raises(ProducerError, match="setup evidence is invalid"):
@@ -188,6 +192,8 @@ def test_invalid_certificate_proof_forces_teardown(
             (output_dir / "bao_token").write_text("hvs.disposable-service-token")
             (output_dir / "callback_signer_bao_token").write_text(
                 "hvs.disposable-callback-token")
+            (output_dir / "notification_openbao_token").write_text(
+                "hvs.disposable-notification-token")
         return True
 
     with pytest.raises(ProducerError, match="setup evidence is invalid"):

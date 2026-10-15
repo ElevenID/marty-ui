@@ -18,6 +18,7 @@ is_placeholder_secret_value() {
 }
 
 BAO_ADDR="${BAO_ADDR:-}"
+BAO_CACERT="${BAO_CACERT:-}"
 BAO_TOKEN="${BAO_TOKEN:-}"
 BAO_TOKEN_FILE="${BAO_TOKEN_FILE:-}"
 SELFHOST_SECRET_DIR="${SELFHOST_SECRET_DIR:-${REPO_ROOT}/docker/secrets/selfhost.example}"
@@ -30,6 +31,18 @@ PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE:-${SE
 
 if [ -z "${BAO_ADDR}" ]; then
     echo "BAO_ADDR must be set to the external Vault/OpenBao address." >&2
+    exit 1
+fi
+
+case "${BAO_ADDR}" in
+    https://*) ;;
+    *) echo "BAO_ADDR must use verified HTTPS." >&2; exit 1 ;;
+esac
+if [ -z "${BAO_CACERT}" ] || [ -L "${BAO_CACERT}" ] ||
+   [ ! -f "${BAO_CACERT}" ] || [ ! -r "${BAO_CACERT}" ] ||
+   ! grep -q '^-----BEGIN CERTIFICATE-----$' "${BAO_CACERT}" ||
+   grep -q 'PRIVATE KEY' "${BAO_CACERT}"; then
+    echo "BAO_CACERT must be a readable public CA certificate file." >&2
     exit 1
 fi
 
@@ -87,7 +100,8 @@ if [ -n "${SELFHOST_BOOTSTRAP_CONTAINER_NAME:-}" ]; then
         *[!a-z0-9-]*) echo "Invalid disposable bootstrap container name." >&2; exit 1 ;;
     esac
     set -- --name "${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" \
-        --label "marty.selfhost.bootstrap-handoff=${SELFHOST_BOOTSTRAP_CONTAINER_NAME}"
+        --label "marty.selfhost.bootstrap-handoff=${SELFHOST_BOOTSTRAP_CONTAINER_NAME}" \
+        --network "container:${SELFHOST_BOOTSTRAP_CONTAINER_NAME%-helper}"
 else
     set --
 fi
@@ -99,6 +113,7 @@ fi
 
 docker run --rm "$@" \
     -e BAO_ADDR="${BAO_ADDR}" \
+    -e BAO_CACERT=/work-kms-ca/ca.crt \
     -e BAO_TOKEN \
     -e DIDCOMM_KMS_POLICY_ONLY=true \
     -e SERVICE_TOKEN_OUTPUT_FILE="/work-service/${SERVICE_TOKEN_OUTPUT_BASENAME}" \
@@ -109,6 +124,7 @@ docker run --rm "$@" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
     -e GRANT_TOKEN_OUTPUT_DIR=/work-grants \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
+    -v "${BAO_CACERT}:/work-kms-ca/ca.crt:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
     -v "${BOOTSTRAP_TOKEN_OUTPUT_DIR}:/work-bootstrap" \
     -v "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}:/work-signing" \

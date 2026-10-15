@@ -8,6 +8,7 @@ OPERATOR_SIGNED_INPUTS=(
   marty-ui-services-sbom.cdx.json
   marty-ui-migrations-sbom.cdx.json
   marty-ui-openbao-didcomm-sbom.cdx.json
+  marty-ui-keycloak-sbom.cdx.json
   marty-deploy-linux-amd64
   marty-deploy-linux-arm64
 )
@@ -20,6 +21,7 @@ OPERATOR_CHECKSUM_INPUTS=(
   marty-ui-services-sbom.cdx.json.sigstore.json
   marty-ui-migrations-sbom.cdx.json.sigstore.json
   marty-ui-openbao-didcomm-sbom.cdx.json.sigstore.json
+  marty-ui-keycloak-sbom.cdx.json.sigstore.json
   marty-deploy-linux-amd64.sigstore.json
   marty-deploy-linux-arm64.sigstore.json
 )

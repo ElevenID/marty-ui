@@ -1,19 +1,79 @@
-"""Qualify clean self-host OpenBao Raft bootstrap with disposable Docker volumes."""
+"""Qualify self-host OpenBao HTTPS bootstrap and Raft recovery in Docker volumes."""
 
 from __future__ import annotations
 
+import hashlib
+import json
+import ssl
 import subprocess
+import sys
+import tempfile
+import urllib.request
 import uuid
+import zipfile
+from functools import partial
+from pathlib import Path
 
 from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
     prepare_image,
-    request,
-    require_status,
+    request as http_request,
+    require_status as http_require_status,
     wait_for,
 )
+
+
+def volume_file(volume: str, path: str) -> str:
+    return docker(
+        "run", "--rm", "-v", f"{volume}:/bao/data:ro",
+        "--entrypoint", "/bin/cat", IMAGE, f"/bao/data/{path}",
+    )
+
+
+def initialize_tls(volume: str, ca_file: Path) -> None:
+    docker(
+        "run", "--rm", "-v", f"{volume}:/bao/data",
+        "--entrypoint", "/usr/local/bin/selfhost-tls-init", IMAGE,
+    )
+    ca_file.write_text(volume_file(volume, "tls/ca.crt") + "\n", encoding="utf-8")
+
+
+def server_digest(volume: str) -> str:
+    return docker(
+        "run", "--rm", "-v", f"{volume}:/bao/data:ro",
+        "--entrypoint", "/bin/sh", IMAGE, "-c",
+        "sha256sum /bao/data/tls/server.pem",
+    ).split()[0]
+
+
+def start_node(name: str, volume: str, ca_file: Path) -> str:
+    config = ROOT / "docker/openbao-selfhost.hcl"
+    docker(
+        "run", "-d", "--name", name,
+        "--label", "marty.disposable=kms-selfhost-probe",
+        "-p", "127.0.0.1::8200", "-v", f"{volume}:/bao/data",
+        "-v", f"{config}:/bao/config/openbao.hcl:ro",
+        IMAGE, "server", "-config=/bao/config/openbao.hcl",
+    )
+    try:
+        port = int(docker("port", name, "8200/tcp").splitlines()[0].rsplit(":", 1)[1])
+        base = f"https://127.0.0.1:{port}"
+        wait_for(
+            "self-host Raft listener",
+            lambda: http_request(base, "GET", "sys/health", ca_file=ca_file)[0]
+            in (200, 501, 503),
+        )
+        return base
+    except (RuntimeError, IndexError, ValueError) as error:
+        logs = subprocess.run(
+            ["docker", "logs", "--tail", "20", name],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        raise RuntimeError(
+            f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
+        ) from error
 
 
 def run() -> None:
@@ -22,10 +82,13 @@ def run() -> None:
     server = f"kms-selfhost-{suffix}"
     state = f"kms-selfhost-state-{suffix}"
     runtime = f"kms-selfhost-runtime-{suffix}"
+    cold_state = f"kms-selfhost-cold-{suffix}"
+    snapshot_state = f"kms-selfhost-snapshot-{suffix}"
     volumes: list[str] = []
-    started = False
+    started: list[str] = []
+    public_ca_dir = tempfile.TemporaryDirectory(prefix="marty-selfhost-raft-ca-")
     try:
-        for volume in (state, runtime):
+        for volume in (state, runtime, cold_state, snapshot_state):
             docker(
                 "volume",
                 "create",
@@ -34,69 +97,31 @@ def run() -> None:
                 volume,
             )
             volumes.append(volume)
+        ca_file = Path(public_ca_dir.name) / "ca.crt"
+        initialize_tls(state, ca_file)
+        before_rotation = server_digest(state)
         docker(
-            "run",
-            "--rm",
-            "-v",
-            f"{state}:/bao/data",
-            "--entrypoint",
-            "/bin/chown",
-            IMAGE,
-            "-R",
-            "openbao:openbao",
-            "/bao/data",
+            "run", "--rm", "-v", f"{state}:/bao/data",
+            "--entrypoint", "/usr/local/bin/selfhost-tls-init",
+            IMAGE, "-rotate",
         )
-        config = ROOT / "docker/openbao-selfhost.hcl"
-        docker(
-            "run",
-            "-d",
-            "--name",
-            server,
-            "--label",
-            "marty.disposable=kms-selfhost-probe",
-            "-p",
-            "127.0.0.1::8200",
-            "-v",
-            f"{state}:/bao/data",
-            "-v",
-            f"{config}:/bao/config/openbao.hcl:ro",
-            IMAGE,
-            "server",
-            "-config=/bao/config/openbao.hcl",
+        if server_digest(state) == before_rotation:
+            raise RuntimeError("OpenBao listener rotation did not replace its key")
+        if volume_file(state, "tls/ca.crt") != ca_file.read_text(encoding="utf-8").strip():
+            raise RuntimeError("OpenBao listener rotation changed the trusted public CA")
+        permissions = docker(
+            "run", "--rm", "-v", f"{state}:/bao/data:ro",
+            "--entrypoint", "/bin/sh", IMAGE, "-c",
+            "stat -c '%a:%U' /bao/data/tls/server.pem",
         )
-        started = True
-        try:
-            port = int(
-                docker("port", server, "8200/tcp").splitlines()[0].rsplit(":", 1)[1]
-            )
-        except (RuntimeError, IndexError, ValueError) as error:
-            logs = subprocess.run(
-                ["docker", "logs", "--tail", "20", server],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            raise RuntimeError(
-                f"Disposable Raft server exited: {(logs.stdout + logs.stderr)[-2500:]}"
-            ) from error
-        base = f"http://127.0.0.1:{port}"
-        try:
-            wait_for(
-                "self-host Raft listener",
-                lambda: request(base, "GET", "sys/health")[0] == 501,
-            )
-        except RuntimeError as error:
-            logs = subprocess.run(
-                ["docker", "logs", "--tail", "20", server],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            raise RuntimeError(
-                f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
-            ) from error
+        if permissions != "600:openbao":
+            raise RuntimeError("Rotated TLS identity escaped OpenBao file custody")
+        request = partial(http_request, ca_file=ca_file)
+        require_status = partial(http_require_status, ca_file=ca_file)
+        started.append(server)
+        base = start_node(server, state, ca_file)
+        if request(base, "GET", "sys/health")[0] != 501:
+            raise RuntimeError("Fresh self-host Raft state was initialized unexpectedly")
         result = subprocess.run(
             [
                 "docker",
@@ -105,7 +130,9 @@ def run() -> None:
                 "--network",
                 f"container:{server}",
                 "-e",
-                "BAO_ADDR=http://127.0.0.1:8200",
+                "BAO_ADDR=https://127.0.0.1:8200",
+                "-e",
+                "BAO_CACERT=/bao/data/tls/ca.crt",
                 "-e",
                 "DIDCOMM_KMS_PLUGIN_REQUIRED=true",
                 "-v",
@@ -130,30 +157,34 @@ def run() -> None:
         )
         if result.returncode:
             raise RuntimeError("Disposable self-host Raft bootstrap failed")
-        root = docker(
-            "run",
-            "--rm",
-            "-v",
-            f"{state}:/bao/data",
-            "--entrypoint",
-            "/bin/cat",
-            IMAGE,
-            "/bao/data/root.token",
+        published_ca = docker(
+            "run", "--rm", "-v", f"{runtime}:/bao/runtime:ro",
+            "--entrypoint", "/bin/cat", IMAGE,
+            "/bao/runtime/openbao_tls_ca_cert",
         )
+        if published_ca.strip() != ca_file.read_text(encoding="utf-8").strip():
+            raise RuntimeError("Disposable bootstrap published the wrong public CA")
+        if "PRIVATE KEY" in published_ca:
+            raise RuntimeError("Disposable runtime CA contains private key material")
+        root = volume_file(state, "root.token")
         if len(root) < 16:
             raise RuntimeError("Disposable bootstrap did not retain its root token")
         leader = require_status(base, "GET", "sys/leader", root)
         if leader.get("is_self") is not True:
             raise RuntimeError("Disposable self-host Raft node is not active")
         did = "did:example:selfhost-probe"
-        require_status(
+        sender = require_status(
             base,
             "POST",
             "didcomm/keys/tenant_a/sender",
             root,
             {"sender_did": did, "sender_key_id": did + "#agreement-1"},
         )
-        require_status(base, "POST", "didcomm/haip/keys/tenant_a/flow_a", root, {})
+        haip = require_status(
+            base, "POST", "didcomm/haip/keys/tenant_a/flow_a", root, {}
+        )
+        sender_version = sender["data"]["version"]
+        haip_version = haip["data"]["version"]
         key_name = "integration-secret-envelope-marty-aes256"
         metadata = require_status(base, "GET", f"transit/keys/{key_name}", root)["data"]
         if (
@@ -163,13 +194,8 @@ def run() -> None:
         ):
             raise RuntimeError("Disposable integration-secret key has unsafe metadata")
         token = docker(
-            "run",
-            "--rm",
-            "-v",
-            f"{runtime}:/bao/runtime",
-            "--entrypoint",
-            "/bin/cat",
-            IMAGE,
+            "run", "--rm", "-v", f"{runtime}:/bao/runtime:ro",
+            "--entrypoint", "/bin/cat", IMAGE,
             "/bao/runtime/signing_keys_openbao_token",
         )
         encrypted = require_status(
@@ -199,14 +225,101 @@ def run() -> None:
             raise RuntimeError(
                 "Scoped token unexpectedly exported integration-secret key"
             )
-        print("Clean self-host Raft bootstrap, plugin and secret custody passed")
+        host_state = Path(public_ca_dir.name) / "state"
+        host_state.mkdir()
+        (host_state / "tls").mkdir()
+        (host_state / "tls" / "ca.crt").write_bytes(ca_file.read_bytes())
+        for name in ("selfhost-init.json", "root.token", "unseal.key"):
+            (host_state / name).write_text(
+                volume_file(state, name), encoding="utf-8"
+            )
+        exported = Path(public_ca_dir.name) / "exports"
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/export-selfhost-openbao.py"),
+             "--state-dir", str(host_state), "--export-dir", str(exported),
+             "--bao-url", base],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError(f"Disposable HTTPS Raft export failed: {result.stderr[-800:]}")
+        with zipfile.ZipFile(next(exported.glob("*.zip"))) as bundle:
+            snapshot = bundle.read("raft.snap")
+            manifest = json.loads(bundle.read("manifest.json"))
+        if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:
+            raise RuntimeError("Disposable Raft snapshot checksum differs")
+
+        # A stopped full-state copy retains the KMS-owned TLS identity.
+        docker("stop", server)
+        docker("rm", server)
+        started.remove(server)
+        docker(
+            "run", "--rm", "-v", f"{state}:/source:ro",
+            "-v", f"{cold_state}:/target", "--entrypoint", "/bin/sh",
+            IMAGE, "-c", "cp -a /source/. /target/",
+        )
+        cold_name = f"{server}-cold"
+        started.append(cold_name)
+        cold_base = start_node(cold_name, cold_state, ca_file)
+        require_status(cold_base, "POST", "sys/unseal", "",
+                       {"key": volume_file(state, "unseal.key")})
+        cold = partial(http_require_status, ca_file=ca_file)
+        if cold(cold_base, "POST", f"transit/decrypt/{key_name}", root,
+                {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
+            raise RuntimeError("Cold Raft state copy lost Transit ciphertext")
+        if cold(cold_base, "GET", "didcomm/keys/tenant_a/sender/versions/"
+                f"{sender_version}", root)["data"]["version"] != sender_version:
+            raise RuntimeError("Cold Raft state copy lost DIDComm key version")
+        if cold(cold_base, "GET", "didcomm/haip/keys/tenant_a/flow_a/versions/"
+                f"{haip_version}", root)["data"]["version"] != haip_version:
+            raise RuntimeError("Cold Raft state copy lost HAIP key version")
+
+        # A fresh node has its own TLS CA; a Raft snapshot never exports that
+        # node-local private identity into the application or archive.
+        snapshot_ca = Path(public_ca_dir.name) / "snapshot-ca.crt"
+        initialize_tls(snapshot_state, snapshot_ca)
+        snapshot_name = f"{server}-snapshot"
+        started.append(snapshot_name)
+        snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
+        fresh = partial(http_require_status, ca_file=snapshot_ca)
+        initialized = fresh(snapshot_base, "POST", "sys/init", "",
+                            {"secret_shares": 1, "secret_threshold": 1})
+        fresh(snapshot_base, "POST", "sys/unseal", "",
+              {"key": initialized["keys_base64"][0]})
+        restore_request = urllib.request.Request(
+            snapshot_base + "/v1/sys/storage/raft/snapshot-force",
+            data=snapshot, method="POST",
+            headers={"X-Vault-Token": initialized["root_token"],
+                     "Content-Type": "application/octet-stream"},
+        )
+        with urllib.request.urlopen(
+            restore_request, timeout=60,
+            context=ssl.create_default_context(cafile=str(snapshot_ca)),
+        ) as response:  # noqa: S310 - verified disposable loopback TLS
+            if response.status not in (200, 204):
+                raise RuntimeError("Fresh Raft snapshot force-restore failed")
+        docker("stop", snapshot_name)
+        docker("rm", snapshot_name)
+        started.remove(snapshot_name)
+        snapshot_name = f"{server}-restored"
+        started.append(snapshot_name)
+        snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
+        fresh(snapshot_base, "POST", "sys/unseal", "",
+              {"key": volume_file(state, "unseal.key")})
+        if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
+                 {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
+            raise RuntimeError("Snapshot restore lost Transit ciphertext")
+        if fresh(snapshot_base, "GET", "didcomm/haip/keys/tenant_a/flow_a/versions/"
+                 f"{haip_version}", root)["data"]["version"] != haip_version:
+            raise RuntimeError("Snapshot restore lost HAIP key version")
+        if fresh(snapshot_base, "GET", "didcomm/keys/tenant_a/sender/versions/"
+                 f"{sender_version}", root)["data"]["version"] != sender_version:
+            raise RuntimeError("Snapshot restore lost DIDComm key version")
+        print("Self-host HTTPS Raft bootstrap, cold copy and snapshot recovery passed")
     finally:
-        if started:
+        for name in reversed(started):
             subprocess.run(
-                ["docker", "rm", "-f", server],
-                capture_output=True,
-                timeout=30,
-                check=False,
+                ["docker", "rm", "-f", name], capture_output=True,
+                timeout=30, check=False,
             )
         for volume in reversed(volumes):
             subprocess.run(
@@ -215,6 +328,7 @@ def run() -> None:
                 timeout=30,
                 check=False,
             )
+        public_ca_dir.cleanup()
 
 
 if __name__ == "__main__":

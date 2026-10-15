@@ -44,8 +44,6 @@ SANs.
   `flow` (and the cluster-qualified service name where used).
 - `auth_workload_client_cert`: client-auth certificate with the exact URI SAN
   `spiffe://marty.internal/service/auth`.
-- `applicant_workload_client_cert`: client-auth certificate with the exact URI
-  SAN `spiffe://marty.internal/service/applicant`.
 - `verification_workload_client_cert`: client-auth certificate with the exact
   URI SAN `spiffe://marty.internal/service/verification`.
 - Each certificate has its own private key. Never copy a client private key to
@@ -62,35 +60,33 @@ authenticated URI SAN; a caller-provided header is never treated as identity.
 Docker self-host installations place these files in `SELFHOST_SECRET_DIR`:
 
 - `workload_identity_ca_cert`
-- `pp_workload_server_cert` and `pp_workload_server_key`
-- `flow_workload_client_cert` and `flow_workload_client_key`
-- `flow_workload_server_cert` and `flow_workload_server_key`
-- `auth_workload_client_cert` and `auth_workload_client_key`
-- `applicant_workload_client_cert` and `applicant_workload_client_key`
-- `verification_workload_client_cert` and
-  `verification_workload_client_key`
-- `deployment_profile_workload_client_cert` and
-  `deployment_profile_workload_client_key`
-- `compliance_profile_workload_client_cert` and
-  `compliance_profile_workload_client_key`
+- `pp_workload_server_cert`, `openbao_tls_ca_cert`, and `pp_tls_kms_token`
+- `flow_workload_client_cert`, `openbao_tls_ca_cert`, and `flow_client_tls_kms_token`
+- `flow_workload_server_cert`, `openbao_tls_ca_cert`, and `flow_server_tls_kms_token`
+- `auth_workload_client_cert`, `openbao_tls_ca_cert`, and `auth_tls_kms_token`
+- `verification_workload_client_cert`, `openbao_tls_ca_cert`, and
+  `verification_tls_kms_token`
+- `deployment_profile_workload_client_cert`, `openbao_tls_ca_cert`, and
+  `deployment_profile_tls_kms_token`
+- `compliance_profile_workload_client_cert`, `openbao_tls_ca_cert`, and
+  `compliance_profile_tls_kms_token`
 
 Kubernetes installations provide the equivalent values through either the
 value or `_FILE` form of these variables before running `setup-secrets`:
 
 - `MARTY_WORKLOAD_IDENTITY_CA_CERT`
-- `PP_WORKLOAD_SERVER_CERT` and `PP_WORKLOAD_SERVER_KEY`
-- `FLOW_WORKLOAD_CLIENT_CERT` and `FLOW_WORKLOAD_CLIENT_KEY`
-- `FLOW_WORKLOAD_SERVER_CERT` and `FLOW_WORKLOAD_SERVER_KEY`
-- `AUTH_WORKLOAD_CLIENT_CERT` and `AUTH_WORKLOAD_CLIENT_KEY`
-- `APPLICANT_WORKLOAD_CLIENT_CERT` and `APPLICANT_WORKLOAD_CLIENT_KEY`
-- `VERIFICATION_WORKLOAD_CLIENT_CERT` and
-  `VERIFICATION_WORKLOAD_CLIENT_KEY`
-- `DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT` and
-  `DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY`
-- `COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT` and
-  `COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY`
+- `PP_WORKLOAD_SERVER_CERT`, `OPENBAO_TLS_CA_CERT`, and `PP_TLS_KMS_TOKEN`
+- `FLOW_WORKLOAD_CLIENT_CERT`, `OPENBAO_TLS_CA_CERT`, and `FLOW_CLIENT_TLS_KMS_TOKEN`
+- `FLOW_WORKLOAD_SERVER_CERT`, `OPENBAO_TLS_CA_CERT`, and `FLOW_SERVER_TLS_KMS_TOKEN`
+- `AUTH_WORKLOAD_CLIENT_CERT`, `OPENBAO_TLS_CA_CERT`, and `AUTH_TLS_KMS_TOKEN`
+- `VERIFICATION_WORKLOAD_CLIENT_CERT`, `OPENBAO_TLS_CA_CERT`, and
+  `VERIFICATION_TLS_KMS_TOKEN`
+- `DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT`, `OPENBAO_TLS_CA_CERT`, and
+  `DEPLOYMENT_PROFILE_TLS_KMS_TOKEN`
+- `COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT`, `OPENBAO_TLS_CA_CERT`, and
+  `COMPLIANCE_PROFILE_TLS_KMS_TOKEN`
 
 The deployment helper creates separate Kubernetes Secrets and each pod mounts
-only its own private key. Certificate material is mandatory outside development;
+only its scoped TLS signer token and public certificates. Certificate material is mandatory outside development;
 missing or partial configuration stops the affected service before it can
 process verification traffic.

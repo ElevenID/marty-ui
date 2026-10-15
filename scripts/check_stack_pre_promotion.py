@@ -150,6 +150,7 @@ def main() -> None:
     try:
         images = args.image or [os.environ.get(name, "") for name in (
             "IMAGE", "SERVICES_IMAGE", "MIGRATIONS_IMAGE", "OPENBAO_DIDCOMM_IMAGE",
+            "KEYCLOAK_IMAGE",
         )]
         if len(images) != len(REQUIRED_IMAGE_ROLES):
             raise PrePromotionError("Every release image coordinate is required")

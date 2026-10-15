@@ -32,24 +32,24 @@ mmf-security.workspace = true
 num-bigint.workspace = true
 p256.workspace = true
 redis.workspace = true
-reqwest.workspace = true
+reqwest = { workspace = true, features = ["blocking"] }
+rustls.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 tempfile.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tonic-health.workspace = true
 tower.workspace = true
 url.workspace = true
 uuid.workspace = true
 x509-cert.workspace = true
 
 [[test]]
-name = "passport_managed_kms_chain"
-path = "tests/passport_managed_kms_chain.rs"
-
-[[test]]
-name = "passport_gateway_postgres"
-path = "tests/passport_gateway_postgres.rs"
+name = "csca_capability_contract"
+path = "tests/csca_capability_contract.rs"
 
 [[test]]
 name = "gateway_signing_acceptance"
@@ -60,8 +60,16 @@ name = "holder_remote_live_kms"
 path = "tests/holder_remote_live_kms.rs"
 
 [[test]]
-name = "csca_capability_contract"
-path = "tests/csca_capability_contract.rs"
+name = "passport_gateway_postgres"
+path = "tests/passport_gateway_postgres.rs"
+
+[[test]]
+name = "passport_managed_kms_chain"
+path = "tests/passport_managed_kms_chain.rs"
+
+[[test]]
+name = "tls_openbao_keyless"
+path = "tests/tls_openbao_keyless.rs"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -6,7 +6,10 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use marty_crypto::certificate::{load_certificate_der, load_certificate_pem};
 use marty_emrtd_issuance::{prepare_sod, SodSignatureAlgorithm};
-use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
+use marty_signing_grant::{
+    minter::{GrantMinter, GrantMinting},
+    SigningOrigin,
+};
 use marty_verification::{
     trust_anchor::CscaRegistry,
     verification::emrtd::{verify_dsc_chain, ChainStatus, DocumentSignerCertificate},
@@ -209,23 +212,23 @@ impl ManagedProfileSigner {
         api_key: Option<&str>,
         issuer_sign_key: Option<&str>,
     ) -> Result<Self, SignerError> {
-        Self::configure(base_url, api_key, issuer_sign_key, None)
+        Self::configure::<GrantMinter>(base_url, api_key, issuer_sign_key, None)
     }
 
-    pub fn new_with_grant(
+    pub fn new_with_grant<M: GrantMinting + 'static>(
         base_url: Url,
         api_key: Option<&str>,
         issuer_sign_key: Option<&str>,
-        minter: GrantMinter,
+        minter: M,
     ) -> Result<Self, SignerError> {
         Self::configure(base_url, api_key, issuer_sign_key, Some(minter))
     }
 
-    fn configure(
+    fn configure<M: GrantMinting + 'static>(
         base_url: Url,
         api_key: Option<&str>,
         issuer_sign_key: Option<&str>,
-        minter: Option<GrantMinter>,
+        minter: Option<M>,
     ) -> Result<Self, SignerError> {
         let mut signer =
             HttpDidSigner::new(base_url.clone(), issuer_sign_key, Duration::from_secs(30))
@@ -720,43 +723,20 @@ mod tests {
             .route("/internal/signing-keys/resolve-issuer-did", get(resolve))
             .route("/internal/signing-keys/csca-trust-anchors", get(trust))
             .route("/internal/signing-keys/issuer-dids/sign", post(sign))
-            .route(
-                "/v1/transit/hmac/marty-sign-grant-issuance-passport-v1/sha2-256",
-                post(|headers: HeaderMap| async move {
-                    assert_eq!(headers["x-vault-token"], "passport-mint-token");
-                    Json(json!({"data": {"hmac": format!("vault:v1:{}", STANDARD.encode([7_u8; 32]))}}))
-                }),
-            )
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let mut token_file = tempfile::NamedTempFile::new().unwrap();
-        std::io::Write::write_all(&mut token_file, b"passport-mint-token\n").unwrap();
-        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
-            .lock()
-            .unwrap();
-        let previous_bao_addr = std::env::var_os("BAO_ADDR");
-        let endpoint = format!("http://{address}");
-        std::env::set_var("BAO_ADDR", &endpoint);
-        let minter = GrantMinter::for_managed_openbao(
-            &endpoint,
-            SigningOrigin::IssuancePassport,
-            token_file.path().to_path_buf(),
-        )
-        .unwrap();
-        match previous_bao_addr {
-            Some(value) => std::env::set_var("BAO_ADDR", value),
-            None => std::env::remove_var("BAO_ADDR"),
-        }
-        drop(_bao_config_guard);
-        let signer = ManagedProfileSigner::new_with_grant(
+        let mut signer = ManagedProfileSigner::new(
             Url::parse(&format!("http://{address}/internal/signing-keys/")).unwrap(),
             Some("existing-internal-auth"),
             Some("synthetic-issuer-sign-key"),
-            minter,
         )
         .unwrap();
+        signer.signer = signer.signer.clone().with_grant_minter(
+            SigningOrigin::IssuancePassport,
+            crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuancePassport),
+        );
         let groups = BTreeMap::from([
             (BigUint::from(1u8), "AQ==".into()),
             (BigUint::from(2u8), "Ag==".into()),

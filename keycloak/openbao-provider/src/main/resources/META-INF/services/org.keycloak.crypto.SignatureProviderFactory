@@ -1,0 +1,2 @@
+dev.marty.keycloak.kms.RemoteRs256SignatureProviderFactory
+dev.marty.keycloak.kms.RemoteHs512SignatureProviderFactory

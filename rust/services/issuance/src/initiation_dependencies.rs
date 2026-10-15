@@ -66,7 +66,7 @@ impl std::fmt::Debug for NativeInitiationControlPlane {
 }
 
 impl NativeInitiationControlPlane {
-    pub fn connect_lazy(
+    pub async fn connect_lazy(
         organization_target: &str,
         credential_template_target: &str,
         revocation_profile_target: &str,
@@ -84,15 +84,20 @@ impl NativeInitiationControlPlane {
             )
         })?;
         Ok(Self {
-            organizations: OrganizationServiceClient::new(channel(organization_target, timeout)?),
-            templates: CredentialTemplateServiceClient::new(channel(
-                credential_template_target,
-                timeout,
-            )?),
-            revocation_profiles: RevocationProfileServiceClient::new(channel(
-                revocation_profile_target,
-                timeout,
-            )?),
+            organizations: OrganizationServiceClient::new(
+                channel(organization_target, timeout).await?,
+            ),
+            templates: CredentialTemplateServiceClient::new(
+                grpc_client_channel::credential_template_channel(
+                    credential_template_target,
+                    timeout,
+                )
+                .await
+                .map_err(InitiationDependencyError::Invalid)?,
+            ),
+            revocation_profiles: RevocationProfileServiceClient::new(
+                channel(revocation_profile_target, timeout).await?,
+            ),
             service_token,
             timeout,
         })
@@ -642,9 +647,9 @@ fn verify_sri(value: Option<&str>, content: &[u8]) -> Result<(), InitiationDepen
     }
 }
 
-fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDependencyError> {
-    grpc_client_channel::endpoint(target, timeout)
-        .map(|endpoint| endpoint.connect_lazy())
+async fn channel(target: &str, timeout: Duration) -> Result<Channel, InitiationDependencyError> {
+    grpc_client_channel::channel(target, timeout)
+        .await
         .map_err(InitiationDependencyError::Invalid)
 }
 
@@ -691,7 +696,9 @@ mod tests {
             normalize_grpc_target("https://organization.example:9002").unwrap(),
             "https://organization.example:9002"
         );
-        channel("organization:9002", Duration::from_secs(1)).unwrap();
+        channel("organization:9002", Duration::from_secs(1))
+            .await
+            .unwrap();
 
         for invalid in [
             "",
@@ -744,6 +751,7 @@ mod tests {
             Some(TEST_SERVICE_TOKEN),
             Duration::from_secs(2),
         )
+        .await
         .unwrap();
 
         let result = dependencies.resolve("template-1").await;

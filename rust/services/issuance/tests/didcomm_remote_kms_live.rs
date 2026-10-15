@@ -2,10 +2,11 @@
 //! The sender secret is generated and retained only inside OpenBao. The holder
 //! key exists only in this test process to exercise independent decryption.
 
-use std::{io::Write, path::PathBuf};
+use std::{io::Write, path::PathBuf, time::Duration};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_didcomm::DidDocument;
+use marty_openbao_http::OpenBaoHttp;
 #[path = "support/didcomm_test_fixtures.rs"]
 mod didcomm_test_fixtures;
 use marty_issuance_service::{
@@ -13,7 +14,6 @@ use marty_issuance_service::{
     initiation_didcomm::NativeDidcommEnvelope,
 };
 use rand::random;
-use reqwest::Client;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
@@ -23,7 +23,13 @@ use x25519_dalek::{x25519, X25519_BASEPOINT_BYTES};
 async fn issuer_authcrypt_uses_scoped_openbao_key_and_holder_decrypts_after_rotation() {
     let base = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
     let root_token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("disposable root token");
-    let client = Client::builder().no_proxy().build().unwrap();
+    let kms_ca = std::env::var("MARTY_TEST_OPENBAO_CA_CERT_FILE")
+        .ok()
+        .map(PathBuf::from);
+    let client = OpenBaoHttp::connect(&base, kms_ca.as_deref(), Duration::from_secs(10))
+        .expect("HTTPS OpenBao test transport")
+        .client()
+        .clone();
     let tenant = format!("org_{}", uuid::Uuid::new_v4().simple());
     let name = "issuer";
     let sender_did = "did:web:issuer.example";
@@ -78,6 +84,21 @@ async fn issuer_authcrypt_uses_scoped_openbao_key_and_holder_decrypts_after_rota
     let mut file = std::fs::File::create(&token_file).unwrap();
     writeln!(file, "{scoped_token}").unwrap();
     drop(file);
+    let wrong_ca_file = temp.path().join("wrong-openbao-ca.pem");
+    std::fs::write(
+        &wrong_ca_file,
+        include_str!("../../signing-keys/tests/fixtures/public_certificates/root-ca.pem"),
+    )
+    .unwrap();
+    let wrong_ca_kms =
+        RemoteDidcommKms::new(&base, token_file.clone(), Some(wrong_ca_file)).unwrap();
+    assert!(
+        wrong_ca_kms
+            .public_key(&DidcommKeyReference::parse(&reference).unwrap(), sender_did)
+            .await
+            .is_err(),
+        "wrong OpenBao CA must fail closed"
+    );
     let denied = client
         .post(format!("{base}/v1/didcomm/keys/{tenant}/forbidden"))
         .header("X-Vault-Token", scoped_token)
@@ -121,7 +142,7 @@ async fn issuer_authcrypt_uses_scoped_openbao_key_and_holder_decrypts_after_rota
         .to_string(),
     )
     .unwrap();
-    let kms = RemoteDidcommKms::new(&base, PathBuf::from(&token_file)).unwrap();
+    let kms = RemoteDidcommKms::new(&base, PathBuf::from(&token_file), kms_ca).unwrap();
     let envelope = NativeDidcommEnvelope::new(
         None,
         Some(&resolver_url),

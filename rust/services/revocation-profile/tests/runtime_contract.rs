@@ -49,7 +49,9 @@ async fn executable_serves_http_grpc_and_operational_contracts() {
     let grpc_port = available_port();
     let mut child = ChildGuard(
         Command::new(env!("CARGO_BIN_EXE_marty-revocation-profile"))
-            .env("ENVIRONMENT", "beta")
+            // This fixture uses plaintext loopback gRPC on both sides. Production
+            // TLS/KMS configuration is checked separately in config tests.
+            .env("ENVIRONMENT", "test")
             .env("DATABASE_URL", &database_url)
             .env("REDIS_URL", &redis_url)
             .env("ORG_GRPC_TARGET", &organization_target)

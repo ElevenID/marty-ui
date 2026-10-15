@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use mmf_platform::{KeylessGrpcTransportOptions, OpenBaoTlsIdentityFiles};
 use serde_json::{json, Value};
 
 use marty_issuance_service::issuance_proto::{
@@ -41,6 +42,135 @@ fn smoke_database_url() -> Option<String> {
         "executable smoke database must be a dedicated *_test database"
     );
     Some(database_url)
+}
+
+fn flow_issuance_fixture(name: &str) -> String {
+    std::env::var(format!("MARTY_TEST_FLOW_ISSUANCE_{name}"))
+        .unwrap_or_else(|_| panic!("missing disposable Flow/Issuance {name} fixture"))
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "requires disposable PostgreSQL after Organization and Credential Template migrations, and scripts/with_disposable_event_stream_kms.py --profile flow-issuance"]
+async fn executable_serves_issuance_rpc_with_remote_key_mutual_tls() {
+    let database_url = smoke_database_url().expect("dedicated disposable issuance database");
+    assert!(
+        std::process::Command::new(issuance_process::issuance_binary())
+            .arg("migrate")
+            .env("DATABASE_URL", &database_url)
+            .status()
+            .expect("run Issuance schema-owner migration")
+            .success(),
+        "the real Issuance schema-owner migration must succeed"
+    );
+    let (http_reservation, http_port) = reserve_port();
+    let (grpc_reservation, grpc_port) = reserve_port();
+    let service_token = flow_issuance_fixture("SERVICE_TOKEN");
+    let ca = std::path::PathBuf::from(flow_issuance_fixture("WORKLOAD_CA"));
+    let mut command = smoke_command(http_port, grpc_port);
+    command
+        .env("DATABASE_URL", database_url)
+        .env("GRPC_SERVICE_TOKEN", &service_token)
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            flow_issuance_fixture("ISSUANCE_SERVER_CERT"),
+        )
+        .env("GRPC_WORKLOAD_TLS_CA_CERT", &ca)
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+            flow_issuance_fixture("KMS_URL"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            flow_issuance_fixture("KMS_CA"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            flow_issuance_fixture("ISSUANCE_SERVER_KMS_TOKEN_FILE"),
+        )
+        .env(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            flow_issuance_fixture("ISSUANCE_SERVER_KMS_KEY_NAME"),
+        )
+        .env("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1");
+    drop(http_reservation);
+    drop(grpc_reservation);
+    let mut child = ChildGuard(command.spawn().expect("start real Issuance executable"));
+    let client = bounded_http_client(Duration::from_secs(2));
+    let health = tokio::time::timeout(
+        Duration::from_secs(15),
+        wait_for_health_with_client(http_port, &client),
+    )
+    .await
+    .expect("bounded Issuance executable readiness");
+    assert_eq!(
+        health,
+        Some(json!({"status":"healthy", "service":"issuance-service"})),
+        "Issuance exited before readiness: {:?}",
+        child.0.try_wait().unwrap()
+    );
+    let client_identity = OpenBaoTlsIdentityFiles {
+        certificate_chain_file: flow_issuance_fixture("FLOW_CLIENT_CERT").into(),
+        kms_ca_cert_file: flow_issuance_fixture("KMS_CA").into(),
+        kms_endpoint: flow_issuance_fixture("KMS_URL"),
+        kms_token_file: flow_issuance_fixture("FLOW_CLIENT_KMS_TOKEN_FILE").into(),
+        kms_key_name: flow_issuance_fixture("FLOW_CLIENT_KMS_KEY_NAME"),
+        kms_key_version: 1,
+        request_timeout: Duration::from_secs(10),
+        max_concurrent_signs: 16,
+    };
+    let target = format!("https://localhost:{grpc_port}");
+    let ca_only = tonic::transport::Endpoint::from_shared(target.clone())
+        .unwrap()
+        .tls_config(tonic::transport::ClientTlsConfig::new().ca_certificate(
+            tonic::transport::Certificate::from_pem(std::fs::read(&ca).unwrap()),
+        ))
+        .unwrap()
+        .connect_timeout(Duration::from_secs(5))
+        .connect()
+        .await;
+    if let Ok(channel) = ca_only {
+        assert!(
+            tonic_health::pb::health_client::HealthClient::new(channel)
+                .check(tonic_health::pb::HealthCheckRequest {
+                    service: String::new(),
+                })
+                .await
+                .is_err(),
+            "Issuance executable must reject a client without its certificate"
+        );
+    }
+    let channel_result = client_identity
+        .grpc_channel_connected(&target, &ca, KeylessGrpcTransportOptions::default())
+        .await;
+    assert!(
+        channel_result.is_ok(),
+        "remote-key Flow identity must connect to the Issuance executable: {:?}; process status: {:?}",
+        channel_result.as_ref().err(),
+        child.0.try_wait().unwrap()
+    );
+    let channel = channel_result.unwrap();
+    let mut issuance = IssuanceServiceClient::new(channel);
+    assert_eq!(
+        issuance
+            .health_check(HealthCheckRequest {})
+            .await
+            .expect_err("business RPC requires a service token")
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut request = tonic::Request::new(HealthCheckRequest {});
+    request
+        .metadata_mut()
+        .insert("x-service-token", service_token.parse().unwrap());
+    assert_eq!(
+        issuance
+            .health_check(request)
+            .await
+            .unwrap()
+            .into_inner()
+            .status,
+        "serving"
+    );
 }
 
 #[tokio::test]

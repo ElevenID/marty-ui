@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
+use marty_signing_grant::{minter::GrantMinting, SigningOrigin};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
@@ -430,11 +430,11 @@ impl HttpCanvasLtiToolSignatureProvider {
         })
     }
 
-    pub fn new_with_grant(
+    pub fn new_with_grant<M: GrantMinting + 'static>(
         base_url: url::Url,
         api_key: Option<&str>,
         timeout: Duration,
-        minter: GrantMinter,
+        minter: M,
     ) -> Result<Self, CanvasLtiToolSigningError> {
         Ok(Self {
             signer: HttpDidSigner::new(base_url, api_key, timeout)

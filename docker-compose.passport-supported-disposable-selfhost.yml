@@ -14,24 +14,38 @@ services:
       FLOW_WEBHOOK_SECRET_FILE: /run/secrets/flow_webhook_secret
       FLOW_CALLBACK_CA_CERT_FILE: /run/secrets/workload_identity_ca_cert
       GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
-      GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: https://openbao:8200
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /bao/public-ca/ca.crt
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_workload_client_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}-flow-client
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: "1"
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: https://openbao:8200
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /bao/public-ca/ca.crt
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_workload_server_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}-flow-server
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: "1"
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
     secrets:
       - flow_webhook_secret
       - flow_workload_client_cert
-      - flow_workload_client_key
+      - flow_workload_client_kms_token
       - flow_workload_server_cert
-      - flow_workload_server_key
+      - flow_workload_server_kms_token
       - workload_identity_ca_cert
+    volumes: [openbao_public_ca:/bao/public-ca:ro]
   presentation-policy:
     environment:
       ENVIRONMENT: production
       GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert
-      GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key
+      GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR: https://openbao:8200
+      GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT: /bao/public-ca/ca.crt
+      GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_workload_server_kms_token
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME: ${PASSPORT_ACCEPTANCE_PROJECT:?bind disposable project}-pp-server
+      GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION: "1"
       GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
-    secrets: [pp_workload_server_cert, pp_workload_server_key, workload_identity_ca_cert]
+    secrets: [pp_workload_server_cert, pp_workload_server_kms_token, workload_identity_ca_cert]
+    volumes: [openbao_public_ca:/bao/public-ca:ro]
   issuance-native:
     environment:
       # The disposable Marty simulator is deliberately rejected in production mode.

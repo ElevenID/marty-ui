@@ -142,12 +142,30 @@ async fn passport_artifact_http_round_trip_preserves_kms_and_tenant_boundary() {
             "/v1/transit/decrypt/passport-artifact-marty-aes256",
             post(kms_decrypt),
         );
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let certified = rcgen::generate_simple_self_signed(vec!["127.0.0.1".into()]).unwrap();
+    let public_ca = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(public_ca.path(), certified.cert.pem()).unwrap();
+    let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+        certified.cert.pem().into_bytes(),
+        certified.signing_key.serialize_pem().into_bytes(),
+    )
+    .await
+    .unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
-    let provider = marty_signing_keys::flow_envelope::OpenBaoEnvelopeProvider::new(
-        format!("http://{address}"),
+    let server = tokio::spawn(async move {
+        axum_server::from_tcp_rustls(listener, tls)
+            .unwrap()
+            .serve(kms.into_make_service())
+            .await
+            .unwrap()
+    });
+    let provider = marty_signing_keys::flow_envelope::OpenBaoEnvelopeProvider::new_with_ca(
+        format!("https://{address}"),
         "synthetic-token",
+        Some(public_ca.path()),
     )
     .unwrap();
     let app = marty_signing_keys::http::router_with_dependencies(

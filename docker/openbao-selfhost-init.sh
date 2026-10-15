@@ -13,7 +13,9 @@ is_placeholder_secret_value() {
     return 1
 }
 
-BAO_ADDR="${BAO_ADDR:-http://openbao:8200}"
+BAO_ADDR="${BAO_ADDR:-https://openbao:8200}"
+BAO_CACERT="${BAO_CACERT:-/bao/data/tls/ca.crt}"
+BAO_PUBLIC_CA_FILE="${BAO_PUBLIC_CA_FILE:-/bao/runtime/openbao_tls_ca_cert}"
 BAO_INIT_FILE="${BAO_INIT_FILE:-/bao/data/selfhost-init.json}"
 BAO_ROOT_TOKEN_FILE="${BAO_ROOT_TOKEN_FILE:-/bao/data/root.token}"
 BAO_UNSEAL_KEY_FILE="${BAO_UNSEAL_KEY_FILE:-/bao/data/unseal.key}"
@@ -22,11 +24,15 @@ BAO_BOOTSTRAP_TOKEN_FILE="${BAO_BOOTSTRAP_TOKEN_FILE:-/bao/runtime/openbao_boots
 BAO_SIGNING_KEYS_TOKEN_FILE="${BAO_SIGNING_KEYS_TOKEN_FILE:-/bao/runtime/signing_keys_openbao_token}"
 BAO_DIDCOMM_ISSUANCE_TOKEN_FILE="${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE:-/bao/runtime/didcomm_issuance_openbao_token}"
 BAO_NOTIFICATION_TOKEN_FILE="${BAO_NOTIFICATION_TOKEN_FILE:-/bao/runtime/notification-webhook-service.token}"
+BAO_PASSPORT_CALLBACK_TOKEN_FILE="${BAO_PASSPORT_CALLBACK_TOKEN_FILE:-}"
 BAO_HAIP_TOKEN_FILE="${BAO_HAIP_TOKEN_FILE:-/bao/runtime/haip-kms.token}"
 BAO_HAIP_POLICY_FILE="${BAO_HAIP_POLICY_FILE:-/scripts/openbao-haip-workload-policy.hcl}"
 BAO_GRANT_TOKEN_DIR="${BAO_GRANT_TOKEN_DIR:-/bao/runtime}"
 
-mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
+mkdir -p "$(dirname "${BAO_INIT_FILE}")" "$(dirname "${BAO_ROOT_TOKEN_FILE}")" "$(dirname "${BAO_UNSEAL_KEY_FILE}")" "$(dirname "${BAO_SERVICE_TOKEN_FILE}")" "$(dirname "${BAO_BOOTSTRAP_TOKEN_FILE}")" "$(dirname "${BAO_SIGNING_KEYS_TOKEN_FILE}")" "$(dirname "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}")" "$(dirname "${BAO_NOTIFICATION_TOKEN_FILE}")" "$(dirname "${BAO_HAIP_TOKEN_FILE}")" "$(dirname "${BAO_PUBLIC_CA_FILE}")" "${BAO_GRANT_TOKEN_DIR}"
+if [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
+    mkdir -p "$(dirname "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}")"
+fi
 
 status_json() {
     bao status -address="${BAO_ADDR}" -format=json 2>/dev/null || true
@@ -80,6 +86,19 @@ while :; do
     echo "  waiting..."
     sleep 2
 done
+
+# Publish only the public trust anchor to application mounts. The CA and
+# listener private keys remain inside the OpenBao state directory.
+if ! grep -q '^-----BEGIN CERTIFICATE-----$' "${BAO_CACERT}" || grep -q 'PRIVATE KEY' "${BAO_CACERT}"; then
+    echo "OpenBao TLS public CA is missing or invalid." >&2
+    exit 1
+fi
+if ! cmp -s "${BAO_CACERT}" "${BAO_PUBLIC_CA_FILE}"; then
+    ca_tmp="$(mktemp "${BAO_PUBLIC_CA_FILE}.XXXXXX")"
+    chmod 0644 "${ca_tmp}"
+    cp "${BAO_CACERT}" "${ca_tmp}"
+    mv -f "${ca_tmp}" "${BAO_PUBLIC_CA_FILE}"
+fi
 
 initialized="$(json_bool "${current_status}" initialized)"
 if [ "${initialized}" != "true" ]; then
@@ -238,6 +257,30 @@ else
         exit 1
     fi
     write_secret_file "${BAO_SIGNING_KEYS_TOKEN_FILE}" "${signing_token}" 0444
+fi
+
+if [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ] && [ -s "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
+    callback_token="$(tr -d '\r' < "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}")"
+    if ! bao token lookup -address="${BAO_ADDR}" "${callback_token}" >/dev/null 2>&1; then
+        echo "Existing passport callback token is not accepted by OpenBao; rotate it explicitly." >&2
+        exit 1
+    fi
+    callback_lookup="$(bao token lookup -address="${BAO_ADDR}" -format=json "${callback_token}")"
+    if [ "$(json_array_field "${callback_lookup}" policies)" != '["passport-callback-hmac-service"]' ] ||
+       [ -n "$(json_field "${callback_lookup}" entity_id)" ]; then
+        echo "Existing passport callback token has unexpected authority; rotate it explicitly." >&2
+        exit 1
+    fi
+    echo "Reusing passport callback token at ${BAO_PASSPORT_CALLBACK_TOKEN_FILE}"
+elif [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
+    echo "Minting scoped passport callback token..."
+    callback_token_json="$(bao token create -address="${BAO_ADDR}" -policy=passport-callback-hmac-service -no-default-policy -orphan -format=json)"
+    callback_token="$(json_field "${callback_token_json}" client_token)"
+    if [ -z "${callback_token}" ]; then
+        echo "Failed to mint passport callback token." >&2
+        exit 1
+    fi
+    write_secret_file "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" "${callback_token}" 0444
 fi
 
 didcomm_token_missing=0
