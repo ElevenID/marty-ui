@@ -22731,3 +22731,20 @@ diff checks passed. Along with `1e4bd5d62` and `e5234e76d`, these are the
 single grouped correction for the next PR head. Keep a real Flow-to-Issuance
 KMS-backed client/server handshake and installed cutover on the acceptance
 list; no synthetic plaintext fixture proves that boundary.
+
+The three grouped UI corrections were pushed together at `015210c63`.
+[Exact-head CI run
+38812248400](https://github.com/ElevenID/marty-ui/actions/runs/38812248400)
+is active; its Release Contract Tests have passed and the remaining Rust
+image/runtime lanes are still running at this checkpoint. A further local,
+unpushed UI commit `a849420fe` activates the already implemented ignored
+`marty-flow` Flow-to-Issuance mutual TLS test under a disposable HTTPS OpenBao
+profile. Its two non-exportable scoped Transit identities present client and
+server certificates, reject a client without an identity, and complete a real
+gRPC health call over mTLS. The CI step verifies the named test exists and
+requires exactly one passing test. Local Rust test inventory/compilation,
+workflow YAML parsing and 153 workflow tests passed; local Docker remains
+unavailable, so the connected KMS run is pending the next grouped PR head.
+This proof will cover the Flow channel primitive, while installed Flow service
+configuration, Keycloak database cutover and release-artifact qualification
+remain separate acceptance requirements.
