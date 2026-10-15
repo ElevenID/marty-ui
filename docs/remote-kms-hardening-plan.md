@@ -20513,10 +20513,24 @@ CA-verified HTTPS OpenBao with the plugin mounted. It passed scoped
 non-exportable sender-key creation, key rotation, authcrypt pack and holder
 decryption, and rejection of a wrong OpenBao CA; the dedicated probe
 removes its OpenBao container. This is real local backend evidence, not a
-published image or physical wallet test. The existing coordinated-restore
-CI probe still starts its Raft OpenBao on HTTP and invokes this live test;
-that gate will now fail until the Raft probe and its other OpenBao clients
-are converted to authenticated HTTPS. The current same-machine self-host
+published image or physical wallet test. At this point the coordinated-restore
+CI probe still started its Raft OpenBao on HTTP and invoked this live test;
+the next entry records the resulting probe correction. The current same-machine self-host
 OpenBao scaffold and example `BAO_ADDR` are also HTTP. Do not push the
-grouped UI branch until those dependencies and the passport fixture are
+grouped UI branch until the self-host and passport fixtures are
 converted and retested; do not reinstate an HTTP DIDComm fallback.
+
+2026-10-14 coordinated-restore CI gate correction, staged in the grouped UI
+worktree: the probe now invokes the native DIDComm authcrypt contract against
+a separate disposable CA-verified HTTPS OpenBao plugin instance, reusing its
+built plugin image. It does not re-enable an HTTP mode in the production
+client. The original Raft phase still checks plugin mount, scoped token
+capabilities and coordinated snapshot/restore on its disposable HTTP listener;
+the HTTPS authcrypt phase does not run against that same Raft cluster. The
+complete `python scripts/probe_integration_secret_coordinated_restore.py`
+local gate exited 0: Rust issuer/holder and DIDComm live tests, Go plugin
+integration, Flow HAIP, two PostgreSQL restoration phases and final
+coordinated restore passed. Python compilation also passed. This repairs the
+required CI probe after the HTTPS-only client cutover without proving a
+single HTTPS Raft production graph. The self-host OpenBao and passport
+fixtures still need their own HTTPS cutover before hosted CI/push.
