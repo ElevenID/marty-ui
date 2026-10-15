@@ -22083,5 +22083,7 @@ real KMS acceptance test. Local Python compilation, Compose Canvas/Flow
 renders, Flow keyless-config child, Rust 1.95 Canvas and Flow acceptance test
 compilation, Revocation Profile production config tests (7), formatting and
 diff checks passed. Docker-backed full replay was unavailable locally. The
-two commits remain to be pushed as one PR head and must pass exact-head hosted
-checks before merge or release qualification.
+both commits were pushed together as PR #1344 head
+`ae081b825a5ce9b203b098fb396eb3ae61d60ce4`; the PR body names the exact
+head and failed predecessor. The new head must pass exact-head hosted checks
+before merge or release qualification.
