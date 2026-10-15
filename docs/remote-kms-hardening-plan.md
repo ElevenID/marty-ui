@@ -20550,3 +20550,21 @@ During self-review the staged shared `marty-openbao-http` CA loader was
 bounded to 64 KiB before parsing, so an operator-supplied CA path cannot
 induce an unbounded allocation. The locked Rust crate tests passed. The existing same-machine scaffold remains HTTP
 until that coordinated change is implemented and locally qualified.
+
+2026-10-14 Notification envelope HTTPS cutover, staged in the grouped UI
+worktree: the native webhook secret envelope now uses `marty-openbao-http`
+for strict HTTPS origin, CA validation, no proxy/redirect and bounded timeout.
+It requires its dedicated Notification OpenBao token in every environment;
+the former shared service/root token fallback is removed. Self-host runtime
+and migration Compose now mount the public OpenBao CA, beta overlays mount it,
+and Kubernetes Notification and migration pods read it from `marty-secrets`;
+the deploy script and secrets template supply the public CA key. The reviewed
+self-host snapshot/hash were updated. A beta Compose render exposed missing
+Compliance Profile and Deployment Profile TLS secret declarations from the
+broader staged keyless changes; those declarations and the physical-provider
+fixture inputs were corrected. Locked Notification Rust check/unit tests,
+163 focused self-host/Kubernetes/beta tests, Kubernetes YAML parsing, shell
+syntax and diff checks passed. This is source/config evidence only. The base
+beta OpenBao, disposable migration probes and current same-machine Raft
+listener still use HTTP; their live Notification envelope/migration contract
+must be moved to authenticated HTTPS and rerun before push.
