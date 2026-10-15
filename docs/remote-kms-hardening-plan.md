@@ -20924,3 +20924,20 @@ Gateway still has plaintext Organization/Event Stream targets and the beta
 fixture still sets its plaintext override. Auth dependency wiring, protected
 full-stack journey, exact published artifact and rotation/failure proofs
 remain open. This is not release qualification.
+
+2026-10-15 Gateway/Auth protected-fixture dependency audit: deployed Gateway
+configuration requires a public gRPC CA, CA-verified HTTPS Organization and
+Event Stream targets, and a KMS-backed client identity for HTTPS Auth. The
+Gateway binary connects Auth eagerly before serving requests; the current
+protected fixture has no Auth service and its beta Gateway still enables the
+retired plaintext override. Thus the presently passing static model and
+keyless edge probe do not establish a bootable full Gateway journey. Native
+Auth also needs its own remote client/server TLS identities, a real OIDC
+discovery/JWKS peer, PostgreSQL, Redis, Flow/Organization/Event Stream gRPC,
+and healthy Applicant/Issuance HTTP peers at startup. A fake Auth target or
+an absent Auth service would not be an acceptable custody proof. The staged
+strict producer preflight now rejects a model missing Auth even after Gateway
+plaintext selectors are corrected; a real-Compose regression test covers
+that case. Next implement the isolated real Auth/Keycloak/Applicant dependency
+graph with scoped TLS bootstrap roles, then convert Gateway and prove a full
+local journey before submitting the grouped UI PR.
