@@ -21454,3 +21454,21 @@ then the existing bootstrap unsealed it over verified HTTPS and reused its
 service and signing tokens. Raft returned active and unsealed with the same
 cluster identity. The Notification token was reminted by the existing
 bootstrap policy, which needs separate idempotence review before cutover.
+
+2026-10-15 HTTPS recovery qualification (grouped UI worktree, unlanded): the
+existing disposable clean Raft bootstrap probe now initializes the TLS
+identity through the production Go helper, verifies the listener using its
+public CA, checks only that public CA is published to runtime mounts, and
+passes scoped DIDComm/HAIP/integration-secret operations over HTTPS. The
+coordinated PostgreSQL/Raft restore probe now uses distinct verified source
+and replacement-node CAs, exports the Raft snapshot over loopback HTTPS,
+force-restores it, and proves post-restore Rust integration-secret reads.
+Its full local run passed, including live Issuance signing, Canvas readiness,
+VC-API holder proof and orphan cleanup, DIDComm authcrypt, Go HAIP, Rust Flow
+HAIP, snapshot export/restore and PostgreSQL restore. The exercise found a
+real holder-proof orphan reaper that used a generic HTTP client; it now uses
+the shared `OpenBaoHttp` HTTPS/CA policy. Two Issuance fixtures and a
+holder-proof fixture that asserted HTTP were updated to use the same public
+CA without generating local private keys. This proves a disposable recovery
+path, not the live stack, exact signed release images, real cloud providers,
+or physical device.
