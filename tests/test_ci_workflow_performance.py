@@ -5384,11 +5384,11 @@ def test_service_acceptance_keeps_composition_dependencies_out_of_service_builds
 def _dev_dependency_packages(
     manifest: dict, workspace_dependencies: dict
 ) -> set[str]:
-    tables = [manifest.get("dev-dependencies", {})]
-    tables.extend(
-        target.get("dev-dependencies", {})
-        for target in manifest.get("target", {}).values()
-    )
+    tables = []
+    for owner in (manifest, *manifest.get("target", {}).values()):
+        tables.extend(
+            owner.get(key, {}) for key in ("dev-dependencies", "dev_dependencies")
+        )
     packages = set()
     for dependencies in tables:
         for alias, declaration in dependencies.items():
@@ -5429,10 +5429,19 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
             "gateway_alias": {"package": "marty-gateway", "path": "../gateway"},
             "inherited_alias": {"workspace": True},
         },
+        "dev_dependencies": {
+            "signing_alias": {"package": "marty-signing-keys", "path": "../signing-keys"}
+        },
         "target": {
             "cfg(unix)": {
                 "dev-dependencies": {
                     "flow_alias": {"package": "marty-flow", "path": "../flow"}
+                },
+                "dev_dependencies": {
+                    "issuance_alias": {
+                        "package": "marty-issuance-service",
+                        "path": "../issuance",
+                    }
                 }
             }
         },
@@ -5444,6 +5453,8 @@ def test_service_dev_edge_guard_resolves_aliases_and_target_specific_deps() -> N
         "marty-gateway",
         "marty-auth",
         "marty-flow",
+        "marty-signing-keys",
+        "marty-issuance-service",
     }
 
 
