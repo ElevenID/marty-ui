@@ -22187,3 +22187,29 @@ proof. The official OIDF runner, cert provisioning in an installed graph,
 and deployed KMS reachability still need verification. The base development
 OpenBao listener remains HTTP; the updated operator guide requires a
 separately provisioned HTTPS KMS endpoint until that graph is converted.
+
+2026-10-15 base HTTPS conversion in progress: isolated UI worktree
+`feat/kms-base-https-20261015` now drafts a Raft OpenBao listener with the
+existing Go KMS-owned TLS initializer and self-host bootstrap. It routes the
+base Gateway, Notification, Signing Keys, Flow, Issuance, Canvas worker and
+migration clients through verified HTTPS with a public-CA-only volume. Root
+token environment values are removed from workloads; migration receives the
+short-lived bootstrap token, Signing Keys a scoped token, Notification its
+own token, and Issuance separate service and DIDComm token files. The
+released GHCR overlay pins the plugin image for all three OpenBao roles.
+Compose parses, but this branch is not qualified or pushed: the native
+authcrypt profile and its closed model tests still encode the old dev-server
+HTTP topology. Focused tests currently report 114 passed, two failures and
+30 errors in that model area; local Docker runtime is unavailable. Reconcile
+the independent model and fixture probes, then run the complete native
+Compose checks and real Raft start/restart proof before grouping into PR
+#1344. Do not mistake the staged Compose draft for an accepted KMS-only graph.
+
+The exact-head PR #1344 CI run `38780095995` found one managed-key Gateway
+acceptance failure: the disposable scoped Transit fixture allowed P-256 key
+creation but the same test creates an Ed25519 issuer identity, yielding HTTP
+503 through the native profile route. The production `signing-keys-managed`
+policy already allows Ed25519. The unpushed PR worktree now adds Ed25519 to
+that disposable issuer-key policy; Python compilation, diff check, and 171
+focused workflow/contract tests passed. Wait for the remaining lanes of the
+current run, batch any further corrections, and then push one reviewed head.
