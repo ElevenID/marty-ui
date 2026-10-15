@@ -1255,7 +1255,7 @@ assembled Core matrix is still due.
 | K9 | Land grouped feature PRs through required checks; qualify exact release artifacts, clean KMS-only cutover and recovery; update durable evidence and close the goal only after acceptance below. | In progress; SSI fork #9, Rust-only Issuance #1203, Core #355, Credentials #313, grouped UI #1192, approval-free publisher #1328, clean-install follow-up #1330, and successor lock #1331 are merged. All five #1331 merge-group workflows passed at `667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI `38605156101` is running on that SHA. The first no-write `v1.1.247` claim safely refused the old lock and wrote no tag. `v1.1.246` remains immutable but its installed prepared-consumer check failed. The `stack-release` environment keeps protected-branch policy without manual approval. Signed successor publication, installed probes and full journey, real providers/device, and cutover/recovery remain. |
 | K10 | Remove every private-key database table and secret-bearing key column from clean-install DDL, ORM metadata, initialization and tests, including active identity-provider databases. Add no migration scripts; prove fresh database schemas and runtime writes contain only public keys or scoped remote references where key metadata is needed. | In progress; Credentials private-key ORM definitions and UI legacy wheel paths are removed. Fresh native PostgreSQL service probes and holder runtime-write scans found no private-key storage. The Rust-only assembled migration/service images passed a fresh disposable self-host probe twice: 61 tables, 811 columns, 85 JSON columns and no private-key catalog/content matches. That proof covers the Marty database. Both running local self-host and beta Keycloak databases still hold four `privateKey` and four generated symmetric `secret` KeyProvider entries each in `COMPONENT_CONFIG`; K12 owns their remote-key cutover and separate clean-install/runtime proof. Exact signed-image execution, final representative writes and supported cutover remain. |
 | K11 | Remove file-backed service-owned TLS/mTLS identity private keys from production clients, listeners, compose and Kubernetes deployments. Use remotely held, non-exportable signing with certificate/public-key binding; preserve transport authentication, rotation and failure behavior. Cover all published roots and prove no PEM/key-file fallback in shipped artifacts. | In progress; the shared MMF remote signer is pinned in the grouped UI branch at `aa1f208335df6aa955b669511180dee6555d1896`. Signing Keys, Event Stream and several native gRPC clients/listeners use KMS-backed identities. Auth/Gateway have staged keyless mTLS and a passing connected Auth RPC test. Flow-to-Issuance has staged explicit HTTPS/KMS mTLS and passing connected transport plus real Issuance executable service-RPC tests. The grouped UI changes remain uncommitted/unlanded. Other deployed plaintext edges, disposable private-key fixtures, installed signed-artifact, rotation and full-graph proofs remain. |
-| K12 | Make the deployed OIDC provider KMS-only without losing login, session, refresh, JWKS or rotation behavior. If Keycloak remains the provider, replace active generated/imported/keystore realm signing and symmetric keys with remotely held, non-exportable references through a supported Keycloak provider/SPI or equivalent fail-closed integration; cover the master and 11id realms, disable local-key fallback, and scan the separate Keycloak database and runtime writes for private material. | Confirmed live gap. The packaged Keycloak 25 realm sets RS256 and does not configure a remote key provider. Count-only reads of both running local self-host and beta Keycloak databases found four `privateKey` entries and four generated symmetric `secret` entries each, across `master` and `11id`; eight non-remote KeyProvider components and no remote providers. A staged read-only SQL verifier fails on both. Keycloak 25.0.6 generated-RSA source writes PEM-encoded private material into its component model. No remote-signing extension has been implemented. Do not claim whole-stack KMS-only or complete K10 from the Marty-only 61-table proof. |
+| K12 | Make the deployed OIDC provider KMS-only without losing login, session, refresh, JWKS or rotation behavior. If Keycloak remains the provider, replace active generated/imported/keystore realm signing and symmetric keys with remotely held, non-exportable references through a supported Keycloak provider/SPI or equivalent fail-closed integration; cover the master and 11id realms, disable local-key fallback, and scan the separate Keycloak database and runtime writes for private material. | In progress. Existing self-host and beta Keycloak DBs each still have four `privateKey` and four generated `secret` entries; the staged read-only SQL verifier rejects both. An unshipped Keycloak 25.0.6 Java SPI override now replaces built-in RSA and HMAC key/signature providers for a disposable master realm. Live HTTPS OpenBao Transit RS256/HS512 issuance, JWKS signature verification, KMS-token-loss denial, and zero private/secret rows after runtime writes passed locally. RSA-OAEP and AES remain fail closed; 11id, browser login/session/refresh, rotation, PostgreSQL release schema, broad provider disablement, packaging, and installed acceptance remain. Do not claim whole-stack KMS-only or complete K10. |
 
 ### K11 TLS identity custody inventory and implementation boundary (2026-10-14)
 
@@ -21088,9 +21088,9 @@ token request returned HTTP 500 as intended because remote signing is not
 implemented; a second database scan after that request still had zero key
 material rows. This proves an SPI override can avoid a Keycloak source fork
 for the *bootstrap-storage* problem on this pinned version, while preserving
-fail-closed behavior. It does not yet implement OIDC crypto or prove 11id,
-rotation, refresh, JWE, or production PostgreSQL. Do not deploy the proof
-JAR; replace its failing factories with complete remote operations and
+fail-closed behavior. At that point it did not implement OIDC crypto or prove
+11id, rotation, refresh, JWE, or production PostgreSQL. Do not deploy the
+incomplete JAR; replace its remaining failing factories with remote operations and
 attest the exact JAR/image before K12 acceptance. The SQL verifier must be
 adapted to attest the approved override IDs and distribution rather than
 trusting the provider ID string alone.
@@ -21104,3 +21104,29 @@ provided Keycloak dependencies); `mvn -B -q -DskipTests package` passed in
 the local Java 21 Maven container. This build success is compile evidence,
 not an OIDC feature acceptance test. Its isolated source commit on the
 grouped UI branch is `af7d188a9`; it has not been pushed or deployed.
+
+2026-10-15 K12 remote signing slice: the grouped UI branch now contains
+Keycloak 25.0.6 Java `keys` and signature-provider overrides at `65e6e32fd`.
+The RSA KeyProvider publishes only a version-pinned public key and an
+OpenBao-CA-signed public certificate; the RS256 signer calls OpenBao Transit
+with `pkcs1v15` and verifies the returned signature against that public key.
+The HS512 KeyProvider publishes no `SecretKey`; its signer/verifier use a
+separate non-exportable OpenBao HMAC key. Both read a scoped token file and
+CA-verify HTTPS; wrong KMS key version, missing token, public-key mismatch,
+and non-exportable-key metadata checks fail closed. The RSA-OAEP and AES
+KeyProviders still publish no keys, so their dependent features are not yet
+qualified. The Java 21 Maven package build passed locally.
+
+The reproducible `scripts/probe_keycloak_remote_rs256.py` creates a fresh
+disposable OpenBao HTTPS instance, generates RSA and HMAC keys and a CA/leaf
+certificate entirely inside OpenBao, and mounts only public certificates
+and a scoped read/sign/HMAC/verify token into a fresh Keycloak 25.0.6. It
+issued an admin-cli master-realm token; an independent Python RSA verifier
+validated its RS256 signature using Keycloak's JWKS, while a direct H2
+`COMPONENT_CONFIG` scan returned zero `privateKey` and zero `secret` rows
+after startup and issuance. Replacing the scoped token with an invalid
+value made the next issuance return HTTP 500; the same DB scan remained
+empty. This is real remote cryptography but only a disposable master-realm
+slice. Repeat on `11id`, browser login/refresh/session, key rotation and
+production PostgreSQL; remove or replace all other local KeyProviders and
+qualify the exact installed image before treating Keycloak as KMS-only.
