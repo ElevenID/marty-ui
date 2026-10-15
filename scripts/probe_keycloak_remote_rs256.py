@@ -191,6 +191,27 @@ def browser_code(opener, base: str, callback: str, realm: str,
     })
 
 
+def browser_log_summary(container: str, since: str) -> str:
+    observed = subprocess.run(
+        ["docker", "logs", "--since", since, "--tail", "120", container],
+        capture_output=True, text=True, timeout=10,
+    )
+    lines = (observed.stdout + observed.stderr).splitlines()
+    return "\n".join(line for line in lines if any(marker in line for marker in (
+        "Failed to create fallback key",
+        "Caused by:",
+        "Error encoding cookie",
+        "Remote restart cookie could not be authenticated",
+        "Failed to verify encoded RestartLoginCookie",
+        "Authentication session not found",
+        "Authentication session restart from cookie succeeded",
+        "Failed to parse RestartLoginCookie",
+        "at dev.marty.keycloak.kms.",
+        "at org.keycloak.protocol.RestartLoginCookie",
+        "at org.keycloak.protocol.oidc.grants.ciba.channel.CIBAAuthenticationRequest",
+    )))[:2400]
+
+
 def wait_for(path: Path, seconds: int = 30) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -509,6 +530,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                 "-e", "MARTY_KEYCLOAK_JWE_MOUNT=didcomm",
                 "-e", f"MARTY_KEYCLOAK_KMS_KEY_PREFIX={prefix}",
                 "-e", "MARTY_KEYCLOAK_KMS_KEY_VERSION=1",
+                "-e", "KC_LOG_LEVEL=INFO,org.keycloak.protocol.RestartLoginCookie:DEBUG,org.keycloak.services.resources.SessionCodeChecks:DEBUG",
                 *(["-e", "KC_SPI_CIBA_AUTH_CHANNEL_CIBA_HTTP_AUTH_CHANNEL_HTTP_AUTHENTICATION_CHANNEL_URI="
                    f"http://host.docker.internal:{ciba_device.server_port}/"]
                   if ciba_device else []),
@@ -766,6 +788,20 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                     ("master", "probe", jwks),
                     ("11id", "probe11", jwks_11id),
                 ):
+                    baseline_browser = build_opener(
+                        HTTPCookieProcessor(CookieJar()), StopAtCallback(callback))
+                    try:
+                        baseline_tokens = browser_code(
+                            baseline_browser, base, callback, realm, username, login=True)
+                    except Exception as error:
+                        raise RuntimeError(
+                            f"{realm} baseline browser login failed: {error}\n"
+                            + browser_log_summary(kc_name, browser_log_since)
+                        ) from error
+                    for field in ("access_token", "id_token"):
+                        verify_jwt(baseline_tokens[field], realm_jwks,
+                                   f"{prefix}-{realm}-rs256-v1",
+                                   base + f"/realms/{realm}")
                     browser_cookies = CookieJar()
                     browser = build_opener(HTTPCookieProcessor(browser_cookies),
                                            StopAtCallback(callback))
@@ -783,8 +819,24 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                             {"jwe": restart.value},
                             token=(jwe_token_dir / f"{realm}-cookie.token").read_text(),
                         )["data"]["plaintext_base64"]
-                        if len(base64.b64decode(decrypted).split(b".")) != 3:
+                        signed = base64.b64decode(decrypted)
+                        parts = signed.split(b".")
+                        if len(parts) != 3:
                             raise RuntimeError("Old restart cookie did not survive remote rotation")
+                        header = json.loads(base64.urlsafe_b64decode(
+                            parts[0] + b"=" * (-len(parts[0]) % 4)))
+                        if (header.get("alg") != "HS512" or
+                                header.get("kid") != f"{prefix}-{realm}-hs512-v1"):
+                            raise RuntimeError("Restart cookie lacks the scoped remote HS512 signature")
+                        signature = base64.urlsafe_b64decode(
+                            parts[2] + b"=" * (-len(parts[2]) % 4))
+                        verification = bao_api(
+                            f"transit/verify/{prefix}-{realm}-hs512/sha2-512",
+                            {"input": base64.b64encode(b".".join(parts[:2])).decode(),
+                             "hmac": "vault:v1:" + base64.b64encode(signature).decode()},
+                        )["data"]
+                        if verification.get("valid") is not True:
+                            raise RuntimeError("Restart cookie JWS failed remote HS512 verification")
                     for login in (True, False):
                         try:
                             browser_tokens = browser_code(browser, base, callback,
@@ -792,18 +844,13 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
                                                           before_submit=rotate_during_login
                                                           if login else None)
                         except Exception as error:
-                            observed = subprocess.run(["docker", "logs", "--since",
-                                                      browser_log_since, "--tail", "120", kc_name],
-                                                      capture_output=True, text=True, timeout=10)
-                            lines = (observed.stdout + observed.stderr).splitlines()
-                            logs = "\n".join(line for line in lines
-                                             if "Failed to create fallback key" in line
-                                             or "Caused by:" in line
-                                             or "Error encoding cookie" in line
-                                             or "at dev.marty.keycloak.kms." in line
-                                             or "at org.keycloak.protocol.RestartLoginCookie" in line
-                                             or "at org.keycloak.protocol.oidc.grants.ciba.channel.CIBAAuthenticationRequest" in line)[:2400]
-                            raise RuntimeError(f"{realm} browser flow failed: {error}\n{logs}") from error
+                            names = sorted({cookie.name for cookie in browser_cookies
+                                            if cookie.name in {"AUTH_SESSION_ID", "KC_RESTART", "KC_RESTART_LEGACY"}})
+                            raise RuntimeError(
+                                f"{realm} rotated browser flow failed: {error}; "
+                                f"cookie types {names}\n"
+                                + browser_log_summary(kc_name, browser_log_since)
+                            ) from error
                         for field in ("access_token", "id_token"):
                             verify_jwt(browser_tokens[field], realm_jwks,
                                        f"{prefix}-{realm}-rs256-v1",

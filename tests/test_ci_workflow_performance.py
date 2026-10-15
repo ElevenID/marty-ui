@@ -469,22 +469,25 @@ def test_remote_holder_live_kms_has_one_acceptance_owner_and_exact_ci_call() -> 
     _, workflow = _workflow(CI_PATH)
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     execution = next(
-        step
-        for step in steps
+        step for step in steps
         if step.get("name")
-        == "Prove remote holder lifecycle with scoped OpenBao and fresh PostgreSQL"
+        == "Qualify scoped provider callback verification against disposable OpenBao"
     )
     assert execution["if"] == "matrix.lane == 'contracts'"
-    assert f"-p marty-service-acceptance --test {target}" in execution["run"]
-    assert f"holder_case={case}" in execution["run"]
-    assert '-- --list | grep -Fx "$holder_case: test"' in execution["run"]
-    assert '"$holder_case" -- --ignored --exact' in execution["run"]
-    assert "1 passed; 0 failed; 0 ignored;" in execution["run"]
+    assert execution["run"] == (
+        "python3 scripts/probe_signing_keys_openbao_policy.py --rust-adapter"
+    )
+    assert all(
+        "holder_remote_live_kms" not in step.get("run", "") for step in steps
+    )
     probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
         encoding="utf-8"
     )
-    assert '"-p", "marty-service-acceptance",\n                    "--test", "holder_remote_live_kms"' in probe
-    assert '"registration_provision_sign_and_deactivate_delete_remote_key"' in probe
+    assert probe.count('"--test", "holder_remote_live_kms"') == 1
+    assert f'"{case}"' in probe
+    assert '"--", "--ignored", "--exact", "--nocapture"' in probe
+    assert '"BAO_CACERT": str(ca_file)' in probe
+    assert '"MARTY_TEST_OPENBAO_TOKEN": managed' in probe
     assert "if not rust_test_succeeded(result):" in probe
 
 
