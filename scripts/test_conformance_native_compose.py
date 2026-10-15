@@ -376,7 +376,7 @@ def run(command):
                         selected["services"]["flow"]["environment"][
                             "ISSUANCE_GRPC_TARGET"
                         ]
-                        == "issuance-native:9005"
+                        == "https://issuance-native:9005"
                     )
                     assert (
                         selected["services"]["issuance-native"]["environment"][

@@ -692,7 +692,9 @@ def run(command):
         required = {
             key: "synthetic-required-artifact"
             for key in re.findall(
-                r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
+                r"\$\{([A-Z0-9_]+):\?",
+                (ROOT / "docker-compose.base.yml").read_text()
+                + (ROOT / "docker-compose.profile.issuance-native.yml").read_text(),
             )
         }
         required["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
