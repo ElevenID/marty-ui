@@ -22454,3 +22454,19 @@ the existing disposable HTTPS OpenBao policy probe, which provisions the
 non-exportable envelope and scoped token. Python syntax, Bash syntax, diff
 checks, and all 37 database-group policy tests passed locally. Hosted proof
 remains pending; Canvas, plugin recovery, and self-host jobs are still live.
+
+Run `38791978877` finished failed at the CI gate. Plugin recovery, image
+packaging, self-host, and the other required lanes passed. Canvas's published
+database suite had 126 passes and five failures: the three isolated Gateway
+composition children and two native-only renewal cases. The owned child
+diagnostics recorded Gateway `ProviderUnavailable("gRPC TLS dependency")`;
+native renewal returned 503 for its credential-template peer. These share
+the disposable HTTPS peer's Tokio test runtime. The MMF OpenBao TLS signer
+explicitly refuses synchronous signing on a current-thread runtime, so its
+server-side handshake could not complete. Local UI commit `60c05939f` moves
+the five relevant peer-owning tests to multi-thread Tokio and makes the
+fixture reject a future current-thread regression before startup. Rust 1.95
+Canvas Clippy with warnings denied, rustfmt, and diff checks passed. This
+is an evidence-based correction, not a claim that the hosted handshake has
+passed; the next exact-head run must prove it. Together with local commits
+`aa77cecc4` and `48638e858`, it forms the next grouped PR retry batch.
