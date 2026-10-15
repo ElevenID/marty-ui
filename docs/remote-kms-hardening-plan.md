@@ -20901,3 +20901,26 @@ callback. This is a staged local image, not the exact published release.
 Trust/Compliance/Deployment/Presentation Policy/Flow/Gateway clients and
 their remaining plaintext targets still need cutover; the full protected
 passport journey remains blocked.
+
+2026-10-15 protected profile/Flow transport slice, staged in the grouped UI
+worktree: the disposable Rust/OpenBao bootstrap now issues two additional
+non-exportable, project-scoped client signer roles for Compliance Profile and
+Deployment Profile, bringing its public-only output to thirteen roles. The
+base and self-host disposable Compose surfaces now route Trust, Compliance,
+Presentation Policy, Deployment and Flow to Organization over CA-verified
+HTTPS. Compliance and Deployment mount their own public client certificates,
+read-only OpenBao CA and scoped signer tokens; Trust uses the public CA.
+Presentation Policy's server and Flow's client/server identities now use
+their existing remote signers on both surfaces, and Flow's Organization,
+Credential Template, Presentation Policy and Issuance gRPC targets are HTTPS.
+The rendered model and live ownership verifiers were updated together with
+their synthetic fixtures. Four focused suites passed 259 tests with two
+skips; the Rust bootstrap binary check, rustfmt and Python compilation
+passed. A fresh local Linux services image
+`sha256:74ee80d1040fa1eeaa563c1f2eddc54419dd3c54e1268c1e4d168d1019192c0b`
+passed a real disposable HTTPS OpenBao probe covering all thirteen outputs,
+public-only material, wrong-CA rejection and the remote-signed edge callback.
+Gateway still has plaintext Organization/Event Stream targets and the beta
+fixture still sets its plaintext override. Auth dependency wiring, protected
+full-stack journey, exact published artifact and rotation/failure proofs
+remain open. This is not release qualification.
