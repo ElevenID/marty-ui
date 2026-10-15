@@ -16,16 +16,17 @@ This bundle is the image-based distribution for the open-source self-host stack.
 
 The bundle is an image-only packaging format. Its image roles must be published
 and qualified together before a customer installation; the packager does not
-produce them. The v1.1.231 public release publishes `ui`, `services`, and
-`migrations` OSS images, but not this bundle's `ui-selfhost`, `db-migrate`, or
-`cloudflared-wrapper` roles. Do not treat that release as a ready-to-install
-self-host bundle.
+produce them. The v1.1.247 Stack release prepared an exact image-locked bundle
+in an opt-in job, but that ZIP is an unqualified Actions artifact, not a public
+release asset. Do not treat the Stack release as a ready-to-install self-host
+bundle.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`
 
 The intended UI role is `ui-selfhost`, excluding the public marketing and blog
-surface. It is not among the v1.1.231 public images.
+surface. An image reference in an internal prepared lock does not qualify the
+role for customer installation.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
 For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
