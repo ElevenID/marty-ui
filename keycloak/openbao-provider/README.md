@@ -43,10 +43,14 @@ Pinned 25.0.6 bytecode shows `RestartLoginCookie.encodeAndEncrypt` calls
 then passes both `SecretKey` objects directly to `TokenUtil.jweDirectEncode`.
 Its decode path similarly calls `TokenUtil.jweDirectVerifyAndDecode`.
 `DefaultKeycloakSession.keys()` constructs `DefaultKeyManager` directly.
-A `ContentEncryptionProvider` SPI override alone cannot intercept this
-cookie path. Preserve the no-export rule: qualify a pinned Keycloak source
-patch or a proven opaque remote JCE bridge for these operations rather than
-returning local AES/HMAC key bytes from the KeyProvider.
+`TokenUtil.jweDirectEncode(Key, Key, byte[])` also unconditionally calls
+`Key.getEncoded().length` before building the JWE. A
+`ContentEncryptionProvider` SPI override cannot intercept this cookie path,
+and an opaque `SecretKey` with `getEncoded() == null` cannot pass the current
+code. The implementation route for this pinned version is a
+source-built Keycloak change to route cookie JWE encode/decode to remote
+operations. Keep AES/HMAC bytes inside OpenBao; do not supply real or fake
+local key bytes to satisfy the old `SecretKey` API.
 
 The build must pin Keycloak to exactly 25.0.6. Its `keys` SPI is internal and
 may change between releases. Keycloak's Admin REST component representation
