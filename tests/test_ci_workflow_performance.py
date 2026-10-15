@@ -1271,6 +1271,8 @@ def test_openbao_plugin_changes_select_required_image_lane(tmp_path: Path) -> No
         coordinated_gate["env"]["MARTY_OPENBAO_PROBE_IMAGE"]
         == "marty-openbao-didcomm:ci"
     )
+    assert coordinated_gate["env"]["CARGO_PROFILE_DEV_DEBUG"] == 0
+    assert coordinated_gate["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
     assert "probe_integration_secret_coordinated_restore.py" in coordinated_gate["run"]
     assert job["timeout-minutes"] >= 30
     assert "CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go vet ./..." in (
