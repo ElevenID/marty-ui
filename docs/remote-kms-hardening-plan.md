@@ -21855,3 +21855,10 @@ installed standalone Compose 5.4.0 binary. Its exact extracted model gate
 now passes through qualification; the live container loader remains a hosted
 retest. Keep the prior red run as evidence, then push this grouped correction
 batch for one new CI run.
+
+Both UI correction commits were pushed together to PR #1344 at exact head
+`9687b49b607c04fe459bebff01bfe5041abfcf67`. The new hosted CI run is
+[`38759939281`](https://github.com/ElevenID/marty-ui/actions/runs/38759939281),
+queued at registration. The PR body records the exact head, local gates and
+the remaining live Keycloak/selfhost qualification. The prior red run remains
+immutable evidence and does not qualify the new head.
