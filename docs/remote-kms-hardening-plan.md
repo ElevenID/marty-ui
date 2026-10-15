@@ -21899,3 +21899,19 @@ if startup still fails. Python compilation, workflow YAML parsing and diff
 checks pass; no live Docker rerun is claimed. Selfhost and image lanes of
 `38759939281` were still running when inspected, so retain this correction
 locally until their results are known, then batch one UI push.
+
+Run `38759939281` completed red with four failing jobs: Keycloak/OpenBao,
+Canvas, contracts and selfhost. The Rust Service Images job and the other
+completed lanes passed. The selfhost public-image build and packaging
+preflight passed; its installed loader failed at `empty:await-health` because
+the HTTP loader intentionally disables gRPC TLS without a live signer, while
+the fixture's empty/placeholder/missing-file cases still corrupted only the
+gRPC service token. With gRPC and passport internal auth off, that token is
+not required by the HTTP process. Local UI commit `5a4ac2200` instead
+mutates the always-required integration-secret API key for these negative
+cases and rejects a placeholder key in native Issuance config via the same
+prefix guard used for the gRPC token. The dedicated Rust config test passed;
+the selfhost acceptance executable compiled. The live loader and Canvas
+startup cannot run on this Windows host while its Docker daemon is
+unavailable, so both remain hosted retests. The grouped unpublished UI
+correction batch is `17b8ffeaa`, `30324cb7c`, and `5a4ac2200`.
