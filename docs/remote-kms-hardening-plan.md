@@ -22549,3 +22549,31 @@ acceptance limits. A local Docker Desktop startup attempt could not open its
 stopped Windows service from this session, so no local container handshake was
 claimed. Continue with the new CI result; if its direct peer probe fails,
 correct the actual remote-signing/TLS boundary before another grouped push.
+
+Additional local consumer coverage at the pushed head: all Python test files
+that reference `docker-compose.beta.yml` passed as one suite (822 passed, two
+skipped). This broadens the rendered/source configuration check but does not
+replace beta container startup or installed Keycloak database proof.
+
+Run `38799724846` is terminal failed. Release Contracts, Rust Contracts,
+Rust images, self-host, browser/Keycloak packaged custody, and OpenBao
+plugin/Raft recovery passed. Canvas again had 126 passes and five failures;
+the new direct CA-validated probe identified the shared cause: OpenBao issued
+only DNS SAN `localhost`, while the gRPC clients connect to `127.0.0.1`.
+The PKI role defaults `use_csr_sans=true`; its empty Transit CSR therefore
+overrode the requested `ip_sans`. The local correction sets
+`use_csr_sans=false` so OpenBao signs the requested IP SAN, without disabling
+client name verification. Rust Lint and Packaging failed only because the
+render-only Compose fixture did not supply the new Keycloak KMS address,
+image digest and key version. The local correction supplies synthetic values
+for those three inputs. Security Scanning failed at npm's audit endpoint with
+HTTP 400 `Invalid package tree`; the local lockfile is unchanged after
+`npm install --package-lock-only`, and `npm ci` followed by audit reports no
+vulnerabilities. The CI scan now installs the locked test graph before audit.
+These three fixes are local pending grouped push and hosted verification.
+`marty-canvas-acceptance` compiles on Rust 1.95, Rustfmt and diff checks pass,
+and the focused beta Keycloak tests pass (eight tests). Disposable TLS runtime
+remains unproven locally because Docker Desktop's service is unavailable.
+The grouped fix was pushed as UI PR #1344 head `a39986959`, and the PR
+description was reconciled with that head and the prior failed run. Await its
+new immutable CI evidence before claiming the Canvas or beta path works.
