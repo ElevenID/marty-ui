@@ -21653,3 +21653,18 @@ intentional ignores, with two Kubernetes synthetic-runtime fixture failures
 requiring separate correction. Local Docker could not qualify the live plugin
 handshake, so this batch remains unpushed until grouped release-contract
 fixes and the hosted image gate are ready.
+
+2026-10-15 grouped CI contract correction, local UI commit `ff21fad26`:
+the native DIDComm Compose gate now checks beta's HTTPS gRPC targets and
+remote TLS signer mounts, while its source model includes the beta override
+instead of assuming a bare `extends`. All 17 native-configuration tests and
+the actual Docker Compose render gate passed locally. The Canvas Kubernetes
+synthetic input inventory now includes all 15 workload TLS signer triples
+and Keycloak's public KMS references; its platform-independent inventory
+test passed. The two broader rendered Kubernetes fixture tests still require
+`envsubst`, absent on this Windows host, and remain for a Linux runner. The
+separate opt-in DIDComm dev Compose overlay still specifies HTTP OpenBao;
+that transport must be changed with CA-only distribution rather than merely
+updating a test expectation. The affected-Rust planner selection still has
+18 failing cases (49 passed, one skipped) from stale source markers and is
+part of the remaining local CI batch.
