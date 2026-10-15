@@ -20998,3 +20998,29 @@ provider fallback, preserve JWT/JWKS rotation and login behavior, then pass
 the Keycloak database verifier and connected Auth/Gateway journey. The
 Keycloak keys/signature SPIs are internal, so pin and regression-test the
 exact Keycloak artifact before upgrading.
+
+2026-10-15 Keycloak 25.0.6 bytecode feasibility check: the local matching
+`services.jar`, `server-spi.jar`, `server-spi-private.jar`, and `core.jar` were
+inspected with `javap`. `KeyProvider` exposes `getKeysStream`, while
+`SignatureProvider` exposes signer/verifier contexts; an external RS256 signer
+can publish only a public `KeyWrapper` and route the signer context to OpenBao.
+This alone cannot retire the other stored secrets. The built-in
+`AbstractGeneratedSecretKeyProvider` decodes the component's `secret` value
+into a local `javax.crypto.SecretKey` and publishes it through
+`KeyWrapper.setSecretKey`. Keycloak has separate content-encryption and
+signature provider SPIs. Therefore the implementation must map **all**
+active realm operations before choosing hooks: JWT RSA signing/verification,
+RSA encryption/decryption if used, HMAC, AES content encryption, and any
+session/token use of those providers. OpenBao Transit remote sign, HMAC,
+encrypt and decrypt operations must be matched to the exact Keycloak
+algorithms and payload formats; do not expose an exportable fake `SecretKey`
+or keep the generated AES/HMAC providers for compatibility. Verify bootstrap
+of `master` and `11id` before issuing a token, JWKS/public key rotation,
+login/refresh/session flows, and fail-closed behavior when OpenBao is down.
+The staged read-only SQL verifier was widened from two hard-coded realms to
+every realm while still requiring `master` and `11id`; an extra realm can no
+longer evade key-custody checks. It was executed against both running local
+self-host and beta Keycloak databases and failed as intended on each with
+4 private-key entries, 4 local-secret entries, 8 non-remote providers, and
+0 of 2 realms with remote providers. No extension or successful Keycloak
+journey is yet present.
