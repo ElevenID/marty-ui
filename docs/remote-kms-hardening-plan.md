@@ -21679,3 +21679,12 @@ DIDComm gate remains green. Separate Kubernetes token/release checks passed
 53 tests and issuance consumer/Kubernetes service coverage passed 88. These
 are local source and render gates, not proof of live KMS cryptography or
 published-image behavior; PR #1344 still awaits the grouped push/hosted CI.
+
+The workflow-performance suite then found three stale Canvas runner
+assertions that omitted the newly required public CA. Local UI commit
+`069d5f47b` shares one exact CA-bearing invocation expectation; all three
+affected cases passed. The remaining 149 cases had passed in the preceding
+full run, so this fixture-only correction did not trigger a second full
+90-second run. The separate Passport disposable OpenBao test is Docker-backed
+and local Docker did not return within the observation window; it requires
+the hosted image lane rather than a source-only acceptance claim.
