@@ -21510,3 +21510,71 @@ tests. Keep this as an explicit test-custody gap: qualify remote signing in
 that Canvas fixture or replace it with an equivalent KMS-only integration
 test before claiming all tests are keyless. Do not silently remove the LTI
 coverage or count the Marty-only database scan as proof for Canvas OSS.
+
+2026-10-15 grouped UI TLS/custody local regression review (in progress):
+the current `feat/kms-tls-custody-20261014` worktree remains unpushed and
+unmerged. A broad changed-Python run passed 1,162 tests with three skips.
+The selected Rust batch exposed Flow, Gateway and Issuance unit tests that
+constructed plaintext loopback OpenBao grant minters; the production
+`marty-signing-grant` dependency correctly rejected those fixtures. A shared
+`GrantMinting` interface now lets those HTTP contract tests supply a
+synthetic bound grant while production still constructs the HTTPS OpenBao
+`GrantMinter`. Connected OpenBao acceptance tests retain real HMAC mint and
+verification. Flow (44 passed, one ignored), Gateway (165 passed, one
+ignored), signing-grant (18 passed, three ignored), and Gateway executable
+smoke (three passed) ran locally after the correction. The Issuance library
+run reached 588 passed, eight ignored and one HTTPS startup-fixture failure;
+that focused fixture passed after its KMS URL was changed to HTTPS. The
+selected full Rust batch is being rerun. Review its final result before
+claiming local Rust qualification, committing the grouped change, or using
+hosted CI.
+
+2026-10-15 grouped UI local Rust checkpoint: the selected six-package
+`cargo +1.95.0 test --locked --no-fail-fast -p marty-service-acceptance
+-p marty-signing-keys -p marty-flow -p marty-issuance-service -p marty-auth
+-p marty-gateway --quiet` batch exited zero. It covered the 589-pass
+Issuance library, 165-pass Gateway library, 197-pass Signing Keys library,
+HTTP/Canvas credential behavior, the corrected Gateway executable smoke,
+Signing Keys provider vectors and its HTTPS passport artifact route. Tests
+that explicitly require disposable Redis, OpenBao, PostgreSQL or physical
+device remain ignored in this default batch and must be qualified in their
+owned live runners. The fixes retain production HTTPS validation, migrate
+test-only HTTP KMS stubs to bound-grant contract fixtures or ephemeral TLS
+peers, and preserve the separate real OpenBao mint/verify cases. The Signing
+Keys custom Transit validator now propagates the configured CA certificate
+path through payload normalization; its live HTTPS test passed. The registry
+golden vector now includes the public CA file metadata field. Diff hygiene
+passed for the touched Rust areas. Full grouped diff self-review, exact
+current-main reconciliation, local live reruns and hosted gates still precede
+a PR or release claim.
+
+2026-10-15 grouped UI integration checkpoint: `feat/kms-tls-custody-20261014`
+committed the 293-file cohesive KMS TLS/self-host change as `49597bfc7`.
+The six-package Rust batch above exited zero before the merge. It then
+merged the 11 newer `origin/main` commits, resolving five content conflicts
+into merge commit `7749cd6a3`; the worktree is clean and current main is an
+ancestor. The resolution retains main's BYOK Gateway-to-Signing-Keys Redis
+acceptance in its own contracts-lane step and the managed-key Gateway case
+in the existing HTTPS OpenBao probe, avoiding a Redis-only KMS invocation.
+It also retains both `holder_remote_live_kms` and `tls_openbao_keyless` as
+service-acceptance targets, sorts the exact target inventory, and combines
+the corresponding release-context guards. On the merged head, 231 affected
+Python workflow/context/release tests passed, Ruff passed, locked Cargo
+metadata succeeded and the Gateway Signing acceptance binary compiled.
+The seven default cases in that binary are intentionally ignored because
+they require disposable backends. A local Docker status query did not
+respond and was stopped; the BYOK live case was therefore not rerun locally
+after the merge. Selected warnings-denied Rust Clippy is running. Review its
+result, run the remaining relevant local checks, then publish one grouped
+head for hosted exact-head CI. Do not count this as signed-image installation
+or live cutover.
+
+2026-10-15 merged UI lint checkpoint: warnings-denied Clippy for
+`marty-signing-grant`, Signing Keys, Flow, Issuance, Auth, Gateway and
+Service Acceptance with `--all-targets` passed on the merged branch after
+two corrections in commit `db52720d3`: remove a redundant `#[must_use]`
+from a `Result` constructor and load the shared Signing Keys disposable
+backend test module once. The affected Signing Keys library then passed
+197 tests with 19 ignored. The UI worktree is clean. This is local source
+evidence; hosted exact-head CI, disposable live case reruns, installed-image
+proof and cutover are still open.
