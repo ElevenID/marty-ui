@@ -510,8 +510,14 @@ def main(mode: str = "database") -> int:
     preflight_modes = (
         FULL_QUALIFICATION_PREFLIGHT_MODES if qualification == "1" else PREFLIGHT_MODES
     )
-    if mode in ("database", "canvas"):
+    if mode in ("database", "canvas", "canvas-without-selfhost"):
         published_mode = ["full-after-preflights"] if _has_preflight_evidence() else []
+        if mode == "canvas-without-selfhost":
+            published_mode = (
+                ["full-after-preflights-without-selfhost"]
+                if published_mode
+                else ["full-without-selfhost"]
+            )
         commands: dict[str, list[str]] = {
             "published-canvas": [
                 "bash",
@@ -595,6 +601,7 @@ if __name__ == "__main__":
         [],
         ["preflights"],
         ["canvas"],
+        ["canvas-without-selfhost"],
         ["rust-db"],
         ["worker-preflights"],
         ["worker-canvas"],
@@ -602,6 +609,6 @@ if __name__ == "__main__":
     ):
         raise SystemExit(
             "Usage: run-db-contract-groups.py "
-            "[preflights|canvas|rust-db|worker-preflights|worker-canvas|selfhost-canvas]"
+            "[preflights|canvas|canvas-without-selfhost|rust-db|worker-preflights|worker-canvas|selfhost-canvas]"
         )
     raise SystemExit(main(sys.argv[1] if sys.argv[1:] else "database"))

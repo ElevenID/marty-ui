@@ -1,4 +1,4 @@
-//! Guarded combined Rust services proof with disposable OpenBao and PostgreSQL.
+//! Guarded cross-service holder-key proof with disposable OpenBao and PostgreSQL.
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};

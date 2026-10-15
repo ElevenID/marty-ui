@@ -32,7 +32,10 @@ use marty_signing_keys::{
     csca_lifecycle::CscaLifecycleStore,
     documents::{DocumentStore as SigningDocumentStore, PublishJwkRequest},
     flow_envelope::OpenBaoEnvelopeProvider,
-    http::{router_with_all_keys, router_with_dependencies_and_sign_key as signing_router},
+    http::{
+        router_with_all_keys, router_with_dependencies,
+        router_with_dependencies_and_sign_key as signing_router,
+    },
     profiles::ProfileStore as SigningProfileStore,
     registry::RegistryStore as SigningRegistryStore,
 };
@@ -325,6 +328,97 @@ fn gateway_with_signing_http_dsc(
         state.memberships = fixture;
     }
     gateway_router(state)
+}
+
+#[tokio::test]
+#[ignore = "requires guarded disposable MARTY_TEST_REDIS_URL and nonce sentinel"]
+async fn byok_gateway_proxies_to_live_signing_keys_without_persisting_private_material() {
+    let redis_url = disposable_signing_redis_url().await;
+    let organization_id = format!("gateway-config-{}", uuid::Uuid::new_v4().simple());
+    let registry = SigningRegistryStore::connect(&redis_url)
+        .await
+        .expect("disposable Redis registry");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("disposable signing-keys listener");
+    let signing_url = format!("http://{}", listener.local_addr().unwrap());
+    let signing_app = router_with_dependencies(
+        "disposable-internal-key".into(),
+        Some(registry.clone()),
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    let signing_task = tokio::spawn(async move {
+        axum::serve(listener, signing_app)
+            .await
+            .expect("disposable signing-keys server");
+    });
+    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let request = |authenticated: bool, organization_id: &str, body: Value| {
+        let mut builder = Request::builder()
+            .method("PATCH")
+            .uri(format!(
+                "/v1/signing-keys/config?organization_id={organization_id}"
+            ))
+            .header("content-type", "application/json");
+        if authenticated {
+            builder = builder.header("cookie", "sessionId=valid");
+        }
+        builder.body(Body::from(body.to_string())).unwrap()
+    };
+    let baseline = json!({"services": [], "default_service_id": null});
+    assert_eq!(
+        gateway
+            .clone()
+            .oneshot(request(false, &organization_id, baseline.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        gateway
+            .clone()
+            .oneshot(request(true, "org-other", baseline.clone()))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let accepted = gateway
+        .clone()
+        .oneshot(request(true, &organization_id, baseline))
+        .await
+        .unwrap();
+    assert_eq!(accepted.status(), StatusCode::OK);
+    let before = registry
+        .load(&organization_id)
+        .await
+        .expect("saved registry");
+
+    let rejected = gateway
+        .oneshot(request(
+            true,
+            &organization_id,
+            json!({"services": [], "private_key_pem": "synthetic-secret"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let after = registry
+        .load(&organization_id)
+        .await
+        .expect("registry read");
+    assert_eq!(after, before);
+    signing_task.abort();
+    let mut cleanup = registry.connection();
+    let _: () = cleanup
+        .del(marty_signing_keys::registry::storage_key(&organization_id))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

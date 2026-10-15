@@ -212,7 +212,7 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert "run-db-contract-groups.py worker-canvas" in group_run
     assert (
         "run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+        "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}"
     ) in group_run
     assert "if" not in by_name["Run isolated database contract suites concurrently"]
     assert (
@@ -233,14 +233,14 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert "github.event_name == 'pull_request'" in matrix
     assert "ci-worker-diagnostic" in matrix
     assert "needs.changes.outputs.rust_runtime == 'true'" in matrix
-    assert '\'["canvas","contracts","worker"]\'' in matrix
+    assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
     changes = workflow["jobs"]["changes"]
     assert (
         changes["outputs"]["rust_matrix"] == "${{ steps.classify.outputs.rust_matrix }}"
     )
     classifier = next(step for step in changes["steps"] if step.get("id") == "classify")
-    assert 'rust_matrix=\'["canvas","contracts"]\'' in classifier["run"]
+    assert 'rust_matrix=\'["canvas","contracts","selfhost"]\'' in classifier["run"]
     assert "rust_matrix='[\"contracts\"]'" in classifier["run"]
     assert "rust_matrix='[\"worker\"]'" in classifier["run"]
     assert "rust_matrix='[\"selfhost\"]'" in classifier["run"]
@@ -283,10 +283,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         for step in gate["steps"]
     )
     gate_script = gate["steps"][0]["run"]
-    assert '\'true:true:["canvas","contracts"]\'' in gate_script
+    assert '\'true:true:["canvas","contracts","selfhost"]\'' in gate_script
     assert "'true:false:[\"contracts\"]'" in gate_script
     assert "'true:false:[\"worker\"]'" in gate_script
-    assert '"$RUST_MATRIX" == \'["canvas","contracts"]\' ]]' in gate_script
+    assert '"$RUST_MATRIX" == \'["canvas","contracts","selfhost"]\' ]]' in gate_script
 
     packages = {
         "canvas-acceptance": (
@@ -347,7 +347,7 @@ def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> N
         "Build public selfhost image",
         "Prepare public selfhost image loader acceptance",
     ):
-        assert steps[name]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+        assert steps[name]["if"] == "matrix.lane == 'selfhost'"
         assert not steps[name].get("continue-on-error", False)
     renderer = steps["Prepare pinned standalone Compose renderer for Rust contracts"]
     assert "matrix.lane == 'selfhost'" in renderer["if"]

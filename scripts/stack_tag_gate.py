@@ -34,6 +34,20 @@ def _object(value: Any, label: str) -> dict[str, Any]:
     return value
 
 
+def _execution_order(run: dict[str, Any]) -> tuple[datetime, int]:
+    """Order reruns by the current attempt, not the original workflow ID."""
+    raw = run.get("run_started_at") or run.get("created_at")
+    if not isinstance(raw, str):
+        raise StackTagGateError("workflow execution timestamp is missing")
+    try:
+        started = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise StackTagGateError("workflow execution timestamp is invalid") from error
+    if started.utcoffset() is None:
+        raise StackTagGateError("workflow execution timestamp has no timezone")
+    return started, int(run.get("id", 0))
+
+
 def _load_json(path: Path, label: str) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8-sig"))
@@ -162,7 +176,7 @@ def validate_workflow_runs(
         ]
         if not matches:
             raise StackTagGateError(f"required exact-main workflow is missing: {path}")
-        latest = max(matches, key=lambda run: int(run.get("id", 0)))
+        latest = max(matches, key=_execution_order)
         if latest.get("status") != "completed":
             raise StackTagGateError(f"required workflow is still pending: {path}")
         if latest.get("conclusion") != "success":
@@ -196,9 +210,7 @@ def validate_workflow_runs(
     ]
     if not qualification_runs:
         raise StackTagGateError("exact-main full Canvas qualification is missing")
-    latest_qualification = max(
-        qualification_runs, key=lambda run: int(run.get("id", 0))
-    )
+    latest_qualification = max(qualification_runs, key=_execution_order)
     if latest_qualification.get("status") != "completed":
         raise StackTagGateError("full Canvas qualification is still pending")
     if latest_qualification.get("conclusion") != "success":

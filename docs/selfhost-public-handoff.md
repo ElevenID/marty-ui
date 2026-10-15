@@ -98,7 +98,7 @@ disposable test signer digest for review; no published release contains that
 policy yet. Adding a trusted signer requires a reviewed source change and a
 new prepared release. The
 integration checkout is pinned to protected-main commit
-`71a34c96f4bff2911919ebd3a41644ec2631ee07`; a PR head cannot qualify.
+`0b9aec1994378aba4ef4715f858de813b1a329ea`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet
 passed an installed run, so no installed journey has qualified a release.
 

@@ -102,10 +102,11 @@ SELFHOST_TEST_FILES = (
 )
 SERVICE_ACCEPTANCE_TEST_ROOT = "rust/crates/service-acceptance/tests/"
 SERVICE_ACCEPTANCE_TARGETS = (
-    "passport_managed_kms_chain",
-    "passport_gateway_postgres",
-    "gateway_signing_acceptance",
     "csca_capability_contract",
+    "gateway_signing_acceptance",
+    "holder_remote_live_kms",
+    "passport_gateway_postgres",
+    "passport_managed_kms_chain",
     "tls_openbao_keyless",
 )
 SIGNING_CSCA_TEST_ROOT = "rust/services/signing-keys/tests/"

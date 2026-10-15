@@ -90,8 +90,10 @@ def assert_public_image_loader_connected(reader):
         "selfhost_public_image_loader_child",
     ]:
         assert source.count(f"fn {name}()") == 1
-        line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
+        line = f"  printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
         assert runner.splitlines().count(line) == 1
+    assert 'require_selfhost_tests "$("$selfhost_executable" --list)"' in runner
+    assert "12 passed; 0 failed; 0 ignored" in runner
     for required in [
         "selfhost_packaged_runtime::run_isolated_child()",
         "PendingOperation::begin",
@@ -156,10 +158,11 @@ def assert_public_image_loader_connected(reader):
     assert len(matches) == 1
     index, step = matches[0]
     assert set(step) == {"name", "if", "shell", "run"}
-    assert step["if"] == "matrix.lane == 'canvas' || matrix.lane == 'selfhost'"
+    assert step["if"] == "matrix.lane == 'selfhost'"
     assert step["shell"] == "bash"
     body = step["run"]
     build = steps[index - 1]
+    assert build["if"] == "matrix.lane == 'selfhost'"
     assert build["name"] == "Build public selfhost image"
     assert build["with"]["file"] == "services/Dockerfile"
     assert build["with"]["tags"] == "marty-selfhost-public:contract"

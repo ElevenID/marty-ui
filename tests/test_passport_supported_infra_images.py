@@ -100,6 +100,35 @@ def test_registry_index_fails_closed_when_both_digest_sources_fail() -> None:
     assert run.call_count == 2
 
 
+def test_quay_registry_index_retries_the_same_pinned_digest() -> None:
+    reference = "quay.io/openbao/openbao@sha256:" + "c" * 64
+    response = subprocess.CompletedProcess([], 0, stdout=json.dumps(index(reference)))
+    with mock.patch(
+        "scripts.passport_supported_infra_images.subprocess.run",
+        side_effect=[subprocess.CalledProcessError(1, ["docker", "buildx"]), response],
+    ) as run, mock.patch(
+        "scripts.passport_supported_infra_images.time.sleep"
+    ) as pause:
+        assert registry_index(reference) == index(reference)
+    assert run.call_count == 2
+    assert all(call.args[0][4] == reference for call in run.call_args_list)
+    pause.assert_called_once_with(1)
+
+
+def test_quay_registry_index_stops_after_three_failed_fetches() -> None:
+    reference = "quay.io/openbao/openbao@sha256:" + "d" * 64
+    with mock.patch(
+        "scripts.passport_supported_infra_images.subprocess.run",
+        side_effect=subprocess.CalledProcessError(1, ["docker", "buildx"]),
+    ) as run, mock.patch(
+        "scripts.passport_supported_infra_images.time.sleep"
+    ) as pause:
+        with pytest.raises(InfraImageError, match="digest is unavailable"):
+            registry_index(reference)
+    assert run.call_count == 3
+    assert [call.args[0] for call in pause.call_args_list] == [1, 2]
+
+
 @pytest.mark.skipif(shutil.which("docker") is None, reason="Docker Buildx unavailable")
 def test_reviewed_registry_indexes_are_available_now() -> None:
     # Read-only registry smoke. It does not pull, run, or provision containers.

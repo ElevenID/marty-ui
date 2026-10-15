@@ -200,7 +200,11 @@ Public-protocol A0 inventory (2026-10-03): the `public-protocol-contract` job ch
 
 Public-protocol vector ownership follow-up (2026-10-05, `main` at `a98d7b766`): the source-reference guard covers 21 `gateway-*-behavior.json` files plus `credential-metadata-behavior.json` and `vc-api-adapter-behavior.json`. Rust references are in the Gateway service's library tests, Signing Keys library tests (issuer context/identity, signing authorization, Flow key envelope), Deployment Profile library test, and Issuance's explicitly registered `didcomm_delivery_behavior` integration target. Some tests load vectors through `contract()` helpers; the DIDComm vector also appears in a production `include_bytes!`, so filename presence alone cannot establish test ownership. The `test-rust-services` contracts lane compiles workspace test executables and runs `cargo test --locked --workspace`; that is the CI execution owner for non-ignored Rust tests, separate from the Python-only `public-protocol-contract` job. This inventory does not prove each vector's cases execute on every selected change: the broad Rust selector and actual Cargo result are required, and per-vector dynamic coverage would need separately justified evidence. No job selector, test set, or gate is changed here.
 
-Release-contract A0 inventory (2026-10-03): `test-release-contracts` runs on release, verification, or Rust changes. It verifies digest-pinned released Core/Verification/ISO18013/Common wheels and a fixed Credentials v0.1.76 source/image, exercises released mdoc binding behavior and OSS commerce policy, replays the Canvas mirror reference in that exact image, runs `python -m pytest tests -v --tb=short`, then proves the pinned OCI archive/backend and DIDComm/retention release compatibility. On UI #1061 the repository-test step took 405 seconds of the 7m58s job. The separate `test-services` job runs `pytest` with `working-directory: services`, not the root `tests` tree, so these two steps are not duplicate collection of the same files. The release job is not the current Rust critical path (Canvas remains longer), and its released-artifact/environment obligations are distinct. Do not split or remove its broad test step until exact case ownership and Rust-change trigger coverage are mapped.
+Release-contract A0 inventory (2026-10-03 baseline, updated 2026-10-15): `test-release-contracts` runs on release, verification, or Rust changes. It verifies digest-pinned released Core/Verification/ISO18013 wheels, exercises released mdoc binding behavior and OSS commerce policy, runs the selected root repository tests (normally `python -m pytest tests -n 2 -v --tb=short --durations=20` in this candidate), then proves the pinned OCI archive/backend and DIDComm/retention release compatibility. The earlier inventory also recorded a fixed Credentials v0.1.76 source/image pull and Canvas mirror reference replay; #1335 retires that repeated CI replay. Frozen Canvas artifacts and guards, native Rust behavior tests, and the manual pinned-image replay tool remain. On UI #1061 the repository-test step took 405 seconds of the 7m58s job; that is historical timing, not a measured #1335 saving. The separate `test-services` job runs `pytest` with `working-directory: services`, not the root `tests` tree, so these two steps are not duplicate collection of the same files. The release job's remaining released-artifact/environment obligations are distinct. Do not narrow its broad test step without exact case ownership and Rust-change trigger evidence.
+
+October 15 outcome: [#1335](https://github.com/ElevenID/marty-ui/pull/1335) passed exact-head review and CI, then all 22 jobs in the [protected merge-group run](https://github.com/ElevenID/marty-ui/actions/runs/38693036317), and merged as `d0e4f267e3963e734b2e46a9d591dc7c84542968`. The retained root release-test step executed 6,732 passed and 25 skipped cases in 615.72 seconds on its PR head. No end-to-end speedup is attributed to removing the fixed replay: the runs have different inputs, and the released-artifact, native regression, and historical qualification owners remain distinct.
+
+October 15 local A6 parallelism pilot: the unchanged 148-case workflow-policy module passed in 91.42 seconds serial and 60.78 seconds with two `pytest-xdist` 3.8.0 workers on the same Windows worktree. The full two-worker root suite completed with 6,704 passed, 53 skipped, 534 subtests passed in 614.28 seconds. Its 6,757 reported pass/skip outcomes equal the preceding hosted serial suite's total, but platform-specific outcomes differ; equality alone does not prove identical case collection. An optional full Windows serial comparison was stopped after slow progress, so this is not a measured whole-suite speedup. The proposed CI change retains the same root test selection, assertions, failure status, slow-case report, and protected gate while using two workers in the existing job; exact-head Linux and protected combined-head results must establish safety and actual hosted duration.
 
 Release-test timing candidate (2026-10-10): local collection with `PYTHONPATH=packages` found 6,197 root cases in 1.36 seconds; only 22 are under `tests/unit`, which is a directory label rather than an execution-cost or obligation classification. A Windows attempt to run the 227-case Canvas published-preflight module was stopped after it did not finish promptly; no duration or failure conclusion follows from that interrupted attempt. The existing full release-test step now requests pytest's 20 slowest durations in its normal log, with the same collection, assertions, exit status, and required gate. Use hosted case/setup timing before proposing a root-suite split; this instrumentation alone claims no speedup.
 
@@ -4167,6 +4171,107 @@ remain pending. The old v1.1.246 prepared ZIP is not a qualified external
 handoff artifact; no external self-host support claim follows from the merge.
 
 ## Design references
+
+October 15 A6 parallel self-host acceptance candidate: [#1338](https://github.com/ElevenID/marty-ui/pull/1338) merged the two-worker root release-contract suite after exact-head and protected CI, retaining 6,735 passed/25 skipped cases. Its protected root pytest step fell from 530.95s on #1335 to 356.49s on #1338; overall workflow wall time varied, so this is a step-level result only. In #1338's protected Canvas job, reusable test compilation took 376s, the public self-host image 386s, and the database group 485s. The existing self-host-only diagnostic owner proves an exact twelve-case test inventory and candidate image identity. A candidate now requires that owner as a parallel third lane for runtime PRs and protected merge groups, and omits only those twelve cases and the image build from Canvas. Worker, composition, Flow, database, full-qualification, and protected gates remain required. This change adds one standard public-repository runner; it does not claim a wall-time saving until exact-head and protected runs verify lane execution and comparable timings. The prior migrated-base database reuse pilot was slower in hosted runs and remains manual-only.
+
+October 15 A6 outcome: [#1339](https://github.com/ElevenID/marty-ui/pull/1339)
+merged as `416988bae` after 6,711 local root tests passed (53 Windows skips),
+independent review, exact-head CI, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38715290884). The
+new self-host lane passed its exact 12-case inventory in 83.77s, while Canvas
+and contracts passed independently. Compared with the preceding protected
+[#1338 run](https://github.com/ElevenID/marty-ui/actions/runs/38704320016),
+Canvas job time was 25m32s then 22m03s; total workflow time was 25m52s then
+25m17s. OpenBao qualification, not Canvas, was the later critical path at
+24m51s. These are two different combined heads and one observation each, not
+a general speed guarantee.
+
+The OpenBao recovery step in #1339 spent approximately 20 minutes in eight
+serial Cargo build/no-run invocations before its real PostgreSQL/OpenBao
+checks completed. The first normal Signing Keys binary build used the dev
+profile with line-table debug information; the following test targets used
+`CARGO_PROFILE_TEST_DEBUG=0`. A follow-up candidate aligns dev debug info to
+zero **for that CI step only**, matching the existing test override so Cargo
+can reuse compatible dependency outputs. It retains all target builds,
+database/KMS assertions, immutable image identity, and protected gates.
+Hosted before/after compile and workflow timings are required before claiming
+any further saving. Current main already owns the Canvas composition target
+in `marty-canvas-acceptance` and the cross-service Signing Keys cases in
+`marty-service-acceptance` ([#1332](https://github.com/ElevenID/marty-ui/pull/1332));
+the earlier A1 relocation candidates above are historical, not pending file
+moves.
+
+October 15 A6 follow-up: [#1340](https://github.com/ElevenID/marty-ui/pull/1340)
+merged as `4770e86b0` after 150 focused workflow-policy tests, independent
+review, exact-head CI, and full [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38721742848). The first
+test-target build after the normal Signing Keys binary fell from 5m33s to
+28.64s in the protected run, consistent with reuse under the aligned debug
+profiles. The complete OpenBao recovery step took 21m34s before and 18m35s
+after; total protected workflow time took 25m17s before and 22m26s after.
+Other compilation and runner variance remains, so this is a one-run observed
+improvement rather than a general guarantee. No Rust target, runtime
+assertion, OpenBao/PostgreSQL/Raft check, or protected gate was removed.
+
+October 15 A1 graph recheck: locked Cargo metadata on current UI main lists
+17 `rust/services/*` packages and **zero** service-to-service development
+dependency edges. The Canvas composition target and cross-service Signing Keys
+proofs have moved to acceptance packages, while service-owned unit and adapter
+tests remain with their services. The earlier A1 rows above described the
+state before those later moves. A lightweight manifest guard now rejects a
+new service-to-service dev edge, including renamed dependencies inherited
+from the workspace or declared for a specific target. It prevents regression
+of this compile boundary; it does not claim that every A0 runtime or
+cross-repository obligation has been inventoried.
+
+The guard merged in [#1341](https://github.com/ElevenID/marty-ui/pull/1341)
+as `032e915ca` after review found and corrected a missed Cargo 2021 spelling:
+both `dev-dependencies` and `dev_dependencies` are now checked at the root and
+within target tables. All 152 local workflow-policy tests, exact-head CI and
+full [protected combined-head CI](https://github.com/ElevenID/marty-ui/actions/runs/38727240568)
+passed. This is regression prevention, not a measured speedup. The protected
+Canvas job took 21m51s, including 7m22s compiling reusable test executables
+and 10m08s in the isolated database group. These are one run's measurements,
+not a before/after attribution.
+
+October 15 A0 effective-execution audit: the disposable OpenBao policy probe
+invokes the Device Registration pairing Redis test and nineteen other focused
+Cargo test commands, but most previously checked only process exit status.
+Cargo can exit successfully when an ignored or filtered invocation selects
+zero tests. A focused candidate requires a Rust harness summary with at least
+one passed test for every one of those commands, preserving their current
+cases, disposable fixtures, and CI lanes. It changes no production behavior
+and claims no speedup; exact-head hosted execution and independent review are
+required before treating this audit gap as closed.
+
+October 14 A0/A1 Gateway live-config ownership candidate: a previously
+ignored Gateway library test composes the real Signing Keys HTTP router and
+disposable Redis to prove that unauthenticated and cross-tenant configuration
+updates are denied, valid empty configuration is saved, and a private-key
+field is rejected without mutating the registry. The current CI workspace
+test invocation excludes ignored cases, and no exact invocation of this name
+appeared in the contracts lane. The existing service-acceptance live managed-
+key case exercises a different public route, so it does not replace this
+proof. Move the unchanged behavior matrix to the Gateway Signing acceptance
+target, reuse its guarded disposable-Redis and Gateway runtime fixtures, and
+invoke the case explicitly under the contracts lane with an exact discovery
+guard. This removes Gateway's Signing Keys dev-dependency; Device Registration's
+separate Signing Keys/OpenBao live test moves to acceptance in the same slice. Require
+focused Rust compilation, a live hosted execution, independent review, and
+protected CI before claiming the move or any compile-time benefit.
+
+October 14 A0/A1 holder-key acceptance candidate: Device Registration's
+`holder_remote_live_kms` target is an ignored, explicitly invoked combined
+Device Registration/Signing Keys/OpenBao/PostgreSQL lifecycle proof. Its 657-
+line test imports both service implementations; `marty-signing-keys` and
+`p256` are otherwise unused Device Registration dev-dependencies. Moving the
+same target to `marty-service-acceptance` preserves its guarded disposable
+OpenBao and fresh-PostgreSQL invocation in the contracts CI lane and the
+separate local Rust-adapter probe, while removing that service-to-service
+development edge. The new package owner must compile with a locked manifest
+and the live case must pass in hosted CI before treating the move as merged or
+claiming any package-scoped speed benefit. This does not replace Device
+Registration's service-owned behavior and persistence tests.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
