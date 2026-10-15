@@ -20432,3 +20432,22 @@ passed (1 Rust edge test; 28 combined Python tests). This provisions five
 current identities, not yet the whole protected Compose graph, and no new
 services image was built after adding the bootstrap binary. Wiring,
 additional workload identities and installed-image acceptance remain open.
+
+2026-10-14 containerized TLS custody verification: built the staged public
+services image including both new Rust passport binaries as local image
+`sha256:3727d51a126796344273bf01a4d00e82ffc542d75d59dfc91ab610fe56358500`.
+The first isolated Linux-image probe found a real certificate defect: the
+OpenBao PKI signer kept only the Transit CSR's `localhost` SAN, so an HTTPS
+client could not verify the edge by its Docker DNS name. The Rust bootstrap
+now tells the PKI role to use explicit SANs from the signing request and
+restricts the Flow client URI SAN to its declared SPIFFE identity. A fresh
+host OpenBao probe passed, followed by a rebuilt image and a Docker-private
+network probe: HTTPS OpenBao peer validation, five non-exportable Transit
+keys, public certificates and scoped tokens only, and an HTTPS callback to
+`https://edge:8443` with CA and peer-name validation all passed. The probe
+removed its uniquely named containers, network and output volume. Focused
+Python packaging, Compose model and migration qualifier tests passed 33/33;
+Python compilation and `git diff --check` passed. The image is an unsigned
+local build and the protected passport Compose fixture still mounts legacy
+TLS private keys, so exact release-artifact qualification and complete graph
+cutover remain open.
