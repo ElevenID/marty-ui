@@ -418,4 +418,60 @@ mod tests {
         .unwrap();
         edge_task.abort();
     }
+
+    #[tokio::test]
+    #[ignore = "requires a disposable HTTPS OpenBao signer and public certificate"]
+    async fn oidf_https_handshake_signs_with_versioned_remote_key() {
+        async fn upstream(request: Request<Body>) -> Response<Body> {
+            let host = request.headers()[header::HOST].to_str().unwrap();
+            Response::new(Body::from(format!("{host}|{}", request.uri().path())))
+        }
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(upstream_listener, Router::new().fallback(any(upstream)))
+                .await
+                .unwrap();
+        });
+        let tls = keyless_tls_config("OIDF_EDGE").await.unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let edge_task = tokio::spawn(async move {
+            axum_server::from_tcp_rustls(listener, tls)
+                .unwrap()
+                .serve(
+                    Router::new()
+                        .fallback(any(proxy))
+                        .with_state(EdgeState {
+                            gateway: upstream_address.to_string(),
+                            keycloak: upstream_address.to_string(),
+                            ui: upstream_address.to_string(),
+                        })
+                        .into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+                .unwrap();
+        });
+        let ca = std::fs::read(required("MARTY_TEST_OIDF_EDGE_CA").unwrap()).unwrap();
+        let ca = reqwest::Certificate::from_pem(&ca).unwrap();
+        let client = reqwest::Client::builder()
+            .https_only(true)
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .tls_certs_only([ca])
+            .build()
+            .unwrap();
+        let response = client
+            .get(format!("https://localhost:{}/v1/ready", address.port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.text().await.unwrap(),
+            format!("localhost:{}|/v1/ready", address.port())
+        );
+        edge_task.abort();
+        upstream_task.abort();
+    }
 }

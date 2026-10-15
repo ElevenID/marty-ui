@@ -63,7 +63,7 @@ class Bao:
 
 
 def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]:
-    if role not in {"event-stream", "signing-keys", "passport-edge"}:
+    if role not in {"event-stream", "signing-keys", "passport-edge", "oidf-edge"}:
         raise RuntimeError("unknown disposable server TLS role")
     bao.request("POST", "sys/mounts/transit", {"type": "transit"})
     key_name = role + "-tls-" + secrets.token_hex(8)
@@ -106,7 +106,7 @@ def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]
     })
     token = bao.request("POST", "auth/token/create", {
         "policies": [policy_name], "no_default_policy": True,
-        "ttl": "1h" if role in {"signing-keys", "passport-edge"} else "10m",
+        "ttl": "1h" if role in {"signing-keys", "passport-edge", "oidf-edge"} else "10m",
     })["auth"]["client_token"]
     foreign_key = "foreign-tls-" + secrets.token_hex(8)
     bao.request("POST", f"transit/keys/{foreign_key}", {
@@ -428,6 +428,17 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                     "PASSPORT_EDGE_TLS_KMS_ADDR": bao.endpoint,
                     "MARTY_TEST_PASSPORT_EDGE_CA": identity["workload_ca"],
                 })
+            elif profile == "oidf-edge":
+                identity = provision_server_identity(bao, root, "oidf-edge")
+                environment.update({
+                    "OIDF_EDGE_TLS_CERT_FILE": identity["cert"],
+                    "OIDF_EDGE_TLS_KMS_CA_CERT_FILE": str(ca),
+                    "OIDF_EDGE_TLS_KMS_TOKEN_FILE": identity["token_file"],
+                    "OIDF_EDGE_TLS_KMS_KEY_NAME": identity["key_name"],
+                    "OIDF_EDGE_TLS_KMS_KEY_VERSION": "1",
+                    "OIDF_EDGE_TLS_KMS_ADDR": bao.endpoint,
+                    "MARTY_TEST_OIDF_EDGE_CA": identity["workload_ca"],
+                })
             elif profile == "passport-bootstrap":
                 token_file = root / "bootstrap-root-token"
                 token_file.write_text(root_token, encoding="ascii")
@@ -465,7 +476,7 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-transit", "signing-grant", "passport-edge", "passport-bootstrap", "notification"), default="event-stream")
+    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "notification"), default="event-stream")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     return execute(args.image, args.command, args.profile)

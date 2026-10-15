@@ -26,6 +26,7 @@ else:
         ("Test native Canvas AGS/NRPS over real HTTPS", 1),
         ("Test native passport Gateway signed webhook on PostgreSQL", 1),
         ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
+        ("Exercise OIDF keyless HTTPS edge against disposable OpenBao", 1),
     ],
 )
 def test_focused_rust_ci_cases_require_positive_execution(

@@ -455,6 +455,20 @@ def test_gateway_live_config_case_has_exact_contracts_lane_invocation() -> None:
     ).read_text(encoding="utf-8")
 
 
+def test_oidf_keyless_edge_has_live_https_kms_contracts_lane_invocation() -> None:
+    _, document = _workflow(CI_PATH)
+    steps = document["jobs"]["test-rust-services"]["steps"]
+    [execution] = [
+        step for step in steps
+        if step.get("name") == "Exercise OIDF keyless HTTPS edge against disposable OpenBao"
+    ]
+    assert execution["if"] == "matrix.lane == 'contracts'"
+    script = execution["run"]
+    assert "--profile oidf-edge" in script
+    assert "tests::oidf_https_handshake_signs_with_versioned_remote_key" in script
+    assert "-- --ignored --exact --nocapture" in script
+
+
 def test_remote_holder_live_kms_has_one_acceptance_owner_and_exact_ci_call() -> None:
     target = "holder_remote_live_kms"
     case = "registration_provision_sign_and_deactivate_delete_remote_key"
