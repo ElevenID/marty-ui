@@ -1894,6 +1894,10 @@ jobs:
               http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null
             curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
               --header 'Content-Type: application/json' --request POST \
+              --data '{"type":"transit"}' \
+              http://127.0.0.1:8200/v1/sys/mounts/transit >/dev/null
+            curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
+              --header 'Content-Type: application/json' --request POST \
               --data '{"type":"aes256-gcm96","exportable":false,"allow_plaintext_backup":false}' \
               http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null
             curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \
