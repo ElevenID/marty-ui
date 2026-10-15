@@ -21619,3 +21619,24 @@ SPI methods. Maven packaging passed with Java 17, as did ownership,
 no-Canvas Compose rendering and locked probe metadata. This commit is
 deliberately unpushed while the Canvas and broad release failures are
 corrected; Keycloak 26.8.0 installed behavior is not yet qualified.
+
+2026-10-15 second PR #1344 local CI batch: commit `d54776f51` added the seven
+missing Keycloak token/public-certificate example secret files (placeholders
+only), updated the fifth-image/five-gate release assertions, corrected beta
+TLS policy assertions, and supplied the newly required distinct Notification
+OpenBao token to certificate rehearsal fixtures. The selected four-module
+local regression set passed 33 tests; source secret closure and no-Canvas
+Compose rendering also passed. A wider 15-module release selection still
+reported 40 failures and two collection errors after those fixes, with 218
+passed and 433 subtests passed. The largest remaining clusters are stale
+native DIDComm/GRPC and affected-Rust source markers, plus other frozen
+deployment snapshots. The separate Canvas OpenBao acceptance launcher still
+uses plaintext dev mode; it must be upgraded to verified HTTPS along with
+the Rust sender fixture, not waived.
+
+The Keycloak 26.8.0 source JAR was compared directly with both locally
+compiled patched classes: their full public `javap` APIs now match. Commit
+`0d8dc6f12` restores the two public restart-cookie methods introduced after
+25.0.6 and adds a Docker build-time ABI comparison against the pinned
+upstream JAR. Maven packaging passed. Runtime browser/CIBA and PostgreSQL
+custody still require the exact built image on a working Docker runner.
