@@ -924,7 +924,14 @@ services:
       ORG_GRPC_TARGET: organization:9002
       PP_GRPC_TARGET: presentation-policy:9009
       CT_GRPC_TARGET: credential-template:9003
-      ISSUANCE_GRPC_TARGET: issuance-native:9005
+      ISSUANCE_GRPC_TARGET: https://issuance-native:9005
+      GRPC_WORKLOAD_TLS_CA_CERT: /run/secrets/workload_identity_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/flow_workload_client_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR: ${FLOW_CLIENT_TLS_KMS_ADDR:?FLOW_CLIENT_TLS_KMS_ADDR must be HTTPS OpenBao}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME: ${FLOW_CLIENT_TLS_KMS_KEY_NAME:?FLOW_CLIENT_TLS_KMS_KEY_NAME must be set}
+      GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION: ${FLOW_CLIENT_TLS_KMS_KEY_VERSION:?FLOW_CLIENT_TLS_KMS_KEY_VERSION must be set}
       ISSUANCE_SERVICE_URL: http://issuance:8005
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       PASSPORT_NATIVE_FLOW_ENABLED: ${PASSPORT_NATIVE_FLOW_ENABLED:-false}
@@ -961,6 +968,11 @@ services:
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_flow_grant:/bao/flow-grant:ro
+    secrets:
+      - workload_identity_ca_cert
+      - flow_workload_client_cert
+      - openbao_tls_ca_cert
+      - flow_client_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1383,6 +1395,39 @@ services:
       - marty-network
     restart: unless-stopped
 
+  # Shares Envoy's loopback namespace. Only this Rust process holds the scoped
+  # OpenBao token; it presents a remote-held client key to Issuance mTLS.
+  envoy-issuance-bridge:
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: envoy-issuance-bridge
+    entrypoint: ["/usr/local/bin/marty-keyless-grpc-bridge"]
+    environment:
+      KEYLESS_BRIDGE_LISTEN: 127.0.0.1:19006
+      KEYLESS_BRIDGE_UPSTREAM_HOST: issuance-native
+      KEYLESS_BRIDGE_UPSTREAM_PORT: "9005"
+      KEYLESS_BRIDGE_SERVER_CA_FILE: /run/secrets/workload_identity_ca_cert
+      KEYLESS_BRIDGE_CLIENT_CERT_FILE: /run/secrets/envoy_issuance_client_cert
+      KEYLESS_BRIDGE_KMS_ADDR: ${ENVOY_ISSUANCE_TLS_KMS_ADDR:?ENVOY_ISSUANCE_TLS_KMS_ADDR must be HTTPS OpenBao}
+      KEYLESS_BRIDGE_KMS_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
+      KEYLESS_BRIDGE_KMS_TOKEN_FILE: /run/secrets/envoy_issuance_tls_kms_token
+      KEYLESS_BRIDGE_KMS_KEY_NAME: ${ENVOY_ISSUANCE_TLS_KMS_KEY_NAME:?ENVOY_ISSUANCE_TLS_KMS_KEY_NAME must be set}
+      KEYLESS_BRIDGE_KMS_KEY_VERSION: ${ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION:?ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION must be set}
+    secrets:
+      - workload_identity_ca_cert
+      - envoy_issuance_client_cert
+      - openbao_tls_ca_cert
+      - envoy_issuance_tls_kms_token
+    network_mode: service:envoy
+    depends_on:
+      envoy:
+        condition: service_started
+      issuance-native:
+        condition: service_healthy
+    restart: unless-stopped
+
 secrets:
   dev_integration_secret_ca:
     file: ${DEV_INTEGRATION_SECRET_CA_FILE:?DEV_INTEGRATION_SECRET_CA_FILE must be set}
@@ -1392,6 +1437,20 @@ secrets:
     file: ${OPENBAO_TLS_CA_CERT_FILE:?OPENBAO_TLS_CA_CERT_FILE must be set}
   signing_keys_tls_kms_token:
     file: ${SIGNING_KEYS_TLS_KMS_TOKEN_FILE:?SIGNING_KEYS_TLS_KMS_TOKEN_FILE must be set}
+  workload_identity_ca_cert:
+    file: ${MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE:?MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE must be set}
+  issuance_workload_server_cert:
+    file: ${ISSUANCE_WORKLOAD_SERVER_CERT_FILE:?ISSUANCE_WORKLOAD_SERVER_CERT_FILE must be set}
+  issuance_tls_kms_token:
+    file: ${ISSUANCE_TLS_KMS_TOKEN_FILE:?ISSUANCE_TLS_KMS_TOKEN_FILE must be set}
+  envoy_issuance_client_cert:
+    file: ${ENVOY_ISSUANCE_CLIENT_CERT_FILE:?ENVOY_ISSUANCE_CLIENT_CERT_FILE must be set}
+  envoy_issuance_tls_kms_token:
+    file: ${ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE:?ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE must be set}
+  flow_workload_client_cert:
+    file: ${FLOW_WORKLOAD_CLIENT_CERT_FILE:?FLOW_WORKLOAD_CLIENT_CERT_FILE must be set}
+  flow_client_tls_kms_token:
+    file: ${FLOW_CLIENT_TLS_KMS_TOKEN_FILE:?FLOW_CLIENT_TLS_KMS_TOKEN_FILE must be set}
 
 volumes:
   postgres_data:

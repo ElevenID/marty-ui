@@ -164,7 +164,10 @@ def modeled(tmp_path):
         "authcrypt": True,
         "inputs": {
             "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
-            + "d" * 64
+            + "d" * 64,
+            "ISSUANCE_TLS_KMS_ADDR": "https://openbao:8200",
+            "ISSUANCE_TLS_KMS_KEY_NAME": "synthetic-issuance-server",
+            "ISSUANCE_TLS_KMS_KEY_VERSION": "1",
         },
         "policy_directory": tmp_path,
     }

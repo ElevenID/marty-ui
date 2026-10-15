@@ -68,7 +68,7 @@ def test_beta_initiation_consumer_selection_preserves_other_owners() -> None:
     gate["assert_initiation_consumer_bindings"](model)
     assert "ISSUANCE_SERVICE_URL" not in beta["services"]["flow"]["environment"]
     base_flow = base["services"]["flow"]["environment"]
-    assert base_flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert base_flow["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
     assert base_flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert base_flow["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
     production = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())

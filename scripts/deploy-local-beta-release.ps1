@@ -902,7 +902,7 @@ if ($EnablePassportNative) {
 }
 foreach ($envFile in $script:EnvFiles) {
     foreach ($line in Get-Content -LiteralPath $envFile) {
-        if ($line -match '^(SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE|SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE|AUTH_WORKLOAD_SERVER_KEY_FILE|GATEWAY_WORKLOAD_CLIENT_KEY_FILE)=') {
+        if ($line -match '^(SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE|SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE|AUTH_WORKLOAD_SERVER_KEY_FILE|GATEWAY_WORKLOAD_CLIENT_KEY_FILE|ENVOY_ISSUANCE_CLIENT_KEY_FILE)=') {
             throw "Beta workload TLS private-key files are retired; use remote KMS signers"
         }
     }
@@ -928,6 +928,8 @@ $workloadIdentityPathNames = @(
     "GATEWAY_TLS_KMS_TOKEN_FILE",
     "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
     "ISSUANCE_TLS_KMS_TOKEN_FILE",
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE",
+    "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
     "VERIFICATION_TLS_KMS_TOKEN_FILE",
     "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
@@ -942,6 +944,19 @@ foreach ($name in $workloadIdentityPathNames) {
         throw "$name does not identify a readable workload identity file"
     }
     $workloadIdentityPaths[$name] = (Resolve-Path -LiteralPath $path).Path
+}
+$bridgeKmsAddress = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_ADDR"
+$bridgeKmsUri = $null
+if (-not [Uri]::TryCreate($bridgeKmsAddress, [UriKind]::Absolute, [ref]$bridgeKmsUri) -or
+    $bridgeKmsUri.Scheme -ne "https" -or -not $bridgeKmsUri.Host -or
+    $bridgeKmsUri.UserInfo -or $bridgeKmsUri.Query -or $bridgeKmsUri.Fragment) {
+    throw "ENVOY_ISSUANCE_TLS_KMS_ADDR must be a trusted HTTPS OpenBao origin"
+}
+$null = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_KEY_NAME"
+$bridgeKeyVersion = Get-DotEnvValue -Path $GeneratedEnvFile -Name "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION"
+$parsedBridgeVersion = 0
+if (-not [int]::TryParse($bridgeKeyVersion, [ref]$parsedBridgeVersion) -or $parsedBridgeVersion -le 0) {
+    throw "ENVOY_ISSUANCE_TLS_KMS_KEY_VERSION must be a positive integer"
 }
 if ($EnablePassportNative) {
     foreach ($purpose in @("DSC", "CSCA")) {
@@ -970,10 +985,12 @@ $workloadLeafNames = @(
     "PP_WORKLOAD_SERVER_CERT_FILE",
     "FLOW_WORKLOAD_CLIENT_CERT_FILE",
     "FLOW_WORKLOAD_SERVER_CERT_FILE",
+    "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
     "AUTH_WORKLOAD_CLIENT_CERT_FILE",
     "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE",
     "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
-    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"
+    "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE"
 )
 foreach ($name in $workloadLeafNames) {
     $certificate = $workloadIdentityPaths[$name]
@@ -984,6 +1001,7 @@ foreach ($identity in @(
     @{ Name = "Auth"; File = "AUTH_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/auth" },
     @{ Name = "Verification"; File = "VERIFICATION_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/verification" },
     @{ Name = "Flow"; File = "FLOW_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/flow" },
+    @{ Name = "Envoy Issuance bridge"; File = "ENVOY_ISSUANCE_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/envoy-issuance-bridge" },
     @{ Name = "Compliance Profile"; File = "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/compliance-profile" },
     @{ Name = "Deployment Profile"; File = "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Uri = "URI:spiffe://marty.internal/service/deployment-profile" }
 )) {
@@ -1005,6 +1023,15 @@ if ($LASTEXITCODE -ne 0 -or ($flowServerSan -join "`n") -notmatch [regex]::Escap
 $flowServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $flowServerCertificate
 if ($LASTEXITCODE -ne 0 -or ($flowServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
     throw "Flow server certificate must permit server authentication"
+}
+$issuanceServerCertificate = $workloadIdentityPaths["ISSUANCE_WORKLOAD_SERVER_CERT_FILE"]
+$issuanceServerSan = & openssl x509 -noout -ext subjectAltName -in $issuanceServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($issuanceServerSan -join "`n") -notmatch [regex]::Escape("DNS:issuance-native")) {
+    throw "Issuance server certificate must contain the issuance-native DNS SAN"
+}
+$issuanceServerEku = & openssl x509 -noout -ext extendedKeyUsage -in $issuanceServerCertificate
+if ($LASTEXITCODE -ne 0 -or ($issuanceServerEku -join "`n") -notmatch "TLS Web Server Authentication") {
+    throw "Issuance server certificate must permit server authentication"
 }
 $eventServerCertificate = $workloadIdentityPaths["ES_WORKLOAD_SERVER_CERT_FILE"]
 $eventServerSan = & openssl x509 -noout -ext subjectAltName -in $eventServerCertificate

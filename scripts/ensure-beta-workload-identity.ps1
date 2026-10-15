@@ -47,6 +47,7 @@ $retiredWorkloadKeys = @(
     @{ Env = "AUTH_WORKLOAD_SERVER_KEY_FILE"; File = "auth_workload_server_key" },
     @{ Env = "GATEWAY_WORKLOAD_CLIENT_KEY_FILE"; File = "gateway_workload_client_key" },
     @{ Env = "ISSUANCE_WORKLOAD_SERVER_KEY_FILE"; File = "issuance_workload_server_key" },
+    @{ Env = "ENVOY_ISSUANCE_CLIENT_KEY_FILE"; File = "envoy_issuance_client_key" },
     @{ Env = "VERIFICATION_WORKLOAD_CLIENT_KEY_FILE"; File = "verification_workload_client_key" },
     @{ Env = "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE"; File = "deployment_profile_workload_client_key" },
     @{ Env = "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE"; File = "compliance_profile_workload_client_key" },
@@ -73,6 +74,8 @@ foreach ($name in @(
     "GATEWAY_TLS_KMS_TOKEN_FILE",
     "ISSUANCE_WORKLOAD_SERVER_CERT_FILE",
     "ISSUANCE_TLS_KMS_TOKEN_FILE",
+    "ENVOY_ISSUANCE_CLIENT_CERT_FILE",
+    "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE",
     "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
     "COMPLIANCE_PROFILE_TLS_KMS_TOKEN_FILE",
     "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE",
@@ -83,7 +86,7 @@ foreach ($name in @(
         throw "$name must identify a readable file"
     }
 }
-foreach ($role in @("SIGNING_KEYS", "AUTH_SERVER", "GATEWAY", "ISSUANCE", "COMPLIANCE_PROFILE", "DEPLOYMENT_PROFILE")) {
+foreach ($role in @("SIGNING_KEYS", "AUTH_SERVER", "GATEWAY", "ISSUANCE", "ENVOY_ISSUANCE", "COMPLIANCE_PROFILE", "DEPLOYMENT_PROFILE")) {
     $kmsAddress = Get-DotEnvValue $lines "${role}_TLS_KMS_ADDR"
     $kmsUri = $null
     if (-not [Uri]::TryCreate($kmsAddress, [UriKind]::Absolute, [ref]$kmsUri) -or
@@ -125,6 +128,7 @@ foreach ($identity in @(
     @{ Env = "AUTH_WORKLOAD_SERVER_CERT_FILE"; Label = "Auth server"; San = "DNS:auth"; Usage = "TLS Web Server Authentication" },
     @{ Env = "GATEWAY_WORKLOAD_CLIENT_CERT_FILE"; Label = "Gateway client"; San = "URI:spiffe://marty.internal/service/gateway"; Usage = "TLS Web Client Authentication" },
     @{ Env = "ISSUANCE_WORKLOAD_SERVER_CERT_FILE"; Label = "Issuance server"; San = "DNS:issuance-native"; Usage = "TLS Web Server Authentication" },
+    @{ Env = "ENVOY_ISSUANCE_CLIENT_CERT_FILE"; Label = "Envoy Issuance client"; San = "URI:spiffe://marty.internal/service/envoy-issuance-bridge"; Usage = "TLS Web Client Authentication" },
     @{ Env = "COMPLIANCE_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Label = "Compliance Profile client"; San = "URI:spiffe://marty.internal/service/compliance-profile"; Usage = "TLS Web Client Authentication" },
     @{ Env = "DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_CERT_FILE"; Label = "Deployment Profile client"; San = "URI:spiffe://marty.internal/service/deployment-profile"; Usage = "TLS Web Client Authentication" }
 )) {

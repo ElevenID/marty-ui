@@ -240,14 +240,9 @@ def render(spec, command):
         directory = Path(temporary)
         # Reuse the base gate's existing required-artifact binding. No image or
         # build is executed; all inputs remain synthetic and process-local.
-        import re
-
-        required = {
-            key: "synthetic-required-artifact"
-            for key in re.findall(
-                r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
-            )
-        }
+        required = GATE["required_compose_inputs"](
+            "docker-compose.base.yml", GATE["PROFILE"]
+        )
         required["MARTY_OPENBAO_DIDCOMM_IMAGE"] = (
             "synthetic.invalid/openbao-didcomm@sha256:" + "d" * 64
         )

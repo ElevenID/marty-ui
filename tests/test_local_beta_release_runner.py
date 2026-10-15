@@ -784,6 +784,10 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in deploy
     assert "Beta workload TLS private-key files are retired" in deploy
     assert "openssl genpkey" not in initializer
+    assert '"ENVOY_ISSUANCE_CLIENT_CERT_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE"' in initializer
+    assert "spiffe://marty.internal/service/envoy-issuance-bridge" in initializer
     assert (
         "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert" in beta
     )

@@ -106,7 +106,10 @@ def test_spec_has_only_owned_explicit_addresses_and_paths(spec):
         ("kms_token_file", "absent"),
         ("integration_secret_kms_url", "http://127.0.0.1:28201/internal"),
         ("integration_secret_kms_url", "https://production.example:8018/internal"),
-        ("integration_secret_kms_url", "https://user:password@127.0.0.1:28201/internal"),
+        (
+            "integration_secret_kms_url",
+            "https://user:password@127.0.0.1:28201/internal",
+        ),
         ("integration_secret_kms_ca_file", "absent"),
     ],
 )
@@ -189,12 +192,9 @@ def test_actual_base_compose_render_keeps_provider_ingress_out_of_peer_overlay(s
     if shutil.which("docker") is None:
         pytest.skip("Docker Compose is unavailable")
     gate = FIXTURE["GATE"]
-    required = {
-        key: "synthetic-required-artifact"
-        for key in re.findall(
-            r"\$\{([A-Z0-9_]+):\?", (ROOT / "docker-compose.base.yml").read_text()
-        )
-    }
+    required = gate["required_compose_inputs"](
+        "docker-compose.base.yml", gate["PROFILE"]
+    )
     inputs = {**required, **spec["inputs"]}
     directory = Path(spec["policy_directory"])
     (directory / "images.env").write_text(
@@ -226,7 +226,10 @@ def test_actual_authcrypt_render_binds_owned_kms_address_and_token_file(spec):
     assert native["DIDCOMM_KMS_CA_CERT_FILE"] == spec["kms_ca_file"]
     assert native["DIDCOMM_KMS_TOKEN_FILE"] == spec["kms_token_file"]
     assert native["INTEGRATION_SECRET_KMS_URL"] == spec["integration_secret_kms_url"]
-    assert native["INTEGRATION_SECRET_KMS_CA_FILE"] == spec["integration_secret_kms_ca_file"]
+    assert (
+        native["INTEGRATION_SECRET_KMS_CA_FILE"]
+        == spec["integration_secret_kms_ca_file"]
+    )
     assert native["DIDCOMM_ENCRYPTION_POLICY_FILE"] == str(
         Path(spec["policy_directory"]) / "didcomm-encryption-policy.json"
     )
@@ -255,9 +258,11 @@ RUNTIME_GATES = {
 def runtime_registration(script, source, name):
     line = f"printf '%s\\n' \"$all_test_names\" | grep -Fx '{name}: test'"
     assert script.splitlines().count(line) == 1
-    attribute = (r'#\[tokio::test\(flavor = "multi_thread"\)\]'
-                 if name != "base_profile_gateway_composition_isolated"
-                 else r"#\[tokio::test\]")
+    attribute = (
+        r'#\[tokio::test\(flavor = "multi_thread"\)\]'
+        if name != "base_profile_gateway_composition_isolated"
+        else r"#\[tokio::test\]"
+    )
     match = re.search(
         rf"{attribute}\s*async fn {name}\(\) \{{(.*?)^\}}",
         source,
@@ -355,7 +360,7 @@ def runtime_ci(workflow):
         "test -x rust/target/debug/marty-gateway",
         "test -x rust/target/debug/marty-flow",
         'redis_image="$(bash scripts/ci/pull-pinned-dockerhub-image.sh \\',
-        "  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)\"",
+        '  redis:7-alpine@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2)"',
         'docker tag "$redis_image" redis:7-alpine',
         "# Resolve the actual source Dockerfile build to a local immutable ID.",
         "# This is runtime identity evidence, not release provenance.",

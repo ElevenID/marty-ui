@@ -36,6 +36,14 @@ NATIVE_ONLY = {
     "SERVICE_NAME": "issuance_native",
     "ENVIRONMENT": "${ENVIRONMENT:-development}",
     "ISSUANCE_GRPC_ENABLED": "true",
+    "GRPC_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/issuance_workload_server_cert",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "${ISSUANCE_TLS_KMS_ADDR:?ISSUANCE_TLS_KMS_ADDR must be HTTPS OpenBao}",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/run/secrets/openbao_tls_ca_cert",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance_tls_kms_token",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": "${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}",
+    "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}",
     "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
     "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
     "DIDCOMM_KMS_ADDR": "https://openbao:8200",
@@ -94,14 +102,7 @@ FILE_SELECTORS = frozenset(
         "CANVAS_CREDENTIALS_API_TOKEN_FILE",
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
-        "GRPC_WORKLOAD_TLS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
         "GRPC_WORKLOAD_TLS_SERVER_KEY",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
-        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
         "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
         "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE",
     }
@@ -123,6 +124,16 @@ FORBIDDEN_LOCAL_CUSTODY_INPUTS = frozenset(
 
 def source(path):
     return yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
+
+
+def required_compose_inputs(*paths):
+    return {
+        key: "synthetic-required-artifact"
+        for path in paths
+        for key in re.findall(
+            r"\$\{([A-Z0-9_]+):\?", (ROOT / path).read_text(encoding="utf-8")
+        )
+    }
 
 
 def readiness_default():
@@ -169,12 +180,25 @@ def assert_sources(base, profile, runtime):
         assert client["INTEGRATION_SECRET_KMS_CA_FILE"] == (
             "/run/secrets/dev_integration_secret_ca"
         )
-    assert native["secrets"] == ["dev_integration_secret_ca"]
+    assert native["secrets"] == [
+        "dev_integration_secret_ca",
+        "workload_identity_ca_cert",
+        "issuance_workload_server_cert",
+        "openbao_tls_ca_cert",
+        "issuance_tls_kms_token",
+    ]
     assert set(base["secrets"]) == {
         "dev_integration_secret_ca",
         "dev_integration_secret_server_cert",
         "openbao_tls_ca_cert",
         "signing_keys_tls_kms_token",
+        "workload_identity_ca_cert",
+        "issuance_workload_server_cert",
+        "issuance_tls_kms_token",
+        "envoy_issuance_client_cert",
+        "envoy_issuance_tls_kms_token",
+        "flow_workload_client_cert",
+        "flow_client_tls_kms_token",
     }
     for secret, file_env in (
         ("dev_integration_secret_ca", "DEV_INTEGRATION_SECRET_CA_FILE"),
@@ -184,6 +208,13 @@ def assert_sources(base, profile, runtime):
         ),
         ("openbao_tls_ca_cert", "OPENBAO_TLS_CA_CERT_FILE"),
         ("signing_keys_tls_kms_token", "SIGNING_KEYS_TLS_KMS_TOKEN_FILE"),
+        ("workload_identity_ca_cert", "MARTY_WORKLOAD_IDENTITY_CA_CERT_FILE"),
+        ("issuance_workload_server_cert", "ISSUANCE_WORKLOAD_SERVER_CERT_FILE"),
+        ("issuance_tls_kms_token", "ISSUANCE_TLS_KMS_TOKEN_FILE"),
+        ("envoy_issuance_client_cert", "ENVOY_ISSUANCE_CLIENT_CERT_FILE"),
+        ("envoy_issuance_tls_kms_token", "ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE"),
+        ("flow_workload_client_cert", "FLOW_WORKLOAD_CLIENT_CERT_FILE"),
+        ("flow_client_tls_kms_token", "FLOW_CLIENT_TLS_KMS_TOKEN_FILE"),
     ):
         assert base["secrets"][secret] == {
             "file": "${" + file_env + ":?" + file_env + " must be set}"
@@ -241,7 +272,7 @@ def assert_sources(base, profile, runtime):
     assert profile["services"]["flow"] == {
         "environment": {
             "GRPC_SERVICE_TOKEN": NATIVE_ONLY["GRPC_SERVICE_TOKEN"],
-            "ISSUANCE_GRPC_TARGET": "issuance-native:9005",
+            "ISSUANCE_GRPC_TARGET": "https://issuance-native:9005",
         }
     }
     assert profile["services"]["issuance"] == {
@@ -271,7 +302,13 @@ def assert_sources(base, profile, runtime):
         "volumes",
         "networks",
     }
-    assert native["secrets"] == ["dev_integration_secret_ca"]
+    assert native["secrets"] == [
+        "dev_integration_secret_ca",
+        "workload_identity_ca_cert",
+        "issuance_workload_server_cert",
+        "openbao_tls_ca_cert",
+        "issuance_tls_kms_token",
+    ]
     grant_mounts = [
         ("credential", "openbao_issuance_credential_grant"),
         ("canvas", "openbao_issuance_canvas_grant"),
@@ -322,9 +359,19 @@ def assert_sources(base, profile, runtime):
         f"unexpected={sorted(actual_omitted - omitted)!r}, "
         f"stale={sorted(omitted - actual_omitted)!r}"
     )
-    assert not any(":?" in str(value) for value in env.values()), (
-        "Beta required inputs leaked"
-    )
+    required_tls = {
+        name
+        for name in env
+        if name.startswith("GRPC_WORKLOAD_TLS_SERVER_KMS_") and ":?" in str(env[name])
+    }
+    assert required_tls == {
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    }
+    assert not any(
+        ":?" in str(value) for name, value in env.items() if name not in required_tls
+    ), "Unexpected required input leaked into native profile"
 
 
 def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
@@ -347,6 +394,18 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             "SERVICE_NAME": "issuance_native",
             "ENVIRONMENT": inputs.get("ENVIRONMENT") or "development",
             "ISSUANCE_GRPC_ENABLED": "true",
+            "GRPC_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+            "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/issuance_workload_server_cert",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": inputs["ISSUANCE_TLS_KMS_ADDR"],
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/run/secrets/openbao_tls_ca_cert",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance_tls_kms_token",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": inputs[
+                "ISSUANCE_TLS_KMS_KEY_NAME"
+            ],
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": inputs[
+                "ISSUANCE_TLS_KMS_KEY_VERSION"
+            ],
             "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
             "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
             "DIDCOMM_KMS_ADDR": "https://openbao:8200",
@@ -404,7 +463,16 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
             {
                 "source": "dev_integration_secret_ca",
                 "target": "/run/secrets/dev_integration_secret_ca",
-            }
+            },
+            *[
+                {"source": name, "target": f"/run/secrets/{name}"}
+                for name in (
+                    "workload_identity_ca_cert",
+                    "issuance_workload_server_cert",
+                    "openbao_tls_ca_cert",
+                    "issuance_tls_kms_token",
+                )
+            ],
         ],
         "volumes": [
             {
@@ -451,7 +519,7 @@ def expected_model(baseline, *, local, authcrypt, inputs, policy_directory):
     expected = deepcopy(baseline)
     expected["services"]["issuance-native"] = expected_native
     expected["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] = (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     for name in NATIVE["TOKEN_CONSUMERS"]:
         expected["services"][name]["environment"]["GRPC_SERVICE_TOKEN"] = token
@@ -552,7 +620,7 @@ def assert_model(baseline, actual, *, local, authcrypt, inputs, policy_directory
     POLICY["validate_model"](actual, authcrypt_enabled=authcrypt, base_https=True)
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_GRPC_TARGET"]
-        == "issuance-native:9005"
+        == "https://issuance-native:9005"
     )
     assert (
         actual["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"]
