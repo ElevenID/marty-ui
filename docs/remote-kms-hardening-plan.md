@@ -22380,3 +22380,13 @@ to OpenBao's `vault-ca.pem`. A total of 171 focused Python checks passed
 HTTP/root-token/private-volume/missing-CA graphs. These local checks are not
 live installed-beta qualification. The commit remains unpushed while hosted
 run `38788256643` finishes, so any further CI corrections can be batched.
+
+The same hosted run's Rust Contracts lane subsequently failed its OIDF
+HTTPS handshake: the test used Tokio's default current-thread runtime,
+whereas the reviewed shared remote TLS signer explicitly requires a
+multi-thread Tokio runtime to perform its blocking OpenBao signing call.
+Grouped local commit `bc38336fa` selects the production runtime flavor for
+that test. The OIDF binary's three normal tests passed locally and the
+ignored KMS handshake target compiled; the actual remote handshake must be
+rerun in hosted CI. The image lane passed; Canvas, plugin and self-host lanes
+remain live at this checkpoint.
