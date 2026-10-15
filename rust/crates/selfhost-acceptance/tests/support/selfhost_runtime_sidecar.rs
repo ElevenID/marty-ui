@@ -21,9 +21,11 @@ use super::{
 const ERROR: &str = "Owned selfhost service boundary refused";
 const SOCKET: &str = "unix:///var/run/docker.sock";
 pub(super) const PENDING_OPERATION: &str = ".pending-operation-v1";
-const ISSUANCE_SECRET_MOUNTS: [&str; 10] = [
+const ISSUANCE_SECRET_MOUNTS: [&str; 16] = [
     "marty_db_password",
     "issuance_api_key",
+    "signing_keys_issuer_sign_key",
+    "signing_keys_integration_secret_key",
     "didcomm_issuance_openbao_token",
     "sign_grant_mint_issuance_credential_token",
     "sign_grant_mint_issuance_canvas_token",
@@ -32,6 +34,10 @@ const ISSUANCE_SECRET_MOUNTS: [&str; 10] = [
     "token_hmac_key",
     "canvas_credentials_shared_secret",
     "grpc_service_token",
+    "workload_identity_ca_cert",
+    "issuance_workload_server_cert",
+    "openbao_tls_ca_cert",
+    "issuance_tls_kms_token",
 ];
 
 #[derive(Clone, Copy)]
@@ -531,6 +537,23 @@ impl<'a> OwnedNative<'a> {
             json!(format!("{prefix}@{database_host}:5432/marty")),
         );
         environment.insert("INTEGRATION_SECRET_KMS_URL".into(), json!(kms_url));
+        // This loader contract exercises the packaged HTTP process, mounted
+        // secret inventory, and recovery identity. The production model above
+        // must declare the full keyless gRPC identity; live gRPC TLS has its
+        // own connected acceptance owner.
+        require(environment.get("ISSUANCE_GRPC_ENABLED") == Some(&json!("true")))?;
+        for name in [
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+        ] {
+            require(environment.remove(name).is_some())?;
+        }
+        environment.insert("ISSUANCE_GRPC_ENABLED".into(), json!("false"));
         if case == SecretCase::RawAndFile {
             environment.insert(
                 "GRPC_SERVICE_TOKEN".into(),

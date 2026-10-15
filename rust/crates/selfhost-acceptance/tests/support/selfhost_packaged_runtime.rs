@@ -603,6 +603,12 @@ fn write_synthetic_secrets(
         ),
         ("grpc_service_token", SERVICE_TOKEN),
         ("workload_identity_ca_cert", kms_ca_pem),
+        ("issuance_workload_server_cert", kms_ca_pem),
+        ("openbao_tls_ca_cert", kms_ca_pem),
+        (
+            "issuance_tls_kms_token",
+            "synthetic-selfhost-issuance-tls-kms-token",
+        ),
         (
             "signing_keys_issuer_sign_key",
             "synthetic-selfhost-issuer-sign-key-00000001",
@@ -838,7 +844,10 @@ mod tests {
             .map(str::to_owned)
             .collect();
         assert_eq!(actual, expected);
-        assert!(KMS_CA_CERT.starts_with("-----BEGIN CERTIFICATE-----\n"));
+        assert_eq!(
+            KMS_CA_CERT.lines().next(),
+            Some("-----BEGIN CERTIFICATE-----")
+        );
         let dedicated_key =
             std::fs::read_to_string(directory.path().join("signing_keys_integration_secret_key"))
                 .unwrap();
