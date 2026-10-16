@@ -74,11 +74,11 @@ struct Http {
 
 #[test]
 fn shipped_descriptor_preserves_exact_initiation_capability_and_all_eleven_siblings() {
-    // Reviewed additive policy transport and current credential-template schema;
-    // the twelve remaining descriptor files, including issuance, are unchanged.
+    // Reviewed policy transport, credential-template schema, and the additive
+    // auth_time field already present in the canonical auth proto source.
     assert_eq!(
         format!("{:x}", Sha256::digest(DESCRIPTOR)),
-        "09a396226f46afabbd9c00dce80bb53fc8ed67bfa0f740816fdaf5ec57dcbe45"
+        "06ddc17814ec24441a79396af5755f9751bda9f0b93ddbf9e44c060395204d9f"
     );
     let set = DescriptorSet::decode(DESCRIPTOR).unwrap();
     let files: Vec<_> = set
