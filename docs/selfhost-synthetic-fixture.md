@@ -60,6 +60,14 @@ non-exportable Ed25519 key metadata, proves export and unrelated signing are
 denied, and calls Transit `sign` on the exact source/ZIP/lock-bound evidence
 bytes. The runner verifies the signature with the source-approved public key
 before the public journey. Remove the scoped token after the disposable run.
+
+If refresh fails and `selfhost_custody_signer_token.new` remains in the private
+output directory, stop rather than minting another token. The old-token revoke
+response may have been lost; either token may still be valid. Using the protected
+OpenBao root token, revoke the token held in `.new` without printing its value.
+Remove `.new` only after OpenBao confirms revocation or that token's expiry,
+then rerun `--refresh-token`. Keep `.new` private and do not delete it merely
+because the OpenBao API is unavailable.
 The signed statement records both managed transit key references, versions,
 and public profile selector tuples, plus the attestation key reference and
 version. The test separately exercises issue, present, verify, revoke, and
