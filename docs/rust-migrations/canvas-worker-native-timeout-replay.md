@@ -74,7 +74,7 @@ runtime policy change without further diagnosis. The later diagnostic supplied
 that evidence for the narrow repair; neither result authorizes Python deletion
 or deployment.
 
-The [published four-case reference](canvas-worker-timeout-capture-plan.md) remains
+The [published four-case reference](../../contracts/canvas-worker-timeout-oracle.json) remains
 the independent behavioral authority. The native replay does not derive its
 expected state from the Rust implementation.
 
@@ -177,8 +177,11 @@ negative evidence. The narrow implementation retains these constraints but is
 not yet a qualified parity result; do not alter the frozen reference to
 accommodate native behavior. Roster and LTI still use their existing policies;
 roster inactivity is not qualified by the application REST repair.
-The [provider source audit](canvas-worker-provider-timeout-audit-2026-09-07.md)
-records the pinned published client ownership and its separate timeout values.
+The pinned published client distinguishes application REST read inactivity
+(15 seconds) from roster inactivity (20 seconds). Header timeout, body read
+inactivity and whole-job deadline are separate boundaries; none is proof of
+the others. Refresh, revocation and AGS retain their independently scoped
+policies and qualification requirements.
 
 Select the target scope explicitly at the existing processor/provider `for_run`
 boundary: learner application and active issued drift use the application scope;
@@ -224,7 +227,7 @@ existing trust checks and per-run token reuse must remain intact.
 
 Required evidence includes the unchanged four-case worker replay, explicit
 application/drift-versus-roster candidate scope tests, and the forthcoming
-[whole-worker body-timeout capture plan](canvas-worker-body-timeout-capture-plan.md).
+[whole-worker body-timeout replay](canvas-worker-native-body-replay.md).
 Progressing bodies must be allowed to exceed one total interval, while stalled
 reads must fail at the applicable inactivity boundary. Existing transport-level
 body fixtures support reuse but do not qualify worker durable effects. Retain the

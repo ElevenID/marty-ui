@@ -28,18 +28,30 @@ both profiles, and nonexportable Transit keys in preserved beta OpenBao.
 Keep the ceremony intent, ceremony receipt and KMS proof with the aggregate
 receipt. Public ingress remains closed until the Rust owner checks pass.
 
-Source-readiness audit: Signing Keys #913 and the passport aggregate #919 are
-on protected main. The reviewed aggregate correction and deployment writer fence
-must also be on protected main before a release claim. The
-[1.1.218 coordinate](passport-predeletion-release-1.1.218.md) was tombstoned
-after qualification failed. The [1.1.219 coordinate](passport-predeletion-release-1.1.219.md)
-also stopped before promotion when its pinned public-stack harness selected a
-retired Python DIDComm owner. The [1.1.220 release](passport-predeletion-release-1.1.220.md)
-passed release qualification, but its protected disposable producer failed and
-did not create acceptance evidence. The [1.1.221 coordinate](passport-predeletion-release-1.1.221.md)
-selects the reviewed teardown correction for another Rust qualification run.
-Historical beta 1.1.217 evidence cannot qualify the new source.
+## Historical release boundaries
+
+The old coordinate reports are retired at Git checkpoint `053102a80`; select
+current source and coordinates from the stack lock and the post-deletion
+cutover workflow linked above. Their outcomes must not be relabeled:
+
+- Beta 1.1.215 deployed, but CSP blocked WASM and organization restoration.
+  Beta 1.1.216 deployed, but JSON-versus-JSONB claims storage broke token exchange.
+  Beta 1.1.217's KMS/theme evidence did not prove full lifecycle, devices or soak.
+- The 1.1.218 claim was tombstoned and must not be reused. Its actual verifier
+  failure was Syft CycloneDX 1.7 versus the harness's 1.6 requirement, before
+  reading the SPDX oracle; the sealed tombstone's SPDX diagnosis was incorrect.
+  Public stack smoke also found missing psycopg 3 in the migrations image.
+- The 1.1.219 claim stopped before promotion because the pinned harness selected
+  the retired Python DIDComm owner. This coordinate must not be reused either.
+- Release 1.1.220 published successfully, but its protected disposable producer
+  rejected OpenBao's owned `callback_signing` primary network instead of
+  `private`. The project was quarantined, then recovered through attested
+  ownership checks with production inventories unchanged. It supplied no beta
+  or passport acceptance. 1.1.221 was the proposed corrected qualification
+  coordinate, not proof of acceptance or a current unused-coordinate claim.
+
 The final beta release must come from the source after Python passport deletion.
+Historical release success is not authorization to deploy another source.
 
 ## Protected configuration audit — 2026-09-20
 
@@ -336,6 +348,5 @@ The final beta release must come from the source after Python passport deletion.
 
 Local unit/configuration/runtime qualification remains useful prerequisite
 evidence, not proof of released image provenance, real device behavior or the
-completed beta soak. Historical instructions remain in
-[beta 1.1.217 follow-up](beta-acceptance-follow-up-1.1.217.md); their old source
+completed beta soak. The historical coordinate notes are summarized above; their old source
 coordinates and draft status must not be reused as current deployment state.

@@ -181,11 +181,9 @@ acceptance separately against the current qualification gates:
 - CI enforces the ownership model; and
 - a production promotion package exists, based on beta evidence, for separate approval.
 
-The wave-one evidence for these conditions is captured in
-[`final-migration-evidence-2026-08-14.md`](rust-migrations/final-migration-evidence-2026-08-14.md),
-and the accepted wave-two aggregate is captured in
-[`wave-two-final-evidence-2026-08-15.md`](rust-migrations/wave-two-final-evidence-2026-08-15.md).
-Promoting the accepted artifacts beyond beta remains explicitly out of scope.
+The completed wave-one and wave-two beta evidence reports are retained in Git
+history at `053102a80`. Those historical receipts do not qualify new source or
+authorize production or persistent self-host promotion.
 
 ## Deliberate non-targets
 
