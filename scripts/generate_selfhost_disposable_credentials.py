@@ -71,6 +71,11 @@ def generate(root: Path, random_hex: Callable[[int], str] = secrets.token_hex) -
             created.append(path)
             with os.fdopen(descriptor, "w", encoding="ascii") as stream:
                 stream.write(value)
+                stream.flush()
+                # Compose bind-mounts the file into containers with distinct
+                # non-root UIDs. The 0700 host directory protects the files;
+                # their final mode must permit those containers to read them.
+                os.fchmod(stream.fileno(), 0o444)
     except (OSError, UnicodeError):
         for path in created:
             try:

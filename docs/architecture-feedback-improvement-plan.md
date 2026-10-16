@@ -79,6 +79,11 @@ and public OpenBao CA paths account for 52 filenames, but do not yet stage
 one persistent install root. The local follow-up generates seventeen further
 text credentials into an owner-private POSIX directory, includes that helper
 in the bundle, and mints the HAIP KMS token under its narrow OpenBao policy.
+Review found that final `0600` host files would be unreadable by distinct
+non-root Compose container UIDs. The generator now flushes each file at
+`0600`, sets the final mode to `0444` inside the `0700` host directory, and
+rolls back new files if that mode transition fails. Linux focused tests cover
+the exact mode and rollback; installed Compose use remains unproven.
 Six optional integration files may be empty only when the rendered integrations
 are disabled. The Cloudflare tunnel token is not used by the local journey.
 This does not close the installed secret roster or qualify the bundle.

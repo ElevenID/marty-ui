@@ -106,9 +106,12 @@ remain external; packaging does not load their values.
    `python3 scripts/generate_selfhost_disposable_credentials.py --secret-root /path/to/selfhost-secrets`
    on Linux or a Linux WSL filesystem; native Windows cannot enforce the required private file modes.
    It creates only seventeen local text credentials and refuses to overwrite
-   files. Provision all remaining required certificates, scoped tokens, and
-   integration values separately; this helper does not make a bundle qualified
-   or ready to start. Never use its disposable credentials for a production install.
+   files. It writes them at `0600` before setting their final mode to `0444`;
+   the `0700` host directory keeps them private while distinct non-root
+   container UIDs can read their Compose-mounted files. Provision all remaining
+   required certificates, scoped tokens, and integration values separately;
+   this helper does not make a bundle qualified or ready to start. Never use
+   its disposable credentials for a production install.
 5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write separate `openbao_service_token`, HAIP workload, and short-lived `openbao_bootstrap_token` secrets, or provision equivalent scoped tokens in `SELFHOST_SECRET_DIR` yourself. The helper keeps the host secret directory private (0700) and makes individual file-backed secrets readable by the stack's different non-root container UIDs (0444). Re-run the helper to renew the migration token before a later schema upgrade:
 
    The bundled helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
