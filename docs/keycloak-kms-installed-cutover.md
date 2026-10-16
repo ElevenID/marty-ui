@@ -122,3 +122,13 @@ not stop writers or create its own backup, and does not qualify installed
 cutover/rollback. The disposable container was removed. The synthetic backup
 files remain under the OS temporary directory because automatic approval
 review rejected their deletion; they contain no real keys or database data.
+
+The beta Compose Keycloak service already starts with `--import-realm` and a
+read-only checked-in realm import mount, so a fresh database can bootstrap the
+`11id` realm before the existing configurator runs. The ordinary beta release
+also captures a quiesced coordinated backup after stopping writers, but its
+preflight migration rehearsal restores only the Marty database; it does not
+rehearse restoring Keycloak, OpenBao Raft, Redis, and applicant state together.
+The swap primitive must be wired after that quiesced backup, and the emergency
+restore path must be extended and rehearsed for the currently installed legacy
+Issuance/Gateway image pairing before any live cutover.
