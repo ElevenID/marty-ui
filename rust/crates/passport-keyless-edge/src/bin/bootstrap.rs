@@ -30,6 +30,114 @@ struct Role {
     client: bool,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Profile {
+    Passport,
+    Selfhost,
+}
+
+struct SelfhostRole {
+    name: &'static str,
+    key_name: &'static str,
+    cert_file: &'static str,
+    token_file: &'static str,
+}
+
+// Names here are the disposable self-host contract in the production Compose
+// catalog. The keys live only in this install's private OpenBao instance.
+const SELFHOST_ROLES: &[SelfhostRole] = &[
+    SelfhostRole {
+        name: "signing-keys-server",
+        key_name: "workload-tls-signing-keys-server",
+        cert_file: "signing_keys_workload_server_cert",
+        token_file: "signing_keys_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "gateway-client",
+        key_name: "workload-tls-gateway-auth-client",
+        cert_file: "gateway_workload_client_cert",
+        token_file: "gateway_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "auth-client",
+        key_name: "workload-tls-auth-client",
+        cert_file: "auth_workload_client_cert",
+        token_file: "auth_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "auth-server",
+        key_name: "workload-tls-auth-server",
+        cert_file: "auth_workload_server_cert",
+        token_file: "auth_server_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "compliance-profile-client",
+        key_name: "workload-tls-compliance-profile-client",
+        cert_file: "compliance_profile_workload_client_cert",
+        token_file: "compliance_profile_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "deployment-profile-client",
+        key_name: "workload-tls-deployment-profile-client",
+        cert_file: "deployment_profile_workload_client_cert",
+        token_file: "deployment_profile_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "organization-server",
+        key_name: "workload-tls-organization-server",
+        cert_file: "org_workload_server_cert",
+        token_file: "org_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "event-stream-server",
+        key_name: "workload-tls-event-stream-server",
+        cert_file: "es_workload_server_cert",
+        token_file: "es_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "revocation-profile-server",
+        key_name: "workload-tls-revocation-profile-server",
+        cert_file: "rp_workload_server_cert",
+        token_file: "rp_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "credential-template-server",
+        key_name: "workload-tls-credential-template-server",
+        cert_file: "ct_workload_server_cert",
+        token_file: "ct_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "issuance-server",
+        key_name: "workload-tls-issuance-server",
+        cert_file: "issuance_workload_server_cert",
+        token_file: "issuance_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "flow-client",
+        key_name: "workload-tls-flow-client",
+        cert_file: "flow_workload_client_cert",
+        token_file: "flow_client_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "flow-server",
+        key_name: "workload-tls-flow-server",
+        cert_file: "flow_workload_server_cert",
+        token_file: "flow_server_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "pp-server",
+        key_name: "workload-tls-presentation-policy-server",
+        cert_file: "pp_workload_server_cert",
+        token_file: "pp_tls_kms_token",
+    },
+    SelfhostRole {
+        name: "verification-client",
+        key_name: "workload-tls-verification-client",
+        cert_file: "verification_workload_client_cert",
+        token_file: "verification_tls_kms_token",
+    },
+];
+
 const ROLES: &[Role] = &[
     Role {
         name: "passport-edge",
@@ -181,7 +289,28 @@ const ROLES: &[Role] = &[
         server: true,
         client: false,
     },
+    Role {
+        name: "verification-client",
+        file_prefix: "verification_workload_client",
+        common_name: "verification",
+        alt_names: "",
+        uri_sans: "spiffe://marty.internal/service/verification",
+        ip_sans: "",
+        server: false,
+        client: true,
+    },
 ];
+
+fn selfhost_role(name: &str) -> Option<&'static SelfhostRole> {
+    SELFHOST_ROLES.iter().find(|role| role.name == name)
+}
+
+fn selected_roles(profile: Profile) -> impl Iterator<Item = &'static Role> {
+    ROLES.iter().filter(move |role| match profile {
+        Profile::Passport => role.name != "verification-client",
+        Profile::Selfhost => selfhost_role(role.name).is_some(),
+    })
+}
 
 fn required(name: &str) -> Result<String, Box<dyn Error>> {
     let value = env::var(name)?;
@@ -269,27 +398,48 @@ impl Bao {
     }
 }
 
-async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dyn Error>> {
+async fn provision(
+    bao: &Bao,
+    output: &Path,
+    project: &str,
+    profile: Profile,
+) -> Result<(), Box<dyn Error>> {
+    let pki_mount = match profile {
+        Profile::Passport => {
+            bao.checked(
+                Method::POST,
+                "sys/mounts/transit",
+                Some(json!({"type":"transit"})),
+                None,
+            )
+            .await?;
+            "pki"
+        }
+        Profile::Selfhost => {
+            // The existing self-host OpenBao bootstrap owns Transit. A distinct
+            // PKI mount keeps workload TLS separate from its credential PKI.
+            bao.checked(Method::GET, "sys/mounts/transit", None, None)
+                .await?;
+            "workload-pki"
+        }
+    };
     bao.checked(
         Method::POST,
-        "sys/mounts/transit",
-        Some(json!({"type":"transit"})),
-        None,
-    )
-    .await?;
-    bao.checked(
-        Method::POST,
-        "sys/mounts/pki",
+        &format!("sys/mounts/{pki_mount}"),
         Some(json!({"type":"pki"})),
         None,
     )
     .await?;
+    let ca_name = match profile {
+        Profile::Passport => "Marty disposable passport workload CA",
+        Profile::Selfhost => "Marty disposable self-host workload CA",
+    };
     let ca = bao
         .checked(
             Method::POST,
-            "pki/root/generate/internal",
+            &format!("{pki_mount}/root/generate/internal"),
             Some(json!({
-                "common_name": "Marty disposable passport workload CA", "ttl": "48h",
+                "common_name": ca_name, "ttl": "48h",
                 "key_type": "ec", "key_bits": 256,
             })),
             None,
@@ -306,8 +456,15 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
 
     let mut first_token = None;
     let mut last_key = None;
-    for role in ROLES {
-        let key = format!("{project}-{}", role.name);
+    for role in selected_roles(profile) {
+        let selfhost = selfhost_role(role.name);
+        let key = match profile {
+            Profile::Passport => format!("{project}-{}", role.name),
+            Profile::Selfhost => selfhost
+                .ok_or("self-host TLS role is unmapped")?
+                .key_name
+                .to_owned(),
+        };
         bao.checked(
             Method::POST,
             &format!("transit/keys/{key}"),
@@ -328,7 +485,7 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
         }
         bao.checked(
             Method::POST,
-            &format!("pki/roles/{}", role.name),
+            &format!("{pki_mount}/roles/{}", role.name),
             // Transit emits a CSR with its own SAN. Use the explicit, role-scoped
             // names below so the issued certificate covers the Docker peer name.
             Some(json!({
@@ -349,8 +506,12 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
                 None,
             )
             .await?;
+        let ttl = match profile {
+            Profile::Passport => "1h",
+            Profile::Selfhost => "8h",
+        };
         let mut request = json!({"csr":value(&csr, "csr")?,
-                                 "common_name":role.common_name,"ttl":"1h"});
+                                 "common_name":role.common_name,"ttl":ttl});
         if !role.alt_names.is_empty() {
             request["alt_names"] = json!(role.alt_names);
         }
@@ -363,7 +524,7 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
         let signed = bao
             .checked(
                 Method::POST,
-                &format!("pki/sign/{}", role.name),
+                &format!("{pki_mount}/sign/{}", role.name),
                 Some(request),
                 None,
             )
@@ -375,14 +536,25 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
         if !cert.contains("BEGIN CERTIFICATE") {
             return Err("OpenBao leaf certificate is invalid".into());
         }
-        write_new(&output.join(format!("{}_cert", role.file_prefix)), cert)?;
+        let cert_file = match profile {
+            Profile::Passport => format!("{}_cert", role.file_prefix),
+            Profile::Selfhost => selfhost
+                .ok_or("self-host TLS role is unmapped")?
+                .cert_file
+                .to_owned(),
+        };
+        write_new(&output.join(cert_file), cert)?;
+        let policy_name = match profile {
+            Profile::Passport => key.clone(),
+            Profile::Selfhost => format!("{project}-{key}"),
+        };
         let policy = format!(
             "path \"transit/keys/{key}\" {{ capabilities = [\"read\"] }}\n\
              path \"transit/sign/{key}\" {{ capabilities = [\"update\"] }}"
         );
         bao.checked(
             Method::PUT,
-            &format!("sys/policies/acl/{key}"),
+            &format!("sys/policies/acl/{policy_name}"),
             Some(json!({"policy":policy})),
             None,
         )
@@ -392,7 +564,7 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
                 Method::POST,
                 "auth/token/create",
                 Some(json!({
-                    "policies":[key], "no_default_policy":true, "ttl":"1h",
+                    "policies":[policy_name], "no_default_policy":true, "ttl":ttl,
                 })),
                 None,
             )
@@ -405,10 +577,14 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
         if token == bao.root_token || token.len() < 20 {
             return Err("OpenBao scoped token is invalid".into());
         }
-        write_new(
-            &output.join(format!("{}_kms_token", role.file_prefix)),
-            token,
-        )?;
+        let token_file = match profile {
+            Profile::Passport => format!("{}_kms_token", role.file_prefix),
+            Profile::Selfhost => selfhost
+                .ok_or("self-host TLS role is unmapped")?
+                .token_file
+                .to_owned(),
+        };
+        write_new(&output.join(token_file), token)?;
         if first_token.is_none() {
             first_token = Some(token.to_owned());
         }
@@ -431,17 +607,39 @@ async fn provision(bao: &Bao, output: &Path, project: &str) -> Result<(), Box<dy
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let profile = match env::var("MARTY_TLS_BOOTSTRAP_PROFILE").as_deref() {
+        Ok("selfhost-disposable") => Profile::Selfhost,
+        Ok("passport") | Err(_) => Profile::Passport,
+        Ok(_) => return Err("unknown disposable TLS bootstrap profile".into()),
+    };
+    if profile == Profile::Selfhost
+        && env::var("MARTY_SELFHOST_DISPOSABLE_OPENBAO").as_deref() != Ok("1")
+    {
+        return Err("self-host TLS bootstrap requires disposable OpenBao ownership".into());
+    }
     let endpoint = required("BAO_ADDR")?;
-    let project = required("PASSPORT_ACCEPTANCE_PROJECT")?;
-    if !project.starts_with("marty-passport-acceptance-")
+    let (project_name, output_name, project_prefix) = match profile {
+        Profile::Passport => (
+            "PASSPORT_ACCEPTANCE_PROJECT",
+            "PASSPORT_TLS_OUTPUT_DIR",
+            "marty-passport-acceptance-",
+        ),
+        Profile::Selfhost => (
+            "MARTY_SELFHOST_PROJECT",
+            "SELFHOST_TLS_OUTPUT_DIR",
+            "marty-selfhost-disposable-",
+        ),
+    };
+    let project = required(project_name)?;
+    if !project.starts_with(project_prefix)
         || project.len() > 80
         || !project
             .bytes()
             .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
-        return Err("disposable passport project is invalid".into());
+        return Err("disposable TLS project is invalid".into());
     }
-    let output = PathBuf::from(required("PASSPORT_TLS_OUTPUT_DIR")?);
+    let output = PathBuf::from(required(output_name)?);
     let metadata = fs::symlink_metadata(&output)?;
     if !output.is_absolute()
         || !metadata.is_dir()
@@ -460,7 +658,17 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let ca_file = required("BAO_CACERT")?;
     let root_token = fs::read_to_string(required("BAO_ROOT_TOKEN_FILE")?)?;
     let root_token = root_token.trim().to_owned();
-    if root_token.len() != 64 || !root_token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let valid_token = match profile {
+        Profile::Passport => {
+            root_token.len() == 64 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit())
+        }
+        Profile::Selfhost => {
+            root_token.len() >= 20
+                && root_token.len() <= 256
+                && root_token.bytes().all(|byte| byte.is_ascii_graphic())
+        }
+    };
+    if !valid_token {
         return Err("OpenBao bootstrap token is invalid".into());
     }
     let bao = Bao {
@@ -471,6 +679,55 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?,
         root_token,
     };
-    provision(&bao, &output, &project).await?;
+    provision(&bao, &output, &project, profile).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeSet;
+
+    #[test]
+    fn selfhost_tls_outputs_and_keys_match_deployment_inputs() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let catalog: Value = serde_json::from_str(
+            &fs::read_to_string(root.join("deploy-config/catalog/secrets.json")).unwrap(),
+        )
+        .unwrap();
+        let secrets = catalog["secrets"].as_object().unwrap();
+        let expected_files: BTreeSet<_> = secrets
+            .keys()
+            .filter(|name| {
+                name.contains("_workload_") && name.ends_with("_cert")
+                    || name.ends_with("_tls_kms_token")
+            })
+            .map(String::as_str)
+            .collect();
+        let actual_files: BTreeSet<_> = SELFHOST_ROLES
+            .iter()
+            .flat_map(|role| [role.cert_file, role.token_file])
+            .collect();
+        assert_eq!(actual_files.len(), SELFHOST_ROLES.len() * 2);
+        assert_eq!(actual_files, expected_files);
+
+        let environment =
+            fs::read_to_string(root.join(".env.selfhost.production.example")).unwrap();
+        let expected_keys: BTreeSet<_> = environment
+            .lines()
+            .filter_map(|line| line.split_once('='))
+            .filter(|(name, _)| name.ends_with("_TLS_KMS_KEY_NAME"))
+            .map(|(_, value)| value)
+            .collect();
+        let actual_keys: BTreeSet<_> = SELFHOST_ROLES.iter().map(|role| role.key_name).collect();
+        assert_eq!(actual_keys.len(), SELFHOST_ROLES.len());
+        assert_eq!(actual_keys, expected_keys);
+
+        let selected: BTreeSet<_> = selected_roles(Profile::Selfhost)
+            .map(|role| role.name)
+            .collect();
+        let mapped: BTreeSet<_> = SELFHOST_ROLES.iter().map(|role| role.name).collect();
+        assert_eq!(selected, mapped);
+        assert_eq!(selected_roles(Profile::Passport).count(), 15);
+    }
 }

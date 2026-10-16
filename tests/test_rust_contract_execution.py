@@ -27,6 +27,7 @@ else:
         ("Test native passport Gateway signed webhook on PostgreSQL", 1),
         ("Exercise authenticated Signing Keys Gateway to Rust routes", 2),
         ("Exercise OIDF keyless HTTPS edge against disposable OpenBao", 1),
+        ("Exercise self-host workload TLS bootstrap against disposable OpenBao", 1),
         ("Exercise live Signing Keys public contracts on disposable Redis", 1),
         ("Test beta passport reconciliation and native batch on PostgreSQL", 1),
         ("Run Flow database contract after workspace suite", 1),
@@ -48,6 +49,25 @@ def test_focused_rust_ci_cases_require_positive_execution(
             [BASH, "-n", "-c", script], capture_output=True, text=True, check=False
         )
         assert syntax.returncode == 0, syntax.stderr
+
+
+def test_selfhost_tls_bootstrap_runs_live_scoped_openbao_probe() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    [step] = [
+        entry for entry in steps
+        if entry.get("name")
+        == "Exercise self-host workload TLS bootstrap against disposable OpenBao"
+    ]
+    script = step["run"]
+    assert "--profile selfhost-bootstrap -- cargo run --locked" in script
+    assert "--bin marty-passport-tls-bootstrap" in script
+    probe = (ROOT / "scripts/with_disposable_event_stream_kms.py").read_text(
+        encoding="utf-8"
+    )
+    assert "validate_selfhost_tls_bootstrap(bao, output, root_token)" in probe
 
 
 def test_https_grant_probe_requires_positive_rust_execution() -> None:
