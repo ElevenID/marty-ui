@@ -12,6 +12,7 @@
     "docker-compose.service.issuance-native-runtime.yml",
     ".env.selfhost.production.example",
     "SELFHOST_BUNDLE.md",
+    "docs/selfhost-disposable-qualification-runbook.md",
     "docker/init-databases.sh",
     "docker/nginx-selfhost.prod.conf.template",
     "docker/tunnel-nginx-proxy.edge.conf",

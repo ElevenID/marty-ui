@@ -29,6 +29,8 @@ OUTPUTS = frozenset({
     "keycloak_11id_rs256_cert",
     *(f"keycloak_{realm}_{purpose}_token" for realm in REALMS for purpose in PURPOSES),
 })
+SESSION_TTL = "8h"
+MIN_VALIDITY_SECONDS = 7 * 60 * 60
 
 
 class KeycloakBao(Bao):
@@ -55,12 +57,25 @@ def require_data(response: dict, field: str) -> dict:
 def scoped_token(bao: Bao, policy: str, name: str) -> str:
     bao.request("PUT", f"sys/policies/acl/{name}", {"policy": policy})
     result = bao.request("POST", "auth/token/create", {
-        "policies": [name], "no_default_policy": True, "ttl": "1h",
+        "policies": [name], "no_default_policy": True, "ttl": SESSION_TTL,
     }).get("auth", {})
     token = result.get("client_token") if isinstance(result, dict) else None
     if not isinstance(token, str) or len(token) < 20 or token == bao.token:
         raise RuntimeError("disposable Keycloak signer token is unscoped")
+    if (type(result.get("lease_duration")) is not int
+            or result["lease_duration"] < MIN_VALIDITY_SECONDS):
+        raise RuntimeError("disposable Keycloak token expires before tester session")
     return token
+
+
+def require_cert_lifetime(certificate: str) -> None:
+    lifetime = subprocess.run(
+        ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"],
+        input=certificate.encode("ascii"), capture_output=True, timeout=10,
+        check=False,
+    )
+    if lifetime.returncode:
+        raise RuntimeError("disposable Keycloak certificate expires before tester session")
 
 
 def require_mounts(bao: Bao) -> None:
@@ -83,7 +98,7 @@ def provision(bao: Bao) -> dict[str, str]:
         raise RuntimeError("disposable Keycloak PKI exported its CA key")
     bao.request("POST", "keycloak-pki/roles/rs256", {
         "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
-        "max_ttl": "1h", "use_csr_common_name": False, "use_csr_sans": False,
+        "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
     })
     outputs: dict[str, str] = {}
     rsa_policy = ""
@@ -104,7 +119,7 @@ def provision(bao: Bao) -> dict[str, str]:
         csr = require_data(bao.request("POST", f"transit/keys/{rsa_key}/csr",
                                        {"version": 1}), "csr")["csr"]
         signed = require_data(bao.request("POST", "keycloak-pki/sign/rs256", {
-            "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": "1h",
+            "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": SESSION_TTL,
         }), "certificate")
         if "private_key" in signed:
             raise RuntimeError("disposable Keycloak leaf exported a private key")
@@ -113,6 +128,7 @@ def provision(bao: Bao) -> dict[str, str]:
         public_key = metadata["keys"].get("1", {}).get("public_key")
         if not isinstance(public_key, str) or not isinstance(certificate, str):
             raise RuntimeError("disposable Keycloak RS256 public key is absent")
+        require_cert_lifetime(certificate)
         # OpenSSL only receives public data. Verify the mounted certificate is
         # bound to the non-exportable Transit version that Keycloak will sign.
         extracted = subprocess.run(

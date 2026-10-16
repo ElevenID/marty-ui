@@ -124,6 +124,18 @@ remain external; packaging does not load their values.
    `python3 scripts/provision_selfhost_keycloak_kms.py`; it refuses to
    overwrite any of its seven targets and writes files readable by the stack's
    non-root containers. This remains a disposable, unqualified setup path.
+   Keycloak and the workload TLS bootstrap request eight-hour credentials;
+   the Keycloak helper rejects a shorter-than-seven-hour issued token or
+   certificate. Treat **seven hours as an upper bound, not a guaranteed
+   operating window**: OpenBao may cap other workload TLS leases sooner, so
+   inspect their actual expiry and stop at the earliest one. This is not a
+   continuously running installation. The read-only expiry check in
+   `docs/selfhost-disposable-qualification-runbook.md` prints the earliest
+   workload TLS expiry without exposing token values. Before another session, stop the
+   Compose stack and its external disposable OpenBao, discard their disposable
+   state and secret roots, and start with fresh roots and a new OpenBao
+   bootstrap. Do not delete or replace live secret files, rerun this helper
+   against its existing `keycloak-pki/` mount, or claim in-place renewal.
 
    On Linux, the disposable workload TLS helper can stage 31 public
    certificates and scoped tokens from the same running OpenBao project. It

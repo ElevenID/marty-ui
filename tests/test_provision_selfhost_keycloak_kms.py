@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -12,7 +13,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from provision_selfhost_keycloak_kms import OUTPUTS, require_mounts, write_outputs  # noqa: E402
+from provision_selfhost_keycloak_kms import (  # noqa: E402
+    MIN_VALIDITY_SECONDS, OUTPUTS, SESSION_TTL, require_cert_lifetime,
+    require_mounts, scoped_token, write_outputs,
+)
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
 
@@ -153,3 +157,38 @@ def test_keycloak_provisioning_requires_current_didcomm_plugin() -> None:
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:ci")
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:local")
     assert not PLUGIN_IMAGE.fullmatch("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm:latest")
+
+
+def test_keycloak_token_requires_a_real_session_length() -> None:
+    class TokenBao:
+        token = "disposable-root-token-long-enough"
+
+        def __init__(self, duration: int) -> None:
+            self.duration = duration
+
+        def request(self, method: str, path: str, body: dict) -> dict:
+            if path.startswith("sys/policies/acl/"):
+                assert method == "PUT"
+                return {}
+            assert (method, path) == ("POST", "auth/token/create")
+            assert body["ttl"] == SESSION_TTL == "8h"
+            assert body["no_default_policy"] is True
+            return {"auth": {"client_token": "disposable-scoped-token-long-enough",
+                             "lease_duration": self.duration}}
+
+    assert scoped_token(TokenBao(MIN_VALIDITY_SECONDS), "policy", "scope")
+    with pytest.raises(RuntimeError, match="expires before tester session"):
+        scoped_token(TokenBao(MIN_VALIDITY_SECONDS - 1), "policy", "scope")
+
+
+def test_keycloak_certificate_requires_a_real_session_length(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def short_cert(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        assert command == ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"]
+        assert kwargs["input"] == b"public certificate"
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr("provision_selfhost_keycloak_kms.subprocess.run", short_cert)
+    with pytest.raises(RuntimeError, match="certificate expires before tester session"):
+        require_cert_lifetime("public certificate")

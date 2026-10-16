@@ -24,6 +24,63 @@ journey and custody checks pass, the lower-memory operating envelope is
 reviewed, and this qualification target is updated. A Compose render or image
 pull alone does not establish a smaller supported minimum.
 
+The disposable Keycloak and workload TLS credentials request eight-hour
+lifetimes. Seven hours is an upper bound, not a guaranteed operating window:
+check the effective expiry of workload TLS credentials, which OpenBao may cap,
+and complete the journey before the earliest expiration. Do not keep the stack
+running afterward. A new session requires teardown and
+fresh disposable OpenBao state and secret roots, followed by a new install and
+bootstrap. The current helpers deliberately do not rotate live Keycloak or
+workload TLS files in place.
+
+After provisioning, inspect the effective expirations without printing token
+values. Run this from the clean release source checkout with its `scripts/`
+directory on `PYTHONPATH`; `BAO_ADDR` must name the same locally controlled
+HTTPS OpenBao used to provision the secrets. Repeat the check before a longer
+test session, and stop before the earliest reported expiry. Set
+`openbao_state_root` to that project's private state directory (the one
+containing `root.token` and `tls/ca.crt`). Set all four paths/address for
+your isolated install; the root token is mode 0400, so the inspection needs
+`sudo`:
+
+```bash
+source_root=/path/to/clean/release-source
+secret_root=/path/to/private/selfhost-secrets
+openbao_state_root=/path/to/private/openbao-state
+BAO_ADDR="https://127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT:-18200}"
+sudo env PYTHONPATH="$source_root/scripts" python3 - "$secret_root" "$openbao_state_root" "$BAO_ADDR" <<'PY'
+from datetime import datetime, timezone
+from pathlib import Path
+import subprocess
+import sys
+from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TOKEN_FILES
+from selfhost_openbao_client import Bao
+
+secret_root, bao_state = map(Path, sys.argv[1:3])
+address = sys.argv[3]
+if not address.startswith("https://"):
+    raise SystemExit("OpenBao endpoint must use HTTPS")
+client = Bao(address, bao_state / "tls/ca.crt",
+             (bao_state / "root.token").read_text(encoding="ascii").strip())
+expiries = []
+for name in sorted(SELFHOST_CERT_FILES):
+    result = subprocess.run(["openssl", "x509", "-enddate", "-noout",
+                             "-in", str(secret_root / name)],
+                            check=True, capture_output=True, text=True)
+    value = result.stdout.strip().removeprefix("notAfter=")
+    expiries.append(datetime.strptime(value, "%b %d %H:%M:%S %Y %Z")
+                    .replace(tzinfo=timezone.utc))
+for name in sorted(SELFHOST_TOKEN_FILES):
+    token = (secret_root / name).read_text(encoding="ascii").strip()
+    data = client.request("POST", "auth/token/lookup", {"token": token})["data"]
+    expiries.append(datetime.fromisoformat(data["expire_time"].replace("Z", "+00:00")))
+earliest = min(expiries)
+if earliest <= datetime.now(timezone.utc):
+    raise SystemExit("A workload TLS credential has expired")
+print("Earliest workload TLS expiry (UTC):", earliest.isoformat())
+PY
+```
+
 ## Stage exact inputs
 
 1. From the successful Stack release run, download the unique
