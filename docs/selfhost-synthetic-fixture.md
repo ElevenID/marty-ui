@@ -28,13 +28,14 @@ Additional hook inputs:
 | Variable | Value |
 | --- | --- |
 | `SELFHOST_BAO_AUDIT_URL` | Loopback HTTPS URL for the **same** disposable OpenBao instance used by `signing-keys`; port must match the installed `BAO_ADDR` and its CA must be staged as `openbao_tls_ca_cert` in the private secret root |
-| `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit`, at most one-hour TTL, and only `read` on `transit/keys/cred-issuer-*` and `transit/keys/oid4vp-verifier-*` |
+| `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit`, at most one-hour TTL, and only `read` on `transit/keys/cred-issuer-*`, `transit/keys/oid4vp-verifier-*`, and the exact custody signer metadata path |
 | `SELFHOST_KMS_JWK_TOOL` | Set by the installed runner to a fresh `public-kms-jwk` build from the clean exact release source; the Rust converter parses the audited OpenBao PEM and its public coordinates must equal the resolved issuer JWK |
 | `SELFHOST_CUSTODY_SIGNING_TOKEN_FILE` | Outside-repo file containing a short-lived token scoped to the source-approved, non-exportable Ed25519 Transit signer |
+| `SELFHOST_CUSTODY_CHALLENGE`, `SELFHOST_RUN_ID`, `SELFHOST_FIXTURE_SHA256` | Fresh runner-generated challenge and exact prepared run/fixture identity; never supply or reuse these manually |
 
 Before issuing the audit token, the operator must inspect the actual
 `selfhost-qualification-audit` ACL and confirm it grants only `read` on the
-two transit key metadata path families above. The fixture checks the token's
+two transit key metadata path families and exact custody signer above. The fixture checks the token's
 policy names and TTL, but does **not** prove the policy's ACL contents or
 record them as verified custody evidence.
 
@@ -49,16 +50,17 @@ python3 scripts/provision_selfhost_custody_signer.py \
   --state-root "$openbao_state_root" --output-root "$secret_root"
 ```
 
-Add only the printed public-key SHA-256 to
-`deploy-config/selfhost-kms-custody-trust-roots.json` in a protected source
-commit, then prepare a new ZIP/receipt from that exact commit. Only the
-public PEM and scoped token leave OpenBao; no custody private key file is
+The printed public-key digest is an install-local diagnostic, not a release
+source edit. Each fresh OpenBao instance may generate a distinct signer.
+Only the public PEM and scoped token leave OpenBao; no custody private key file is
 created. If the token expires before the installed run, repeat the helper with
 `--refresh-token`; it verifies that the public key still matches and revokes
 the prior token. The hook checks the token's policy and TTL, reads the
 non-exportable Ed25519 key metadata, proves export and unrelated signing are
 denied, and calls Transit `sign` on the exact source/ZIP/lock-bound evidence
-bytes. The runner verifies the signature with the source-approved public key
+bytes, including the runner's fresh challenge and prepared run/fixture identity.
+The runner independently reads the live key metadata from the owned,
+image-locked OpenBao instance and verifies the signature with that public key
 before the public journey. Remove the scoped token after the disposable run.
 
 If refresh fails and `selfhost_custody_signer_token.new` remains in the private
@@ -82,7 +84,7 @@ must show the same synthetic operator and organization in `db-migrate` and
 `host.docker.internal` OpenBao port. The gateway and Keycloak URLs must match
 the exact loopback ports published by the installed `edge` and `keycloak`
 services. A domain/DID mismatch, public-key
-mismatch, exportable transit key, root or long-lived audit token, missing
-signer approval, or incomplete
+mismatch, exportable transit key, root or long-lived audit token, wrong OpenBao
+owner/image/loopback port/CA, replayed challenge, or incomplete
 Keycloak/profile setup fails the run. A passing hook remains **unqualified**
 until the exact fresh installation and release publisher gates pass.

@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import ssl
 import subprocess
 import sys
@@ -37,6 +38,7 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
         "SELFHOST_KMS_JWK_TOOL",
         "SELFHOST_CUSTODY_SIGNING_TOKEN_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
+        "SELFHOST_RUN_ID", "SELFHOST_FIXTURE_SHA256", "SELFHOST_CUSTODY_CHALLENGE",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH",
         "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH",
         "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH",
@@ -44,6 +46,9 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
     missing = [name for name in names if not values.get(name)]
     if missing:
         raise ValueError("synthetic fixture inputs absent: " + ", ".join(missing))
+    if (re.fullmatch(r"[0-9a-f]{64}", values["SELFHOST_CUSTODY_CHALLENGE"]) is None
+            or re.fullmatch(r"[0-9a-f]{64}", values["SELFHOST_FIXTURE_SHA256"]) is None):
+        raise ValueError("synthetic custody challenge or fixture digest is invalid")
     if values["SELFHOST_ISSUER_DID"] != values["SELFHOST_VERIFIER_DID"]:
         raise ValueError("synthetic issuer and verifier must share the local organization DID")
     did = "did:web:" + values["SELFHOST_PUBLIC_DOMAIN"].replace(":", "%3A")
@@ -329,6 +334,9 @@ async def provision(fixture: dict[str, str]) -> dict:
             "source_sha": fixture["SELFHOST_SOURCE_SHA"],
             "archive_sha256": fixture["SELFHOST_ARCHIVE_SHA256"],
             "image_lock_sha256": fixture["SELFHOST_IMAGE_LOCK_SHA256"],
+            "run_id": fixture["SELFHOST_RUN_ID"],
+            "fixture_sha256": fixture["SELFHOST_FIXTURE_SHA256"],
+            "challenge": fixture["SELFHOST_CUSTODY_CHALLENGE"],
             "organization_id": org, "issuer_did": did, "verifier_did": did,
             "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
             "profile_proofs": proofs}

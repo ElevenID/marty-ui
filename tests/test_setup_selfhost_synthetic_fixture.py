@@ -41,6 +41,7 @@ def fixture_env() -> dict[str, str]:
         "SELFHOST_KMS_JWK_TOOL",
         "SELFHOST_CUSTODY_SIGNING_TOKEN_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
+        "SELFHOST_RUN_ID", "SELFHOST_FIXTURE_SHA256", "SELFHOST_CUSTODY_CHALLENGE",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH", "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH",
         "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH",
     )
@@ -50,7 +51,9 @@ def fixture_env() -> dict[str, str]:
                   SELFHOST_ORG_ID="00000000-0000-0000-0000-000000000001",
                   SELFHOST_GATEWAY_URL="http://127.0.0.1:19080",
                   SELFHOST_KEYCLOAK_URL="http://127.0.0.1:18180",
-                  SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200")
+                  SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200",
+                  SELFHOST_FIXTURE_SHA256="f" * 64,
+                  SELFHOST_CUSTODY_CHALLENGE="c" * 64)
     did = "did:web:selfhost.marty.test:orgs:" + values["SELFHOST_ORG_ID"]
     values.update(SELFHOST_ISSUER_DID=did, SELFHOST_VERIFIER_DID=did)
     return values

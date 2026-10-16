@@ -102,15 +102,15 @@ first two paths to the setup script as
 `SELFHOST_KMS_CUSTODY_EVIDENCE_PATH` and
 `SELFHOST_KMS_CUSTODY_SIGNATURE_PATH`. The script must write a new signed JSON
 document with schema `marty.selfhost-kms-custody/v1`, the exact `source_sha`,
-`archive_sha256`, `image_lock_sha256`, `organization_id`, `issuer_did`, and
+`archive_sha256`, `image_lock_sha256`, `run_id`, fixture digest, runner challenge,
+`organization_id`, `issuer_did`, and
 `verifier_did`, plus `issuer_key_non_exportable: true` and
-`verifier_key_non_exportable: true`. The runner verifies its signature using
-the supplied OpenSSL Ed25519 public key before issuing, and requires that key's SHA-256 digest
-in the prepared release source commit's reviewed
-`deploy-config/selfhost-kms-custody-trust-roots.json`. The v1.1.247 source
-contains a reviewed disposable test signer digest, but no installed custody
-evidence or qualification has been published. A different signer requires a
-reviewed source change and a new prepared release. The
+`verifier_key_non_exportable: true`. The runner independently reads live
+non-exportable Transit key metadata through a scoped audit token over the
+owned, image-locked OpenBao container, matches its public key to the evidence,
+and verifies the signature before issuing. Each fresh installation may have a
+different signer; no private key or per-install digest enters release source.
+The v1.1.247 source has no installed custody qualification. The
 integration checkout is pinned to protected-main commit
 `9c63609250274dc1edcf747827a29728ddd15d4a`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet

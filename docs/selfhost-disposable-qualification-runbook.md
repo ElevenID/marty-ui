@@ -120,13 +120,13 @@ PY
    `openbao_tls_ca_cert` in the private secret root, and supply
    `SELFHOST_BAO_AUDIT_TOKEN_FILE` and
    `SELFHOST_CUSTODY_SIGNING_TOKEN_FILE` in the same process environment.
-   Provision the non-exportable Ed25519 Transit signer using
-   [the synthetic fixture guide](selfhost-synthetic-fixture.md) before the
-   source release is claimed. Its public PEM digest must appear in the
-   **prepared source commit's** reviewed
-   `deploy-config/selfhost-kms-custody-trust-roots.json`; the scoped signer
-   token stays outside source and installation. No signer private key file is
-   generated or mounted.
+   Provision a fresh non-exportable Ed25519 Transit signer using
+   [the synthetic fixture guide](selfhost-synthetic-fixture.md) after starting
+   the disposable OpenBao project. Do not pin its per-install public digest in
+   release source. The runner checks live key metadata through the scoped
+   audit token and binds the HTTPS endpoint and CA to the owned, locked-image
+   OpenBao container. The signer token stays outside source and installation;
+   no signer private key file is generated or mounted.
 
 The following commands use absolute, operator-owned paths. They deliberately
 leave credential creation and OpenBao bootstrap to the operator; the runner
@@ -143,6 +143,8 @@ install_root="$private/install/selfhost-prepared"
 state_root="$private/state"
 secret_root="$private/secrets"
 env_file="$private/selfhost.env"
+openbao_state_root=/srv/qualification/private/openbao-state
+openbao_project=marty-selfhost-openbao-qualification
 source_sha=$(git -C "$source_root" rev-parse HEAD)
 run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' \
   "$prepared/prepared-selfhost-bundle.json")
@@ -174,6 +176,7 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --receipt "$prepared/prepared-selfhost-bundle.json" \
   --descriptor "$prepared/prepared-selfhost-product-descriptor.json" \
   --install-root "$install_root" --state-root "$state_root" \
+  --openbao-state-root "$openbao_state_root" --openbao-project "$openbao_project" \
   --secret-root "$secret_root" --env-file "$env_file" \
   --source-checkout "$source_root" --integration-checkout "$integration_root" \
   --compose-model "$private/compose-model.json" \
