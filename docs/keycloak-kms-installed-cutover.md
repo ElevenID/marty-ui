@@ -65,8 +65,9 @@ custody or supported publication.
   private-key fields, PEM markers, private-key-named schema objects and
   generated local secrets. Independently scan the fresh Marty schema and
   representative runtime writes. A clean catalog alone is insufficient.
-  The installed self-host journey now runs both the Keycloak SQL and the
-  native Marty schema/content custody scans after its representative writes.
+  The installed self-host journey issues and refreshes tokens in both the
+  `master` and `11id` realms before the Keycloak SQL scan, then runs the native
+  Marty schema/content custody scan after its representative writes.
 - Exercise master and `11id` login, PKCE browser session reuse, refresh,
   JWKS, CIBA, rotation, and denial when relevant KMS tokens/keys are lost.
   Verify workload mTLS with only remote signer references and public

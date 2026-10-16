@@ -20,6 +20,8 @@ import time
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit
+from urllib.request import ProxyHandler, Request, build_opener
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
@@ -109,6 +111,55 @@ def verify_keycloak_database_custody(compose: list[str], install_root: Path,
     command([*compose, "exec", "-T", "postgres", "psql", "-X", "-q",
              "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"],
             cwd=install_root, env=environment, input_text=sql)
+
+
+def exercise_installed_keycloak_keys(environment: dict[str, str],
+                                    secret_root: Path) -> None:
+    """Require issuance and refresh in both installed realms before the SQL scan."""
+    base = environment.get("SELFHOST_KEYCLOAK_URL", "")
+    parsed = urlsplit(base)
+    if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}
+            or parsed.username or parsed.password or parsed.path not in {"", "/"}
+            or parsed.query or parsed.fragment):
+        raise ValueError("installed Keycloak URL must use disposable loopback HTTP")
+    password_file = secret_root / "keycloak_admin_password"
+    if password_file.is_symlink() or not password_file.is_file():
+        raise ValueError("installed Keycloak admin password is absent or linked")
+    admin_password = password_file.read_text(encoding="utf-8").strip()
+    test_username = environment.get("SELFHOST_TEST_USERNAME", "")
+    test_password = environment.get("SELFHOST_TEST_PASSWORD", "")
+    if not admin_password or not test_username or not test_password:
+        raise ValueError("installed Keycloak probe credentials are absent")
+    opener = build_opener(ProxyHandler({}))
+
+    def token(realm: str, fields: dict[str, str]) -> dict:
+        request = Request(
+            f"{base.rstrip('/')}/realms/{realm}/protocol/openid-connect/token",
+            data=urlencode({"client_id": "admin-cli", **fields}).encode("ascii"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            with opener.open(request, timeout=20) as response:
+                result = json.load(response)
+        except Exception:
+            # Never propagate an HTTP body, credential, or token to diagnostics.
+            raise ValueError("installed Keycloak token use failed") from None
+        if (not isinstance(result, dict) or result.get("token_type") != "Bearer"
+                or not isinstance(result.get("access_token"), str)
+                or not result["access_token"]
+                or not isinstance(result.get("refresh_token"), str)
+                or not result["refresh_token"]):
+            raise ValueError("installed Keycloak token response is incomplete")
+        return result
+
+    for realm, username, password in (
+        ("master", "admin", admin_password),
+        ("11id", test_username, test_password),
+    ):
+        issued = token(realm, {"grant_type": "password", "username": username,
+                               "password": password})
+        token(realm, {"grant_type": "refresh_token",
+                      "refresh_token": issued["refresh_token"]})
 
 
 def verify_marty_database_custody(compose: list[str], install_root: Path,
@@ -445,6 +496,8 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         with measured(diagnostics, "public_journey"):
             command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                      JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
+        with measured(diagnostics, "keycloak_issuance_refresh"):
+            exercise_installed_keycloak_keys(journey_env, secret_root)
         with measured(diagnostics, "keycloak_database_custody"):
             if source_checkout is None:
                 raise ValueError("release source is required for Keycloak custody")
@@ -552,6 +605,7 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "fixture_setup_sha256": args.fixture_setup_sha256,
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
+            "keycloak_issuance_refresh": "passed",
             "keycloak_database_custody": "passed",
             "marty_database_custody": "passed",
             "owned_teardown": "observed", "observed_services": sorted(states)}

@@ -1,12 +1,14 @@
 """Installed journey status gate refuses incomplete service closure and health."""
 
 import hashlib
+from io import BytesIO
 import json
 import shutil
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -62,6 +64,58 @@ def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
     sql_path.unlink()
     with pytest.raises(ValueError, match="custody SQL is absent"):
         runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
+
+
+def test_installed_keycloak_probe_issues_and_refreshes_both_realms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "keycloak_admin_password").write_text("admin-secret\n", encoding="utf-8")
+    requests: list[tuple[str, dict[str, str]]] = []
+
+    class Opener:
+        def open(self, request, *, timeout: int):
+            assert timeout == 20
+            fields = {key: values[0] for key, values in
+                      parse_qs(request.data.decode("ascii")).items()}
+            requests.append((request.full_url, fields))
+            return BytesIO(json.dumps({"token_type": "Bearer",
+                                       "access_token": "access",
+                                       "refresh_token": "refresh"}).encode("utf-8"))
+
+    monkeypatch.setattr(runner, "build_opener", lambda *_args: Opener())
+    runner.exercise_installed_keycloak_keys(
+        {"SELFHOST_KEYCLOAK_URL": "http://127.0.0.1:18080",
+         "SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
+         "SELFHOST_TEST_PASSWORD": "operator-secret"}, tmp_path)
+    assert [(url.split("/realms/")[1].split("/")[0], fields["grant_type"])
+            for url, fields in requests] == [
+                ("master", "password"), ("master", "refresh_token"),
+                ("11id", "password"), ("11id", "refresh_token")]
+    assert requests[0][1]["username"] == "admin"
+    assert requests[2][1]["username"] == "operator@selfhost.marty.invalid"
+    assert all(fields["client_id"] == "admin-cli" for _, fields in requests)
+
+
+def test_installed_keycloak_probe_fails_closed_without_leaking_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "keycloak_admin_password").write_text("admin-secret", encoding="utf-8")
+
+    class Opener:
+        def open(self, _request, *, timeout: int):
+            raise RuntimeError("admin-secret operator-secret")
+
+    monkeypatch.setattr(runner, "build_opener", lambda *_args: Opener())
+    environment = {"SELFHOST_KEYCLOAK_URL": "http://localhost:18080",
+                   "SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
+                   "SELFHOST_TEST_PASSWORD": "operator-secret"}
+    with pytest.raises(ValueError, match="installed Keycloak token use failed") as error:
+        runner.exercise_installed_keycloak_keys(environment, tmp_path)
+    assert "admin-secret" not in str(error.value)
+    assert "operator-secret" not in str(error.value)
+    with pytest.raises(ValueError, match="disposable loopback"):
+        runner.exercise_installed_keycloak_keys(
+            {**environment, "SELFHOST_KEYCLOAK_URL": "https://external.example"}, tmp_path)
 
 
 def test_installed_marty_custody_scans_schema_and_written_content(
