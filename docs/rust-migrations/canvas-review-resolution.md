@@ -21,8 +21,9 @@ image assertion is repaired locally in `121b77737`, and Rust 2021 formatting in
 service suite passed 118 tests, including nine image-strategy tests; the root
 2,891-test run did not include services. All 229 target format checks passed.
 Image, browser and UI jobs completed successfully. The
-[roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08)
-records the now-authorized credentials release and outstanding qualification gates.
+[current roadmap](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-qualification-gates)
+records the retained qualification rules; the run/release claims above remain
+historical checkpoint evidence.
 
 The integrated candidate gateway lifecycle helper is independently reviewed and
 locally executed; hosted qualification remains pending. It reuses the actual-main owner
