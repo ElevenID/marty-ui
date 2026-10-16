@@ -101,3 +101,9 @@ JWKS, KMS-loss denial, then ran the SQL against the resulting PostgreSQL
 database. Its containers and network were removed. The local images are not
 the signed `v1.1.248` release artifacts; that exact-artifact and installed
 cutover proof remains separate.
+
+The beta release preflight now invokes this same custody SQL before its backup
+and again after Keycloak configuration. This removes the older, narrower
+KeyProvider-only count, so an unrelated component's private-key field or a
+retired private-key table cannot pass the release preflight. Installed beta
+still fails the gate until the clean cutover is executed.
