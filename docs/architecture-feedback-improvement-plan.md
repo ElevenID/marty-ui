@@ -27,18 +27,39 @@ success do not establish installed Compose or supported release acceptance.
   Current disposable JWE policies cover the initial key version only and
   require scoped-token reprovisioning after rotation. Installed rotation
   readiness remains unqualified.
-- The local journey requires 76 secret files. Workload TLS, Keycloak, OpenBao
-  bootstrap and public CA paths account for 52; the text-credential helper
-  generates seventeen more and the HAIP token needs its narrow KMS policy.
-  A complete persistent install root and installed secret roster remain open.
+- The complete local journey inventory closes all 76 secret names:
+  17 scalar credentials,
+  31 workload TLS files, seven Keycloak files, 15 OpenBao outputs and six
+  disabled-optional placeholders. A staged persistent root and fresh installed
+  acceptance still require evidence. The HAIP token retains its narrow KMS policy.
 - For generated text credentials, preserve the private POSIX directory (`0700`)
   and container-readable final files (`0444`), with initial `0600` creation and
-  rollback on a failed
-  mode transition. Six optional integration files may be empty only when those
+  rollback on a failed mode transition. Six optional integration files may be empty only when those
   integrations are disabled. The local journey does not use a Cloudflare token.
 - Installed hooks require loopback HTTPS OpenBao at the selected signing-keys
   port and must verify the staged public CA. Wrong-host and foreign-CA
   rejection remain required.
+
+Disposable setup helpers enforce the POSIX private-root/mode contract and reject
+non-POSIX hosts. The seven Keycloak remote-key inputs share that private root,
+use container-readable final modes and must not overwrite existing files. The
+extracted bundle includes the small shared HTTPS OpenBao client and provisioner;
+focused Linux/Windows tests are not installed-journey acceptance.
+
+The exact services digest pinned by preview .2 lacks
+`/usr/local/bin/marty-passport-tls-bootstrap`; current source containing the
+binary does not repair or qualify that older image. The release gate must check
+the executable on the exact already-pulled services digest after native-schema
+qualification, without another build. A healthy source-built stack with existing
+state on a 15.15 GiB VM is not a fresh install or measured 16 GiB customer envelope.
+
+The Linux-only disposable TLS helper verifies the extracted image lock and the
+running OpenBao Compose owner, image and state mount. It stages only the 31
+verified self-host public certificates/scoped tokens into the existing private
+root, including the Verification client and exact Rust/catalog filenames; it
+stages neither a root token nor a private workload key. Preserve shared binding
+validation and chmod/chown/Docker-timeout cleanup failure handling. Fresh signed
+image installation and preview qualification remain open.
 
 Release-operator Cargo checks on both Linux architectures must report positive
 executed test counts before building/validating binaries. Preserve the unfiltered
@@ -151,3 +172,6 @@ do not authorize removal of local unmerged work or imply current workspace state
 
 Additional October 16 setup checkpoint history is recoverable from protected
 main commit `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its active constraints are retained above.
+
+The installed-setup requirements also incorporate protected-main checkpoint
+`dd0d8d17a556696d6d287b785f40c3fc61f72b66`; source/package checks do not qualify the preview.

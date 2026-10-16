@@ -1181,6 +1181,13 @@ jobs:
             --postgres-image "$postgres_image" \
             --redis-image "$redis_image" \
             --openbao-image "$openbao_image" > native-schema.json
+          # The tester install reuses this exact services image for keyless
+          # workload TLS setup. Preview .2 lacked the binary despite a later
+          # Dockerfile source contract, so prove it on the pulled digest.
+          docker run --rm --pull=never --network none --read-only \
+            --cap-drop ALL --security-opt no-new-privileges \
+            --entrypoint /bin/sh "$services_image" \
+            -ec 'test -x /usr/local/bin/marty-passport-tls-bootstrap'
           jq -e --arg migrations "$migrations_image" --arg services "$services_image" '
             .schema == "marty.selfhost-migrations-qualification/v3" and
             .migrations_image == $migrations and .services_image == $services and

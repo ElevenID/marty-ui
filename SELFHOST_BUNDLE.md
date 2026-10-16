@@ -11,6 +11,8 @@ This bundle is the image-based distribution for the open-source self-host stack.
 - `config/keycloak` for the realm import and theme assets
 - `scripts/bootstrap-selfhost-vault.sh` as the operator helper for configuring an external Vault/OpenBao instance and minting the scoped runtime token
 - `scripts/generate_selfhost_disposable_credentials.py` for seventeen local-only disposable text credentials; it does not generate KMS, workload TLS, or integration secrets
+- `scripts/provision_selfhost_keycloak_kms.py` and its small HTTPS client for seven disposable Keycloak remote-key inputs; these require an already-running HTTPS OpenBao with the DIDComm plugin
+- `scripts/provision_selfhost_disposable_tls.py` and its public-output validator for 31 keyless workload TLS inputs; it uses the exact locked services image and a separate disposable OpenBao project
 - the runtime `docker/*` and `scripts/*` files still mounted by the compose stack
 
 ## Image contract
@@ -114,7 +116,46 @@ remain external; packaging does not load their values.
    its disposable credentials for a production install.
 5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write separate `openbao_service_token`, HAIP workload, and short-lived `openbao_bootstrap_token` secrets, or provision equivalent scoped tokens in `SELFHOST_SECRET_DIR` yourself. The helper keeps the host secret directory private (0700) and makes individual file-backed secrets readable by the stack's different non-root container UIDs (0444). Re-run the helper to renew the migration token before a later schema upgrade:
 
-   The bundled helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
+   For a disposable tester install, provision the seven Keycloak remote-key
+   inputs into the **same** private `SELFHOST_SECRET_DIR` after the DIDComm
+   plugin is mounted. Set `SELFHOST_KEYCLOAK_OUTPUT_DIR` to that directory and
+   provide `BAO_ADDR`, `BAO_CACERT`, and an operator-owned `BAO_ROOT_TOKEN_FILE`.
+   On Linux or a Linux WSL filesystem with Python 3 and OpenSSL installed, run
+   `python3 scripts/provision_selfhost_keycloak_kms.py`; it refuses to
+   overwrite any of its seven targets and writes files readable by the stack's
+   non-root containers. This remains a disposable, unqualified setup path.
+   Keycloak and the workload TLS bootstrap request eight-hour credentials;
+   the Keycloak helper rejects a shorter-than-seven-hour issued token or
+   certificate. Treat **seven hours as an upper bound, not a guaranteed
+   operating window**: OpenBao may cap other workload TLS leases sooner, so
+   inspect their actual expiry and stop at the earliest one. This is not a
+   continuously running installation. The read-only expiry check in
+   `docs/selfhost-disposable-qualification-runbook.md` prints the earliest
+   workload TLS expiry without exposing token values. Before another session, stop the
+   Compose stack and its external disposable OpenBao, discard their disposable
+   state and secret roots, and start with fresh roots and a new OpenBao
+   bootstrap. Do not delete or replace live secret files, rerun this helper
+   against its existing `keycloak-pki/` mount, or claim in-place renewal.
+
+   On Linux, the disposable workload TLS helper can stage 31 public
+   certificates and scoped tokens from the same running OpenBao project. It
+   requires `sudo` to read the project's private root token and uses the
+   services image digest from `.marty-selfhost-images.json`; preview .2 lacks
+   this binary, so wait for a newer tested bundle. Provide the OpenBao Compose
+   project's state directory (which contains `root.token` and `tls/ca.crt`):
+
+```bash
+sudo python3 scripts/provision_selfhost_disposable_tls.py \
+  --secret-root /path/to/selfhost-secrets \
+  --openbao-state-root /path/to/openbao-state
+```
+
+   The helper verifies the project's running OpenBao container, locked plugin
+   image and state mount, then runs the locked Rust bootstrap on the private
+   Compose network. It refuses existing TLS targets and does not copy the
+   root token or private workload keys into the stack secret directory.
+
+   The separate `bootstrap-selfhost-vault.sh` helper runs OpenBao 2.7.1 by its immutable multi-architecture image digest (`quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf`). This pins the helper executable, not the external OpenBao server or a qualified installed-bundle release.
    On Linux the helper runs that CLI container as the invoking UID:GID so it can write scoped token files into a caller-owned secret directory. It restricts the output directory to mode `0700`, writes each temporary token file at `0600`, then atomically replaces any example placeholder and sets the final file to `0444` for the stack's non-root readers; existing readers of a placeholder cannot observe the new token. Do not make the secret directory world-writable or use symlinked output paths.
 
 ```bash
