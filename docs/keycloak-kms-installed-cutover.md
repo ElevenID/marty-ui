@@ -1,5 +1,44 @@
 # Installed Keycloak KMS-only cutover
 
+## 2026-10-16 correction: replace the installed stacks as a unit
+
+The database-only procedure below is **superseded and must not be run against
+either installed stack**. Read-only runtime inspection established that beta
+OpenBao runs `server -dev` with `storage_type=inmem`; its named `openbao_data`
+volume is not its key store. The separate installed self-host OpenBao runs
+with `storage_type=file` under a host bind mount. Neither is the released
+Raft-backed KMS. A fresh Keycloak database inside either old stack would leave
+the remote custody and coordinated recovery goal unmet. In particular,
+stopping beta OpenBao destroys its in-memory key state, and the old beta
+`openbao_data` backup cannot recover it.
+
+Build a new, isolated KMS-only stack from one qualified release: fresh Raft
+OpenBao, scoped tokens and non-exportable keys, fresh Marty and Keycloak
+databases, and the matching Rust services. Do not copy old KeyProvider rows,
+private-key tables, keys, or old OpenBao state into it. Keep the old stack
+running and isolated during a short acceptance/traffic-switch rollback window;
+beta OpenBao must remain running throughout that window. Verify the new
+stack's browser/CIBA, token/JWKS/refresh, native journeys, KMS-loss denial,
+database custody, and Raft snapshot/restore from the exact published images
+before traffic moves. If acceptance fails, route back to the still-running old
+stack. After acceptance, retire the old stack and its private-key-bearing
+database. Because these are non-public installations, old accounts and
+sessions are not migrated; operator re-enrolment is an explicit cutover task.
+
+The new stack requires separate project/host isolation, unique ports and
+volumes, and a tested edge switch. The exact deployment and rollback commands
+are still to be implemented and rehearsed. The PostgreSQL-only swap helper
+`scripts/beta-keycloak-clean-database.ps1` remains a local experiment and is
+not an approved cutover step. Earlier PostgreSQL restore tests prove only
+database recoverability, not recovery of beta's in-memory KMS or the new
+Raft stack. Do not treat the older procedure below as authorization for live
+mutation.
+
+## Superseded database-only design and historical rehearsal evidence
+
+The following design records earlier work for review. Its implementation
+steps and rollback instructions are not to be executed on an installed stack.
+
 This procedure applies to the non-public `elevenid-beta` and
 `marty-selfhost-prod` installations. It is a clean database/realm replacement,
 not a migration of Keycloak's locally generated key-provider material. Do not
