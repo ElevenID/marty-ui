@@ -22940,3 +22940,14 @@ Keycloak databases still use stock Keycloak 25.0 and each hold four
 found 15 beta and four self-host users in realm `11id`, plus one master admin
 in each, so retain coordinated database/Raft backup for rollback when doing
 the fresh KMS-only realm import; no installed database has been changed.
+
+Release head advanced again: unrelated [#1347](https://github.com/ElevenID/marty-ui/pull/1347)
+merged as `a0ee35a6fbdbda2e6d4137bea5366636a0275a23` after all five
+exact-head merge-group workflows succeeded (CI `38827346697`, policy
+`38827346718`, CodeQL Actions `38827346675`, organization quality
+`38827347054`, CodeQL Rust `38827346644`). The release lock remains eligible
+for `v1.1.248` on that main commit. Full-main CI `38829365629` on prior main
+`6d8fa5d3` was cancelled as superseded; do not use it as release evidence.
+Replacement [workflow-dispatch CI run 38829914635](https://github.com/ElevenID/marty-ui/actions/runs/38829914635)
+was dispatched and verified to target exact current main `a0ee35a6`; await
+success before the no-write tag claim.
