@@ -77,6 +77,28 @@ def test_https_grant_probe_requires_positive_rust_execution() -> None:
         assert case in probe
 
 
+def test_release_operator_catalog_tests_require_positive_execution() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/cd.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["build-operator-catalog"]["steps"]
+    [step] = [
+        entry for entry in steps
+        if entry.get("name") == "Build and test the native operator binary"
+    ]
+    script = step["run"]
+    assert "source scripts/ci/rust_contract_execution.sh" in script
+    assert (
+        "run_timed deployment_catalog_release cargo test --locked "
+        "--manifest-path rust/Cargo.toml -p marty-deployment-catalog"
+    ) in script
+    if BASH is not None:
+        syntax = subprocess.run(
+            [BASH, "-n", "-c", script], capture_output=True, text=True, check=False
+        )
+        assert syntax.returncode == 0, syntax.stderr
+
+
 def test_database_runner_uses_positive_execution_guard() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     assert (

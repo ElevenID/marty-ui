@@ -4371,10 +4371,22 @@ positive test-summary guard. [#1355](https://github.com/ElevenID/marty-ui/pull/1
 wraps its existing invocation in the same guard, retaining its serial position
 after the workspace suite, database URL, complete unfiltered case selection,
 and protected gates. Twenty-three focused post-merge local tests, Ruff, and independent
-review passed. Exact-head [CI](https://github.com/ElevenID/marty-ui/actions/runs/38818521929)
-recorded one passing Flow PostgreSQL test and the positive execution marker;
-protected combined-head CI remains required before merge. This is another
-coverage-integrity fix, not a measured speedup.
+review passed. Exact-head CI recorded one passing Flow PostgreSQL test and the
+positive execution marker; [protected combined-head
+CI](https://github.com/ElevenID/marty-ui/actions/runs/38824629452) passed and
+#1355 merged as `d2e2a114f`. This is another coverage-integrity fix, not a
+measured speedup.
+
+October 15 A0 release-operator candidate: the Stack release's Linux amd64 and
+arm64 operator jobs run the unfiltered `marty-deployment-catalog` Cargo tests
+before building and validating the release binary, but previously trusted
+Cargo's exit status even if no tests were selected. Reuse the existing
+positive-summary guard around that exact invocation in both matrix entries;
+retain the package, source, target builds, validation, attestations, and all
+release gates. The package-scoped Rust 1.95 local run passed 11 tests across
+three targets (plus a zero-test doc target). Focused workflow-policy tests
+passed. Hosted and protected validation are still required; this closes a
+potential false-green path, not a measured speedup.
 
 - [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
 - [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
