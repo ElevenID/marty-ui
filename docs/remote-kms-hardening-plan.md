@@ -23048,3 +23048,19 @@ head `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its fresh
 [CI run 38859334733](https://github.com/ElevenID/marty-ui/actions/runs/38859334733)
 and companion required workflows are running. Do not dispatch full-main CI
 until that merge group passes and the resulting exact `main` SHA is verified.
+
+2026-10-16 K10/K12 installed-cutover guard: local branch
+`feat/kms-keycloak-clean-cutover-20261016` commit `6ca258a9c` widens the
+read-only Keycloak SQL gate beyond KeyProvider: all component configurations
+are checked for private-key field names and PEM markers, and the public schema
+is checked for private-key-named tables or columns. Generated KeyProvider
+secrets remain a separate failure condition. In a disposable PostgreSQL 15
+graph, both clean remote-provider realms passed, while a synthetic
+`private_jwk` field on a different component and a synthetic
+`private_key_cache` table each failed. The revised gate rejected both installed
+Keycloak databases with four private-key and four generated-secret rows each;
+it printed counts only, not values. No installed database was modified and the
+disposable container was removed. This is a local grouped-cutover branch, not
+a landed K10/K12 claim. Exact-main full CI `38861909608` remained in progress
+on unchanged `4f2b6d83` at the last check; several Rust and OpenBao jobs were
+still active. Do not claim the release until all jobs finish successfully.
