@@ -23314,3 +23314,14 @@ was dispatched on the same main SHA with the unqualified self-host lock/bundle
 preparation enabled and exact available PostgreSQL, Redis and Nginx digest
 inputs. It is queued; dispatch does not prove publication, bundle
 qualification, installed custody, or supported cutover.
+
+The first [Stack release 38940925318](https://github.com/ElevenID/marty-ui/actions/runs/38940925318)
+failed in `validate-stack` before any image build: PowerShell's native-argument
+handling stripped JSON quotes from the four-role external image map passed
+with `-f`. Its claim remains valid; no tag, release, or image version was
+published. The corrected [Stack release 38941129335](https://github.com/ElevenID/marty-ui/actions/runs/38941129335)
+uses `gh workflow run --json` with JSON on stdin and string-valued workflow
+inputs. It passed `resolve-transaction`, environment preflight, and the
+external-image `validate-stack` gate, then began the grouped service, UI,
+OpenBao, Keycloak, and operator builds. Retain the failed run as immutable
+evidence; do not count this in-progress run as published qualification.
