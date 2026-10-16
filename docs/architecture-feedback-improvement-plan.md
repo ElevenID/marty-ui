@@ -120,7 +120,7 @@ disposable helper that checks the extracted image lock, running OpenBao
 Compose owner/image/state mount, and stages only the 31 verified public
 certificates/scoped tokens into the existing private install root. The helper
 does not stage a root token or private workload key. Focused Linux tests pass
-(45 passed, 2 skipped), including injected chmod/chown and Docker-timeout
+(46 passed, 2 skipped), including injected chmod/chown and Docker-timeout
 cleanup failure handling; the frozen
 deployment CLI and 14 bundle package-contract cases pass locally. This is
 not a fresh-image installed journey or qualification of preview .2.

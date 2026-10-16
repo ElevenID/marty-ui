@@ -187,8 +187,9 @@ def test_ownership_failure_removes_all_staged_tls_inputs(
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
                     reason="Linux root-only disposable staging")
-def test_timeout_failed_cleanup_retains_container_id(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize("remove_status", [0, 1])
+def test_timeout_cleanup_retains_id_only_if_removal_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, remove_status: int,
 ) -> None:
     secret_root = tmp_path / "secrets"
     secret_root.mkdir(mode=0o700)
@@ -207,12 +208,14 @@ def test_timeout_failed_cleanup_retains_container_id(
             )
             raise subprocess.TimeoutExpired(command, 180)
         assert command == ["docker", "rm", "--force", container_id]
-        return subprocess.CompletedProcess(command, 1)
+        return subprocess.CompletedProcess(command, remove_status)
 
     monkeypatch.setattr(stage.subprocess, "run", fake_run)
-    with pytest.raises(stage.BootstrapCleanupError, match="manual cleanup required"):
+    expected = stage.BootstrapCleanupError if remove_status else subprocess.TimeoutExpired
+    with pytest.raises(expected):
         stage.provision(root, secret_root, state, "marty-selfhost-openbao")
     cidfiles = list(tmp_path.glob("marty-selfhost-tls-*.cid"))
-    assert len(cidfiles) == 1
-    assert cidfiles[0].read_text(encoding="ascii") == container_id
+    assert len(cidfiles) == remove_status
+    if remove_status:
+        assert cidfiles[0].read_text(encoding="ascii") == container_id
     assert list(secret_root.iterdir()) == []
