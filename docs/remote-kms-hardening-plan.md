@@ -9,26 +9,25 @@ artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
 Current gate (2026-10-16): Core #355, Credentials #313, grouped native UI
-hardening #1192, the approval-free publisher #1328, clean-install follow-up
-#1330, stack-lock successor #1331, and installed custody gate #1366 are
-merged. The repaired, signed integration harness `v1.2.89` and grouped UI
-PR #1368 passed protected merge and exact-main CI at `9a74ce3d`. The
+hardening #1192, publisher #1328, clean-install #1330, stack-lock #1331,
+installed custody #1366, grouped release #1368, receipt repair #1370, and
+fresh Raft release/cutover [#1371](https://github.com/ElevenID/marty-ui/pull/1371)
+are merged. Signed integration harness `v1.2.89` is published. The signed
 [v1.1.248 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
-published with signed manifest, five images, and passing public-stack smoke,
-but its optional self-host bundle preparation failed: the receipt verifier
-expected two OpenBao services while the package contains three. Preserve
-that terminal failed [workflow run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195)
-and do not call its unproduced bundle qualified. Concurrent PR #1370 has now
-landed the exact OpenBao receipt closure on protected main. Reconciled
-[PR #1371](https://github.com/ElevenID/marty-ui/pull/1371) advances the release
-lock to unused `v1.1.249`, strengthens the source-coupled receipt test, and
-prepares fresh Raft cutover guidance; its new protected checks and an
-exact-main claim/release remain. The
-`stack-release` environment does not require manual reviewer approval.
-Publication alone will not prove
-fresh installed Raft-backed KMS-only beta/self-host custody, cutover and
-rollback, or real AWS/Azure/GCP and physical-device behavior; provider/device
-access is not provisioned. Keep K6, K8/K9/K11 and the overall goal open.
+passed public-stack smoke, but its self-host receipt gate failed; preserve
+[run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195)
+as failed evidence. Protected main `26d73baa4fc29fdd6153d9c812863aada9665253`
+selects unused `v1.1.249`; full
+[exact-main CI 38974982594](https://github.com/ElevenID/marty-ui/actions/runs/38974982594)
+is in progress. Await its success before a new claim and Stack release. The
+`stack-release` environment needs no manual reviewer approval. Then run a
+fresh isolated Raft-backed installation in Ubuntu WSL against this machine's
+16 GiB Docker engine, measuring resource use while preserving the existing
+production website. The installed custody-evidence signer is not yet
+provisioned; resolve it without weakening verification. Publication alone
+does not prove installed KMS-only custody or cutover. Real AWS/Azure/GCP and
+physical-device access is also unprovisioned. Keep K6, K8/K9/K11 and the
+overall goal open.
 
 ## Objective and working agreement
 
