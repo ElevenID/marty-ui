@@ -3476,8 +3476,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
     ):
         assert _classify_changed_path(path, tmp_path)["rust"] == "true"
     for path in (
-        "scripts/capture_signing_response_reference.py",
-        "scripts/capture_token_rate_reference.py",
+        "scripts/capture_canvas_mirror_reference.py",
         "scripts/capture_canvas_url_template_reference.py",
         "tests/test_signing_response_reference_helpers.py",
         "unknown-new-input.txt",
@@ -5359,6 +5358,7 @@ def test_every_issuance_and_acceptance_integration_test_remains_registered(
             "canvas_sync_worker_configuration_oracle.rs",
             "canvas_worker_result_oracle.rs",
             "issued_credential_adapter_behavior.rs",
+            "migration_contract.rs",
             "proof_nonce_behavior.rs",
         }
         if package == "services/issuance"

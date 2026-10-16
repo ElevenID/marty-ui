@@ -473,10 +473,10 @@ test: ## Run gRPC adapter and factory unit tests
 	@cd services && python -m pytest -v --tb=short
 	@echo "$(GREEN)✓ Tests passed$(NC)"
 
-proto-gen: ## Regenerate Python proto stubs from .proto definitions
-	@echo "$(BLUE)Generating Python proto stubs...$(NC)"
-	@python scripts/compile_protos.py
-	@echo "$(GREEN)✓ Proto stubs generated$(NC)"
+proto-gen: ## Regenerate the Envoy descriptor from canonical .proto definitions
+	@echo "$(BLUE)Generating Envoy descriptor...$(NC)"
+	@uv run --no-project --with-requirements requirements-proto.txt python scripts/compile_protos.py
+	@echo "$(GREEN)✓ Envoy descriptor generated$(NC)"
 
 grpc-health: ## Check gRPC health status of all gRPC-enabled services
 	@echo "$(BLUE)Checking gRPC service health...$(NC)"

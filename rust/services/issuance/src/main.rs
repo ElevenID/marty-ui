@@ -151,7 +151,7 @@ use marty_issuance_service::{
     transaction_postgres::PostgresTransactionReadRepository,
     transaction_reads::TransactionReadService,
     transport::TransportPolicy,
-    validate_embedded_contract, IssuanceRuntime, IssuanceServiceConfig,
+    IssuanceRuntime, IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
 use marty_schema_startup::SchemaStartupMode;
@@ -217,10 +217,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .into());
         }
     }
-    validate_embedded_contract().map_err(|error| {
-        error!(%error, "invalid embedded issuance migration contract");
-        error
-    })?;
     let config = IssuanceServiceConfig::from_env().map_err(|error| {
         error!(%error, "invalid issuance configuration");
         error

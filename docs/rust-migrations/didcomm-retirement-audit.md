@@ -8,20 +8,18 @@ This audit is not routing, release, deployment or KMS acceptance.
 
 `contracts/didcomm-projector-python-reference.json` records eight complete
 HTTP/gRPC service response pairs and four isolated idempotency-guard cases.
-Run `python scripts/capture_didcomm_projector_reference.py <credentials-checkout>`
-with Python 3.12, reference dependencies and the observed marty-rs 0.1.60 binding.
-Five exact Git source blobs are checked before importing the unchanged reference.
-The actual native offer builder is used; only delivery, issuer base URL and
-transaction inputs are controlled. Credential strings and IDs are synthetic.
+The historical capture used Python 3.12, reference dependencies and marty-rs 0.1.60.
+The generator is retired and available in Git history.
+Five exact Git source blobs were checked before importing the unchanged reference.
+The actual native offer builder was used; only delivery, issuer base URL and
+transaction inputs were controlled. Credential strings and IDs are synthetic.
 
 The corpus deliberately retains `pre_auth_code` and encoded offer strings: these
 are complete service DTOs, not evidence that gateway redaction has passed.
 Recovered cases are existing-snapshot inputs to projectors, not executed database
-recovery. Idempotency checks execute the original source-hashed `If` nodes alone;
-fallthrough proves neither admission nor successful issuance. Execute the complete
-reference replay separately with
-`python scripts/capture_didcomm_projector_reference.py <credentials-checkout> --check`.
-This is explicit qualification evidence, not a default CI gate.
+recovery. Historical idempotency checks executed the original source-hashed `If` nodes alone;
+fallthrough proves neither admission nor successful issuance.
+The frozen corpus and native response tests remain the regression checks.
 `tests/test_didcomm_projector_reference.py` uses only repository-local fixtures and
 guards: it requires neither another checkout nor a native binding, and has no
 skipped substitute for actual reference execution.

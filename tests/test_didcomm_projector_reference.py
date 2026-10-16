@@ -1,6 +1,5 @@
-"""Repo-local corpus guards; real reference replay is an explicit script --check."""
+"""Frozen DIDComm response and idempotency observations."""
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -8,11 +7,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/capture_didcomm_projector_reference.py"
 CORPUS = ROOT / "contracts/didcomm-projector-python-reference.json"
-SPEC = importlib.util.spec_from_file_location("didcomm_projector_capture", SCRIPT)
-capture = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(capture)
 
 
 def corpus():
@@ -22,12 +17,6 @@ def corpus():
 def test_corpus_names_and_source_provenance_are_closed():
     frozen = corpus()
     assert frozen["schema"] == "marty.didcomm-projector-python-reference/v1"
-    assert frozen["reference"]["source_commit"] == capture.SOURCE_COMMIT
-    assert frozen["reference"]["source_blobs"] == capture.SOURCES
-    assert len(capture.SOURCES) == 5
-    assert [case["case"] for case in frozen["projector_cases"]] == [
-        row[0] for row in capture.CASES
-    ]
     assert len(frozen["projector_cases"]) == 8
     assert len(frozen["idempotency_guard_cases"]) == 4
     governed = frozen["reference"]["governed_didcomm_target"]
@@ -115,7 +104,7 @@ def test_idempotency_guards_preserve_status_and_fallthrough_scope():
             assert (
                 case["http"]["body"]["detail"]
                 == case["grpc"]["detail"]
-                == capture.GUARD_DETAIL
+                == "idempotent initiation does not support DIDComm push delivery"
             )
             assert case["grpc"]["response"] == {}
         else:
@@ -124,42 +113,3 @@ def test_idempotency_guards_preserve_status_and_fallthrough_scope():
                 == case["grpc"]["scope"]
                 == "guard-fallthrough-only"
             )
-
-
-def test_source_hash_accepts_checkout_line_endings_but_rejects_changed_bytes(tmp_path):
-    source = tmp_path / "source.py"
-    source.write_bytes(b"original\r\n")
-    hashes = {"source.py": capture.git_blob(b"original\n")}
-    capture.verify_sources(tmp_path, hashes)
-    source.write_bytes(b"changed\n")
-    with pytest.raises(ValueError, match="source.py"):
-        capture.verify_sources(tmp_path, hashes)
-
-
-def test_guard_extraction_requires_exact_unique_statement():
-    source = (
-        "async def initiate():\n"
-        "    if True:\n"
-        f"        raise ValueError({capture.GUARD_DETAIL!r})\n"
-    )
-    namespace = {}
-    exec(capture.isolated_guard(source, "initiate"), namespace)
-    with pytest.raises(ValueError, match="idempotent initiation"):
-        namespace["observed_guard"]()
-    with pytest.raises(ValueError, match="guard is not unique"):
-        capture.isolated_guard("async def initiate():\n    pass\n", "initiate")
-    with pytest.raises(ValueError, match="function is not unique"):
-        capture.isolated_guard(source + source, "initiate")
-
-
-def test_exact_observation_comparison_accepts_equal_corpus():
-    capture.verify_observations(corpus(), corpus())
-
-
-def test_exact_observation_comparison_rejects_normalized_transport_difference():
-    observed = corpus()
-    observed["projector_cases"][0]["grpc"]["response"] = observed["projector_cases"][0][
-        "http"
-    ]["response"]
-    with pytest.raises(ValueError, match="observations differ"):
-        capture.verify_observations(observed, corpus())

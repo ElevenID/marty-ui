@@ -9,7 +9,7 @@ This document explains the current permission model used by the org console. It 
 1. **Which roles actually exist today?**
 2. **What can each role do across the main console resources?**
 
-It complements `RELEASE_READINESS.md`, which tracks launch sign-off, and `IMPLEMENTATION_PROGRESS.md`, which tracks implementation history.
+It complements `RELEASE_READINESS.md`, which tracks launch sign-off.
 
 ---
 

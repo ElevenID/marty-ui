@@ -1,3 +1,5 @@
+//! Historical migration consistency checks; never part of service startup.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use mmf_core::{ErrorCode, MmfError};
@@ -755,8 +757,7 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
                 .is_some_and(|routes| routes.len() == 8)
             && application_templates["security"]["authentication"]
                 == "X-API-Key management key on every route"
-            && application_templates["security"]["trusted_tenant_header"]
-                == "X-Organization-ID"
+            && application_templates["security"]["trusted_tenant_header"] == "X-Organization-ID"
             && application_templates["native_cutover_repairs"]["atomic_lifecycle"]["required"]
                 == true
             && application_templates["native_cutover_repairs"]["catalog_lookup"]

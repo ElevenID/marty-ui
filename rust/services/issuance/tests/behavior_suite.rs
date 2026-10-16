@@ -28,3 +28,6 @@ mod canvas_lti_tool_signing_behavior;
 
 #[path = "issued_credential_adapter_behavior.rs"]
 mod issued_credential_adapter_behavior;
+
+#[path = "migration_contract.rs"]
+mod migration_contract;
