@@ -3468,7 +3468,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
         assert _classify_changed_path(path, tmp_path) == selected
 
     # This selector is for exact test sources, not reference artifacts or
-    # capture implementations. Their existing Rust/full owners must remain.
+    # support implementations. Their existing Rust/full owners must remain.
     for path in (
         "contracts/signing-response-python-reference.json",
         "contracts/token-rate-python-reference.json",
@@ -3476,8 +3476,8 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
     ):
         assert _classify_changed_path(path, tmp_path)["rust"] == "true"
     for path in (
-        "scripts/capture_canvas_mirror_reference.py",
-        "scripts/capture_canvas_url_template_reference.py",
+        "scripts/probe_kms_native_service_migrations.py",
+        "scripts/probe_kms_profile_runtime_schema.py",
         "tests/test_signing_response_reference_helpers.py",
         "unknown-new-input.txt",
     ):

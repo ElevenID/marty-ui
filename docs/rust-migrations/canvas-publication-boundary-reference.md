@@ -33,7 +33,6 @@ Python JSON text; errors retain exact original classes/messages. Every case
 retains one actual controlled HTTP callback and complete state snapshots.
 
 ```text
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --publication-boundary-reference --check
 python -m pytest tests/test_canvas_mirror_reference.py
 ```
 
@@ -41,11 +40,7 @@ python -m pytest tests/test_canvas_mirror_reference.py
 10/2/3 counts and the original raw source revision. JSON artifact identity is
 UTF-8 with CRLF normalized to LF only; Git source blobs still use raw byte
 identity. Root-discovered guards retain hash/content-mutation, CRLF, source,
-complete-case, response-shape, cancellation ownership and mutually exclusive
-mode checks without importing application dependencies.
-
-No filesystem-secret mode is introduced here. The capture still rejects
-arbitrary `_FILE` selectors. A future separately audited owned synthetic file
-rotation section must precede any filesystem-rotation claim. No production
-Rust, Core, KMS, dependency pin, deployed configuration, route owner, native
-publication capability or Python deletion is changed by this reference slice.
+complete-case and response-shape checks without importing application dependencies.
+The capture generator and its process/cancellation-control tests have been
+retired; Git history retains the original capture implementation. The frozen
+cancellation observations remain inputs to native Rust behavior tests.

@@ -59,8 +59,11 @@ Only checked append and final formatted-output reservations currently expose
 the explicit recoverable resource error. Debug/Display expose only error kinds; exact
 lossless diagnostics require the explicit message accessor and caller policy.
 
-Reproduce the independent metadata inventory using exact CPython 3.12.10:
+The metadata and named-format generators have been retired; their source remains
+in Git history. Keep the frozen inventory and pairwise observations: the native
+formatter embeds the attribute inventory and tests all captured format cases.
+Run the repository guards with:
 
 ```text
-python -I scripts/capture_python_string_attributes.py --check
+python -m pytest tests/test_python_string_attribute_inventory.py
 ```

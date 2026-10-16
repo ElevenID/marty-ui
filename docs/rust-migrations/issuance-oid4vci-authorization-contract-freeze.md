@@ -56,20 +56,12 @@ status, relevant headers, complete JSON or text bodies, repository calls, PAR
 persistence, authorization-session persistence, and transaction-revocation
 ordering.
 
-[`scripts/capture_oid4vci_authorization_reference.py`](../../scripts/capture_oid4vci_authorization_reference.py)
-replays the capture from an exact Credentials checkout. Dynamic UUIDs,
-authorization codes, and timestamps are normalized; error detail, redirects,
-query strings, headers, call order, and persisted effects are not. Reproduce it
-with:
+The historical capture generator has been retired and remains in Git history.
+Dynamic UUIDs, authorization codes and timestamps were normalized; error detail,
+redirects, query strings, headers, call order and persisted effects were not.
+Current checks retain the frozen observations and their Rust consumers.
 
-```powershell
-$env:PYTHONDONTWRITEBYTECODE='1'
-py -3.12 scripts\capture_oid4vci_authorization_reference.py `
-  ..\..\marty-credentials `
-  --verify contracts\issuance-oid4vci-authorization-python-reference.json
-```
-
-The capture pins normalized SHA-256 hashes for the route, entity, in-memory
+The historical capture pinned normalized SHA-256 hashes for the route, entity, in-memory
 repository, and PostgreSQL repository sources. The contract separately pins the
 reference hash, so changing either the protected source observation or its
 interpretation requires an explicit review.
@@ -175,3 +167,7 @@ The historical freeze itself changed no runtime route. The stacked candidates
 now own all seven routes in Rust and select them through the fail-closed native
 coverage manifest. Credentials source deletion, the KMS boundary, release, and
 deployment remain later gates and are not claimed by this checkpoint.
+
+Capture-script paths retained in the hash-bound contracts identify the original
+historical capture. They are provenance, not executable commands in the current
+checkout; use Git history to inspect the retired tools.
