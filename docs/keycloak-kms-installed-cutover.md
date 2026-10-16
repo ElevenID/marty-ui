@@ -26,7 +26,7 @@ test-user accounts as part of installed acceptance.
 1. Resolve one published Stack transaction, every image by immutable digest,
    the matched Keycloak provider image, and the signed self-host bundle and
    image lock. Reject any unqualified preview or mixed release. The
-   `v1.1.248` candidate is not yet a published installed qualification.
+   `v1.1.249` candidate is not yet a published installed qualification.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full

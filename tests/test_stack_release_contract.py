@@ -693,15 +693,12 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.248"
+    assert lock["release"] == "marty-ui@1.1.249"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.248")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.249")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
-    cutover_guide = _text("docs/rust-migrations/passport-postdeletion-beta-cutover.md")
-    assert (
-        f"gh workflow run passport-beta-rust-readiness.yml --ref {release_tag}"
-        in cutover_guide
-    )
+    cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
+    assert release_tag in cutover_guide
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components

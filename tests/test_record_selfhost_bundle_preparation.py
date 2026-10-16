@@ -8,6 +8,8 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import record_selfhost_bundle_preparation as preparation
 from record_selfhost_bundle_preparation import record
@@ -22,16 +24,21 @@ class BundlePreparationTest(unittest.TestCase):
         self.lock = root / "images.json"
         self.transaction = root / "transaction.json"
         self.image = "example.org/app@sha256:" + "a" * 64
+        self.plugin_image = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
         self.lock.write_text(json.dumps({"schema": "marty.selfhost-image-lock/v1",
                                          "release": "marty-ui@1.2.3",
-                                         "openbao_didcomm_image": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64,
+                                         "openbao_didcomm_image": self.plugin_image,
                                          "services": {"app": self.image}}))
         self.transaction.write_text("{}")
+        source_image = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}"
+        openbao_source = (Path(__file__).resolve().parents[1] /
+                          "docker-compose.selfhost.openbao.yml").read_text(encoding="utf-8")
+        self.assertEqual(openbao_source.count(source_image), 3)
         self.contents = {
             ".marty-selfhost-images.json": self.lock.read_bytes(),
-            "docker-compose.selfhost.openbao.yml": (
-                "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
-                "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode(),
+            "docker-compose.selfhost.openbao.yml": openbao_source.replace(
+                source_image, self.plugin_image
+            ).encode(),
             "docker-compose.yml": f"services:\n  app:\n    image: {self.image}\n".encode(),
             "README.md": b"unqualified\n",
         }
@@ -99,10 +106,17 @@ class BundlePreparationTest(unittest.TestCase):
             self.check()
 
     def test_rejects_openbao_compose_image_mismatch(self):
-        self.contents["docker-compose.selfhost.openbao.yml"] = (
-            b"services:\n  openbao:\n    image: quay.io/openbao/openbao:latest\n"
-            b"  openbao-bootstrap:\n    image: quay.io/openbao/openbao:latest\n"
-        )
+        self.contents["docker-compose.selfhost.openbao.yml"] = self.contents[
+            "docker-compose.selfhost.openbao.yml"
+        ].replace(self.plugin_image.encode(), b"quay.io/openbao/openbao:latest", 1)
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_missing_openbao_tls_init(self):
+        compose = yaml.safe_load(self.contents["docker-compose.selfhost.openbao.yml"])
+        del compose["services"]["openbao-tls-init"]
+        self.contents["docker-compose.selfhost.openbao.yml"] = yaml.safe_dump(compose).encode()
         self.write_archive()
         with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
             self.check()
