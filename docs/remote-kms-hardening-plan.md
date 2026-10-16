@@ -22970,3 +22970,12 @@ replay and hosted PR gates are pending. Do not claim `v1.1.248` from the failed
 full-main run. After the fix merges, qualify the new exact main and rerun the
 no-write tag claim before release. The installed Keycloak clean-cutover and
 real cloud/device acceptance remain open.
+
+The final committed-source replay on the fix passed all seven stages and 55
+actual HTTPS requests in 384.56 seconds, with the temporary worker-stderr
+diagnostic removed. Rust formatting and test-target compilation, Ruff, Python
+compilation and diff checks passed. The fix was rebased onto then-current main
+`c0a06263f` as `09ca881ee`, pushed, and opened as
+[#1362](https://github.com/ElevenID/marty-ui/pull/1362). Await its exact-head
+required checks, protected merge-group gates, and a new full-main run before
+any `v1.1.248` claim.
