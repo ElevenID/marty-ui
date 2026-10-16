@@ -22951,3 +22951,22 @@ for `v1.1.248` on that main commit. Full-main CI `38829365629` on prior main
 Replacement [workflow-dispatch CI run 38829914635](https://github.com/ElevenID/marty-ui/actions/runs/38829914635)
 was dispatched and verified to target exact current main `a0ee35a6`; await
 success before the no-write tag claim.
+
+2026-10-16 full-main release blocker: run
+[38829914635](https://github.com/ElevenID/marty-ui/actions/runs/38829914635)
+finished failed on exact `a0ee35a6` in the Canvas published-worker
+mixed-roster preflight (job `116746464137`); the other completed release lanes
+passed. The nested worker exited before stage 0. Preserved CI output did not
+contain its stderr. The exact test binary and real worker were built locally;
+running them directly in WSL against disposable published PostgreSQL reproduced
+`Error: Invalid(InvalidConfig)` before any HTTPS requests. The fixture served
+the synthetic signing-grant endpoint over HTTP, while the hardened production
+Transit grant client now requires HTTPS and a public CA. Branch
+`fix/kms-canvas-full-main-20261016` commit `f66dd22f1` reuses the existing
+loopback TLS certificate for that endpoint and supplies `BAO_CACERT`; it does
+not add a private-key fallback or change production crypto. The seven-stage
+local replay passed with 55 actual HTTPS requests; final committed-source
+replay and hosted PR gates are pending. Do not claim `v1.1.248` from the failed
+full-main run. After the fix merges, qualify the new exact main and rerun the
+no-write tag claim before release. The installed Keycloak clean-cutover and
+real cloud/device acceptance remain open.
