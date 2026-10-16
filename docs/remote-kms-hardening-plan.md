@@ -23177,3 +23177,11 @@ acceptance must use the isolated local edge and the later traffic switch must
 be an explicit separately rehearsed step. This source inspection is not a
 rendered/installed qualification, and the fresh Raft state plus private-key
 database retirement remain outstanding.
+
+UI [PR #1365](https://github.com/ElevenID/marty-ui/pull/1365)
+passed exact-head checks and merged through the protected queue on
+`dd0d8d17a556696d6d287b785f40c3fc61f72b66`. All five merge-group
+workflows reported success on that SHA, and `origin/main` matches it. Required
+full-main [CI run 38916424114](https://github.com/ElevenID/marty-ui/actions/runs/38916424114)
+was dispatched at exact main; it was queued at the last check. Do not advance
+to a fresh tag claim or Stack release until that run succeeds.
