@@ -23185,3 +23185,15 @@ workflows reported success on that SHA, and `origin/main` matches it. Required
 full-main [CI run 38916424114](https://github.com/ElevenID/marty-ui/actions/runs/38916424114)
 was dispatched at exact main; it was queued at the last check. Do not advance
 to a fresh tag claim or Stack release until that run succeeds.
+
+User clarified that both old installations are disposable and require no
+data, account, session, ciphertext, or key migration. The supported cutover
+plan is now **fresh replacement**, not blue/green rollback to an old local-key
+stack: quiesce and retire the old deployments, initialize clean Raft/KMS,
+Marty and Keycloak state, run exact-image and custody acceptance with ingress
+closed, then open the new edge. A failure leaves ingress closed and repairs or
+recreates the fresh installation; post-opening recovery uses a rehearsed
+coordinated snapshot of the **new KMS-only** PostgreSQL/Raft/Redis/applicant
+state. No old private-key data or old OpenBao state is imported. The local
+cutover guide was revised accordingly; earlier parallel traffic-switch and
+database-swap notes are superseded historical investigation, not operations.
