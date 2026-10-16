@@ -23231,3 +23231,7 @@ on prior main `dd0d8d17` was cancelled while its remaining Rust jobs were
 active, avoiding another complete qualification cycle before #1366 lands.
 Preserve that run as incomplete evidence; dispatch fresh full-main CI on the
 exact merge commit after protected merge.
+
+The superseded full-main run `38916424114` reached terminal `cancelled`
+without a complete release qualification. PR #1366 exact-head checks are
+running; do not use the cancelled run for a new stack-tag claim.
