@@ -23340,3 +23340,18 @@ OpenBao and remotely managed integration-secret TLS identity, run it locally,
 release a signed harness, update the UI pin, requalify exact main, and make a
 fresh no-write release claim before retrying publication. No `v1.1.248`
 publication or installed cutover is evidenced by this failed smoke job.
+
+The public release harness repair is [marty-integration-tests PR #441](https://github.com/ElevenID/marty-integration-tests/pull/441)
+at candidate commit `13596a8`. It runs disposable OpenBao over trusted HTTPS,
+registers the packaged DIDComm plugin before migrations, and replaces the
+signing-keys workload TLS private-key file with a non-exportable Transit
+signer and scoped token. OpenBao's dev listener key stays in its own volume;
+application containers receive only a separately exported public CA. Local
+Compose reached healthy with the exact candidate UI, services, migrations,
+and OpenBao image digests from failed release run `38941129335`; all eight
+public-stack journey tests passed. The full integration harness unit suite
+passed with 1,028 tests and two skips; Ruff and Compose validation passed.
+This is local candidate evidence until the PR checks, protected merge, signed
+harness release, UI release-workflow/pin update, exact-main CI, new claim, and
+full artifact release pass. The disposable dev-TLS fixture does not replace
+the separate Raft-backed installed qualification.
