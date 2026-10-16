@@ -44,6 +44,21 @@ def ed25519_public_pem(raw_base64: str) -> str:
     return pem
 
 
+def custody_signer_public(metadata: dict) -> tuple[int, str]:
+    """Read the current non-exportable Transit signer version and public key."""
+    if (not isinstance(metadata, dict) or metadata.get("type") != "ed25519"
+            or metadata.get("exportable") is not False
+            or metadata.get("allow_plaintext_backup") is not False
+            or type(metadata.get("latest_version")) is not int
+            or metadata["latest_version"] <= 0):
+        raise ValueError("OpenBao custody signer is not non-exportable Ed25519")
+    version = metadata["latest_version"]
+    entry = metadata.get("keys", {}).get(str(version), {})
+    if not isinstance(entry, dict):
+        raise ValueError("OpenBao custody signer public key is absent")
+    return version, ed25519_public_pem(entry.get("public_key"))
+
+
 def public_key_der(pem: str) -> bytes:
     result = subprocess.run(
         ["openssl", "pkey", "-pubin", "-outform", "DER"],

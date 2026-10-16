@@ -23,7 +23,7 @@ from urllib.parse import quote, urlsplit
 import httpx
 
 from selfhost_openbao_client import (
-    CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, ed25519_public_pem,
+    CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, custody_signer_public,
 )
 
 
@@ -193,20 +193,6 @@ def validate_custody_signer_token(metadata: dict) -> None:
     if (not isinstance(policies, list) or set(policies) != {CUSTODY_SIGNER_POLICY}
             or type(ttl) is not int or not 0 < ttl <= 3600):
         raise ValueError("OpenBao custody signer token is not scoped or short-lived")
-
-
-def custody_signer_public(metadata: dict) -> tuple[int, str]:
-    if (not isinstance(metadata, dict) or metadata.get("type") != "ed25519"
-            or metadata.get("exportable") is not False
-            or metadata.get("allow_plaintext_backup") is not False
-            or type(metadata.get("latest_version")) is not int
-            or metadata["latest_version"] <= 0):
-        raise ValueError("OpenBao custody signer is not non-exportable Ed25519")
-    version = metadata["latest_version"]
-    entry = metadata.get("keys", {}).get(str(version), {})
-    if not isinstance(entry, dict):
-        raise ValueError("OpenBao custody signer public key is absent")
-    return version, ed25519_public_pem(entry.get("public_key"))
 
 
 def validate_profile_projection(profile: dict, *, did: str, purpose: str) -> dict:
