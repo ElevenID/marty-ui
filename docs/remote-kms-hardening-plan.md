@@ -23206,3 +23206,15 @@ test and before teardown; the command targets only the runner-owned PostgreSQL
 service and suppresses database values on failure. Focused runner tests passed
 38/38, handoff tests 3/3, and Ruff/diff checks passed locally. This is grouped
 unlanded work, not an installed clean database or signed image proof.
+
+The grouped cutover branch additionally reuses the existing native migration
+verifier's Marty private-key schema/content queries inside the installed
+self-host journey after representative writes. The Keycloak and Marty gates
+run against the runner-owned PostgreSQL service before cleanup and report
+generic failure without exposing stored values. Local runner tests passed
+39/39 and Ruff/diff checks passed. A fresh local disposable
+`probe_keycloak_remote_rs256.py --require-browser` run against locally built
+Keycloak/OpenBao images passed both realms' rotated browser/cookie, CIBA,
+token/refresh/JWKS, KMS-loss denial and the revised PostgreSQL custody gate;
+its three owned containers were removed. This does not yet prove the bundled
+runner against signed release images or new Raft installed recovery.
