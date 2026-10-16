@@ -15,9 +15,9 @@ merged. The first `v1.1.248` Stack release failed in public smoke because its
 old harness used HTTP OpenBao and a workload TLS private-key file; preserve
 that failed evidence. The repaired, signed integration harness `v1.2.89` is
 published at protected main `9c636092`; grouped UI [PR #1368](https://github.com/ElevenID/marty-ui/pull/1368)
-pins its verified digest and is first in the protected merge queue after
-exact-head CI passed. Merge-group [CI 38951644944](https://github.com/ElevenID/marty-ui/actions/runs/38951644944)
-is running. After merge, exact-main full CI, a new no-write release claim,
+pins its verified digest and merged at `9a74ce3d` after all protected
+merge-group workflows passed. Exact-main full [CI 38954734784](https://github.com/ElevenID/marty-ui/actions/runs/38954734784)
+is running. After it succeeds, a new no-write release claim,
 and the corrected Stack release are required. The `stack-release` environment
 does not require manual reviewer approval. Publication alone will not prove
 fresh installed Raft-backed KMS-only beta/self-host custody, cutover and
