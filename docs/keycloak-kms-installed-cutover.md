@@ -63,3 +63,11 @@ The existing `restore-local-beta-release.ps1` is not yet this rollback path:
 its Rust-only image pairing check rejects the currently running beta
 Issuance/Gateway images. The cutover implementation must provide and locally
 rehearse its own exact-prior-image recovery before installed mutation.
+
+On 2026-10-16, a disposable network-isolated PostgreSQL 15 container proved
+the narrow database operation with synthetic `privateKey` data: rename the
+old `keycloak` database, create a fresh same-named database, find no old
+`component_config` table in the fresh database, rename the fresh database
+aside, restore the old name, and recover the synthetic row. The owned
+container was removed. This does not yet prove Keycloak startup, coordinated
+backup/restore, writer quiescence, or an installed cutover.
