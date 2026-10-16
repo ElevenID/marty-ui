@@ -24,6 +24,9 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Requ
 
 
 IMAGE = re.compile(r"quay\.io/openbao/openbao@sha256:[0-9a-f]{64}\Z")
+PLUGIN_IMAGE = re.compile(
+    r"(?:ghcr\.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:[0-9a-f]{64}|marty-openbao-didcomm:(?:ci|local))\Z"
+)
 
 # Independent oracle for the disposable self-host roles. These names must not
 # be derived from the Rust producer: a wrong producer mapping must fail here.
@@ -44,6 +47,90 @@ SELFHOST_TLS_IDENTITIES = {
     "pp_tls_kms_token": ("pp_workload_server_cert", "DNS:presentation-policy", "TLS Web Server Authentication"),
     "verification_tls_kms_token": ("verification_workload_client_cert", "URI:spiffe://marty.internal/service/verification", "TLS Web Client Authentication"),
 }
+
+KEYCLOAK_CERT_KEYS = {
+    "keycloak_master_rs256_cert": "keycloak-master-rs256",
+    "keycloak_11id_rs256_cert": "keycloak-11id-rs256",
+}
+KEYCLOAK_JWE_TOKENS = {
+    "keycloak_master_cookie_token": ("master", "cookie"),
+    "keycloak_master_ciba_token": ("master", "ciba"),
+    "keycloak_11id_cookie_token": ("11id", "cookie"),
+    "keycloak_11id_ciba_token": ("11id", "ciba"),
+}
+
+
+def validate_selfhost_keycloak(bao: Bao, output: Path, root_token: str) -> None:
+    """Independent output and live scope oracle for the seven catalogued files."""
+    expected = set(KEYCLOAK_CERT_KEYS) | set(KEYCLOAK_JWE_TOKENS) | {
+        "keycloak_signing_kms_token",
+    }
+    if {path.name for path in output.iterdir()} != expected:
+        raise RuntimeError("disposable Keycloak output differs from seven-file contract")
+    for cert_name, key_name in KEYCLOAK_CERT_KEYS.items():
+        cert = output / cert_name
+        if "PRIVATE KEY" in cert.read_text(encoding="ascii"):
+            raise RuntimeError("disposable Keycloak certificate exported private material")
+        details = run(["openssl", "x509", "-in", str(cert), "-noout", "-text"])
+        if key_name.split("-")[1] + ".keycloak.internal" not in details:
+            raise RuntimeError("disposable Keycloak certificate has wrong realm")
+        public = run(["openssl", "x509", "-in", str(cert), "-pubkey", "-noout"])
+        metadata = bao.request("GET", f"transit/keys/{key_name}")["data"]
+        if (metadata.get("type") != "rsa-2048" or metadata.get("exportable") is not False
+                or metadata.get("latest_version") != 1
+                or public_key_der(public) != public_key_der(metadata["keys"]["1"]["public_key"])):
+            raise RuntimeError("disposable Keycloak certificate differs from remote key")
+    tokens = {name: (output / name).read_text(encoding="ascii")
+              for name in expected if name.endswith("_token")}
+    if len(set(tokens.values())) != 5 or root_token in tokens.values():
+        raise RuntimeError("disposable Keycloak scoped tokens are reused or root")
+    signing = tokens["keycloak_signing_kms_token"]
+    for realm in ("master", "11id"):
+        payload = {"input": base64.b64encode(b"independent-keycloak-proof").decode("ascii")}
+        if not bao.request("POST", f"transit/sign/keycloak-{realm}-rs256", payload,
+                           token=signing).get("data", {}).get("signature"):
+            raise RuntimeError("disposable Keycloak signing token cannot sign")
+        if not bao.request("POST", f"transit/hmac/keycloak-{realm}-hs512/sha2-512",
+                           payload, token=signing).get("data", {}).get("hmac"):
+            raise RuntimeError("disposable Keycloak signing token cannot HMAC")
+    try:
+        bao.request("GET", "transit/keys/foreign-keycloak-selfhost", token=signing)
+    except HTTPError as error:
+        if error.code != 403:
+            raise RuntimeError("disposable Keycloak signer foreign-key status changed") from error
+    else:
+        raise RuntimeError("disposable Keycloak signer reached a foreign key")
+    scopes = tuple(KEYCLOAK_JWE_TOKENS.values())
+    for name, (realm, purpose) in KEYCLOAK_JWE_TOKENS.items():
+        token = tokens[name]
+        key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
+        version = bao.request("GET", key_path, token=token)["data"]["version"]
+        encoded = bao.request("POST", f"didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}", {
+            "plaintext_base64": base64.b64encode(b"independent-jwe-proof").decode("ascii"),
+        }, token=token)["data"]["jwe"]
+        decoded = bao.request("POST", f"didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}", {
+            "jwe": encoded,
+        }, token=token)["data"]["plaintext_base64"]
+        if base64.b64decode(decoded) != b"independent-jwe-proof":
+            raise RuntimeError("disposable Keycloak JWE scope failed round trip")
+        for other_realm, other_purpose in scopes:
+            if (other_realm, other_purpose) == (realm, purpose):
+                continue
+            try:
+                bao.request("GET", f"didcomm/keycloak/keys/{other_realm}/{other_purpose}",
+                            token=token)
+            except HTTPError as error:
+                if error.code != 403:
+                    raise RuntimeError("disposable Keycloak JWE cross-scope status changed") from error
+            else:
+                raise RuntimeError("disposable Keycloak JWE token crossed realm or purpose")
+        try:
+            bao.request("GET", "transit/keys/keycloak-master-rs256", token=token)
+        except HTTPError as error:
+            if error.code != 403:
+                raise RuntimeError("disposable Keycloak JWE token reached Transit") from error
+        else:
+            raise RuntimeError("disposable Keycloak JWE token reached Transit")
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -525,7 +612,10 @@ def provision_workload_pair(bao: Bao, root: Path, profile: str) -> dict[str, str
 
 
 def execute(image: str, command: list[str], profile: str = "event-stream") -> int:
-    if not IMAGE.fullmatch(image):
+    if profile == "selfhost-keycloak":
+        if not PLUGIN_IMAGE.fullmatch(image):
+            raise RuntimeError("disposable Keycloak OpenBao requires a pinned plugin image")
+    elif not IMAGE.fullmatch(image):
         raise RuntimeError("disposable OpenBao image must use a pinned upstream digest")
     if not command:
         raise RuntimeError("an acceptance command is required")
@@ -533,7 +623,8 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
         command = command[1:]
     if not command:
         raise RuntimeError("an acceptance command is required")
-    require_pinned_image(image)
+    if image not in {"marty-openbao-didcomm:ci", "marty-openbao-didcomm:local"}:
+        require_pinned_image(image)
     container = "marty-event-stream-kms-" + secrets.token_hex(8)
     root_token = secrets.token_hex(32 if profile == "passport-bootstrap" else 24)
     attempted = False
@@ -546,6 +637,8 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                 "--label", "marty.disposable=event-stream-kms",
                 "-p", "127.0.0.1::8200", "--tmpfs", "/tmp/bao-tls:rw,mode=1777",
                 "-e", "BAO_DEV_LISTEN_ADDRESS=0.0.0.0:8200",
+                *(["-e", 'BAO_LOCAL_CONFIG={"plugin_directory":"/plugins"}']
+                  if profile == "selfhost-keycloak" else []),
                 "-e", f"BAO_DEV_ROOT_TOKEN_ID={root_token}", image,
                 "server", "-dev", "-dev-tls", "-dev-tls-cert-dir=/tmp/bao-tls",
             ], timeout=60)
@@ -657,6 +750,30 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                     + secrets.token_hex(5),
                     "SELFHOST_TLS_OUTPUT_DIR": str(output),
                 })
+            elif profile == "selfhost-keycloak":
+                digest = run(["docker", "exec", container, "sha256sum",
+                              "/plugins/openbao-didcomm-authcrypt"]).split()[0]
+                if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                    raise RuntimeError("disposable Keycloak plugin digest is invalid")
+                bao.request("PUT", "sys/plugins/catalog/secret/openbao-didcomm-authcrypt", {
+                    "command": "openbao-didcomm-authcrypt", "sha256": digest,
+                })
+                bao.request("POST", "sys/mounts/didcomm", {
+                    "type": "openbao-didcomm-authcrypt",
+                })
+                bao.request("POST", "sys/mounts/transit", {"type": "transit"})
+                token_file = root / "bootstrap-root-token"
+                token_file.write_text(root_token, encoding="ascii")
+                if os.name != "nt":
+                    token_file.chmod(0o600)
+                output = root / "selfhost-keycloak-output"
+                output.mkdir(mode=0o700)
+                environment.update({
+                    "BAO_ADDR": bao.endpoint,
+                    "BAO_CACERT": str(ca),
+                    "BAO_ROOT_TOKEN_FILE": str(token_file),
+                    "SELFHOST_KEYCLOAK_OUTPUT_DIR": str(output),
+                })
             elif profile == "notification":
                 environment.update(provision_notification(bao, root))
                 environment["NOTIFICATION_OPENBAO_CA_CERT_FILE"] = str(ca)
@@ -670,6 +787,8 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
             result = subprocess.run(command, env=environment, check=False)
             if result.returncode == 0 and profile == "selfhost-bootstrap":
                 validate_selfhost_tls_bootstrap(bao, output, root_token)
+            if result.returncode == 0 and profile == "selfhost-keycloak":
+                validate_selfhost_keycloak(bao, output, root_token)
             return result.returncode
         finally:
             if attempted:
@@ -693,7 +812,7 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-keys-image", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "selfhost-bootstrap", "notification"), default="event-stream")
+    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-keys-image", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "selfhost-bootstrap", "selfhost-keycloak", "notification"), default="event-stream")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     return execute(args.image, args.command, args.profile)

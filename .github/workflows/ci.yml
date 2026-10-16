@@ -893,6 +893,13 @@ jobs:
           python3 scripts/probe_keycloak_remote_rs256.py --require-browser \
             --keycloak-image marty-keycloak-openbao:ci \
             --openbao-image marty-openbao-didcomm:ci
+      - name: Prove disposable self-host Keycloak secret closure and token scopes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/with_disposable_event_stream_kms.py \
+            --image marty-openbao-didcomm:ci --profile selfhost-keycloak \
+            -- python3 scripts/provision_selfhost_keycloak_kms.py
       - name: Qualify packaged plugin storage and self-host Raft behavior
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
