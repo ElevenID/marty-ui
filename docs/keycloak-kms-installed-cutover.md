@@ -28,8 +28,8 @@ sessions are not migrated; operator re-enrolment is an explicit cutover task.
 The new stack requires separate project/host isolation, unique ports and
 volumes, and a tested edge switch. The exact deployment and rollback commands
 are still to be implemented and rehearsed. The PostgreSQL-only swap helper
-`scripts/beta-keycloak-clean-database.ps1` remains a local experiment and is
-not an approved cutover step. Earlier PostgreSQL restore tests prove only
+was removed from this branch; its prior commits remain historical evidence.
+Earlier PostgreSQL restore tests prove only
 database recoverability, not recovery of beta's in-memory KMS or the new
 Raft stack. Do not treat the older procedure below as authorization for live
 mutation.
@@ -147,7 +147,7 @@ KeyProvider-only count, so an unrelated component's private-key field or a
 retired private-key table cannot pass the release preflight. Installed beta
 still fails the gate until the clean cutover is executed.
 
-`scripts/beta-keycloak-clean-database.ps1` now provides the database-only
+The retired `scripts/beta-keycloak-clean-database.ps1` prototype provided the database-only
 swap/reversal primitive for that cutover. It requires the checksum-verified
 quiesced beta backup, the expected running beta PostgreSQL container, unused
 validated database names, and zero Keycloak database connections. It renames
