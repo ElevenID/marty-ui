@@ -23154,3 +23154,17 @@ for modified scripts, and diff checks. PR exact-head checks and protected
 merge are pending. Release run `38865841692` is terminal failure; its later
 publication jobs were skipped. A new published harness artifact and updated
 UI lock are needed before another qualified release attempt.
+
+Harness [PR #438](https://github.com/ElevenID/marty-integration-tests/pull/438)
+merged at protected main `1ff32cb439a9c32baaf6311a7bd5c6e7940a7118`.
+Its exact-main [integration run 38868612697](https://github.com/ElevenID/marty-integration-tests/actions/runs/38868612697)
+passed. The signed [v1.2.88 release](https://github.com/ElevenID/marty-integration-tests/releases/tag/v1.2.88)
+published successfully in [run 38868820654](https://github.com/ElevenID/marty-integration-tests/actions/runs/38868820654);
+its source archive digest is
+`sha256:07ec0892d9136e39f0802507fbbefb015a3a5d38c8442d0369027d2cd57ef650`.
+UI [PR #1365](https://github.com/ElevenID/marty-ui/pull/1365) at
+`e1e263752` pins the published harness, source digest, and self-host journey
+revision together. Local release/handoff/journey tests passed 87/87 and
+manifest-builder tests passed 5/5. PR checks and protected merge queue are
+pending, followed by full-main and a fresh Stack release. Do not reuse failed
+run `38865841692` or its claim as publication evidence.
