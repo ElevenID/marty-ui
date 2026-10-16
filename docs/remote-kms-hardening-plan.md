@@ -22991,3 +22991,17 @@ input checks passed, and the exact seven-stage real-worker replay passed again
 with 55 HTTPS requests (384.53 seconds). PR #1362 was updated to head
 `ac7c9d323`; await fresh exact-head checks. Preserve the failed first-head
 evidence rather than rewriting its captured oracle.
+
+Installed Keycloak recovery rehearsal on 2026-10-16: streamed read-only
+`pg_dump -Fc` from each running beta/self-host Keycloak PostgreSQL database
+directly into separate network-isolated disposable PostgreSQL 15 containers.
+Both `pg_restore --no-owner --no-acl --exit-on-error` operations succeeded.
+Beta source and restore matched 16 users plus four `privateKey` and four
+generated `secret` KeyProvider rows; self-host matched five users plus the
+same four-plus-four key rows. The disposable containers were removed and no
+extra backup file was retained. The installed databases remain unchanged and
+still fail the KMS-only custody gate. This narrows the recovery risk but does
+not replace the quiesced coordinated PostgreSQL/Raft/Redis/applicant restore
+rehearsal or authorize the cutover. Details are on local branch
+`feat/kms-keycloak-clean-cutover-20261016` in
+`docs/keycloak-kms-installed-cutover.md`.
