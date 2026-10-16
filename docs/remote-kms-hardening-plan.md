@@ -23355,3 +23355,12 @@ This is local candidate evidence until the PR checks, protected merge, signed
 harness release, UI release-workflow/pin update, exact-main CI, new claim, and
 full artifact release pass. The disposable dev-TLS fixture does not replace
 the separate Raft-backed installed qualification.
+
+PR #441 rebased onto current integration main `7e9dce1`, advanced to exact
+head `7b4d768`, and bumps the signed harness target to `v1.2.89`. Auto-merge
+is armed. Its exact-head [integration check 38946090239](https://github.com/ElevenID/marty-integration-tests/actions/runs/38946090239)
+is queued; do not tag or pin this PR head. A local Marty UI release-workflow
+branch `fix/kms-public-smoke-release-20261016` already handles the three new
+expected one-shot OpenBao jobs; it must also pin the eventual protected-main
+harness commit and signed source digest in the release lock and self-host
+handoff before it is pushed.
