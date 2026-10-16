@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
@@ -69,6 +70,27 @@ def test_refresh_preserves_new_token_if_cleanup_fails(tmp_path: Path) -> None:
         )
     assert token_file.read_text(encoding="ascii") == "old"
     assert token_file.with_name(token_file.name + ".new").read_text(encoding="ascii") == "new"
+
+
+def test_pending_refresh_rejected_before_new_token_created(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state_root = tmp_path / "state"
+    output_root = tmp_path / "output"
+    (state_root / "tls").mkdir(parents=True)
+    output_root.mkdir()
+    (state_root / "root.token").write_text("root", encoding="ascii")
+    (state_root / "tls" / "ca.crt").write_text("ca", encoding="ascii")
+    (output_root / "selfhost_custody_signer_token").write_text("old", encoding="ascii")
+    (output_root / "selfhost_custody_signer.pub").write_text("public", encoding="ascii")
+    (output_root / "selfhost_custody_signer_token.new").write_text("pending", encoding="ascii")
+    monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+    monkeypatch.setattr(signer, "private_directory", lambda path: path)
+    monkeypatch.setattr(signer, "Bao", lambda *_args: pytest.fail("new token was created"))
+
+    with pytest.raises(ValueError, match="pending custody token refresh"):
+        signer.provision("https://127.0.0.1:18200", state_root, output_root,
+                         refresh_token=True)
 
 
 def test_operator_root_must_be_private_and_outside_source(

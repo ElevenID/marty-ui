@@ -71,13 +71,16 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
     ca_file = state_root / "tls" / "ca.crt"
     token_file = output_root / "selfhost_custody_signer_token"
     public_file = output_root / "selfhost_custody_signer.pub"
+    pending_file = token_file.with_name(token_file.name + ".new")
     if (root_file.is_symlink() or not root_file.is_file() or ca_file.is_symlink()
             or not ca_file.is_file() or token_file.is_symlink()
-            or public_file.is_symlink()):
+            or public_file.is_symlink() or pending_file.is_symlink()):
         raise ValueError("OpenBao signer input or output is invalid")
     if refresh_token:
         if not token_file.is_file() or not public_file.is_file():
             raise ValueError("OpenBao custody signer outputs are absent for refresh")
+        if pending_file.exists():
+            raise ValueError("pending custody token refresh requires operator recovery")
     elif token_file.exists() or public_file.exists():
         raise ValueError("OpenBao custody signer outputs must be fresh")
     root_token = root_file.read_text(encoding="ascii").strip()
