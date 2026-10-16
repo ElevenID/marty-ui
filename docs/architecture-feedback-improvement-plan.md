@@ -101,6 +101,19 @@ Focused Linux and Windows tests pass; this is not an installed journey, new
 published preview, or supported handoff. The remaining secret inputs and
 fresh installed acceptance still need evidence.
 
+October 16 exact-preview image check: the services image pinned by preview .2
+(`sha256:8193d6d35ec6364a151293bd3ba5e290b2062a94ad2ece811e2b98e4a75f2775`)
+does not contain `/usr/local/bin/marty-passport-tls-bootstrap` (isolated
+`docker run` on the pulled digest fails `test -x`). The current public
+`services/Dockerfile` and its build script include that Rust binary, added
+after preview .2; source inspection alone cannot qualify the older image.
+A follow-up release gate checks the binary on the exact already-pulled
+services digest after native-schema qualification, without another build.
+The existing source-built local Compose stack has health-checked services
+healthy on a 15.15 GiB Docker VM, but it uses local images and pre-existing
+state: neither a clean install nor a 16 GiB customer operating envelope is
+proven.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
