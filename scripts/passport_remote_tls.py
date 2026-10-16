@@ -55,7 +55,20 @@ def accept_remote_tls(output: Path, secret_dir: Path, root_token: str) -> None:
             raise ValueError("Disposable remote TLS destination already exists")
     if len(set(tokens)) != len(TLS_PREFIXES):
         raise ValueError("Disposable remote TLS tokens are shared")
-    for name in sorted(PUBLIC_TLS_FILES):
-        entries[name].rename(secret_dir / name)
-        if os.name == "posix":
-            os.chmod(secret_dir / name, 0o644)
+    moved: list[str] = []
+    try:
+        for name in sorted(PUBLIC_TLS_FILES):
+            entries[name].rename(secret_dir / name)
+            moved.append(name)
+            if os.name == "posix":
+                os.chmod(secret_dir / name, 0o644)
+    except OSError as error:
+        rollback_failed = False
+        for name in reversed(moved):
+            try:
+                (secret_dir / name).rename(output / name)
+            except OSError:
+                rollback_failed = True
+        if rollback_failed:
+            raise RuntimeError("Disposable remote TLS rollback is incomplete") from error
+        raise

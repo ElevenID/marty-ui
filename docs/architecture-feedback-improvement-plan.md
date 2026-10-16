@@ -114,6 +114,17 @@ healthy on a 15.15 GiB Docker VM, but it uses local images and pre-existing
 state: neither a clean install nor a 16 GiB customer operating envelope is
 proven.
 
+October 16 next candidate: require the exact released services digest to
+contain the workload TLS bootstrap executable, then ship a Linux-only
+disposable helper that checks the extracted image lock, running OpenBao
+Compose owner/image/state mount, and stages only the 31 verified public
+certificates/scoped tokens into the existing private install root. The helper
+does not stage a root token or private workload key. Focused Linux tests pass
+(45 passed, 2 skipped), including injected chmod/chown and Docker-timeout
+cleanup failure handling; the frozen
+deployment CLI and 14 bundle package-contract cases pass locally. This is
+not a fresh-image installed journey or qualification of preview .2.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
