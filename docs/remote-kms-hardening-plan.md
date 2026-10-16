@@ -23027,6 +23027,17 @@ last inspection; no failures were reported. Auto-merge is armed for #1362 but
 must pass the required PR and protected merge-group gates before main can be
 used for fresh release qualification.
 
+#1362 merged through the protected queue on 2026-10-16T06:33:28Z as exact
+main `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`. All five merge-group
+workflows passed on that SHA: CI `38859334733`, CodeQL Actions `38859334714`,
+Organization Quality `38859335024`, CodeQL Rust `38859334713`, and policy
+`38859334757`. The release lock on that main commit remains
+`marty-ui@1.1.248` eligible. Required full-main
+[workflow-dispatch CI run 38861909608](https://github.com/ElevenID/marty-ui/actions/runs/38861909608)
+was dispatched and verified to target exact `4f2b6d83`; await successful
+completion before the no-write stack-tag claim. Merge-group checks alone do
+not qualify the release.
+
 Final #1362 PR head `de001b4ba` passed all 28 exact-head checks in
 [CI run 38857007260](https://github.com/ElevenID/marty-ui/actions/runs/38857007260)
 and associated CodeQL/policy/quality workflows. This includes the full Canvas
