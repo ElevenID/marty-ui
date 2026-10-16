@@ -11,15 +11,18 @@ the service or release boundary.
 Current gate (2026-10-16): Core #355, Credentials #313, grouped native UI
 hardening #1192, the approval-free publisher #1328, clean-install follow-up
 #1330, stack-lock successor #1331, and installed custody gate #1366 are
-merged. The first `v1.1.248` Stack release failed in public smoke because its
-old harness used HTTP OpenBao and a workload TLS private-key file; preserve
-that failed evidence. The repaired, signed integration harness `v1.2.89` is
-published at protected main `9c636092`; grouped UI [PR #1368](https://github.com/ElevenID/marty-ui/pull/1368)
-pins its verified digest and merged at `9a74ce3d` after all protected
-merge-group workflows passed. Exact-main full [CI 38954734784](https://github.com/ElevenID/marty-ui/actions/runs/38954734784)
-is running. After it succeeds, a new no-write release claim,
-and the corrected Stack release are required. The `stack-release` environment
-does not require manual reviewer approval. Publication alone will not prove
+merged. The repaired, signed integration harness `v1.2.89` and grouped UI
+PR #1368 passed protected merge and exact-main CI at `9a74ce3d`. The
+[v1.1.248 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
+published with signed manifest, five images, and passing public-stack smoke,
+but its optional self-host bundle preparation failed: the receipt verifier
+expected two OpenBao services while the package contains three. Preserve
+that terminal failed [workflow run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195)
+and do not call its unproduced bundle qualified. Grouped [PR #1371](https://github.com/ElevenID/marty-ui/pull/1371)
+fixes the exact OpenBao closure and advances the release lock to unused
+`v1.1.249`; protected checks and a new exact-main claim/release remain. The
+`stack-release` environment does not require manual reviewer approval.
+Publication alone will not prove
 fresh installed Raft-backed KMS-only beta/self-host custody, cutover and
 rollback, or real AWS/Azure/GCP and physical-device behavior; provider/device
 access is not provisioned. Keep K6, K8/K9/K11 and the overall goal open.
@@ -23393,3 +23396,7 @@ Exact-main [CI 38954734784](https://github.com/ElevenID/marty-ui/actions/runs/38
 [Stack release 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) passed all five image builds, both operator catalogs, exact-digest recording, native schema, Keycloak KMS image, OpenBao DIDComm plugin image, verifier differential, and the repaired exact-image `public-stack-smoke` job. Its `qualify-release` job also succeeded. This clears the HTTP OpenBao/workload TLS-key harness failure preserved in run `38941129335`. The workflow is still active in `publish-manifest` and `build-selfhost-lock-roles`; no tag, published release, prepared bundle, or installed Raft acceptance is claimed until those jobs and their downstream gates finish.
 
 Publication checkpoint: [v1.1.248](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248) is a published, non-draft release from [Stack run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195); its annotated tag peels to exact protected-main `9a74ce3da14eafe95919eb4a8c06fd09eb80e505`. The downloaded `stack-manifest.json` SHA-256 is `96ba3c4e6629e39d7d6c45886de8fd83409e381779e6352941e9cca4fc893327`, matching release `SHA256SUMS`; `gh attestation verify` succeeded and binds the artifact to that main commit. Published transaction `c108470092225d1a626ae3a7a4ad007e845a1d14766d824ff6f0ef6cd73982d6` binds successful claim `38959876556` and build run `38959969195`. Its five exact OCI digests are UI `sha256:c482a5755040f44d51ee682a6a23c271dde179a4bcc670481e81189b295c8b59`, services `sha256:e34a144917db4d8ce293f666c1cdad2fcd1e8d8c7affce75dd19d38ef6bf9d24`, migrations `sha256:b48130a0527617e5a08609e3656b8664da90ef4b571a67b5eda667288285aa81`, OpenBao DIDComm `sha256:ba606a0a5c71dbe4017f7febebd4dff47231c244312fabd2ca95c9a100e08e3e`, and Keycloak `sha256:398ef6d9e139e480362ff3f085025596c64fc416244eda254fd1679c3f4e4d80`. The release workflow is still packaging an unqualified self-host ZIP/lock; do not claim terminal workflow success or installed Raft custody yet.
+
+The published v1.1.248 Stack transaction finished with workflow failure after publication. `prepare-selfhost-image-lock` packaged the ZIP but `scripts/record_selfhost_bundle_preparation.py` raised `ValueError: ZIP OpenBao Compose image differs from lock`; downstream prepared-consumer preflight was skipped. Rust `pin_openbao_compose` requires and pins `openbao-tls-init`, `openbao`, and `openbao-bootstrap`, all to the exact locked plugin image. The Python receipt gate still accepted only the latter two. This is a stale verifier assumption, not a reason to remove the HTTPS initializer or relax locked-image checks. The signed v1.1.248 manifest and all five images remain published and passed public-stack smoke, but no prepared self-host bundle is evidenced by this run.
+
+Candidate [Marty UI PR #1371](https://github.com/ElevenID/marty-ui/pull/1371) at `b2e9f1bba52100fb3773b73a0e72d920e1723ccd` requires exactly those three OpenBao services, each using the immutable locked image and no source build. It updates the consumer/descriptor fixtures, binds the receipt regression fixture to the actual OpenBao Compose source, and advances the stack lock to unused `v1.1.249`. It marks the old in-place beta migration playbook historical under the user's fresh-install decision. Local checks: 105 focused Python tests, Ruff, seven-component stack manifest, and 14 Rust packager contract tests passed. A real local v1.1.249 ZIP was produced from the candidate source with synthetic self-host role digests; receipt, product descriptor, archive-only consumer verification, and extracted 31-service consumer preflight all passed. This validates the package/receipt interface locally, not actual published digests or installed custody. Auto-merge is armed; retain the v1.1.248 failed workflow and signed release without rewriting them.
