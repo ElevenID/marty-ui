@@ -23303,3 +23303,14 @@ cancelled run. Preserve both runs and the failed claim; do not weaken the
 policy or delete the cancelled evidence. One new full-main [CI 38935914328](https://github.com/ElevenID/marty-ui/actions/runs/38935914328)
 was dispatched at the unchanged exact main SHA; wait for it to succeed before
 retrying the no-write claim.
+
+Replacement full-main [CI 38935914328](https://github.com/ElevenID/marty-ui/actions/runs/38935914328)
+passed at unchanged main `45e6ce7d` and remained the latest qualification.
+The second no-write [`v1.1.248` claim 38940807944](https://github.com/ElevenID/marty-ui/actions/runs/38940807944)
+passed and produced transaction `8465fc253068a3da04afc4a2536ce22e1243368803bc7950b846f14807f4b4c2`
+bound to the five successful merge-group workflows, that exact full-main CI,
+and absent tag/release/image version tags. [Stack release 38940925318](https://github.com/ElevenID/marty-ui/actions/runs/38940925318)
+was dispatched on the same main SHA with the unqualified self-host lock/bundle
+preparation enabled and exact available PostgreSQL, Redis and Nginx digest
+inputs. It is queued; dispatch does not prove publication, bundle
+qualification, installed custody, or supported cutover.
