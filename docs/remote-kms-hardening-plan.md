@@ -23018,3 +23018,11 @@ transport contract and its driver doubles, while retaining the distinct
 internal signer HTTP test path. All 15 fixture and 36 driver focused tests,
 Ruff, Python compilation and diff checks passed. Updated PR head
 `de001b4ba` is pushed; await its fresh exact-head checks before merge.
+
+On exact final PR head `de001b4ba`, [CI run 38857007260](https://github.com/ElevenID/marty-ui/actions/runs/38857007260)
+has passed Release Contract Tests, the Canvas frozen-input harness, and the
+published-worker parity preflight (Canvas job step 24, 05:47:11–05:49:08Z).
+The four remaining Rust/DIDComm jobs and CodeQL Rust were still running at
+last inspection; no failures were reported. Auto-merge is armed for #1362 but
+must pass the required PR and protected merge-group gates before main can be
+used for fresh release qualification.
