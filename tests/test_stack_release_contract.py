@@ -676,11 +676,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.88"
-    assert integration["commit"] == "1ff32cb439a9c32baaf6311a7bd5c6e7940a7118"
+    assert integration["version"] == "1.2.89"
+    assert integration["commit"] == "9c63609250274dc1edcf747827a29728ddd15d4a"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:07ec0892d9136e39f0802507fbbefb015a3a5d38c8442d0369027d2cd57ef650"
+            "sha256:3b81d939547d6fa97a1cc356dc13610165426a0530e9c396bb18b13823320cc8"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -706,7 +706,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.88"
+    assert components["marty-integration-tests"]["version"] == "1.2.89"
 
     documents = (
         _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
@@ -972,6 +972,22 @@ def test_public_stack_smoke_binds_all_five_kms_images() -> None:
     assert 'marty-ui-oss/openbao-didcomm' in script
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
+
+
+def test_public_stack_smoke_allows_only_pinned_one_shot_initializers() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    smoke = next(step["run"] for step in jobs["public-stack-smoke"]["steps"]
+                 if step.get("name") == "Run the artifact-only public integration suite")
+    expected = {
+        "migrations", "issuance-migrations", "revocation-profile-migrations",
+        "openbao-tls-init", "openbao-ca-export", "openbao-plugin-bootstrap",
+        "openbao-grant-bootstrap", "signing-integration-tls-bootstrap",
+    }
+    exit_filter = next(line for line in smoke.splitlines()
+                       if line.startswith('unexpected_exits='))
+    assert set(re.findall(r'\$0 != "([^"]+)"', exit_filter)) == expected
+    assert '$0 != ""' in exit_filter
+    assert "if [ -n \"$unexpected_exits\" ]; then" in smoke
 
 
 def test_release_qualifies_exact_keycloak_kms_image_before_promotion() -> None:
