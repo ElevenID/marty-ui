@@ -23102,3 +23102,16 @@ replacement and coordinated rollback are still missing. The Stack CD workflow
 publishes artifacts but does not itself run `run_selfhost_business_journey.py`;
 the exact published self-host installed journey must be invoked and qualified
 separately after publication.
+
+Local K12 cutover branch `b4bb6439e` now adds a guarded beta Keycloak
+database-only swap/reversal primitive. It validates the quiesced coordinated
+backup manifest and six checksums, the beta PostgreSQL container labels,
+database name grammar, unused names, and zero Keycloak connections. A
+network-isolated disposable PostgreSQL 15 rehearsal preserved a synthetic old
+KeyProvider marker in the retained database, created a fresh empty `keycloak`
+database, and reversed the names while retaining the failed fresh database;
+a tampered backup was rejected. The helper is not yet wired into the locked
+release flow, and writer quiescence, full restore, installed Keycloak startup,
+and user/session acceptance are still required. The disposable database
+container was removed. Automatic approval review rejected cleanup of its
+synthetic temporary backup files; they contain no real key or database data.
