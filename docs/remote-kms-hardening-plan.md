@@ -23259,3 +23259,18 @@ unqualified bundle were each independently resolved by `docker manifest
 inspect` on 2026-10-16. This confirms registry availability of the proposed
 inputs, not that the new self-host image lock or installed KMS-only journey is
 qualified. `v1.1.248` is not yet published.
+
+PR #1366 review found two real custody gaps: a private JWK under a generic
+`component_config` field name escaped the SQL check, and the installed runner
+read that SQL from a mutable working tree after its initial source check. The
+final candidate head `3ef38fdc8` counts structured private JWK members in
+the read-only Keycloak gate, proves the negative case in the disposable live
+Keycloak/PostgreSQL probe, and executes the SQL blob from the exact reviewed
+source SHA. Both review conversations are resolved. The local disposable
+master/`11id` browser/CIBA/refresh/KMS-loss/PostgreSQL probe passed, including
+synthetic private-JWK rejection; 120 focused tests, Ruff and diff checks also
+passed. CI on the intermediate `f72cd7534` was cancelled to avoid a duplicate
+run after the final documentation commit; exact-head [CI run
+38924603611](https://github.com/ElevenID/marty-ui/actions/runs/38924603611)
+is running. These are candidate and local evidence until protected merge and
+exact-main/release qualification.
