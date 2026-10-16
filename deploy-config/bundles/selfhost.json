@@ -23,6 +23,8 @@
     "config/keycloak",
     "scripts/bootstrap-selfhost-vault.sh",
     "scripts/generate_selfhost_disposable_credentials.py",
+    "scripts/provision_selfhost_keycloak_kms.py",
+    "scripts/selfhost_openbao_client.py",
     "scripts/cloudflared-selfhost.sh",
     "scripts/keycloak-selfhost-start.sh",
     "scripts/load-openbao-token-and-start.sh",
