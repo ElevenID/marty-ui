@@ -10,6 +10,7 @@ import re
 import stat
 import sys
 from pathlib import Path
+from typing import Callable
 from urllib.error import HTTPError
 
 from selfhost_openbao_client import (
@@ -20,6 +21,32 @@ from selfhost_openbao_client import (
 )
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
+                         write: Callable[[Path, str, int], None]) -> None:
+    """Keep the previous credential recoverable until its revocation succeeds."""
+    old_token = token_file.read_text(encoding="ascii").strip()
+    temporary = token_file.with_name(token_file.name + ".new")
+    if temporary.exists() or temporary.is_symlink():
+        raise ValueError("pending custody token refresh requires operator recovery")
+    write(temporary, token, 0o400)
+    try:
+        try:
+            bao.request("POST", "auth/token/revoke", {"token": old_token})
+        except HTTPError as error:
+            if error.code != 400:  # Already-expired disposable token.
+                raise
+    except (OSError, RuntimeError, HTTPError):
+        try:
+            bao.request("POST", "auth/token/revoke", {"token": token})
+        except (OSError, RuntimeError, HTTPError) as cleanup_error:
+            # Preserve the new token so an operator can revoke it explicitly.
+            raise RuntimeError("pending custody token refresh requires operator recovery") from cleanup_error
+        temporary.unlink()
+        raise
+    # If replacement fails, the new token remains in .new for operator recovery.
+    os.replace(temporary, token_file)
 
 
 def private_directory(path: Path) -> Path:
@@ -118,15 +145,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
             raise
 
     if refresh_token:
-        old_token = token_file.read_text(encoding="ascii").strip()
-        temporary = output_root / (token_file.name + ".new")
-        write(temporary, token, 0o400)
-        os.replace(temporary, token_file)
-        try:
-            bao.request("POST", "auth/token/revoke", {"token": old_token})
-        except HTTPError as error:
-            if error.code != 400:  # Already-expired disposable token.
-                raise
+        refresh_scoped_token(bao, token_file, token, write)
     else:
         try:
             write(public_file, pem, 0o444)
