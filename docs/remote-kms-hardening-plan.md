@@ -23115,3 +23115,31 @@ release flow, and writer quiescence, full restore, installed Keycloak startup,
 and user/session acceptance are still required. The disposable database
 container was removed. Automatic approval review rejected cleanup of its
 synthetic temporary backup files; they contain no real key or database data.
+
+2026-10-16 installed KMS backend correction: direct `bao status` against the
+running beta OpenBao reports `storage_type=inmem`, with command `server -dev`.
+Its `openbao_data` volume is not the active key store, so stopping that process
+would lose its old KMS state and the beta release backup cannot restore it.
+The separately running self-host OpenBao reports `storage_type=file` from its
+host-mounted state, not Raft. Both installed stacks therefore require a fresh,
+isolated KMS-only Raft deployment, including clean Marty and Keycloak
+databases, then exact-release acceptance and a controlled traffic switch.
+Keep the old beta OpenBao process running during the temporary rollback
+window; after acceptance retire the old stack and private-key-bearing
+Keycloak database. No old key or private-key row migration, compatibility
+fallback, or migration script is planned. The local database-only swap helper
+and earlier in-place Keycloak cutover design are superseded, not approved for
+installed use. See the corrected local
+`feat/kms-keycloak-clean-cutover-20261016` document.
+
+The exact `v1.1.248` Stack release [run 38865841692](https://github.com/ElevenID/marty-ui/actions/runs/38865841692)
+passed image builds, digest recording, DIDComm plugin qualification, native
+schema image qualification, and Keycloak KMS image qualification, but its
+`public-stack-smoke` job failed before Compose startup. The pinned integration
+harness `marty-integration-tests@1.2.87` at `0b9aec1` requires exactly four
+OCI images (`ui`, `services`, `migrations`, `openbao-didcomm`), whereas the
+current UI release manifest adds the fifth, KMS-backed `keycloak` image.
+`render_stack_env.py` rejected the image set. Fix the published harness
+contract and its tests, cut and pin a new immutable harness release, then
+re-run the exact release gates; do not weaken the image-set check or treat
+the current release run as published acceptance.
