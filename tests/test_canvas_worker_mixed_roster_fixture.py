@@ -42,7 +42,7 @@ def request(
         else fixture.origin
     )
     assert origin.hostname == "127.0.0.1" and origin.port
-    if signer or grant:
+    if signer:
         assert origin.scheme == "http"
         client = HTTPConnection(origin.hostname, origin.port, timeout=5)
     else:
