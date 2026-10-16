@@ -23168,3 +23168,12 @@ revision together. Local release/handoff/journey tests passed 87/87 and
 manifest-builder tests passed 5/5. PR checks and protected merge queue are
 pending, followed by full-main and a fresh Stack release. Do not reuse failed
 run `38865841692` or its claim as publication evidence.
+
+The local cutover branch now records the concrete parallel self-host path:
+the current Compose files permit distinct project names, state/secret roots,
+and loopback ports for Keycloak, Gateway, edge, and OpenBao. Fixed-name beta
+proxy/tunnel containers cannot coexist in the parallel project, so installed
+acceptance must use the isolated local edge and the later traffic switch must
+be an explicit separately rehearsed step. This source inspection is not a
+rendered/installed qualification, and the fresh Raft state plus private-key
+database retirement remain outstanding.
