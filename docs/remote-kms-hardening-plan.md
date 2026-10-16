@@ -22923,3 +22923,20 @@ passed; no unresolved review threads remained. The PR was queued into the
 protected `main` merge queue at 2026-10-15T23:55:34Z, position 2. It is not
 merged yet. Recheck merge-group checks and the resulting exact main SHA before
 dispatching full-main CI or claiming `v1.1.248`.
+
+2026-10-16 protected merge and release gate: [#1356](https://github.com/ElevenID/marty-ui/pull/1356)
+merged at 2026-10-16T00:19:24Z as exact protected-main commit
+`6d8fa5d390825d66041847e277fbed09bdb6b873`. Its merge-group
+[CI run 38826498873](https://github.com/ElevenID/marty-ui/actions/runs/38826498873)
+and the four required CodeQL/policy/quality workflows passed on that same SHA.
+A later merge-group run at `a0ee35a6` belongs to the next queued change and
+is not evidence for #1356. The required full-main
+[workflow-dispatch CI run 38829365629](https://github.com/ElevenID/marty-ui/actions/runs/38829365629)
+was dispatched on `main` and verified to target exact SHA `6d8fa5d3`; it is
+still running. Do not claim or publish `v1.1.248` until that run succeeds and
+`origin/main` still equals its source SHA. The installed beta/self-host
+Keycloak databases still use stock Keycloak 25.0 and each hold four
+`privateKey` plus four generated `secret` provider rows. A read-only count
+found 15 beta and four self-host users in realm `11id`, plus one master admin
+in each, so retain coordinated database/Raft backup for rollback when doing
+the fresh KMS-only realm import; no installed database has been changed.
