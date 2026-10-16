@@ -93,7 +93,7 @@ PY
 2. Check out the release tag in a clean `marty-ui` source tree and confirm that
    `git rev-parse HEAD` equals the source commit in the preparation receipt.
    Check out `ElevenID/marty-integration-tests` separately at
-   `1ff32cb439a9c32baaf6311a7bd5c6e7940a7118`. The runner verifies that
+   `9c63609250274dc1edcf747827a29728ddd15d4a`. The runner verifies that
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. In a private operator directory outside both repositories, create an empty
@@ -114,7 +114,7 @@ PY
    audit hook; its audit token must meet the policy and TTL contract in
    [the synthetic fixture guide](selfhost-synthetic-fixture.md).
 4. Supply the eight public journey `SELFHOST_*` values from the
-   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/1ff32cb439a9c32baaf6311a7bd5c6e7940a7118/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
+   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/9c63609250274dc1edcf747827a29728ddd15d4a/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
    through an operator secret runner. Supply a loopback HTTPS
    `SELFHOST_BAO_AUDIT_URL` for the same OpenBao port, stage its public CA as
    `openbao_tls_ca_cert` in the private secret root, and supply
@@ -174,7 +174,7 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --source-checkout "$source_root" --integration-checkout "$integration_root" \
   --compose-model "$private/compose-model.json" \
   --source-sha "$source_sha" --run-id "$run_id" \
-  --integration-sha 1ff32cb439a9c32baaf6311a7bd5c6e7940a7118 \
+  --integration-sha 9c63609250274dc1edcf747827a29728ddd15d4a \
   --project-name "$project" --fixture-setup "$fixture" \
   --fixture-setup-sha256 "$fixture_sha" \
   --kms-custody-evidence "$private/custody.json" \
