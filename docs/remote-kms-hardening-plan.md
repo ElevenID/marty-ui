@@ -23064,3 +23064,17 @@ disposable container was removed. This is a local grouped-cutover branch, not
 a landed K10/K12 claim. Exact-main full CI `38861909608` remained in progress
 on unchanged `4f2b6d83` at the last check; several Rust and OpenBao jobs were
 still active. Do not claim the release until all jobs finish successfully.
+
+2026-10-16 exact-main release progression: full-main
+[CI run 38861909608](https://github.com/ElevenID/marty-ui/actions/runs/38861909608)
+completed successfully on `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`.
+All jobs passed, including the Canvas published-worker parity preflight and
+isolated database suites, packaged Keycloak browser/CIBA/KMS-loss custody,
+Rust contracts/self-host, and coordinated PostgreSQL/Raft integration-secret
+recovery. `origin/main` still matched that exact SHA. The no-write
+[stack-tag claim 38865745997](https://github.com/ElevenID/marty-ui/actions/runs/38865745997)
+for `v1.1.248` then passed on the same SHA. The
+[release workflow 38865841692](https://github.com/ElevenID/marty-ui/actions/runs/38865841692)
+was dispatched with `claim_run_id=38865745997` and verified to target the same
+SHA; it was still in progress at the last check. Do not claim publication,
+installed journey, or K10/K12 cutover from dispatch alone.
