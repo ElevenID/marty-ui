@@ -23235,3 +23235,12 @@ exact merge commit after protected merge.
 The superseded full-main run `38916424114` reached terminal `cancelled`
 without a complete release qualification. PR #1366 exact-head checks are
 running; do not use the cancelled run for a new stack-tag claim.
+
+The prior unqualified `v1.1.247` self-host preparation artifact supplied exact
+digest pins for the independent PostgreSQL, Redis, and two Nginx service roles.
+Those four service-to-digest inputs passed the `v1.1.248` source-shape
+`check_selfhost_external_images.py` preflight locally with the new KMS Keycloak
+image repository and a synthetic digest. This only validates the proposed
+input map; the new release must still resolve its own images, prepare a new
+bundle, and pass installed consumer and custody acceptance before that bundle
+is called supported.
