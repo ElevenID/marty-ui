@@ -22979,3 +22979,15 @@ compilation and diff checks passed. The fix was rebased onto then-current main
 [#1362](https://github.com/ElevenID/marty-ui/pull/1362). Await its exact-head
 required checks, protected merge-group gates, and a new full-main run before
 any `v1.1.248` claim.
+
+The first #1362 PR head `09ca881ee` failed Canvas and Release Contract gates
+in run `38854894085` because changing shared
+`scripts/canvas_worker_https_fixture.py` invalidated its frozen historical
+body/lease-expiry input hashes. That run was cancelled after the common cause
+was confirmed to avoid spending CI on a superseded head. The correction keeps
+the shared fixture byte-for-byte unchanged and reuses its existing TLS context
+only inside the mixed-roster grant fixture. Local frozen body/lease-expiry
+input checks passed, and the exact seven-stage real-worker replay passed again
+with 55 HTTPS requests (384.53 seconds). PR #1362 was updated to head
+`ac7c9d323`; await fresh exact-head checks. Preserve the failed first-head
+evidence rather than rewriting its captured oracle.
