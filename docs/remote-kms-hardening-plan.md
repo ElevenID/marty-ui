@@ -23253,3 +23253,9 @@ head ended `cancelled` under PR concurrency; exact-head CI
 [`38920404160`](https://github.com/ElevenID/marty-ui/actions/runs/38920404160)
 is running. Do not use either the cancelled run or the new run before it
 completes for release qualification.
+
+The pinned external PostgreSQL, Redis and Nginx digests from the prior
+unqualified bundle were each independently resolved by `docker manifest
+inspect` on 2026-10-16. This confirms registry availability of the proposed
+inputs, not that the new self-host image lock or installed KMS-only journey is
+qualified. `v1.1.248` is not yet published.
