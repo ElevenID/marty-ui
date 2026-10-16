@@ -62,11 +62,13 @@ custody or supported publication.
   isolated target, including the corresponding database and service state.
 - Run `scripts/sql/keycloak-kms-only-verify.sql` against the new Keycloak
   database after both realms have issued and refreshed tokens. Require zero
-  private-key fields, PEM markers, private-key-named schema objects and
-  generated local secrets. Independently scan the fresh Marty schema and
+  private-key fields, PEM markers, private JWK values even under generic
+  component field names, private-key-named schema objects and generated local
+  secrets. Independently scan the fresh Marty schema and
   representative runtime writes. A clean catalog alone is insufficient.
   The installed self-host journey issues and refreshes tokens in both the
-  `master` and `11id` realms before the Keycloak SQL scan, then runs the native
+  `master` and `11id` realms before executing SQL read from the exact reviewed
+  source commit, then runs the native
   Marty schema/content custody scan after its representative writes.
 - Exercise master and `11id` login, PKCE browser session reuse, refresh,
   JWKS, CIBA, rotation, and denial when relevant KMS tokens/keys are lost.
