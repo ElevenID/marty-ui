@@ -71,3 +71,15 @@ old `keycloak` database, create a fresh same-named database, find no old
 aside, restore the old name, and recover the synthetic row. The owned
 container was removed. This does not yet prove Keycloak startup, coordinated
 backup/restore, writer quiescence, or an installed cutover.
+
+On 2026-10-16, a read-only `pg_dump -Fc` of each running installed Keycloak
+database was streamed directly into a separately owned PostgreSQL 15 container
+with `--network none`; `pg_restore --no-owner --no-acl --exit-on-error`
+succeeded in both. Source and restored beta both had 16 users, four
+KeyProvider `privateKey` rows and four generated `secret` rows. Source and
+restored self-host both had five users and the same four-plus-four key rows.
+The stream was not retained as an additional backup and both disposable
+containers were removed. This proves the present Keycloak database can be
+restored in isolation without mutating the installed database. It does not
+prove a quiesced coordinated PostgreSQL/OpenBao/Redis/applicant restore,
+Keycloak login, or the clean KMS-only cutover.
