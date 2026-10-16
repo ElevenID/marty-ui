@@ -30,7 +30,8 @@ class BundlePreparationTest(unittest.TestCase):
         self.contents = {
             ".marty-selfhost-images.json": self.lock.read_bytes(),
             "docker-compose.selfhost.openbao.yml": (
-                "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+                "services:\n  openbao-tls-init:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+                "\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
                 "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode(),
             "docker-compose.yml": f"services:\n  app:\n    image: {self.image}\n".encode(),
             "README.md": b"unqualified\n",
@@ -100,9 +101,29 @@ class BundlePreparationTest(unittest.TestCase):
 
     def test_rejects_openbao_compose_image_mismatch(self):
         self.contents["docker-compose.selfhost.openbao.yml"] = (
-            b"services:\n  openbao:\n    image: quay.io/openbao/openbao:latest\n"
+            b"services:\n  openbao-tls-init:\n    image: quay.io/openbao/openbao:latest\n"
+            b"  openbao:\n    image: quay.io/openbao/openbao:latest\n"
             b"  openbao-bootstrap:\n    image: quay.io/openbao/openbao:latest\n"
         )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_openbao_tls_initializer_image_mismatch(self):
+        pinned = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
+        self.contents["docker-compose.selfhost.openbao.yml"] = (
+            "services:\n  openbao-tls-init:\n    image: quay.io/openbao/openbao:latest\n"
+            f"  openbao:\n    image: {pinned}\n"
+            f"  openbao-bootstrap:\n    image: {pinned}\n"
+        ).encode()
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
+            self.check()
+
+    def test_rejects_missing_openbao_tls_initializer(self):
+        self.contents["docker-compose.selfhost.openbao.yml"] = (
+            "services:\n  openbao:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 +
+            "\n  openbao-bootstrap:\n    image: ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64 + "\n").encode()
         self.write_archive()
         with self.assertRaisesRegex(ValueError, "OpenBao Compose image differs"):
             self.check()
