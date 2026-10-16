@@ -46,6 +46,20 @@ other application secrets, full Compose installation, or a measured 16 GiB
 operating envelope.
 The preview .2 artifact is unchanged and remains unqualified.
 
+October 16 installed-fixture correction candidate: the synthetic custody hook
+required plain HTTP OpenBao while the self-host configuration and disposable
+TLS bootstrap require HTTPS. The hook now requires loopback HTTPS, matches
+the installed signing-keys OpenBao port, and verifies the staged public CA.
+Focused tests include a real accepted TLS handshake and wrong-host/foreign-CA
+rejections. This removes a protocol mismatch but does not establish a passing
+installed journey or qualify the tester bundle.
+The next setup slice must provision the two Keycloak RS256 public certificates,
+one scoped RSA/HMAC signer token, and four scoped cookie/CIBA tokens on the
+same disposable OpenBao. The existing Keycloak probe demonstrates the
+individual remote-key/JWE operations, but its ephemeral probe files and
+three JWE-role setup do not fill the seven self-host catalog entries; the
+published DIDComm-plugin OpenBao image is also a distinct installer input.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
