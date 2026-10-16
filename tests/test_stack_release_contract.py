@@ -956,7 +956,7 @@ def test_fresh_native_schema_gate_binds_exact_release_images() -> None:
     assert '--gate "native_schema=$GITHUB_RUN_ID:$native_digest"' in persist
 
 
-def test_public_stack_smoke_binds_all_five_kms_images() -> None:
+def test_public_stack_smoke_uses_four_adapter_images_without_dropping_keycloak() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
     smoke = jobs["public-stack-smoke"]
     plugin = jobs["didcomm-plugin-image-qualification"]
@@ -967,11 +967,22 @@ def test_public_stack_smoke_binds_all_five_kms_images() -> None:
 
     assert "build-openbao-didcomm" in smoke["needs"]
     assert build["env"]["OPENBAO_DIDCOMM_DIGEST"] == "${{ needs.build-openbao-didcomm.outputs.digest }}"
-    assert script.count('{type: "oci"') == 5
-    assert 'marty-ui-oss/keycloak' in script
+    assert script.count('{type: "oci"') == 4
+    assert 'marty-ui-oss/keycloak' not in script
+    assert "KEYCLOAK_DIGEST" not in build["env"]
     assert 'marty-ui-oss/openbao-didcomm' in script
+    evidence = next(step for step in smoke["steps"]
+                    if step.get("name") == "Record exact-digest public-stack evidence")
+    assert "KEYCLOAK_DIGEST" not in evidence["env"]
+    assert "keycloak_digest" not in evidence["run"]
+    assert "openbao_didcomm:$openbao_didcomm_digest" in evidence["run"]
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
+    assert "keycloak-kms-image-qualification" in release["needs"]
+    publisher = next(step["run"] for job in jobs.values() for step in job.get("steps", [])
+                     if step.get("name") == "Add immutable UI evidence")
+    assert publisher.count('{type: "oci"') == 5
+    assert 'marty-ui-oss/keycloak' in publisher
 
 
 def test_release_qualifies_exact_keycloak_kms_image_before_promotion() -> None:

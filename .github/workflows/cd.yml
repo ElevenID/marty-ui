@@ -784,13 +784,15 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
       - name: Build candidate stack manifest
+        # The public KMS-only integration adapter consumes four image roles.
+        # Keycloak is qualified by keycloak-kms-image-qualification and kept in
+        # the complete published manifest, not passed to this narrower smoke.
         env:
           LOCK_FILE: release/stack-lock.json
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           SERVICES_DIGEST: ${{ needs.build-services.outputs.services_digest }}
           MIGRATIONS_DIGEST: ${{ needs.build-services.outputs.migrations_digest }}
           OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
-          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
           VERSION: ${{ needs.validate-stack.outputs.version }}
         working-directory: marty-ui
         shell: bash
@@ -801,8 +803,7 @@ jobs:
             --arg ui_digest "$UI_DIGEST" \
             --arg services_digest "$SERVICES_DIGEST" \
             --arg migrations_digest "$MIGRATIONS_DIGEST" \
-            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
-            --arg keycloak_digest "$KEYCLOAK_DIGEST" '
+            --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" '
             .components += [{
               name: "marty-ui",
               repository: "ElevenID/marty-ui",
@@ -819,9 +820,6 @@ jobs:
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"},
                 {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm", digest: $openbao_didcomm_digest,
-                 sbom: "https://github.com/ElevenID/marty-ui/attestations",
-                 provenance: "https://github.com/ElevenID/marty-ui/attestations"},
-                {type: "oci", uri: "ghcr.io/elevenid/marty-ui-oss/keycloak", digest: $keycloak_digest,
                  sbom: "https://github.com/ElevenID/marty-ui/attestations",
                  provenance: "https://github.com/ElevenID/marty-ui/attestations"}
               ]
@@ -935,7 +933,6 @@ jobs:
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
           UI_DIGEST: ${{ needs.build-ui.outputs.digest }}
           OPENBAO_DIDCOMM_DIGEST: ${{ needs.build-openbao-didcomm.outputs.digest }}
-          KEYCLOAK_DIGEST: ${{ needs.build-keycloak.outputs.digest }}
         shell: bash
         run: |
           set -euo pipefail
@@ -946,12 +943,11 @@ jobs:
             --arg services_digest "$SERVICES_DIGEST" \
             --arg migrations_digest "$MIGRATIONS_DIGEST" \
             --arg openbao_didcomm_digest "$OPENBAO_DIDCOMM_DIGEST" \
-            --arg keycloak_digest "$KEYCLOAK_DIGEST" \
             --arg run_id "$GITHUB_RUN_ID" \
             '{schema:"elevenid.stack-release-public-gate/v1",status:"passed",
               source_sha:$source_sha,run_id:$run_id,
               images:{ui:$ui_digest,services:$services_digest,migrations:$migrations_digest,
-                      openbao_didcomm:$openbao_didcomm_digest,keycloak:$keycloak_digest}}' \
+                      openbao_didcomm:$openbao_didcomm_digest}}' \
             > work/release-evidence/public-stack.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
