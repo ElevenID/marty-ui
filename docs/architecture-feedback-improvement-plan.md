@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-15 UTC checkpoint; UI main `397fc4d1c`).
+Status: active implementation (2026-10-16 UTC checkpoint; UI main `d2e2a114f`).
 Current delivery priority (2026-10-15): enable outside testers to anonymously
 download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
 preparation and independent archive/Compose/image-pull checks; the same bytes
@@ -27,8 +27,24 @@ the first failing phase, without classifying that record as a successful
 installation. The published [preview .2](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.247-selfhost-preview.2)
 remains an unsupported experimental download; there is still no complete
 installed journey, KMS custody qualification, or measured 16 GiB operating
-envelope. The separate KMS-custody branch and one-command disposable setup
-remain prerequisites to a new tester bundle.
+envelope. KMS-custody [#1344](https://github.com/ElevenID/marty-ui/pull/1344)
+has since merged; one-command disposable setup remains a prerequisite to a new
+tester bundle.
+
+October 16 handoff candidate: extend the existing Rust passport TLS bootstrap
+with a disposable self-host profile for the 15 catalogued workload identities.
+It uses a separate workload PKI mount, non-exportable Transit keys, public
+certificates, and per-key scoped tokens; no private workload key is written to
+the output. The profile maps all 30 cert/token filenames and 15 key names to
+the self-host catalog and environment example. A local disposable HTTPS
+OpenBao run passed certificate-chain, SAN/EKU, certificate-to-Transit-public-key
+binding, key-custody/version, positive own-key signing, and cross-key denial
+checks. The existing passport bootstrap/edge live probe also passed unchanged.
+Hosted/protected review is still pending.
+This does not provision seven Keycloak entries, the distinct OpenBao HTTPS CA,
+other application secrets, full Compose installation, or a measured 16 GiB
+operating envelope.
+The preview .2 artifact is unchanged and remains unqualified.
 
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and

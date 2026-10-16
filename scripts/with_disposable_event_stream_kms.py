@@ -25,6 +25,26 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Requ
 
 IMAGE = re.compile(r"quay\.io/openbao/openbao@sha256:[0-9a-f]{64}\Z")
 
+# Independent oracle for the disposable self-host roles. These names must not
+# be derived from the Rust producer: a wrong producer mapping must fail here.
+SELFHOST_TLS_IDENTITIES = {
+    "signing_keys_tls_kms_token": ("signing_keys_workload_server_cert", "DNS:signing-keys", "TLS Web Server Authentication"),
+    "gateway_tls_kms_token": ("gateway_workload_client_cert", "URI:spiffe://marty.internal/service/gateway", "TLS Web Client Authentication"),
+    "auth_tls_kms_token": ("auth_workload_client_cert", "URI:spiffe://marty.internal/service/auth", "TLS Web Client Authentication"),
+    "auth_server_tls_kms_token": ("auth_workload_server_cert", "DNS:auth", "TLS Web Server Authentication"),
+    "compliance_profile_tls_kms_token": ("compliance_profile_workload_client_cert", "URI:spiffe://marty.internal/service/compliance-profile", "TLS Web Client Authentication"),
+    "deployment_profile_tls_kms_token": ("deployment_profile_workload_client_cert", "URI:spiffe://marty.internal/service/deployment-profile", "TLS Web Client Authentication"),
+    "org_tls_kms_token": ("org_workload_server_cert", "DNS:organization", "TLS Web Server Authentication"),
+    "es_tls_kms_token": ("es_workload_server_cert", "DNS:event-stream", "TLS Web Server Authentication"),
+    "rp_tls_kms_token": ("rp_workload_server_cert", "DNS:revocation-profile", "TLS Web Server Authentication"),
+    "ct_tls_kms_token": ("ct_workload_server_cert", "DNS:credential-template", "TLS Web Server Authentication"),
+    "issuance_tls_kms_token": ("issuance_workload_server_cert", "DNS:issuance-native", "TLS Web Server Authentication"),
+    "flow_client_tls_kms_token": ("flow_workload_client_cert", "URI:spiffe://marty.internal/service/flow", "TLS Web Client Authentication"),
+    "flow_server_tls_kms_token": ("flow_workload_server_cert", "DNS:flow", "TLS Web Server Authentication"),
+    "pp_tls_kms_token": ("pp_workload_server_cert", "DNS:presentation-policy", "TLS Web Server Authentication"),
+    "verification_tls_kms_token": ("verification_workload_client_cert", "URI:spiffe://marty.internal/service/verification", "TLS Web Client Authentication"),
+}
+
 
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
@@ -44,6 +64,89 @@ def require_pinned_image(image: str) -> None:
         run(["docker", "image", "inspect", image], timeout=20)
     except RuntimeError:
         run(["docker", "pull", image], timeout=180)
+
+
+def public_key_der(pem: str) -> bytes:
+    result = subprocess.run(
+        ["openssl", "pkey", "-pubin", "-outform", "DER"],
+        input=pem.encode("ascii"), capture_output=True, timeout=10, check=False,
+    )
+    if result.returncode or not result.stdout:
+        raise RuntimeError("disposable public key is invalid")
+    return result.stdout
+
+
+def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> None:
+    """Check the real output contract and every signer's positive/negative scope."""
+    repo = Path(__file__).resolve().parent.parent
+    catalog = json.loads((repo / "deploy-config/catalog/secrets.json").read_text(encoding="utf-8"))
+    names = set(catalog["secrets"])
+    certs = {
+        name for name in names if "_workload_" in name and name.endswith("_cert")
+    }
+    tokens = {name for name in names if name.endswith("_tls_kms_token")}
+    if (tokens != set(SELFHOST_TLS_IDENTITIES)
+            or certs != {identity[0] for identity in SELFHOST_TLS_IDENTITIES.values()}):
+        raise RuntimeError("self-host TLS identity oracle differs from the secret catalog")
+    expected = certs | tokens | {"workload_identity_ca_cert"}
+    if {path.name for path in output.iterdir()} != expected:
+        raise RuntimeError("disposable self-host TLS output differs from the secret catalog")
+    ca = output / "workload_identity_ca_cert"
+    if "PRIVATE KEY" in ca.read_text(encoding="ascii"):
+        raise RuntimeError("disposable workload CA exported a private key")
+    for name in sorted(certs):
+        cert = output / name
+        if "PRIVATE KEY" in cert.read_text(encoding="ascii"):
+            raise RuntimeError("disposable workload certificate exported a private key")
+        run(["openssl", "verify", "-CAfile", str(ca), str(cert)])
+
+    configured = dict(
+        line.split("=", 1)
+        for line in (repo / ".env.selfhost.production.example").read_text(
+            encoding="utf-8"
+        ).splitlines()
+        if "=" in line and not line.startswith("#")
+    )
+    keys = {value for name, value in configured.items() if name.endswith("_TLS_KMS_KEY_NAME")}
+    if len(keys) != len(tokens):
+        raise RuntimeError("self-host TLS key count differs from scoped token count")
+    public_keys = {}
+    for key in keys:
+        metadata = bao.request("GET", f"transit/keys/{key}")["data"]
+        if (metadata["type"] != "ecdsa-p256" or metadata["exportable"] is not False
+                or metadata.get("latest_version") != 1
+                or metadata["allow_plaintext_backup"] is not False):
+            raise RuntimeError("disposable self-host signer type, custody, or version differs")
+        public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
+        if not isinstance(public_key, str):
+            raise RuntimeError("disposable self-host signer public key is missing")
+        public_keys[key] = public_key_der(public_key)
+    for name in sorted(tokens):
+        token = (output / name).read_text(encoding="ascii")
+        if token == root_token or len(token) < 20:
+            raise RuntimeError("disposable self-host token is unscoped")
+        own_key = configured.get(name.upper().replace("_TOKEN", "_KEY_NAME"))
+        if own_key not in keys:
+            raise RuntimeError("self-host token has no configured signer")
+        cert_name, san, usage = SELFHOST_TLS_IDENTITIES[name]
+        cert = output / cert_name
+        details = run(["openssl", "x509", "-in", str(cert), "-noout", "-text"])
+        if san not in details or usage not in details:
+            raise RuntimeError("disposable self-host certificate has wrong role identity")
+        cert_public = run(["openssl", "x509", "-in", str(cert), "-pubkey", "-noout"])
+        if public_key_der(cert_public) != public_keys[own_key]:
+            raise RuntimeError("disposable certificate is not bound to its Transit key")
+        for key in sorted(keys):
+            try:
+                response = bao.request("POST", f"transit/sign/{key}", {
+                    "input": base64.b64encode(b"disposable-cross-scope-proof").decode("ascii"),
+                }, token=token)
+            except HTTPError as error:
+                if key == own_key or error.code != 403:
+                    raise RuntimeError("disposable signer scope proof failed") from error
+            else:
+                if key != own_key or not response.get("data", {}).get("signature"):
+                    raise RuntimeError("disposable signer crossed key scope")
 
 
 class Bao:
@@ -536,6 +639,24 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                     + secrets.token_hex(5),
                     "PASSPORT_TLS_OUTPUT_DIR": str(output),
                 })
+            elif profile == "selfhost-bootstrap":
+                bao.request("POST", "sys/mounts/transit", {"type": "transit"})
+                token_file = root / "bootstrap-root-token"
+                token_file.write_text(root_token, encoding="ascii")
+                if os.name != "nt":
+                    token_file.chmod(0o600)
+                output = root / "selfhost-tls-output"
+                output.mkdir(mode=0o700)
+                environment.update({
+                    "BAO_ADDR": bao.endpoint,
+                    "BAO_CACERT": str(ca),
+                    "BAO_ROOT_TOKEN_FILE": str(token_file),
+                    "MARTY_TLS_BOOTSTRAP_PROFILE": "selfhost-disposable",
+                    "MARTY_SELFHOST_DISPOSABLE_OPENBAO": "1",
+                    "MARTY_SELFHOST_PROJECT": "marty-selfhost-disposable-"
+                    + secrets.token_hex(5),
+                    "SELFHOST_TLS_OUTPUT_DIR": str(output),
+                })
             elif profile == "notification":
                 environment.update(provision_notification(bao, root))
                 environment["NOTIFICATION_OPENBAO_CA_CERT_FILE"] = str(ca)
@@ -546,7 +667,10 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
                 environment.update(provision_signing_grant(bao, ca))
             else:
                 raise RuntimeError("unknown disposable workload TLS profile")
-            return subprocess.run(command, env=environment, check=False).returncode
+            result = subprocess.run(command, env=environment, check=False)
+            if result.returncode == 0 and profile == "selfhost-bootstrap":
+                validate_selfhost_tls_bootstrap(bao, output, root_token)
+            return result.returncode
         finally:
             if attempted:
                 try:
@@ -569,7 +693,7 @@ def execute(image: str, command: list[str], profile: str = "event-stream") -> in
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-keys-image", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "notification"), default="event-stream")
+    parser.add_argument("--profile", choices=("event-stream", "auth-gateway", "flow-issuance", "signing-keys", "signing-keys-image", "signing-transit", "signing-grant", "passport-edge", "oidf-edge", "passport-bootstrap", "selfhost-bootstrap", "notification"), default="event-stream")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     return execute(args.image, args.command, args.profile)
