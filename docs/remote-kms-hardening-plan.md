@@ -23197,3 +23197,12 @@ coordinated snapshot of the **new KMS-only** PostgreSQL/Raft/Redis/applicant
 state. No old private-key data or old OpenBao state is imported. The local
 cutover guide was revised accordingly; earlier parallel traffic-switch and
 database-swap notes are superseded historical investigation, not operations.
+
+The rebased local K10/K12 cutover branch now replaces its superseded 182-line
+database-swap procedure with a fresh KMS-only install and new-stack recovery
+guide. It also wires the reviewed read-only Keycloak custody SQL into the
+exact-source self-host installed journey after the public browser/credential
+test and before teardown; the command targets only the runner-owned PostgreSQL
+service and suppresses database values on failure. Focused runner tests passed
+38/38, handoff tests 3/3, and Ruff/diff checks passed locally. This is grouped
+unlanded work, not an installed clean database or signed image proof.
