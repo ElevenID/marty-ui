@@ -23026,3 +23026,14 @@ The four remaining Rust/DIDComm jobs and CodeQL Rust were still running at
 last inspection; no failures were reported. Auto-merge is armed for #1362 but
 must pass the required PR and protected merge-group gates before main can be
 used for fresh release qualification.
+
+Final #1362 PR head `de001b4ba` passed all 28 exact-head checks in
+[CI run 38857007260](https://github.com/ElevenID/marty-ui/actions/runs/38857007260)
+and associated CodeQL/policy/quality workflows. This includes the full Canvas
+job, Release Contract Tests, Rust contracts/self-host, DIDComm plugin image,
+and coordinated PostgreSQL/Raft integration-secret recovery. Auto-merge is
+armed. The protected merge queue admitted #1362 at position 1 with merge-group
+head `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its fresh
+[CI run 38859334733](https://github.com/ElevenID/marty-ui/actions/runs/38859334733)
+and companion required workflows are running. Do not dispatch full-main CI
+until that merge group passes and the resulting exact `main` SHA is verified.
