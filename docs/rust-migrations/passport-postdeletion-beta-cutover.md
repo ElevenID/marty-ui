@@ -40,7 +40,7 @@ check and is never a deployment target.
    Preserve every prior receipt and host-record backup. Use the latest receipt
    in every subsequent step.
 3. Dispatch `passport-beta-rust-readiness.yml` on the exact annotated release
-   tag (`gh workflow run passport-beta-rust-readiness.yml --ref v1.1.248`) with
+   tag (`gh workflow run passport-beta-rust-readiness.yml --ref v1.1.249`) with
    the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
    path. Download its three artifacts: the exact fence installation receipt,
    fresh cutover snapshot, and Rust readiness report. Keep their bytes intact.

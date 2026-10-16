@@ -14,6 +14,14 @@ a clean Linux installed journey, KMS custody proof, signed qualified assets,
 and independent anonymous download/install replay. Defer unrelated A0-A7
 optimization behind this handoff.
 
+The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
+published its standard signed assets, but its separate [self-host preparation
+job](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) failed before
+producing a customer ZIP: the receipt validator still expected two OpenBao
+services after the packager added `openbao-tls-init`. PR #1370 repairs that
+exact three-service/digest check. The v1.1.249 lock is a new release candidate,
+not installed qualification; do not rewrite or present v1.1.248 as a handoff.
+
 ## Installed setup requirements
 
 The workload TLS and Keycloak disposable provisioners are now on protected
