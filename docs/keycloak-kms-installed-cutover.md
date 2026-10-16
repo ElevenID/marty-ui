@@ -83,3 +83,13 @@ containers were removed. This proves the present Keycloak database can be
 restored in isolation without mutating the installed database. It does not
 prove a quiesced coordinated PostgreSQL/OpenBao/Redis/applicant restore,
 Keycloak login, or the clean KMS-only cutover.
+
+The custody SQL now checks all Keycloak component configurations for
+private-key field names and PEM markers, and checks the public schema for
+private-key-named tables or columns. It still checks generated KeyProvider
+secrets separately. A disposable PostgreSQL 15 graph with both required
+remote-provider realms passed; an unrelated component's synthetic
+`private_jwk` field and a synthetic `private_key_cache` table each caused the
+gate to fail. The same revised SQL rejected both installed databases with
+four private-key and four generated-secret rows each. No real private key was
+created for these tests, and the disposable container was removed.
