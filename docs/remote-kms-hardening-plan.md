@@ -23244,3 +23244,12 @@ image repository and a synthetic digest. This only validates the proposed
 input map; the new release must still resolve its own images, prepare a new
 bundle, and pass installed consumer and custody acceptance before that bundle
 is called supported.
+
+PR #1366 advanced to `da58d823` with an installed Keycloak check that issues
+and refreshes tokens in both `master` and `11id` before scanning database
+custody. The new diff passed local review, 105 focused runner/fixture/beta/
+handoff tests, Ruff, and `git diff --check`. CI on the superseded `69ba0c4ed`
+head ended `cancelled` under PR concurrency; exact-head CI
+[`38920404160`](https://github.com/ElevenID/marty-ui/actions/runs/38920404160)
+is running. Do not use either the cancelled run or the new run before it
+completes for release qualification.
