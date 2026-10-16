@@ -23325,3 +23325,18 @@ inputs. It passed `resolve-transaction`, environment preflight, and the
 external-image `validate-stack` gate, then began the grouped service, UI,
 OpenBao, Keycloak, and operator builds. Retain the failed run as immutable
 evidence; do not count this in-progress run as published qualification.
+
+The corrected release [run 38941129335](https://github.com/ElevenID/marty-ui/actions/runs/38941129335)
+passed all five image builds, both operator catalogs, digest recording,
+Keycloak KMS image qualification, native schema image qualification, and the
+OpenBao DIDComm plugin image qualification. Its `public-stack-smoke` job then
+failed before the public journey: the pinned integration harness `v1.2.88`
+still starts OpenBao in HTTP `server -dev` mode and supplies an
+`SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE`. Current Marty migrations reject
+the HTTP OpenBao origin, and current Rust signing-keys rejects workload TLS
+private-key files. This is a release-harness defect, not permission to relax
+either fail-closed boundary. Repair the disposable harness with trusted HTTPS
+OpenBao and remotely managed integration-secret TLS identity, run it locally,
+release a signed harness, update the UI pin, requalify exact main, and make a
+fresh no-write release claim before retrying publication. No `v1.1.248`
+publication or installed cutover is evidenced by this failed smoke job.
