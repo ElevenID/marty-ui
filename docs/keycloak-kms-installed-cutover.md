@@ -93,3 +93,11 @@ remote-provider realms passed; an unrelated component's synthetic
 gate to fail. The same revised SQL rejected both installed databases with
 four private-key and four generated-secret rows each. No real private key was
 created for these tests, and the disposable container was removed.
+
+The revised SQL also passed `probe_keycloak_remote_rs256.py --require-browser`
+against disposable local Keycloak/OpenBao images. The probe exercised both
+realms' remote RS256 signing, rotated browser cookies, CIBA, token refresh and
+JWKS, KMS-loss denial, then ran the SQL against the resulting PostgreSQL
+database. Its containers and network were removed. The local images are not
+the signed `v1.1.248` release artifacts; that exact-artifact and installed
+cutover proof remains separate.
