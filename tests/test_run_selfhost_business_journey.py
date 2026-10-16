@@ -64,6 +64,33 @@ def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
         runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
 
 
+def test_installed_marty_custody_scans_schema_and_written_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_command(argv: list[str], **kwargs: object) -> str:
+        observed.append((argv, kwargs))
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    compose = ["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"]
+    runner.verify_marty_database_custody(compose, tmp_path, {})
+    assert len(observed) == 2
+    assert all(argv[:len(compose)] == compose for argv, _ in observed)
+    assert all(argv[-3:-1] == ["-d", "marty"] for argv, _ in observed)
+    assert [argv[-1] for argv, _ in observed] == ["-At", "-q"]
+    assert observed[0][1]["input_text"] == runner.PRIVATE_KEY_SCHEMA_QUERY
+    assert observed[1][1]["input_text"] == runner.PRIVATE_KEY_CONTENT_QUERY
+
+    def dirty_schema(*_args: object, **_kwargs: object) -> str:
+        return "table:public.private_key_cache"
+
+    monkeypatch.setattr(runner, "command", dirty_schema)
+    with pytest.raises(ValueError, match="private-key schema"):
+        runner.verify_marty_database_custody(compose, tmp_path, {})
+
+
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

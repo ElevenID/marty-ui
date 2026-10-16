@@ -62,7 +62,9 @@ KMS custody proof, trusted fixture creation, signatures, and publication.
 After the public journey, the runner executes source-bound read-only Keycloak
 database custody SQL inside its owned PostgreSQL service. It rejects local
 KeyProvider secrets, private-key fields and private-key-named schema objects
-before teardown without printing stored values.
+before teardown without printing stored values. The same runner reuses the
+native migration verifier's Marty schema and content scans after the journey
+writes, rejecting private-key storage in the installed database.
 The integration test requires a real PKCE user, active issuer and verifier DID
 profiles, and proves issue/present/allow followed by revoke/present/deny
 through public routes.

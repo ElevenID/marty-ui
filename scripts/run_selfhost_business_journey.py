@@ -25,6 +25,7 @@ from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
+from qualify_selfhost_migrations import PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
 
@@ -108,6 +109,19 @@ def verify_keycloak_database_custody(compose: list[str], install_root: Path,
     command([*compose, "exec", "-T", "postgres", "psql", "-X", "-q",
              "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"],
             cwd=install_root, env=environment, input_text=sql)
+
+
+def verify_marty_database_custody(compose: list[str], install_root: Path,
+                                  environment: dict[str, str]) -> None:
+    """Reject private-key schema and content after representative installed writes."""
+    psql = [*compose, "exec", "-T", "postgres", "psql", "-X",
+            "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "marty"]
+    schema = command([*psql, "-At"], cwd=install_root, env=environment,
+                     input_text=PRIVATE_KEY_SCHEMA_QUERY)
+    if schema.strip():
+        raise ValueError("installed Marty database retains private-key schema")
+    command([*psql, "-q"], cwd=install_root, env=environment,
+            input_text=PRIVATE_KEY_CONTENT_QUERY)
 
 
 def build_public_kms_jwk_tool(source_checkout: Path, target_root: Path) -> Path:
@@ -436,6 +450,8 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                 raise ValueError("release source is required for Keycloak custody")
             verify_keycloak_database_custody(compose, install_root,
                                               source_checkout, environment)
+        with measured(diagnostics, "marty_database_custody"):
+            verify_marty_database_custody(compose, install_root, environment)
     except Exception as error:
         failure = error
     finally:
@@ -537,6 +553,7 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
             "keycloak_database_custody": "passed",
+            "marty_database_custody": "passed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
 
 
