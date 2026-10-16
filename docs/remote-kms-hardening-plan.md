@@ -23078,3 +23078,15 @@ for `v1.1.248` then passed on the same SHA. The
 was dispatched with `claim_run_id=38865745997` and verified to target the same
 SHA; it was still in progress at the last check. Do not claim publication,
 installed journey, or K10/K12 cutover from dispatch alone.
+
+The grouped local Keycloak cutover branch then ran its widened custody SQL
+through the disposable `probe_keycloak_remote_rs256.py --require-browser`
+journey. Both realms passed remote RS256, rotated browser cookies, CIBA,
+token/refresh/JWKS and KMS-loss denial; the final PostgreSQL custody gate
+passed after these writes. The probe cleaned its containers and network. This
+is local-image regression evidence, not signed release-image or installed
+cutover acceptance. Branch commit `a106743aa` records it; `68a19c613` also
+corrects the self-host handoff guide to require remote TLS signers and public
+certificate/CA inputs, consistent with production Compose. Release run
+`38865841692` remained live with Keycloak and OpenBao images built; do not
+infer publication from those completed build jobs.
