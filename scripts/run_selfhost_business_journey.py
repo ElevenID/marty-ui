@@ -30,6 +30,7 @@ from check_selfhost_installed_runtime_plan import (
 from qualify_selfhost_migrations import PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
+from selfhost_openbao_client import CUSTODY_SIGNER
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -402,9 +403,14 @@ def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
         "verifier_did": environment["SELFHOST_VERIFIER_DID"],
         "issuer_key_non_exportable": True,
         "verifier_key_non_exportable": True,
+        "attestation_key_reference": CUSTODY_SIGNER,
+        "attestation_key_non_exportable": True,
     }
     if not isinstance(document, dict) or any(document.get(k) != v for k, v in expected.items()):
         raise ValueError("signed KMS custody evidence does not bind installed fixture")
+    if (type(document.get("attestation_key_version")) is not int
+            or document["attestation_key_version"] <= 0):
+        raise ValueError("signed KMS custody signer version is invalid")
     proofs = document.get("profile_proofs")
     if not isinstance(proofs, list) or len(proofs) != 2:
         raise ValueError("signed KMS custody profile proofs are incomplete")
@@ -481,6 +487,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         journey_env = {**environment, "PYTHONDONTWRITEBYTECODE": "1",
                        "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH": str(evidence),
                        "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature),
+                       "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH": str(public_key),
                        "SELFHOST_COMPOSE_MODEL_PATH": str(compose_model_path),
                        "SELFHOST_SECRET_ROOT": str(secret_root),
                        "SELFHOST_SOURCE_SHA": preflight["source_sha"],

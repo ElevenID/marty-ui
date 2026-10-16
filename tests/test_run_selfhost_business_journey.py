@@ -1,10 +1,10 @@
 """Installed journey status gate refuses incomplete service closure and health."""
 
+import base64
 import hashlib
 from io import BytesIO
 import json
 import shutil
-import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -514,14 +514,17 @@ def test_fixture_hook_must_match_prepared_source_commit(monkeypatch,
 def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -> None:
     if shutil.which("openssl") is None:
         pytest.skip("OpenSSL is unavailable")
-    private = tmp_path / "short-lived.key"
     public = tmp_path / "short-lived.pub"
     evidence = tmp_path / "evidence.json"
     signature = tmp_path / "evidence.sig"
-    subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
-                   check=True, capture_output=True)
-    subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)],
-                   check=True, capture_output=True)
+    # Public-only fixture signed once by a non-exportable disposable Transit key.
+    public.write_bytes(base64.b64decode(
+        "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUNvd0JRWURLMlZ3QXlFQVY0UjVEcmNORU9haEwwNDZqZmsv"
+        "UVlPK2hENDREQ1ovTE16U0hxY01Jck09Ci0tLS0tRU5EIFBVQkxJQyBLRVktLS0tLQo="
+    ))
+    signature.write_bytes(base64.b64decode(
+        "27o1srHYD4e0kJ6/nlvdJ45L6c0A3agoJrvwCAfzpK9ooqgIg6eJueJ0uuZbpaHtHqJOOWHSQXjfyowKusjqAA=="
+    ))
     preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
                  "image_lock_sha256": "c" * 64}
     environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
@@ -530,11 +533,11 @@ def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -
                 "organization_id": "org", "issuer_did": "did:example:issuer",
                 "verifier_did": "did:example:verifier",
                 "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "attestation_key_reference": "selfhost-qualification-custody-v1",
+                "attestation_key_version": 1, "attestation_key_non_exportable": True,
                 "profile_proofs": custody_profile_proofs(environment)}
-    evidence.write_text(json.dumps(document), encoding="utf-8")
-    subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private),
-                    "-in", str(evidence), "-out", str(signature)],
-                   check=True, capture_output=True)
+    evidence.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8")
     approved = frozenset({hashlib.sha256(public.read_bytes()).hexdigest()})
     assert verify_kms_custody(evidence, signature, public, preflight,
                               environment, approved) == hashlib.sha256(evidence.read_bytes()).hexdigest()
@@ -600,6 +603,8 @@ def test_custody_rejects_unbound_profile_proofs(monkeypatch, tmp_path: Path,
                 "organization_id": "org", "issuer_did": environment["SELFHOST_ISSUER_DID"],
                 "verifier_did": environment["SELFHOST_VERIFIER_DID"],
                 "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "attestation_key_reference": "selfhost-qualification-custody-v1",
+                "attestation_key_version": 1, "attestation_key_non_exportable": True,
                 "profile_proofs": proofs}
     evidence.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("signature check was called"))

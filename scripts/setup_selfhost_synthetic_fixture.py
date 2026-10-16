@@ -22,6 +22,10 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from selfhost_openbao_client import (
+    CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, ed25519_public_pem,
+)
+
 
 def required_environment(values: dict[str, str]) -> dict[str, str]:
     names = (
@@ -31,10 +35,11 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
         "SELFHOST_SECRET_ROOT", "SELFHOST_COMPOSE_MODEL_PATH",
         "SELFHOST_BAO_AUDIT_URL", "SELFHOST_BAO_AUDIT_TOKEN_FILE",
         "SELFHOST_KMS_JWK_TOOL",
-        "SELFHOST_CUSTODY_SIGNING_KEY_FILE", "SELFHOST_SOURCE_SHA",
+        "SELFHOST_CUSTODY_SIGNING_TOKEN_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH",
         "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH",
+        "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH",
     )
     missing = [name for name in names if not values.get(name)]
     if missing:
@@ -182,6 +187,28 @@ def validate_audit_token(metadata: dict) -> None:
         raise ValueError("OpenBao audit token lacks expected policy name or short TTL")
 
 
+def validate_custody_signer_token(metadata: dict) -> None:
+    policies = metadata.get("policies")
+    ttl = metadata.get("ttl")
+    if (not isinstance(policies, list) or set(policies) != {CUSTODY_SIGNER_POLICY}
+            or type(ttl) is not int or not 0 < ttl <= 3600):
+        raise ValueError("OpenBao custody signer token is not scoped or short-lived")
+
+
+def custody_signer_public(metadata: dict) -> tuple[int, str]:
+    if (not isinstance(metadata, dict) or metadata.get("type") != "ed25519"
+            or metadata.get("exportable") is not False
+            or metadata.get("allow_plaintext_backup") is not False
+            or type(metadata.get("latest_version")) is not int
+            or metadata["latest_version"] <= 0):
+        raise ValueError("OpenBao custody signer is not non-exportable Ed25519")
+    version = metadata["latest_version"]
+    entry = metadata.get("keys", {}).get(str(version), {})
+    if not isinstance(entry, dict):
+        raise ValueError("OpenBao custody signer public key is absent")
+    return version, ed25519_public_pem(entry.get("public_key"))
+
+
 def validate_profile_projection(profile: dict, *, did: str, purpose: str) -> dict:
     selector = {"issuer_did": did, "key_purpose": purpose,
                 "credential_format": "SD_JWT_VC", "algorithm": "ES256"}
@@ -321,21 +348,58 @@ async def provision(fixture: dict[str, str]) -> dict:
             "profile_proofs": proofs}
 
 
-def write_signed_evidence(fixture: dict[str, str], document: dict) -> None:
+async def write_signed_evidence(fixture: dict[str, str], document: dict) -> None:
     evidence = Path(fixture["SELFHOST_KMS_CUSTODY_EVIDENCE_PATH"])
     signature = Path(fixture["SELFHOST_KMS_CUSTODY_SIGNATURE_PATH"])
-    private_key = checked_file(fixture["SELFHOST_CUSTODY_SIGNING_KEY_FILE"],
-                               "custody signing key")
+    public_key = Path(fixture["SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH"])
+    token_file = checked_file(fixture["SELFHOST_CUSTODY_SIGNING_TOKEN_FILE"],
+                              "OpenBao custody signer token")
+    token = token_file.read_text(encoding="ascii").strip()
+    if not token:
+        raise ValueError("OpenBao custody signer token is empty")
     if (not evidence.is_absolute() or not signature.is_absolute()
-            or evidence.exists() or signature.exists()):
+            or not public_key.is_absolute()
+            or any(path.exists() or path.is_symlink()
+                   for path in (evidence, signature, public_key))):
         raise ValueError("synthetic custody outputs are not fresh absolute paths")
-    evidence.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    result = subprocess.run(
-        ["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private_key),
-         "-in", str(evidence), "-out", str(signature)],
-        capture_output=True, check=False, timeout=30)
-    if result.returncode != 0 or not signature.is_file() or signature.stat().st_size == 0:
-        raise ValueError("synthetic custody evidence signing failed")
+    headers = {"X-Vault-Token": token}
+    async with audit_client(fixture["SELFHOST_BAO_AUDIT_URL"],
+                            Path(fixture["SELFHOST_SECRET_ROOT"])) as bao:
+        lookup = await bao.get("/v1/auth/token/lookup-self", headers=headers)
+        lookup.raise_for_status()
+        validate_custody_signer_token(lookup.json().get("data", {}))
+        metadata = await bao.get(f"/v1/transit/keys/{CUSTODY_SIGNER}", headers=headers)
+        metadata.raise_for_status()
+        version, pem = custody_signer_public(metadata.json().get("data", {}))
+        denied_export = await bao.get(
+            f"/v1/transit/export/signing-key/{CUSTODY_SIGNER}", headers=headers)
+        denied_other_sign = await bao.post(
+            "/v1/transit/sign/cred-issuer-qualification-denied", headers=headers,
+            json={"input": "YQ=="})
+        if denied_export.status_code != 403 or denied_other_sign.status_code != 403:
+            raise ValueError("OpenBao custody signer token has excess capabilities")
+        document = {**document,
+                    "attestation_key_reference": CUSTODY_SIGNER,
+                    "attestation_key_version": version,
+                    "attestation_key_non_exportable": True}
+        raw = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        result = await bao.post(f"/v1/transit/sign/{CUSTODY_SIGNER}", headers=headers,
+                                json={"input": base64.b64encode(raw).decode("ascii")})
+        result.raise_for_status()
+        encoded = result.json().get("data", {}).get("signature")
+        prefix = f"vault:v{version}:"
+        if not isinstance(encoded, str) or not encoded.startswith(prefix):
+            raise ValueError("OpenBao custody signature version differs from public key")
+        try:
+            signed = base64.b64decode(encoded[len(prefix):], validate=True)
+        except ValueError as error:
+            raise ValueError("OpenBao custody signature is invalid") from error
+        if (len(signed) != 64
+                or base64.b64encode(signed).decode("ascii") != encoded[len(prefix):]):
+            raise ValueError("OpenBao custody signature is invalid")
+    evidence.write_bytes(raw)
+    signature.write_bytes(signed)
+    public_key.write_text(pem, encoding="ascii")
 
 
 def main() -> int:
@@ -343,8 +407,11 @@ def main() -> int:
         fixture = required_environment(dict(os.environ))
         model_path = checked_file(fixture["SELFHOST_COMPOSE_MODEL_PATH"], "Compose model")
         validate_installed_model(json.loads(model_path.read_text(encoding="utf-8")), fixture)
-        document = asyncio.run(provision(fixture))
-        write_signed_evidence(fixture, document)
+        async def setup() -> None:
+            document = await provision(fixture)
+            await write_signed_evidence(fixture, document)
+
+        asyncio.run(setup())
     except (OSError, RuntimeError, TypeError, ValueError, httpx.HTTPError) as error:
         # Never include HTTP bodies or secret-bearing tracebacks in a release report.
         print(f"synthetic self-host fixture failed: {type(error).__name__}", file=sys.stderr)

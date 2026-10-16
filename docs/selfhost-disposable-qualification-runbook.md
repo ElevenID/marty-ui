@@ -119,10 +119,14 @@ PY
    `SELFHOST_BAO_AUDIT_URL` for the same OpenBao port, stage its public CA as
    `openbao_tls_ca_cert` in the private secret root, and supply
    `SELFHOST_BAO_AUDIT_TOKEN_FILE` and
-   `SELFHOST_CUSTODY_SIGNING_KEY_FILE` in the same process environment. The
-   Ed25519 private key and token stay outside source and installation; its
-   public PEM digest must appear in the **prepared source commit's** reviewed
-   `deploy-config/selfhost-kms-custody-trust-roots.json`.
+   `SELFHOST_CUSTODY_SIGNING_TOKEN_FILE` in the same process environment.
+   Provision the non-exportable Ed25519 Transit signer using
+   [the synthetic fixture guide](selfhost-synthetic-fixture.md) before the
+   source release is claimed. Its public PEM digest must appear in the
+   **prepared source commit's** reviewed
+   `deploy-config/selfhost-kms-custody-trust-roots.json`; the scoped signer
+   token stays outside source and installation. No signer private key file is
+   generated or mounted.
 
 The following commands use absolute, operator-owned paths. They deliberately
 leave credential creation and OpenBao bootstrap to the operator; the runner
@@ -158,7 +162,7 @@ fixture="$source_root/scripts/setup_selfhost_synthetic_fixture.py"
 fixture_sha=$(sha256sum "$fixture" | cut -d ' ' -f 1)
 
 # The operator secret runner supplies all SELFHOST_* values and the external
-# OpenBao audit inputs here. The env file resolves Compose settings, including
+# OpenBao audit and signer inputs here. The env file resolves Compose settings, including
 # the same absolute state/secret roots and loopback published ports.
 docker compose --project-name "$project" --env-file "$env_file" \
   -f "$install_root/docker-compose.yml" --profile '*' config --format json \
