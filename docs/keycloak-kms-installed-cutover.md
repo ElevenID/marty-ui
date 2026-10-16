@@ -1,205 +1,121 @@
-# Installed Keycloak KMS-only cutover
+# Installed KMS-only cutover
 
-## 2026-10-16 correction: replace the installed stacks as a unit
+## Boundary and decision
 
-The database-only procedure below is **superseded and must not be run against
-either installed stack**. Read-only runtime inspection established that beta
-OpenBao runs `server -dev` with `storage_type=inmem`; its named `openbao_data`
-volume is not its key store. The separate installed self-host OpenBao runs
-with `storage_type=file` under a host bind mount. Neither is the released
-Raft-backed KMS. A fresh Keycloak database inside either old stack would leave
-the remote custody and coordinated recovery goal unmet. In particular,
-stopping beta OpenBao destroys its in-memory key state, and the old beta
-`openbao_data` backup cannot recover it.
+The non-public `elevenid-beta` and `marty-selfhost-prod` installations must
+be replaced as complete stacks. Do not perform an in-place Keycloak database
+swap. Direct runtime inspection on 2026-10-16 found:
 
-Build a new, isolated KMS-only stack from one qualified release: fresh Raft
-OpenBao, scoped tokens and non-exportable keys, fresh Marty and Keycloak
-databases, and the matching Rust services. Do not copy old KeyProvider rows,
-private-key tables, keys, or old OpenBao state into it. Keep the old stack
-running and isolated during a short acceptance/traffic-switch rollback window;
-beta OpenBao must remain running throughout that window. Verify the new
-stack's browser/CIBA, token/JWKS/refresh, native journeys, KMS-loss denial,
-database custody, and Raft snapshot/restore from the exact published images
-before traffic moves. If acceptance fails, route back to the still-running old
-stack. After acceptance, retire the old stack and its private-key-bearing
-database. Because these are non-public installations, old accounts and
-sessions are not migrated; operator re-enrolment is an explicit cutover task.
+| Installation | Running OpenBao storage | Keycloak local key material |
+| --- | --- | --- |
+| Beta | `inmem` (`server -dev`); its `openbao_data` volume is not the key store | Four `privateKey` and four generated `secret` KeyProvider rows |
+| Self-host | `file` on a host bind mount; not Raft | Four `privateKey` and four generated `secret` KeyProvider rows |
 
-The new stack requires separate project/host isolation, unique ports and
-volumes, and a tested edge switch. The exact deployment and rollback commands
-are still to be implemented and rehearsed. The PostgreSQL-only swap helper
-was removed from this branch; its prior commits remain historical evidence.
-Earlier PostgreSQL restore tests prove only
-database recoverability, not recovery of beta's in-memory KMS or the new
-Raft stack. Do not treat the older procedure below as authorization for live
-mutation.
+The generic Keycloak `component_config` table is required and remains.
+The released model instead requires fresh Raft OpenBao, non-exportable remote
+keys, scoped tokens, clean Marty and Keycloak databases, and the matched Rust
+services. Do not copy private-key rows, old OpenBao state, or local keys. No
+database migration script is required. Existing accounts and sessions are
+not carried into the new non-public installation; plan operator and test-user
+re-enrolment explicitly.
 
-The current self-host Compose source supports a parallel local rehearsal:
-`docker-compose.selfhost.prod.yml` exposes configurable loopback Keycloak,
-Gateway, and edge ports (`SELFHOST_*_HOST_PORT`), while
-`docker-compose.selfhost.openbao.yml` exposes a configurable OpenBao loopback
-port and `SELFHOST_OPENBAO_STATE_DIR`. An explicit distinct Compose project
-name and separate state/secret roots can isolate the new Raft instance and
-databases. Do not enable the old fixed-name beta proxy/tunnel services in the
-parallel project: their `container_name` values would collide. Test the
-rendered all-profile model and actual Docker ownership/port bindings before
-starting it, and make the traffic switch at the external edge only after
-installed acceptance. The disposable self-host journey runner already
-requires an empty named project and empty state root, but its report alone is
-unqualified; KMS custody and Raft restore proof remain separate gates.
+## Prepare the parallel stack
 
-## Superseded database-only design and historical rehearsal evidence
+1. Resolve one published Stack transaction, every image by immutable digest,
+   the matched Keycloak provider image, and the signed self-host bundle and
+   image lock. Reject any unqualified preview or mixed release. The
+   `v1.1.248` candidate is not yet a published installed qualification.
+2. Create distinct Compose project names, empty PostgreSQL/Redis/applicant
+   and OpenBao Raft state roots, and a private secret root. Set unique loopback
+   ports for the new OpenBao, Keycloak, Gateway, and edge. Render the full
+   Compose model and compare the project, mounts, ports, images, and secret
+   references against the approved manifest before starting anything.
+   `docker-compose.selfhost.prod.yml` and
+   `docker-compose.selfhost.openbao.yml` expose the relevant
+   `SELFHOST_*_HOST_PORT` and `SELFHOST_OPENBAO_STATE_DIR` inputs.
+3. Keep the old stack running and out of the new project's network. In
+   particular, do not stop beta OpenBao: its in-memory KMS state would be
+   lost. Do not enable the old fixed-name beta proxy or tunnel containers
+   in the parallel project; their `container_name` values collide. Use
+   the new loopback edge for pre-switch tests.
+4. Initialize fresh OpenBao Raft and remote keys with the matched plugin
+   image, scope each workload token, and provision public certificates and
+   CA material. Workload TLS private-key files are prohibited. The
+   OpenBao-owned HTTPS listener bootstrap key stays confined to OpenBao.
+   Start fresh PostgreSQL, run the Rust-only Marty schema, import the checked-in
+   clean Keycloak realms, run configurators, and then start native services.
+   No old database or KMS volume is mounted in this new project.
 
-The following design records earlier work for review. Its implementation
-steps and rollback instructions are not to be executed on an installed stack.
+The exact published bundle, environment and fixture inputs must pass
+`scripts/run_selfhost_business_journey.py`'s preflight. That runner requires
+an empty project and state root, but its result alone does not establish KMS
+custody or supported publication.
 
-This procedure applies to the non-public `elevenid-beta` and
-`marty-selfhost-prod` installations. It is a clean database/realm replacement,
-not a migration of Keycloak's locally generated key-provider material. Do not
-run it until the exact release images, OpenBao keys, scoped tokens, public
-certificates, browser/CIBA probes, and restore rehearsal have qualified.
+## Acceptance before traffic moves
 
-## Current boundary
+- Verify OpenBao reports `storage_type=raft`, the expected plugin and
+  non-exportable versioned keys, scoped token policies, HTTPS trust, and
+  recoverable Raft snapshot/restore. Rehearse recovery against a disposable
+  isolated target, including the corresponding database and service state.
+- Run `scripts/sql/keycloak-kms-only-verify.sql` against the new Keycloak
+  database after both realms have issued and refreshed tokens. Require zero
+  private-key fields, PEM markers, private-key-named schema objects and
+  generated local secrets. Independently scan the fresh Marty schema and
+  representative runtime writes. A clean catalog alone is insufficient.
+- Exercise master and `11id` login, PKCE browser session reuse, refresh,
+  JWKS, CIBA, rotation, and denial when relevant KMS tokens/keys are lost.
+  Verify workload mTLS with only remote signer references and public
+  certificate/CA inputs. Exercise native issuance, DIDComm holder decryption,
+  integration-secret rotation/recovery, reference-only BYOK, and the
+  installed issue/present/revoke journey using the exact release images.
+- Record the signed artifact identities, database custody output (counts
+  only), Raft status and restore result, negative KMS-loss cases, and the
+  installed journey result in the canonical hardening tracker. Do not
+  present the synthetic CIBA callback or local mock wallet as physical-device
+  acceptance.
 
-Both installed stacks still run stock Keycloak 25.0. Each `keycloak` database
-has four `privateKey` and four generated `secret` KeyProvider configuration
-rows. The generic `public.component_config` table is required by Keycloak and
-must remain. On 2026-10-16, read-only counts found 15 `11id` users and one
-master admin in beta, and four `11id` users and one master admin in self-host.
-Those local accounts are held in the rollback snapshot; a clean realm import
-will not silently claim to preserve their credentials or sessions.
+AWS, Azure, GCP and physical wallet/device access is not provisioned. Their
+real-provider and physical-device gates remain open even if this local
+installed acceptance passes.
 
-## Required implementation
+## Switch, rollback and retirement
 
-1. Resolve every image from the exact published release plan by digest. Prove
-   the Keycloak image contains the matched remote-key provider and that the
-   configured OpenBao RS256, JWE, HMAC, and AES keys are non-exportable and at
-   the pinned versions. Confirm public certificates and scoped token files;
-   reject private-key file inputs.
-2. Acquire the stack's deployment lock, reject another maintenance/release
-   mutation, record the exact running image IDs and container settings, and
-   stop all application writers and Keycloak. Confirm none remain running.
-3. Take a quiesced, checksum-manifested snapshot of the Marty and Keycloak
-   PostgreSQL databases, PostgreSQL globals, OpenBao Raft volume, Redis state,
-   and applicant state. Keep it outside the database volume. Rehearse restore
-   against disposable resources before changing the installed database.
-4. Preserve the old Keycloak database by renaming it under a unique cutover
-   name while all Keycloak connections are stopped. Create a fresh `keycloak`
-   database owned by the Keycloak role. Import the checked-in `11id` realm
-   using the matched remote-key image, then run the supported configurator.
-   Never import old `component_config` rows or a realm export containing local
-   KeyProvider material. This is a clean install; add no row/table migration.
-5. Before reopening application traffic, prove both realms have exactly the
-   expected remote KeyProvider graph and zero `privateKey`/generated `secret`
-   rows with `scripts/sql/keycloak-kms-only-verify.sql`. Run browser login,
-   cookie/session refresh, CIBA, token verification/JWKS, and KMS-loss denial
-   against the exact installed image and both realms. Verify KMS-only custody
-   again after those operations.
-6. Recreate the applications from the same release manifest and run the local
-   and tunneled installed journeys. Only after acceptance, remove the renamed
-   old Keycloak database. Retain the external coordinated backup for the
-   defined rollback window. A private-key-bearing database, even one no longer
-   used by Keycloak, is not the final KMS-only state.
+After acceptance, switch the external edge to the new loopback edge under a
+deployment lock. Keep the old stack, including beta OpenBao, running and
+isolated for a short, defined rollback window. If the new journey or custody
+gate fails, route traffic back to the unchanged old edge; do not copy old
+private-key data into the new stack. Rehearse the actual edge reversal and
+record both endpoint identities before declaring the switch supported.
 
-## Rollback boundary
+When the new stack and its recovery rehearsal have passed for the full
+window, retire the old services and private-key-bearing Keycloak database,
+and verify no old key-bearing volume, table or workload key file remains
+available in the active deployment. The emergency route back to the old
+stack is temporary recovery, not an allowed long-term local-key fallback.
 
-If any step after the database rename fails, keep traffic closed and writers
-stopped. Stop the new Keycloak instance, rename the fresh database aside, and
-restore the original database name and exact previous Keycloak/application
-containers. If the release has also mutated OpenBao or Marty state, restore
-the coordinated PostgreSQL/Raft/Redis/applicant snapshot as one unit before
-reopening traffic. Verify the restored services and user counts. This is an
-emergency recovery path to the pre-cutover installation, not a permitted
-long-term local-key fallback or proof of KMS-only acceptance.
+## Evidence already obtained and limits
 
-The existing `restore-local-beta-release.ps1` is not yet this rollback path:
-its Rust-only image pairing check rejects the currently running beta
-Issuance/Gateway images. The cutover implementation must provide and locally
-rehearse its own exact-prior-image recovery before installed mutation.
+- Read-only `pg_dump -Fc` from each installed Keycloak database restored
+  into network-isolated disposable PostgreSQL 15. Beta source/restore each
+  had 16 users; self-host each had five. Both retained the four-plus-four
+  local key rows. This proved isolated database restore only, not coordinated
+  KMS recovery or a clean cutover.
+- The shared read-only SQL verifier rejects both installed databases and
+  passed a disposable two-realm remote-provider graph. It also rejected an
+  unrelated `private_jwk` component field and `private_key_cache` table.
+  A local disposable Keycloak/OpenBao probe passed remote RS256,
+  browser/session, CIBA, refresh/JWKS and KMS-loss checks, then the revised
+  custody gate. These were locally built images, not the signed installed
+  release.
+- A database-only beta swap/reversal prototype passed a disposable
+  PostgreSQL rehearsal and was then removed from this branch after the
+  installed `inmem`/`file` findings. The old beta backup captured an
+  `openbao_data` volume that was not beta's active key store; it cannot
+  recover a stopped beta OpenBao process. The old restore script also does
+  not restore the new Raft/token-volume set. Do not use either old operation
+  as evidence of supported rollback.
 
-On 2026-10-16, a disposable network-isolated PostgreSQL 15 container proved
-the narrow database operation with synthetic `privateKey` data: rename the
-old `keycloak` database, create a fresh same-named database, find no old
-`component_config` table in the fresh database, rename the fresh database
-aside, restore the old name, and recover the synthetic row. The owned
-container was removed. This does not yet prove Keycloak startup, coordinated
-backup/restore, writer quiescence, or an installed cutover.
-
-On 2026-10-16, a read-only `pg_dump -Fc` of each running installed Keycloak
-database was streamed directly into a separately owned PostgreSQL 15 container
-with `--network none`; `pg_restore --no-owner --no-acl --exit-on-error`
-succeeded in both. Source and restored beta both had 16 users, four
-KeyProvider `privateKey` rows and four generated `secret` rows. Source and
-restored self-host both had five users and the same four-plus-four key rows.
-The stream was not retained as an additional backup and both disposable
-containers were removed. This proves the present Keycloak database can be
-restored in isolation without mutating the installed database. It does not
-prove a quiesced coordinated PostgreSQL/OpenBao/Redis/applicant restore,
-Keycloak login, or the clean KMS-only cutover.
-
-The custody SQL now checks all Keycloak component configurations for
-private-key field names and PEM markers, and checks the public schema for
-private-key-named tables or columns. It still checks generated KeyProvider
-secrets separately. A disposable PostgreSQL 15 graph with both required
-remote-provider realms passed; an unrelated component's synthetic
-`private_jwk` field and a synthetic `private_key_cache` table each caused the
-gate to fail. The same revised SQL rejected both installed databases with
-four private-key and four generated-secret rows each. No real private key was
-created for these tests, and the disposable container was removed.
-
-The revised SQL also passed `probe_keycloak_remote_rs256.py --require-browser`
-against disposable local Keycloak/OpenBao images. The probe exercised both
-realms' remote RS256 signing, rotated browser cookies, CIBA, token refresh and
-JWKS, KMS-loss denial, then ran the SQL against the resulting PostgreSQL
-database. Its containers and network were removed. The local images are not
-the signed `v1.1.248` release artifacts; that exact-artifact and installed
-cutover proof remains separate.
-
-The beta release preflight now invokes this same custody SQL before its backup
-and again after Keycloak configuration. This removes the older, narrower
-KeyProvider-only count, so an unrelated component's private-key field or a
-retired private-key table cannot pass the release preflight. Installed beta
-still fails the gate until the clean cutover is executed.
-
-The retired `scripts/beta-keycloak-clean-database.ps1` prototype provided the database-only
-swap/reversal primitive for that cutover. It requires the checksum-verified
-quiesced beta backup, the expected running beta PostgreSQL container, unused
-validated database names, and zero Keycloak database connections. It renames
-the old database and creates a fresh one owned by `keycloak`; reversal retains
-the failed fresh database separately and restores the old name. A disposable,
-network-isolated PostgreSQL 15 rehearsal proved the old synthetic marker stayed
-in the retained database, the fresh database was empty, and reversal recovered
-the marker without copying local KeyProvider rows. A tampered backup was
-rejected. This primitive is not yet wired into the locked release flow, does
-not stop writers or create its own backup, and does not qualify installed
-cutover/rollback. The disposable container was removed. The synthetic backup
-files remain under the OS temporary directory because automatic approval
-review rejected their deletion; they contain no real keys or database data.
-
-The beta Compose Keycloak service already starts with `--import-realm` and a
-read-only checked-in realm import mount, so a fresh database can bootstrap the
-`11id` realm before the existing configurator runs. The ordinary beta release
-also captures a quiesced coordinated backup after stopping writers, but its
-preflight migration rehearsal restores only the Marty database; it does not
-rehearse restoring Keycloak, OpenBao Raft, Redis, and applicant state together.
-The swap primitive must be wired after that quiesced backup, and the emergency
-restore path must be extended and rehearsed for the currently installed legacy
-Issuance/Gateway image pairing before any live cutover.
-
-The current `restore-local-beta-release.ps1` does not restore the captured
-OpenBao Raft volume; its audit explicitly records
-`openbao_process_preserved = true`. It restores PostgreSQL, Redis, and applicant
-state while leaving OpenBao at its post-mutation point. Therefore removing the
-legacy Issuance/Gateway image-pair check alone would not satisfy coordinated
-KMS recovery. The cutover path must either avoid all post-snapshot OpenBao
-mutations or stop OpenBao and rehearse restoring the exact Raft snapshot with
-the other stores before reopening traffic. The latter is required if any
-remote-key creation, rotation, token or lease state changed during cutover.
-The new Compose model also declares separate OpenBao scoped-token and grant
-volumes in addition to `openbao_data` (and an optional passport callback token
-volume). The existing beta snapshot captures only `openbao_data`. A read-only
-inventory of the currently installed beta found only the older
-`elevenid-beta_openbao_data` volume; the new token volumes would be introduced
-by the KMS release. Any rollback after they are populated must account for
-those volumes together with the Raft snapshot, or prove the prior runtime does
-not consume them and retire them under the deployment lock.
+All disposable database and Keycloak/OpenBao test containers were removed.
+A few synthetic temporary backup marker files remain under the OS temporary
+directory because automatic approval review rejected their deletion; they
+contain no real database or key data.
