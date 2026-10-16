@@ -107,3 +107,18 @@ and again after Keycloak configuration. This removes the older, narrower
 KeyProvider-only count, so an unrelated component's private-key field or a
 retired private-key table cannot pass the release preflight. Installed beta
 still fails the gate until the clean cutover is executed.
+
+`scripts/beta-keycloak-clean-database.ps1` now provides the database-only
+swap/reversal primitive for that cutover. It requires the checksum-verified
+quiesced beta backup, the expected running beta PostgreSQL container, unused
+validated database names, and zero Keycloak database connections. It renames
+the old database and creates a fresh one owned by `keycloak`; reversal retains
+the failed fresh database separately and restores the old name. A disposable,
+network-isolated PostgreSQL 15 rehearsal proved the old synthetic marker stayed
+in the retained database, the fresh database was empty, and reversal recovered
+the marker without copying local KeyProvider rows. A tampered backup was
+rejected. This primitive is not yet wired into the locked release flow, does
+not stop writers or create its own backup, and does not qualify installed
+cutover/rollback. The disposable container was removed. The synthetic backup
+files remain under the OS temporary directory because automatic approval
+review rejected their deletion; they contain no real keys or database data.
