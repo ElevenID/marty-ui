@@ -132,3 +132,13 @@ rehearse restoring Keycloak, OpenBao Raft, Redis, and applicant state together.
 The swap primitive must be wired after that quiesced backup, and the emergency
 restore path must be extended and rehearsed for the currently installed legacy
 Issuance/Gateway image pairing before any live cutover.
+
+The current `restore-local-beta-release.ps1` does not restore the captured
+OpenBao Raft volume; its audit explicitly records
+`openbao_process_preserved = true`. It restores PostgreSQL, Redis, and applicant
+state while leaving OpenBao at its post-mutation point. Therefore removing the
+legacy Issuance/Gateway image-pair check alone would not satisfy coordinated
+KMS recovery. The cutover path must either avoid all post-snapshot OpenBao
+mutations or stop OpenBao and rehearse restoring the exact Raft snapshot with
+the other stores before reopening traffic. The latter is required if any
+remote-key creation, rotation, token or lease state changed during cutover.
