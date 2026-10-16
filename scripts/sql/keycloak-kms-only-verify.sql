@@ -12,6 +12,7 @@ DECLARE
     total_realms integer;
     private_entries bigint;
     private_pem_entries bigint;
+    private_jwk_entries bigint;
     private_schema_objects bigint;
     secret_entries bigint;
     unexpected_providers bigint;
@@ -47,8 +48,11 @@ BEGIN
     -- Search every component, since a different SPI must not silently persist
     -- issuer keys outside the KeyProvider graph. Never print stored values.
     SELECT count(*) FILTER (WHERE cc.name ~* 'private[_-]?(key|jwk)'),
-           count(*) FILTER (WHERE cc.value ~* '-----BEGIN ([A-Z0-9 ]* )?PRIVATE KEY-----')
-    INTO private_entries, private_pem_entries
+           count(*) FILTER (WHERE cc.value ~* '-----BEGIN ([A-Z0-9 ]* )?PRIVATE KEY-----'),
+           count(*) FILTER (
+               WHERE cc.value ~* '"kty"[[:space:]]*:[[:space:]]*"(RSA|EC|OKP|oct)"'
+                 AND cc.value ~* '"(d|p|q|dp|dq|qi|oth|k)"[[:space:]]*:')
+    INTO private_entries, private_pem_entries, private_jwk_entries
     FROM public.component_config AS cc;
 
     SELECT count(*) INTO private_schema_objects
@@ -77,13 +81,13 @@ BEGIN
           AND c.provider_id = required.id
     );
 
-    IF private_entries <> 0 OR private_pem_entries <> 0
+    IF private_entries <> 0 OR private_pem_entries <> 0 OR private_jwk_entries <> 0
        OR private_schema_objects <> 0 OR secret_entries <> 0
        OR unexpected_providers <> 0 OR duplicate_providers <> 0
        OR missing_providers <> 0 THEN
         RAISE EXCEPTION
-            'Keycloak KMS-only custody failed: private-key entries %, private-key PEM entries %, private-key schema objects %, local-secret entries %, unexpected providers %, duplicate providers %, missing required providers % across % realms',
-            private_entries, private_pem_entries, private_schema_objects,
+            'Keycloak KMS-only custody failed: private-key entries %, private-key PEM entries %, private JWK entries %, private-key schema objects %, local-secret entries %, unexpected providers %, duplicate providers %, missing required providers % across % realms',
+            private_entries, private_pem_entries, private_jwk_entries, private_schema_objects,
             secret_entries, unexpected_providers,
             duplicate_providers, missing_providers, total_realms;
     END IF;

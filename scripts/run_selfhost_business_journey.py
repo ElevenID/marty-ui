@@ -36,6 +36,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
 TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
 FIXTURE_PATH = "scripts/setup_selfhost_synthetic_fixture.py"
+KEYCLOAK_SQL_PATH = "scripts/sql/keycloak-kms-only-verify.sql"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_PUBLIC_DOMAIN", "SELFHOST_TEST_USERNAME",
@@ -100,12 +101,13 @@ def command(args: list[str], *, cwd: Path | None = None,
 
 def verify_keycloak_database_custody(compose: list[str], install_root: Path,
                                      source_checkout: Path,
+                                     source_sha: str,
                                      environment: dict[str, str]) -> None:
     """Run the reviewed read-only custody gate inside the owned PostgreSQL service."""
-    sql_path = source_checkout / "scripts/sql/keycloak-kms-only-verify.sql"
-    if sql_path.is_symlink() or not sql_path.is_file():
-        raise ValueError("reviewed Keycloak database custody SQL is absent")
-    sql = sql_path.read_text(encoding="utf-8")
+    if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
+        raise ValueError("reviewed Keycloak database custody source is invalid")
+    sql = command(["git", "show", f"{source_sha}:{KEYCLOAK_SQL_PATH}"],
+                  cwd=source_checkout)
     if not sql.startswith("-- Read-only release check") or "BEGIN READ ONLY;" not in sql:
         raise ValueError("reviewed Keycloak database custody SQL is invalid")
     command([*compose, "exec", "-T", "postgres", "psql", "-X", "-q",
@@ -502,7 +504,8 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
             if source_checkout is None:
                 raise ValueError("release source is required for Keycloak custody")
             verify_keycloak_database_custody(compose, install_root,
-                                              source_checkout, environment)
+                                              source_checkout, preflight["source_sha"],
+                                              environment)
         with measured(diagnostics, "marty_database_custody"):
             verify_marty_database_custody(compose, install_root, environment)
     except Exception as error:

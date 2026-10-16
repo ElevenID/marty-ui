@@ -40,30 +40,49 @@ def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
     source = tmp_path / "source"
     sql_path = source / "scripts/sql/keycloak-kms-only-verify.sql"
     sql_path.parent.mkdir(parents=True)
+    # A local replacement with the expected markers must never be executed.
     sql_path.write_text("-- Read-only release check\nBEGIN READ ONLY;\nCOMMIT;\n",
                         encoding="utf-8")
+    reviewed_sql = "-- Read-only release check\nBEGIN READ ONLY;\nSELECT 1;\nCOMMIT;\n"
+    source_sha = "a" * 40
     observed: list[tuple[list[str], dict[str, object]]] = []
 
     def fake_command(argv: list[str], **kwargs: object) -> str:
         observed.append((argv, kwargs))
+        if argv[:2] == ["git", "show"]:
+            return reviewed_sql
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
     compose = ["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"]
     environment = {"DOCKER_CONFIG": str(tmp_path / "anonymous")}
-    runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
-    assert len(observed) == 1
-    argv, kwargs = observed[0]
+    runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                            source_sha, environment)
+    assert len(observed) == 2
+    assert observed[0][0] == ["git", "show", f"{source_sha}:{runner.KEYCLOAK_SQL_PATH}"]
+    assert observed[0][1]["cwd"] == source
+    argv, kwargs = observed[1]
     assert argv[:len(compose)] == compose
     assert argv[len(compose):] == ["exec", "-T", "postgres", "psql", "-X", "-q",
                                   "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"]
     assert kwargs["cwd"] == tmp_path
     assert kwargs["env"] == environment
-    assert kwargs["input_text"] == sql_path.read_text(encoding="utf-8")
+    assert kwargs["input_text"] == reviewed_sql
 
-    sql_path.unlink()
-    with pytest.raises(ValueError, match="custody SQL is absent"):
-        runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
+    with pytest.raises(ValueError, match="custody source is invalid"):
+        runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                                "main", environment)
+    assert len(observed) == 2
+
+    def missing_reviewed_sql(argv: list[str], **_kwargs: object) -> str:
+        if argv[:2] == ["git", "show"]:
+            raise ValueError("installed journey command returned failure")
+        pytest.fail("database command ran without reviewed SQL")
+
+    monkeypatch.setattr(runner, "command", missing_reviewed_sql)
+    with pytest.raises(ValueError, match="installed journey command returned failure"):
+        runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                                source_sha, environment)
 
 
 def test_installed_keycloak_probe_issues_and_refreshes_both_realms(
