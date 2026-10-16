@@ -142,3 +142,11 @@ KMS recovery. The cutover path must either avoid all post-snapshot OpenBao
 mutations or stop OpenBao and rehearse restoring the exact Raft snapshot with
 the other stores before reopening traffic. The latter is required if any
 remote-key creation, rotation, token or lease state changed during cutover.
+The new Compose model also declares separate OpenBao scoped-token and grant
+volumes in addition to `openbao_data` (and an optional passport callback token
+volume). The existing beta snapshot captures only `openbao_data`. A read-only
+inventory of the currently installed beta found only the older
+`elevenid-beta_openbao_data` volume; the new token volumes would be introduced
+by the KMS release. Any rollback after they are populated must account for
+those volumes together with the Raft snapshot, or prove the prior runtime does
+not consume them and retire them under the deployment lock.
