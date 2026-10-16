@@ -23364,3 +23364,16 @@ branch `fix/kms-public-smoke-release-20261016` already handles the three new
 expected one-shot OpenBao jobs; it must also pin the eventual protected-main
 harness commit and signed source digest in the release lock and self-host
 handoff before it is pushed.
+
+PR #441 review found a real disposable restart regression: `compose down`
+retains named public certificate/token volumes, while dev OpenBao loses its
+in-memory Transit signer. Candidate head `73a30cd` now recognizes the exact
+missing-key response, confirms storage is the disposable `inmem` backend,
+discards only stale public TLS artifacts and the scoped test token, and
+reprovisions from a new non-exportable remote key. Other OpenBao lookup
+failures and a missing key outside `inmem` still fail closed. A local exact
+image `compose up signing-keys` → `compose down` without `-v` → `compose up
+signing-keys` rehearsal returned healthy both times. The review thread was
+resolved after the fix; new exact-head CI is running and auto-merge remains
+armed. This restart behavior is specific to the disposable smoke fixture,
+not the installed Raft recovery model.
