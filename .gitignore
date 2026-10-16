@@ -158,3 +158,11 @@ wheels/
 
 # WASM build artifact
 ui/src/wasm/marty-biometrics-pkg/
+
+# Generated diagnostics and per-task implementation evidence
+tests/pytest-results/
+tests/wallet-debug.png
+.hermes/implementation_reuse_review.yaml
+
+# Local qualification receipts are generated output.
+/artifacts/

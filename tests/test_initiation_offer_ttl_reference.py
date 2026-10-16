@@ -1,6 +1,5 @@
-"""Repository-only expiry corpus guards; explicit --check runs the old entity."""
+"""Frozen expiry observations consumed by the native initiation tests."""
 
-import importlib.util
 import json
 from pathlib import Path
 
@@ -8,10 +7,6 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "scripts/capture_initiation_offer_ttl_reference.py"
-SPEC = importlib.util.spec_from_file_location("offer_ttl_capture", SCRIPT)
-capture = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(capture)
 
 
 def corpus():
@@ -24,10 +19,6 @@ def corpus():
 
 def test_expiry_reference_provenance_and_cases_are_closed():
     frozen = corpus()
-    assert frozen["reference"]["source_blob"] == capture.BLOB
-    assert frozen["reference"]["source_path"] == capture.SOURCE
-    assert frozen["reference"]["clock"] == capture.NOW.isoformat()
-    assert [(row["case"], row["raw"]) for row in frozen["cases"]] == capture.CASES
     assert len(frozen["cases"]) == 18
     assert [row["phase"] for row in frozen["cases"]].count("accepted") == 9
     assert [row["phase"] for row in frozen["cases"]].count("module-import") == 5
@@ -59,14 +50,6 @@ def test_large_integers_remain_valid_until_transaction_creation():
         assert row["parsed_minutes"] == row["raw"]
         assert row["phase"] == "transaction-construction"
         assert row["error_type"] == "OverflowError"
-
-
-def test_capture_rejects_modified_source_before_import(tmp_path):
-    source = tmp_path / capture.SOURCE
-    source.parent.mkdir(parents=True)
-    source.write_text("raise AssertionError('must not execute')\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="source blob differs"):
-        capture.capture(tmp_path)
 
 
 def test_production_construction_configures_shared_owner_before_http_and_grpc():

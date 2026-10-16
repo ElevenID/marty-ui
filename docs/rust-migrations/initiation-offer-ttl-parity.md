@@ -11,12 +11,8 @@ observations from unchanged entity source blob
 `1b5e2eba90c1ec13c1a38135f4da92813f1d1073`, Credentials commit
 `87eae30788924921a42848425d315e2f33f7ae41`. Only environment and `datetime.now`
 are controlled; the entity module and dataclass default factories execute intact.
-Reproduce explicitly with:
-
-`python scripts/capture_initiation_offer_ttl_reference.py <credentials-checkout> --check`
-
-Default CI tests use repository fixtures only; the explicit replay needs the old
-checkout but no native binding. This is not HTTP/gRPC admission, database,
+The capture generator has been retired; its source remains in Git history.
+Current CI checks the frozen observations and runs the native behavior tests. This is not HTTP/gRPC admission, database,
 gateway, fresh automatic delivery or deployment acceptance.
 
 Observed compatibility preserved:

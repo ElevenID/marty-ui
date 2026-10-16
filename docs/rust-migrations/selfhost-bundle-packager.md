@@ -15,9 +15,10 @@ provenance, select production routes or change key custody.
 Original source: `31287d26676872736820f97ae6d6d30d0d8e65f1`,
 `scripts/package-selfhost-bundle.py`, blob
 `77c04ba60f7a31432d210526f50e136f6bde0545`.
-`scripts/capture_selfhost_bundle_reference.py --check` verifies that Git blob
-before executing the original functions against fresh synthetic fixtures.
-Its renderer is controlled; its directory copying and ZIP creation are real.
+The historical capture verified that Git blob before executing the original
+functions against synthetic fixtures. Its renderer was controlled; directory
+copying and ZIP creation were real. The generator is retired and available in
+Git history; native executable and fixture regression checks remain.
 
 `contracts/selfhost-bundle-python-reference.json` records 18 transformation,
 image-predicate and error cases, exact staged binary/text file contents, ZIP
@@ -44,7 +45,7 @@ buffer growth. Missing accounts fail rather than creating literal tilde paths.
 The separate `selfhost-bundle-path-reference.json` records actual Python312
 `Path.expanduser` observations with real platform parsers, synthetic environments
 and controlled account results; the original 18-case artifact remains unchanged.
-Replay with `scripts/capture_selfhost_bundle_reference.py --path-reference --check`.
+The path fixture remains covered by the native platform-expansion tests.
 
 ## Explicit safety corrections
 

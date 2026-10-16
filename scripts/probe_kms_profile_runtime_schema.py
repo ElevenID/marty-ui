@@ -159,7 +159,8 @@ def main() -> None:
             "json_text_content_scan": "passed after Rust migration and seed",
             "limits": ["local source-built executables, not signed release artifacts", "runtime writes beyond migration seeds not exercised"],
         }
-        output = ROOT / "artifacts" / "kms-profile-runtime-schema-audit-20261011.json"
+        output = ROOT / "artifacts" / "kms-profile-runtime-schema-audit.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(json.dumps(receipt, sort_keys=True))
     finally:

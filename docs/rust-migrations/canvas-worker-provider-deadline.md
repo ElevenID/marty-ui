@@ -179,8 +179,8 @@ with compiled Rust controls and strict Clippy also passing. No actual native
 timeout replay has run, and no runtime timeout policy or frozen expectation was
 changed. Those local checks are separate from the hosted `f0` deadline result.
 
-A separate [local clock audit](canvas-worker-local-clock-audit-2026-09-07.md)
-reproduced a roughly -0.945s wall-clock step without importing worker code.
+A separate historical local clock audit (retired at Git checkpoint
+`053102a80`) reproduced a roughly -0.945s wall-clock step without importing worker code.
 Local deadline failures therefore remain invalid timing observations; neither
 the fixture tolerance nor frozen results were changed. The subsequent hosted
 Linux pass supplies qualification without waiving that comparison.

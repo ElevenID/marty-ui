@@ -163,7 +163,7 @@ No gateway route cutover, reachable Canvas Python endpoint deletion or
 deployment has been performed in this lane; those actions remain gated by the
 required evidence. Credentials release preparation has passed after explicit
 workflow activation approval; released-image qualification remains pending.
-See the [current roadmap snapshot](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-execution-snapshot--2026-09-08).
+See the [current qualification requirements](../CONSOLIDATED_RUST_MIGRATION_ROADMAP.md#current-qualification-gates).
 
 Earlier qualified composed checkpoint (historical; later failures and pending
 statements below retain their original checkpoint scope):
@@ -882,7 +882,6 @@ branch/worktree cleanup, CSCA lifecycle-manager/monitor follow-up, all demo and
 device/wallet evidence, release-pin reconciliation, and aggregate beta-only
 acceptance/soak. Production and persistent self-host remain unchanged.
 
-The [local-work inventory](post-wave3-local-work-inventory-2026-09-07.md) records
-dirty dependency/wallet work, divergent branches, unregistered demo source and
-equivalence candidates. Its cached-ref snapshots are preservation leads, not
-authority to delete branches or evidence that all work is merged.
+Historical local-work inventory snapshots have been retired to Git history.
+Use the current architecture/product queue and release qualification gates;
+a deleted report does not release local recorder snapshots or unmerged work.

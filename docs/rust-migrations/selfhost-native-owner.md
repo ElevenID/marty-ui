@@ -73,11 +73,9 @@ profile ID has no native reader and the audited Python helper has no call site;
 its presence is not claimed as an implemented feature or a reason to delete it.
 
 The current independent root-relative snapshot is
-`selfhost-kms-only-model.issuance-grants.snapshot.yml`. The earlier
-`selfhost-kms-only-model.snapshot.yml` remains unchanged as historical
-evidence for the pre-Issuance-grant model.
-Its normalized SHA-256 is
-`5d72ff9654f8c07960449de43dd6818aa2bf8273ca6834ba75ec27ffe0e9d01e`.
+`selfhost-kms-only-model.keyless-tls.snapshot.yml`. Superseded base,
+issuance-grants and managed-passport snapshots are retired; their historical
+bytes remain in Git at `053102a80`. Only the current model is a regression gate.
 `scripts/test_selfhost_native_owner_compose.py` compares the entire rendered
 current model with this KMS-only snapshot and checks the input inventory,
 native dispatcher, Signing Keys dependency and absence of raw integration-secret
@@ -87,8 +85,9 @@ requires explicit review and a corresponding snapshot update. Pure mutation
 tests are explicitly not a Compose emulator.
 
 Locally qualified: no-interpolate and default/empty/custom interpolated current
-model rendering, all ten required inputs missing/empty, exact native dispatcher,
-snapshot identity and 72 mutation guards. Interpolation uses only synthetic
+model rendering, every current required input missing/empty, exact native
+dispatcher and snapshot identity. The current configuration-only gate checks
+58 required inputs; it does not start services or qualify an installed runtime. Interpolation uses only synthetic
 files and a sanitized subprocess environment, not operator secrets. The
 preservation command remains mandatory in image CI; hosted exact-head proof
 is still required.

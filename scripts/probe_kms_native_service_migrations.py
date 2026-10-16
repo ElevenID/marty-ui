@@ -130,7 +130,8 @@ def main() -> None:
             "limits": ["source-built Rust contracts, not signed release artifacts",
                        "does not audit Python metadata or installed-stack cutover"],
         }
-        output = ROOT / "artifacts" / "kms-native-service-migration-audit-20261011.json"
+        output = ROOT / "artifacts" / "kms-native-service-migration-audit.json"
+        output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(f"wrote {output.relative_to(ROOT)}; sha256={hashlib.sha256(output.read_bytes()).hexdigest()}")
     finally:

@@ -1,10 +1,7 @@
 //! Native issuance service boundary.
 //!
-//! While migration status is `cutover-in-progress`, this crate is packaged only
-//! as the beta `issuance-native` sidecar and receives the exact paths enumerated
-//! by the coverage contract. The Python service remains the production runtime
-//! and parity oracle until every frozen HTTP, gRPC, worker, configuration, and
-//! migration gate passes.
+//! HTTP, gRPC, persistence, and worker implementations for native issuance.
+//! Historical migration consistency checks live in the integration test suite.
 
 #![forbid(unsafe_code)]
 
@@ -90,7 +87,6 @@ pub mod canvas_sync_worker_lifecycle;
 pub mod canvas_sync_worker_postgres;
 pub mod client_auth;
 pub mod config;
-pub mod contract;
 pub mod credential;
 pub mod credential_builder;
 pub mod credential_issuer;
@@ -170,7 +166,6 @@ pub mod transaction_reads;
 pub mod transport;
 
 pub use config::*;
-pub use contract::*;
 pub use runtime::*;
 
 pub mod issuance_proto {

@@ -708,8 +708,9 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     assert "marty-credentials-issuance" not in components
     assert components["marty-integration-tests"]["version"] == "1.2.88"
 
+    # Detailed producer incident history belongs in the incident/runbook owners,
+    # rather than being duplicated in the current migration requirements.
     documents = (
-        _text("docs/CONSOLIDATED_RUST_MIGRATION_ROADMAP.md"),
         _text("docs/rust-migrations/verification-image-consolidation-plan.md"),
         _text("docs/rust-migrations/verifier-release-incident-2026-08-31.md"),
     )
