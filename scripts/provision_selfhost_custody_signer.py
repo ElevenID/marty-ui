@@ -37,14 +37,10 @@ def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
         except HTTPError as error:
             if error.code != 400:  # Already-expired disposable token.
                 raise
-    except (OSError, RuntimeError, HTTPError):
-        try:
-            bao.request("POST", "auth/token/revoke", {"token": token})
-        except (OSError, RuntimeError, HTTPError) as cleanup_error:
-            # Preserve the new token so an operator can revoke it explicitly.
-            raise RuntimeError("pending custody token refresh requires operator recovery") from cleanup_error
-        temporary.unlink()
-        raise
+    except (OSError, RuntimeError, HTTPError) as error:
+        # A lost response does not tell us whether the old token was revoked.
+        # Keep both values recoverable; never revoke the only potentially live one.
+        raise RuntimeError("pending custody token refresh requires operator recovery") from error
     # If replacement fails, the new token remains in .new for operator recovery.
     os.replace(temporary, token_file)
 
@@ -112,27 +108,6 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
         'path "auth/token/lookup-self" { capabilities = ["read"] }\n'
     )
     bao.request("PUT", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}", {"policy": policy})
-    created = bao.request("POST", "auth/token/create", {
-        "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
-        "orphan": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
-    })
-    token = created.get("auth", {}).get("client_token")
-    if not isinstance(token, str) or not token:
-        raise ValueError("OpenBao scoped custody token is absent")
-    scoped = Bao(endpoint, ca_file, token)
-    lookup = scoped.request("GET", "auth/token/lookup-self").get("data", {})
-    if (lookup.get("policies") != [CUSTODY_SIGNER_POLICY]
-            or type(lookup.get("ttl")) is not int
-            or not 0 < lookup["ttl"] <= 3600):
-        raise ValueError("OpenBao custody signer token is not scoped or short-lived")
-    scoped.request("GET", f"transit/keys/{CUSTODY_SIGNER}")
-    try:
-        scoped.request("GET", f"transit/export/signing-key/{CUSTODY_SIGNER}")
-    except HTTPError as error:
-        if error.code != 403:
-            raise ValueError("OpenBao custody key export denial is invalid") from None
-    else:
-        raise ValueError("OpenBao custody key was exportable")
     owner = output_root.stat()
 
     def write(path: Path, value: str, mode: int) -> None:
@@ -147,19 +122,48 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
             path.unlink(missing_ok=True)
             raise
 
-    if refresh_token:
-        refresh_scoped_token(bao, token_file, token, write)
-    else:
+    created = bao.request("POST", "auth/token/create", {
+        "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+        "orphan": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
+    })
+    token = created.get("auth", {}).get("client_token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("OpenBao scoped custody token is absent")
+    try:
+        scoped = Bao(endpoint, ca_file, token)
+        lookup = scoped.request("GET", "auth/token/lookup-self").get("data", {})
+        if (lookup.get("policies") != [CUSTODY_SIGNER_POLICY]
+                or type(lookup.get("ttl")) is not int
+                or not 0 < lookup["ttl"] <= 3600):
+            raise ValueError("OpenBao custody signer token is not scoped or short-lived")
+        scoped.request("GET", f"transit/keys/{CUSTODY_SIGNER}")
         try:
+            scoped.request("GET", f"transit/export/signing-key/{CUSTODY_SIGNER}")
+        except HTTPError as error:
+            if error.code != 403:
+                raise ValueError("OpenBao custody key export denial is invalid") from None
+        else:
+            raise ValueError("OpenBao custody key was exportable")
+        if refresh_token:
+            refresh_scoped_token(bao, token_file, token, write)
+        else:
             write(public_file, pem, 0o444)
             write(token_file, token, 0o400)
-        except Exception:
-            public_file.unlink(missing_ok=True)
+    except Exception:
+        # A failed refresh may have stored the new token in .new because the
+        # old-token revocation response was ambiguous. Never discard that token.
+        if not pending_file.exists() and not (token_file.is_file()
+                                              and token_file.read_text(encoding="ascii").strip() == token):
             try:
                 bao.request("POST", "auth/token/revoke", {"token": token})
-            except (OSError, RuntimeError, HTTPError):
-                pass  # The scoped token expires within one hour.
-            raise
+            except (OSError, RuntimeError, ValueError):
+                try:
+                    write(pending_file, token, 0o400)
+                except (OSError, RuntimeError, ValueError) as recovery_error:
+                    raise RuntimeError("new custody token could not be revoked or preserved") from recovery_error
+        if not refresh_token:
+            public_file.unlink(missing_ok=True)
+        raise
     return hashlib.sha256(public_file.read_bytes()).hexdigest()
 
 
