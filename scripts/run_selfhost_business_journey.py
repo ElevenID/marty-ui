@@ -80,10 +80,12 @@ def measured(diagnostics: RunDiagnostics | None, name: str):
 
 
 def command(args: list[str], *, cwd: Path | None = None,
-            env: dict[str, str] | None = None, timeout: int = 60) -> str:
+            env: dict[str, str] | None = None, timeout: int = 60,
+            input_text: str | None = None) -> str:
     try:
         result = subprocess.run(args, cwd=cwd, env=env, timeout=timeout,
-                                capture_output=True, text=True, check=False)
+                                input=input_text, capture_output=True,
+                                text=True, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError("installed journey command failed") from error
     if result.returncode:
@@ -91,6 +93,21 @@ def command(args: list[str], *, cwd: Path | None = None,
         # an artifact or exception; the private runner log is operator-owned.
         raise ValueError("installed journey command returned failure")
     return result.stdout
+
+
+def verify_keycloak_database_custody(compose: list[str], install_root: Path,
+                                     source_checkout: Path,
+                                     environment: dict[str, str]) -> None:
+    """Run the reviewed read-only custody gate inside the owned PostgreSQL service."""
+    sql_path = source_checkout / "scripts/sql/keycloak-kms-only-verify.sql"
+    if sql_path.is_symlink() or not sql_path.is_file():
+        raise ValueError("reviewed Keycloak database custody SQL is absent")
+    sql = sql_path.read_text(encoding="utf-8")
+    if not sql.startswith("-- Read-only release check") or "BEGIN READ ONLY;" not in sql:
+        raise ValueError("reviewed Keycloak database custody SQL is invalid")
+    command([*compose, "exec", "-T", "postgres", "psql", "-X", "-q",
+             "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"],
+            cwd=install_root, env=environment, input_text=sql)
 
 
 def build_public_kms_jwk_tool(source_checkout: Path, target_root: Path) -> Path:
@@ -362,6 +379,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       evidence: Path, signature: Path, public_key: Path,
                       preflight: dict, trusted_keys: frozenset[str],
                       diagnostics: RunDiagnostics | None = None,
+                      source_checkout: Path | None = None,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     with measured(diagnostics, "fresh_project"):
@@ -413,6 +431,11 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         with measured(diagnostics, "public_journey"):
             command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                      JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
+        with measured(diagnostics, "keycloak_database_custody"):
+            if source_checkout is None:
+                raise ValueError("release source is required for Keycloak custody")
+            verify_keycloak_database_custody(compose, install_root,
+                                              source_checkout, environment)
     except Exception as error:
         failure = error
     finally:
@@ -502,7 +525,8 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight, trusted_keys, diagnostics)
+            args.kms_custody_public_key, preflight, trusted_keys, diagnostics,
+            source_checkout=args.source_checkout)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
@@ -512,6 +536,7 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "fixture_setup_sha256": args.fixture_setup_sha256,
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
+            "keycloak_database_custody": "passed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
 
 

@@ -32,6 +32,38 @@ from run_selfhost_business_journey import (  # noqa: E402
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 
 
+def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    sql_path = source / "scripts/sql/keycloak-kms-only-verify.sql"
+    sql_path.parent.mkdir(parents=True)
+    sql_path.write_text("-- Read-only release check\nBEGIN READ ONLY;\nCOMMIT;\n",
+                        encoding="utf-8")
+    observed: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_command(argv: list[str], **kwargs: object) -> str:
+        observed.append((argv, kwargs))
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    compose = ["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"]
+    environment = {"DOCKER_CONFIG": str(tmp_path / "anonymous")}
+    runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
+    assert len(observed) == 1
+    argv, kwargs = observed[0]
+    assert argv[:len(compose)] == compose
+    assert argv[len(compose):] == ["exec", "-T", "postgres", "psql", "-X", "-q",
+                                  "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"]
+    assert kwargs["cwd"] == tmp_path
+    assert kwargs["env"] == environment
+    assert kwargs["input_text"] == sql_path.read_text(encoding="utf-8")
+
+    sql_path.unlink()
+    with pytest.raises(ValueError, match="custody SQL is absent"):
+        runner.verify_keycloak_database_custody(compose, tmp_path, source, environment)
+
+
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
