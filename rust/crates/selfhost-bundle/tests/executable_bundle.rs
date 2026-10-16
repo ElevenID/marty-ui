@@ -156,6 +156,7 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
     }
     let python = if cfg!(windows) { "python" } else { "python3" };
     let tls_help = Command::new(python)
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .arg(extracted.join("scripts/provision_selfhost_disposable_tls.py"))
         .arg("--help")
         .output()
