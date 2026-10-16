@@ -33,6 +33,7 @@ TOKEN_NAMES = (
     "openbao_bootstrap_token",
     "notification_openbao_token",
     "passport_callback_signer_bao_token",
+    "haip_kms_token",
 )
 
 
@@ -214,6 +215,11 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
     require(
         helper.is_file() and not helper.is_symlink(),
         "Extracted bootstrap helper is missing",
+    )
+    haip_policy = install_root / "docker/openbao-haip-workload-policy.hcl"
+    require(
+        haip_policy.is_file() and not haip_policy.is_symlink(),
+        "Extracted HAIP workload policy is missing",
     )
     name = "marty-selfhost-bootstrap-" + secrets.token_hex(8)
     helper_name = name + "-helper"
@@ -411,6 +417,10 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                         require_address=False,
                         expected_mounts={
                             "/scripts/openbao-init.sh": (source, False),
+                            "/scripts/openbao-haip-workload-policy.hcl": (
+                                str(haip_policy.resolve()),
+                                False,
+                            ),
                             "/work-kms-ca/ca.crt": (str(ca_file.resolve()), False),
                             "/work-service": (directory, True),
                             "/work-bootstrap": (directory, True),
@@ -418,6 +428,7 @@ def probe(install_root: Path, receipt: dict, plugin_image: str) -> dict:
                             "/work-didcomm": (directory, True),
                             "/work-notification": (directory, True),
                             "/work-callback": (directory, True),
+                            "/work-haip": (directory, True),
                             "/work-grants": (directory, True),
                         },
                         expected_network=f"container:{name}",

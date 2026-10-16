@@ -171,7 +171,7 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
             self.cert = Path(self.certificates.name) / "synthetic-cert"
             self.origin = "https://127.0.0.1:1"
             self.signer_origin = "http://127.0.0.1:2/internal/signing-keys"
-            self.grant_origin = "http://127.0.0.1:3"
+            self.grant_origin = "https://127.0.0.1:3"
             self.grant_token_file = Path(self.certificates.name) / "grant-mint-token"
             self.grant_operations = []
             self.grant_requests = []
@@ -471,7 +471,7 @@ def test_real_chatty_child_fails_promptly_with_bounded_tails_and_cleanup(
                 cert=root / "synthetic-unused-cert",
                 origin="https://127.0.0.1:1",
                 signer_origin="http://127.0.0.1:2/internal/signing-keys",
-                grant_origin="http://127.0.0.1:3",
+                grant_origin="https://127.0.0.1:3",
                 grant_token_file=root / "grant-mint-token",
                 grant_operations=[],
                 grant_requests=[],

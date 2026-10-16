@@ -14,6 +14,37 @@ a clean Linux installed journey, KMS custody proof, signed qualified assets,
 and independent anonymous download/install replay. Defer unrelated A0-A7
 optimization behind this handoff.
 
+## Installed setup requirements
+
+The workload TLS and Keycloak disposable provisioners are now on protected
+main. Preserve their remote-only contract: workload private keys stay in Transit,
+public certificates bind to the selected remote keys, and per-key/realm/purpose
+policies reject foreign-key and cross-realm use. Provisioning and TLS-oracle
+success do not establish installed Compose or supported release acceptance.
+
+- The next bundle needs a qualified DIDComm-plugin image supporting the
+  Keycloak JWE path; the older cached published image did not support it.
+  Current disposable JWE policies cover the initial key version only and
+  require scoped-token reprovisioning after rotation. Installed rotation
+  readiness remains unqualified.
+- The local journey requires 76 secret files. Workload TLS, Keycloak, OpenBao
+  bootstrap and public CA paths account for 52; the text-credential helper
+  generates seventeen more and the HAIP token needs its narrow KMS policy.
+  A complete persistent install root and installed secret roster remain open.
+- For generated text credentials, preserve the private POSIX directory (`0700`)
+  and container-readable final files (`0444`), with initial `0600` creation and
+  rollback on a failed
+  mode transition. Six optional integration files may be empty only when those
+  integrations are disabled. The local journey does not use a Cloudflare token.
+- Installed hooks require loopback HTTPS OpenBao at the selected signing-keys
+  port and must verify the staged public CA. Wrong-host and foreign-CA
+  rejection remain required.
+
+Release-operator Cargo checks on both Linux architectures must report positive
+executed test counts before building/validating binaries. Preserve the unfiltered
+package, target builds, attestations and protected release gates; current-head
+hosted validation remains required.
+
 ## Objective and scope
 
 Reduce the amount of unrelated code and infrastructure needed to validate a change. Establish independently testable Rust boundaries, select checks from their actual dependencies, and report failures earlier while preserving behavior, features, security guarantees, and release qualification.
@@ -117,3 +148,6 @@ Git commit `c86b2f8c6b34ba7ec1bac5461ded03b28adb7745`. They were removed from th
 Keep current requirements and unresolved acceptance here; store per-run output
 in CI artifacts or ignored local directories. Historical branch/recorder reports
 do not authorize removal of local unmerged work or imply current workspace state.
+
+Additional October 16 setup checkpoint history is recoverable from protected
+main commit `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its active constraints are retained above.

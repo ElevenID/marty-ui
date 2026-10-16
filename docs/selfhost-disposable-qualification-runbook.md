@@ -58,8 +58,10 @@ pull alone does not establish a smaller supported minimum.
    [the synthetic fixture guide](selfhost-synthetic-fixture.md).
 4. Supply the eight public journey `SELFHOST_*` values from the
    [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/0b9aec1994378aba4ef4715f858de813b1a329ea/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
-   through an operator secret runner. Supply `SELFHOST_BAO_AUDIT_URL`,
-   `SELFHOST_BAO_AUDIT_TOKEN_FILE`, and
+   through an operator secret runner. Supply a loopback HTTPS
+   `SELFHOST_BAO_AUDIT_URL` for the same OpenBao port, stage its public CA as
+   `openbao_tls_ca_cert` in the private secret root, and supply
+   `SELFHOST_BAO_AUDIT_TOKEN_FILE` and
    `SELFHOST_CUSTODY_SIGNING_KEY_FILE` in the same process environment. The
    Ed25519 private key and token stay outside source and installation; its
    public PEM digest must appear in the **prepared source commit's** reviewed

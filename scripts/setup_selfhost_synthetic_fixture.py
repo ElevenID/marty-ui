@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import ssl
 import subprocess
 import sys
 import uuid
@@ -46,13 +47,17 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
         raise ValueError("synthetic DID differs from installed public domain and organization")
     if not values["SELFHOST_TEST_USERNAME"].lower().endswith("@selfhost.marty.invalid"):
         raise ValueError("synthetic operator email must use the reserved test domain")
-    for name in ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
-                 "SELFHOST_BAO_AUDIT_URL"):
+    for name in ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL"):
         url = urlsplit(values[name])
         if (url.scheme != "http" or url.hostname not in {"127.0.0.1", "localhost"}
                 or url.username or url.password or url.path not in {"", "/"}
                 or url.query or url.fragment):
             raise ValueError(f"{name} must use disposable loopback HTTP")
+    audit = urlsplit(values["SELFHOST_BAO_AUDIT_URL"])
+    if (audit.scheme != "https" or audit.hostname not in {"127.0.0.1", "localhost"}
+            or audit.port is None or audit.username or audit.password
+            or audit.path not in {"", "/"} or audit.query or audit.fragment):
+        raise ValueError("SELFHOST_BAO_AUDIT_URL must use disposable loopback HTTPS")
     return {name: values[name] for name in names}
 
 
@@ -100,9 +105,21 @@ def validate_installed_model(model: dict, fixture: dict[str, str]) -> None:
             or configurator.get("MARTY_ORG_ADMIN_EMAIL") != fixture["SELFHOST_TEST_USERNAME"]
             or configurator.get("KEYCLOAK_REALM") != "11id"
             or configurator.get("PUBLIC_DOMAIN") != fixture["SELFHOST_PUBLIC_DOMAIN"]
-            or bao.scheme != "http" or bao.hostname != "host.docker.internal"
+            or bao.scheme != "https" or bao.hostname != "host.docker.internal"
             or bao.port is None or bao.port != audit.port):
         raise ValueError("synthetic operator differs from migration-seeded organization")
+
+
+def trusted_audit_context(secret_root: Path) -> ssl.SSLContext:
+    ca = checked_file(str(secret_root / "openbao_tls_ca_cert"), "OpenBao TLS CA")
+    if b"PRIVATE KEY" in ca.read_bytes():
+        raise ValueError("OpenBao TLS CA contains private key material")
+    return ssl.create_default_context(cafile=str(ca))
+
+
+def audit_client(url: str, secret_root: Path) -> httpx.AsyncClient:
+    return httpx.AsyncClient(base_url=url, timeout=20.0, trust_env=False,
+                             verify=trusted_audit_context(secret_root))
 
 
 def validate_public_p256_jwk(public_jwk: dict) -> None:
@@ -270,8 +287,7 @@ async def provision(fixture: dict[str, str]) -> dict:
         if not any(item.get("id") == org for item in organizations):
             raise ValueError("synthetic operator cannot access migration-seeded organization")
         proofs = []
-        async with httpx.AsyncClient(base_url=fixture["SELFHOST_BAO_AUDIT_URL"],
-                                     timeout=20.0, trust_env=False) as bao:
+        async with audit_client(fixture["SELFHOST_BAO_AUDIT_URL"], secret_root) as bao:
             lookup = await bao.get("/v1/auth/token/lookup-self", headers={
                 "X-Vault-Token": audit_token})
             lookup.raise_for_status()
