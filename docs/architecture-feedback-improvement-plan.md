@@ -88,6 +88,49 @@ Six optional integration files may be empty only when the rendered integrations
 are disabled. The Cloudflare tunnel token is not used by the local journey.
 This does not close the installed secret roster or qualify the bundle.
 
+October 16 handoff continuation: the reviewed disposable text credential and
+HAIP-token follow-up [#1361](https://github.com/ElevenID/marty-ui/pull/1361)
+merged as `c0a06263f` after protected merge-group qualification. The next
+candidate puts the seven Keycloak disposable remote-key inputs in the same
+owner-private install root without overwriting existing files, gives them
+non-root-readable final modes for Compose bind mounts, and includes only its
+small shared HTTPS OpenBao client and provisioner in the extracted bundle.
+Independent review found that native Windows could not enforce the private
+POSIX root/mode contract; the candidate now rejects non-POSIX hosts.
+Focused Linux and Windows tests pass; this is not an installed journey, new
+published preview, or supported handoff. The remaining secret inputs and
+fresh installed acceptance still need evidence.
+
+October 16 exact-preview image check: the services image pinned by preview .2
+(`sha256:8193d6d35ec6364a151293bd3ba5e290b2062a94ad2ece811e2b98e4a75f2775`)
+does not contain `/usr/local/bin/marty-passport-tls-bootstrap` (isolated
+`docker run` on the pulled digest fails `test -x`). The current public
+`services/Dockerfile` and its build script include that Rust binary, added
+after preview .2; source inspection alone cannot qualify the older image.
+A follow-up release gate checks the binary on the exact already-pulled
+services digest after native-schema qualification, without another build.
+The existing source-built local Compose stack has health-checked services
+healthy on a 15.15 GiB Docker VM, but it uses local images and pre-existing
+state: neither a clean install nor a 16 GiB customer operating envelope is
+proven.
+
+October 16 next candidate: require the exact released services digest to
+contain the workload TLS bootstrap executable, then ship a Linux-only
+disposable helper that checks the extracted image lock, running OpenBao
+Compose owner/image/state mount, and stages only the 31 verified public
+certificates/scoped tokens into the existing private install root. The helper
+does not stage a root token or private workload key. A further roster audit
+found that the first Python acceptor used passport-style token filenames and
+omitted the self-host Verification client. The candidate now shares the
+certificate/token validation while selecting the exact self-host Rust/catalog
+output inventory. An independent Compose/source inventory closes all 76 local
+secret filenames with 17 scalar credentials, 31 workload TLS files, seven
+Keycloak files, 15 OpenBao outputs, and six disabled-optional placeholders.
+Focused Linux tests pass (48 passed, 2 skipped), including injected
+chmod/chown and Docker-timeout cleanup failure handling; the frozen
+deployment CLI and 14 bundle package-contract cases pass locally. This is
+not a fresh-image installed journey or qualification of preview .2.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers

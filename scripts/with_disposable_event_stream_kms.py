@@ -15,12 +15,11 @@ import os
 from pathlib import Path
 import re
 import secrets
-import ssl
 import subprocess
 import tempfile
 import time
 from urllib.error import HTTPError, URLError
-from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
+from selfhost_openbao_client import Bao, public_key_der
 
 
 IMAGE = re.compile(r"quay\.io/openbao/openbao@sha256:[0-9a-f]{64}\Z")
@@ -133,11 +132,6 @@ def validate_selfhost_keycloak(bao: Bao, output: Path, root_token: str) -> None:
             raise RuntimeError("disposable Keycloak JWE token reached Transit")
 
 
-class NoRedirect(HTTPRedirectHandler):
-    def redirect_request(self, request, response, code, message, headers, new_url):
-        return None
-
-
 def run(args: list[str], timeout: int = 30) -> str:
     result = subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
     if result.returncode:
@@ -151,16 +145,6 @@ def require_pinned_image(image: str) -> None:
         run(["docker", "image", "inspect", image], timeout=20)
     except RuntimeError:
         run(["docker", "pull", image], timeout=180)
-
-
-def public_key_der(pem: str) -> bytes:
-    result = subprocess.run(
-        ["openssl", "pkey", "-pubin", "-outform", "DER"],
-        input=pem.encode("ascii"), capture_output=True, timeout=10, check=False,
-    )
-    if result.returncode or not result.stdout:
-        raise RuntimeError("disposable public key is invalid")
-    return result.stdout
 
 
 def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> None:
@@ -234,30 +218,6 @@ def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> 
             else:
                 if key != own_key or not response.get("data", {}).get("signature"):
                     raise RuntimeError("disposable signer crossed key scope")
-
-
-class Bao:
-    def __init__(self, endpoint: str, ca: Path, token: str) -> None:
-        self.endpoint = endpoint
-        self.token = token
-        self.opener = build_opener(
-            ProxyHandler({}), HTTPSHandler(context=ssl.create_default_context(cafile=str(ca))),
-            NoRedirect(),
-        )
-
-    def request(
-        self, method: str, path: str, body: dict | None = None, *, token: str | None = None
-    ) -> dict:
-        data = None if body is None else json.dumps(body).encode("utf-8")
-        request = Request(
-            f"{self.endpoint}/v1/{path}", data=data, method=method,
-            headers={"X-Vault-Token": token or self.token, "Content-Type": "application/json"},
-        )
-        with self.opener.open(request, timeout=10) as response:
-            content = response.read(1024 * 1024 + 1)
-        if len(content) > 1024 * 1024:
-            raise RuntimeError("disposable OpenBao response exceeded size bound")
-        return json.loads(content) if content else {}
 
 
 def provision_server_identity(bao: Bao, root: Path, role: str) -> dict[str, str]:

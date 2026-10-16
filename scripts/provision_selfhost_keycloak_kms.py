@@ -18,7 +18,7 @@ import subprocess
 import sys
 from urllib.error import HTTPError, URLError
 
-from with_disposable_event_stream_kms import Bao, public_key_der
+from selfhost_openbao_client import Bao, public_key_der
 
 
 REALMS = ("master", "11id")
@@ -29,6 +29,8 @@ OUTPUTS = frozenset({
     "keycloak_11id_rs256_cert",
     *(f"keycloak_{realm}_{purpose}_token" for realm in REALMS for purpose in PURPOSES),
 })
+SESSION_TTL = "8h"
+MIN_VALIDITY_SECONDS = 7 * 60 * 60
 
 
 class KeycloakBao(Bao):
@@ -55,12 +57,25 @@ def require_data(response: dict, field: str) -> dict:
 def scoped_token(bao: Bao, policy: str, name: str) -> str:
     bao.request("PUT", f"sys/policies/acl/{name}", {"policy": policy})
     result = bao.request("POST", "auth/token/create", {
-        "policies": [name], "no_default_policy": True, "ttl": "1h",
+        "policies": [name], "no_default_policy": True, "ttl": SESSION_TTL,
     }).get("auth", {})
     token = result.get("client_token") if isinstance(result, dict) else None
     if not isinstance(token, str) or len(token) < 20 or token == bao.token:
         raise RuntimeError("disposable Keycloak signer token is unscoped")
+    if (type(result.get("lease_duration")) is not int
+            or result["lease_duration"] < MIN_VALIDITY_SECONDS):
+        raise RuntimeError("disposable Keycloak token expires before tester session")
     return token
+
+
+def require_cert_lifetime(certificate: str) -> None:
+    lifetime = subprocess.run(
+        ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"],
+        input=certificate.encode("ascii"), capture_output=True, timeout=10,
+        check=False,
+    )
+    if lifetime.returncode:
+        raise RuntimeError("disposable Keycloak certificate expires before tester session")
 
 
 def require_mounts(bao: Bao) -> None:
@@ -83,7 +98,7 @@ def provision(bao: Bao) -> dict[str, str]:
         raise RuntimeError("disposable Keycloak PKI exported its CA key")
     bao.request("POST", "keycloak-pki/roles/rs256", {
         "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
-        "max_ttl": "1h", "use_csr_common_name": False, "use_csr_sans": False,
+        "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
     })
     outputs: dict[str, str] = {}
     rsa_policy = ""
@@ -104,7 +119,7 @@ def provision(bao: Bao) -> dict[str, str]:
         csr = require_data(bao.request("POST", f"transit/keys/{rsa_key}/csr",
                                        {"version": 1}), "csr")["csr"]
         signed = require_data(bao.request("POST", "keycloak-pki/sign/rs256", {
-            "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": "1h",
+            "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": SESSION_TTL,
         }), "certificate")
         if "private_key" in signed:
             raise RuntimeError("disposable Keycloak leaf exported a private key")
@@ -113,6 +128,7 @@ def provision(bao: Bao) -> dict[str, str]:
         public_key = metadata["keys"].get("1", {}).get("public_key")
         if not isinstance(public_key, str) or not isinstance(certificate, str):
             raise RuntimeError("disposable Keycloak RS256 public key is absent")
+        require_cert_lifetime(certificate)
         # OpenSSL only receives public data. Verify the mounted certificate is
         # bound to the non-exportable Transit version that Keycloak will sign.
         extracted = subprocess.run(
@@ -175,19 +191,20 @@ def provision(bao: Bao) -> dict[str, str]:
     return outputs
 
 
-def require_empty_private_root(root: Path) -> None:
+def require_available_private_root(root: Path) -> None:
+    if os.name != "posix":
+        raise RuntimeError("disposable Keycloak provisioning requires a POSIX filesystem")
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise RuntimeError("disposable Keycloak output root must be an existing private directory")
-    if os.name != "nt":
-        owner = root.stat()
-        if owner.st_uid != os.getuid() or owner.st_mode & 0o077:
-            raise RuntimeError("disposable Keycloak output root is not owner-private")
-    if any(root.iterdir()):
-        raise RuntimeError("disposable Keycloak output root must be empty")
+    owner = root.stat()
+    if owner.st_uid != os.getuid() or owner.st_mode & 0o077:
+        raise RuntimeError("disposable Keycloak output root is not owner-private")
+    if any((root / name).exists() or (root / name).is_symlink() for name in OUTPUTS):
+        raise RuntimeError("disposable Keycloak output would overwrite an existing secret")
 
 
 def write_outputs(root: Path, outputs: dict[str, str]) -> None:
-    require_empty_private_root(root)
+    require_available_private_root(root)
     if set(outputs) != OUTPUTS:
         raise RuntimeError("disposable Keycloak output would overwrite or omit a secret")
     if any(not isinstance(content, str) or not content or "PRIVATE KEY" in content
@@ -201,6 +218,10 @@ def write_outputs(root: Path, outputs: dict[str, str]) -> None:
             created.append(path)
             with os.fdopen(fd, "w", encoding="ascii") as stream:
                 stream.write(content)
+                stream.flush()
+                # Compose bind-mounts these files into non-root containers.
+                # The owner-private host directory protects their contents.
+                os.fchmod(stream.fileno(), 0o444)
     except (OSError, UnicodeError):
         for path in created:
             try:
@@ -223,7 +244,7 @@ def main() -> int:
         token = token_file.read_text(encoding="ascii").strip()
         if len(token) < 20:
             raise RuntimeError("disposable Keycloak root token is absent")
-        require_empty_private_root(root)
+        require_available_private_root(root)
         write_outputs(root, provision(KeycloakBao(endpoint, ca, token)))
     except (KeyError, OSError, ValueError, RuntimeError, HTTPError, URLError,
             HTTPException) as error:
