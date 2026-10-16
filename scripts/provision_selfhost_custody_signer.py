@@ -19,12 +19,17 @@ from selfhost_openbao_client import (
     ed25519_public_pem,
 )
 
+SOURCE_ROOT = Path(__file__).resolve().parents[1]
+
 
 def private_directory(path: Path) -> Path:
     if (not path.is_absolute() or path.is_symlink() or not path.is_dir()
             or stat.S_IMODE(path.stat().st_mode) != 0o700):
         raise ValueError("operator directory must be an existing private directory")
-    return path.resolve()
+    resolved = path.resolve()
+    if resolved.is_relative_to(SOURCE_ROOT):
+        raise ValueError("operator directory must be outside the source checkout")
+    return resolved
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path,
@@ -103,10 +108,14 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
     def write(path: Path, value: str, mode: int) -> None:
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                              0o600)
-        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
-            stream.write(value)
-            os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
-            os.fchmod(stream.fileno(), mode)
+        try:
+            with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+                stream.write(value)
+                os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+                os.fchmod(stream.fileno(), mode)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
 
     if refresh_token:
         old_token = token_file.read_text(encoding="ascii").strip()
@@ -119,8 +128,16 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
             if error.code != 400:  # Already-expired disposable token.
                 raise
     else:
-        write(public_file, pem, 0o444)
-        write(token_file, token, 0o400)
+        try:
+            write(public_file, pem, 0o444)
+            write(token_file, token, 0o400)
+        except Exception:
+            public_file.unlink(missing_ok=True)
+            try:
+                bao.request("POST", "auth/token/revoke", {"token": token})
+            except (OSError, RuntimeError, HTTPError):
+                pass  # The scoped token expires within one hour.
+            raise
     return hashlib.sha256(public_file.read_bytes()).hexdigest()
 
 
