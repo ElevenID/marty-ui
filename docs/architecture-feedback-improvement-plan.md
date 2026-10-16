@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-16 UTC checkpoint; UI main `a84443a8d`).
+Status: active implementation (2026-10-16 UTC checkpoint; UI main `53009f653`).
 Current delivery priority (2026-10-15): enable outside testers to anonymously
 download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
 preparation and independent archive/Compose/image-pull checks; the same bytes
@@ -47,7 +47,8 @@ the distinct OpenBao HTTPS CA, other application secrets, full Compose
 installation, or a measured 16 GiB operating envelope.
 The preview .2 artifact is unchanged and remains unqualified.
 
-October 16 installed-fixture correction candidate: the synthetic custody hook
+October 16 [#1360](https://github.com/ElevenID/marty-ui/pull/1360)
+merged the installed-fixture correction: the synthetic custody hook
 required plain HTTP OpenBao while the self-host configuration and disposable
 TLS bootstrap require HTTPS. The hook now requires loopback HTTPS, matches
 the installed signing-keys OpenBao port, and verifies the staged public CA.
@@ -55,8 +56,8 @@ Focused tests include a real accepted TLS handshake and wrong-host/foreign-CA
 rejections. This removes a protocol mismatch but does not establish a passing
 installed journey or qualify the tester bundle.
 
-October 16 Keycloak disposable setup candidate: a separate provisioner adds
-the seven catalogued Keycloak remote-key files to an operator-owned private
+The same merged PR added a separate Keycloak disposable provisioner that
+writes the seven catalogued remote-key files to an operator-owned private
 root on the same HTTPS OpenBao: two non-exportable RSA-backed public certs,
 one scoped RSA/HMAC token, and four realm/purpose-scoped JWE tokens. The
 independent live oracle checks certificate-to-Transit binding, all four JWE
@@ -68,8 +69,24 @@ Its JWE policies deliberately cover the initial version only: a disposable
 run must reprovision scoped tokens after rotation. Rotation readiness is not
 claimed for an installed product.
 The two profiles passed separate disposable runs and a local sequential run
-against one HTTPS OpenBao with both independent output oracles. Installed
+against one HTTPS OpenBao with both independent output oracles. PR and
+protected merge-group checks passed. Installed
 Compose use and the clean-install journey remain unproven.
+
+October 16 disposable install-input inventory: the local installed journey
+requires 76 secret files. Existing workload TLS, Keycloak, OpenBao bootstrap,
+and public OpenBao CA paths account for 52 filenames, but do not yet stage
+one persistent install root. The local follow-up generates seventeen further
+text credentials into an owner-private POSIX directory, includes that helper
+in the bundle, and mints the HAIP KMS token under its narrow OpenBao policy.
+Review found that final `0600` host files would be unreadable by distinct
+non-root Compose container UIDs. The generator now flushes each file at
+`0600`, sets the final mode to `0444` inside the `0700` host directory, and
+rolls back new files if that mode transition fails. Linux focused tests cover
+the exact mode and rollback; installed Compose use remains unproven.
+Six optional integration files may be empty only when the rendered integrations
+are disabled. The Cloudflare tunnel token is not used by the local journey.
+This does not close the installed secret roster or qualify the bundle.
 
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and

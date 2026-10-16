@@ -33,6 +33,7 @@ const DEFAULT_ASSETS: &[&str] = &[
     "docker/secrets/selfhost.example",
     "config/keycloak",
     "scripts/bootstrap-selfhost-vault.sh",
+    "scripts/generate_selfhost_disposable_credentials.py",
     "scripts/cloudflared-selfhost.sh",
     "scripts/keycloak-selfhost-start.sh",
     "scripts/load-openbao-token-and-start.sh",
