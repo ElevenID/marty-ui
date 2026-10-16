@@ -40,14 +40,15 @@ REPO = Path(__file__).resolve().parents[1]
 
 
 def require_private_root(root: Path) -> None:
+    if os.name != "posix":
+        raise ValueError("disposable credentials require a POSIX host with private file modes")
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise ValueError("disposable secret root must be an existing private directory")
     if root.resolve().is_relative_to(REPO):
         raise ValueError("disposable secret root must be outside the source checkout")
-    if os.name != "nt":
-        status = root.stat()
-        if status.st_uid != os.getuid() or status.st_mode & 0o077:
-            raise ValueError("disposable secret root must be owner-private")
+    status = root.stat()
+    if status.st_uid != os.getuid() or status.st_mode & 0o077:
+        raise ValueError("disposable secret root must be owner-private")
 
 
 def generate(root: Path, random_hex: Callable[[int], str] = secrets.token_hex) -> None:

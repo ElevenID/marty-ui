@@ -103,7 +103,8 @@ remain external; packaging does not load their values.
 4. Replace every required secret placeholder file.
    For a disposable tester installation, you may instead begin with an empty,
    owner-private secret directory outside the bundle and run
-   `python3 scripts/generate_selfhost_disposable_credentials.py --secret-root /path/to/selfhost-secrets`.
+   `python3 scripts/generate_selfhost_disposable_credentials.py --secret-root /path/to/selfhost-secrets`
+   on Linux or a Linux WSL filesystem; native Windows cannot enforce the required private file modes.
    It creates only seventeen local text credentials and refuses to overwrite
    files. Provision all remaining required certificates, scoped tokens, and
    integration values separately; this helper does not make a bundle qualified
