@@ -165,9 +165,12 @@ def test_shipped_helper_does_not_put_bootstrap_token_in_docker_argv() -> None:
         "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE",
         "NOTIFICATION_TOKEN_OUTPUT_FILE",
         "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE",
+        "HAIP_TOKEN_OUTPUT_FILE",
     ):
         assert f'write_private_token "${output}"' in source
     assert 'write_private_token "$grant_file" "$grant_token"' in source
+    assert "-policy=haip-response-service -no-default-policy -orphan" in source
+    assert "docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro" in source
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX bootstrap helper")
@@ -225,6 +228,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         'bao() { case "$*" in\n'
         '  *signing-keys-managed*) command printf \'{"auth":{"client_token":"signing-new"}}\\n\' ;;\n'
         '  *didcomm-issuance*) command printf \'{"auth":{"client_token":"didcomm-new"}}\\n\' ;;\n'
+        '  *haip-response-service*) command printf \'{"auth":{"client_token":"haip-new"}}\\n\' ;;\n'
         '  *sign-grant-mint-*) command printf \'{"auth":{"client_token":"grant-new"}}\\n\' ;;\n'
         '  *sign-grant-verify*) command printf \'{"auth":{"client_token":"verify-new"}}\\n\' ;;\n'
         '  *credential-service*) command printf \'{"auth":{"client_token":"service-new"}}\\n\' ;;\n'
@@ -236,10 +240,11 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         '[ "$(stat -c %a "$1")" = 600 ] || exit 98; '
         'command mv -f "$@"; }\n'
     )
-    paths = [tmp_path / name for name in bootstrap.TOKEN_NAMES]
+    paths = [tmp_path / name for name in bootstrap.TOKEN_NAMES if name != "haip_kms_token"]
     signing_path = tmp_path / "signing_keys_openbao_token"
     didcomm_path = tmp_path / "didcomm_issuance_openbao_token"
-    paths.extend((signing_path, didcomm_path))
+    haip_path = tmp_path / "haip_kms_token"
+    paths.extend((signing_path, didcomm_path, haip_path))
     for path in paths:
         path.write_text("shipped-public-placeholder", encoding="ascii")
         path.chmod(0o644)
@@ -253,6 +258,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         "PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE": str(tmp_path / "passport_callback_signer_bao_token"),
         "SIGNING_KEYS_TOKEN_OUTPUT_FILE": str(signing_path),
         "DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE": str(didcomm_path),
+        "HAIP_TOKEN_OUTPUT_FILE": str(haip_path),
         "GRANT_TOKEN_OUTPUT_DIR": str(tmp_path),
     }
     with paths[0].open("rb") as old_handle:
@@ -273,6 +279,7 @@ def test_scoped_tokens_replace_public_placeholders_without_exposing_old_fd(
         "callback-new",
         "signing-new",
         "didcomm-new",
+        "haip-new",
     ]
     assert all(stat.S_IMODE(path.stat().st_mode) == 0o444 for path in paths)
     grant_paths = list(tmp_path.glob("sign_grant_*_token"))
@@ -339,7 +346,7 @@ def test_shipped_helper_inherits_token_without_argv_value(
         "#!/bin/sh\n"
         'printf "%s\\n" "$@" > "$FAKE_DOCKER_ARGV"\n'
         'printf "%s" "$BAO_TOKEN" > "$FAKE_DOCKER_ENV"\n'
-        "for name in openbao_service_token openbao_bootstrap_token notification_openbao_token passport_callback_signer_bao_token; do\n"
+        "for name in openbao_service_token openbao_bootstrap_token notification_openbao_token passport_callback_signer_bao_token haip_kms_token; do\n"
         '  printf "%s" synthetic-scoped-token > "$SELFHOST_SECRET_DIR/$name"\n'
         "done\n",
         encoding="ascii",
@@ -355,7 +362,7 @@ def test_shipped_helper_inherits_token_without_argv_value(
         (
             Path(__file__).resolve().parents[1]
             / "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
-        ).read_bytes()
+        ).read_bytes().replace(b"\r\n", b"\n")
     )
     environment = {
         **os.environ,
@@ -409,6 +416,9 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
     helper = tmp_path / "scripts/bootstrap-selfhost-vault.sh"
     helper.parent.mkdir()
     helper.write_text("#!/bin/sh\n", encoding="utf-8")
+    policy = tmp_path / "docker/openbao-haip-workload-policy.hcl"
+    policy.parent.mkdir()
+    policy.write_text('path "didcomm/haip/keys/*" { capabilities = ["read"] }\n', encoding="ascii")
     monkeypatch.setattr(bootstrap, "verify_helper_image", lambda *_args: None)
     monkeypatch.setattr(bootstrap, "verify_reviewed_image", lambda *_args: None)
     container_id = "b" * 64
@@ -443,12 +453,19 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
             if args[-1] == helper_id:
                 directory = str(Path(helper_env["SELFHOST_SECRET_DIR"]).resolve())
                 source = str((tmp_path / "docker/openbao-init.sh").resolve())
+                haip_policy = str((tmp_path / "docker/openbao-haip-workload-policy.hcl").resolve())
                 ca_file = str(Path(helper_env["BAO_CACERT"]).resolve())
                 mounts = [
                     {
                         "Type": "bind",
                         "Source": source,
                         "Destination": "/scripts/openbao-init.sh",
+                        "RW": False,
+                    },
+                    {
+                        "Type": "bind",
+                        "Source": haip_policy,
+                        "Destination": "/scripts/openbao-haip-workload-policy.hcl",
                         "RW": False,
                     },
                     {
@@ -471,6 +488,7 @@ def test_handoff_owns_cleanup_and_never_prints_tokens(
                             "/work-didcomm",
                             "/work-notification",
                             "/work-callback",
+                            "/work-haip",
                             "/work-grants",
                         )
                     ),

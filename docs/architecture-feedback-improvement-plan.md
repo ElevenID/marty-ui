@@ -75,8 +75,9 @@ October 16 disposable install-input inventory: the local installed journey
 requires 76 secret files. Existing workload TLS, Keycloak, OpenBao bootstrap,
 and public OpenBao CA paths account for 52 filenames, but do not yet stage
 one persistent install root. Seventeen further local text credentials can be
-generated independently; the HAIP KMS token must instead be minted under its
-OpenBao policy. Six optional integration files may be empty only when the
+generated independently; the current local follow-up also mints the HAIP KMS
+token under the existing narrow OpenBao policy. Six optional integration files
+may be empty only when the
 rendered integrations are disabled. The Cloudflare tunnel token is not used by
 the local journey. A local candidate now generates just the seventeen random
 credentials into an owner-private directory without overwriting other files.

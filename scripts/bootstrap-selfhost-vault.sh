@@ -28,6 +28,7 @@ SIGNING_KEYS_TOKEN_OUTPUT_FILE="${SIGNING_KEYS_TOKEN_OUTPUT_FILE:-${SELFHOST_SEC
 DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/didcomm_issuance_openbao_token}"
 NOTIFICATION_TOKEN_OUTPUT_FILE="${NOTIFICATION_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/notification_openbao_token}"
 PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/passport_callback_signer_bao_token}"
+HAIP_TOKEN_OUTPUT_FILE="${HAIP_TOKEN_OUTPUT_FILE:-${SELFHOST_SECRET_DIR}/haip_kms_token}"
 
 if [ -z "${BAO_ADDR}" ]; then
     echo "BAO_ADDR must be set to the external Vault/OpenBao address." >&2
@@ -76,9 +77,11 @@ NOTIFICATION_TOKEN_OUTPUT_DIR=$(dirname "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 NOTIFICATION_TOKEN_OUTPUT_BASENAME=$(basename "${NOTIFICATION_TOKEN_OUTPUT_FILE}")
 PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR=$(dirname "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
 PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME=$(basename "${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}")
+HAIP_TOKEN_OUTPUT_DIR=$(dirname "${HAIP_TOKEN_OUTPUT_FILE}")
+HAIP_TOKEN_OUTPUT_BASENAME=$(basename "${HAIP_TOKEN_OUTPUT_FILE}")
 
-mkdir -p "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"
-for output_dir in "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}"; do
+mkdir -p "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}" "${HAIP_TOKEN_OUTPUT_DIR}"
+for output_dir in "${SELFHOST_SECRET_DIR}" "${SERVICE_TOKEN_OUTPUT_DIR}" "${BOOTSTRAP_TOKEN_OUTPUT_DIR}" "${SIGNING_KEYS_TOKEN_OUTPUT_DIR}" "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}" "${NOTIFICATION_TOKEN_OUTPUT_DIR}" "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}" "${HAIP_TOKEN_OUTPUT_DIR}"; do
     if [ -L "${output_dir}" ] || [ ! -d "${output_dir}" ]; then
         echo "Scoped token output directory must be a real directory." >&2
         exit 1
@@ -122,8 +125,10 @@ docker run --rm "$@" \
     -e DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE="/work-didcomm/${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_BASENAME}" \
     -e NOTIFICATION_TOKEN_OUTPUT_FILE="/work-notification/${NOTIFICATION_TOKEN_OUTPUT_BASENAME}" \
     -e PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE="/work-callback/${PASSPORT_CALLBACK_TOKEN_OUTPUT_BASENAME}" \
+    -e HAIP_TOKEN_OUTPUT_FILE="/work-haip/${HAIP_TOKEN_OUTPUT_BASENAME}" \
     -e GRANT_TOKEN_OUTPUT_DIR=/work-grants \
     -v "${REPO_ROOT}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro" \
+    -v "${REPO_ROOT}/docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro" \
     -v "${BAO_CACERT}:/work-kms-ca/ca.crt:ro" \
     -v "${SERVICE_TOKEN_OUTPUT_DIR}:/work-service" \
     -v "${BOOTSTRAP_TOKEN_OUTPUT_DIR}:/work-bootstrap" \
@@ -131,6 +136,7 @@ docker run --rm "$@" \
     -v "${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_DIR}:/work-didcomm" \
     -v "${NOTIFICATION_TOKEN_OUTPUT_DIR}:/work-notification" \
     -v "${PASSPORT_CALLBACK_TOKEN_OUTPUT_DIR}:/work-callback" \
+    -v "${HAIP_TOKEN_OUTPUT_DIR}:/work-haip" \
     -v "${SELFHOST_SECRET_DIR}:/work-grants" \
     quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf \
     /bin/sh -ec '
@@ -163,6 +169,7 @@ export VAULT_ADDR="$BAO_ADDR"
 export VAULT_TOKEN="$BAO_TOKEN"
 
 /bin/sh /scripts/openbao-init.sh
+bao policy write -address="$BAO_ADDR" haip-response-service /scripts/openbao-haip-workload-policy.hcl >/dev/null
 
 write_grant_token() {
     grant_policy="$1"
@@ -215,6 +222,14 @@ if [ -z "$didcomm_token" ]; then
 fi
 write_private_token "$DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE" "$didcomm_token"
 
+haip_token_json="$(bao token create -address="$BAO_ADDR" -policy=haip-response-service -no-default-policy -orphan -format=json)"
+haip_token="$(json_field "$haip_token_json" client_token)"
+if [ -z "$haip_token" ]; then
+    echo "Failed to mint HAIP workload token." >&2
+    exit 1
+fi
+write_private_token "$HAIP_TOKEN_OUTPUT_FILE" "$haip_token"
+
 notification_token_json="$(bao token create -address="$BAO_ADDR" -policy=notification-webhook-service -orphan -format=json)"
 notification_token="$(json_field "$notification_token_json" client_token)"
 
@@ -239,6 +254,7 @@ echo "Use that file as the openbao_service_token secret in the self-host stack."
 echo "Wrote migration-only KMS bootstrap token to ${BOOTSTRAP_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped signing-keys token to ${SIGNING_KEYS_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped DIDComm Issuance token to ${DIDCOMM_ISSUANCE_TOKEN_OUTPUT_FILE}"
+echo "Wrote scoped HAIP workload token to ${HAIP_TOKEN_OUTPUT_FILE}"
 echo "Wrote scoped Notification webhook token to ${NOTIFICATION_TOKEN_OUTPUT_FILE}"
 echo "Use that file as the notification_openbao_token secret in the self-host stack."
 echo "Wrote scoped passport callback HMAC token to ${PASSPORT_CALLBACK_TOKEN_OUTPUT_FILE}"
