@@ -23218,3 +23218,16 @@ Keycloak/OpenBao images passed both realms' rotated browser/cookie, CIBA,
 token/refresh/JWKS, KMS-loss denial and the revised PostgreSQL custody gate;
 its three owned containers were removed. This does not yet prove the bundled
 runner against signed release images or new Raft installed recovery.
+
+Grouped UI [PR #1366](https://github.com/ElevenID/marty-ui/pull/1366)
+now carries the widened Keycloak SQL gate, beta pre-release guard, installed
+self-host Keycloak and Marty post-journey custody checks, and the fresh
+replacement guide on one reviewed head. Auto-merge is armed for required
+checks and the protected merge queue. Local focused suite passed 91 tests,
+Ruff/diff checks passed, and the disposable browser/CIBA/KMS-loss custody
+probe passed. The superseded full-main
+[run 38916424114](https://github.com/ElevenID/marty-ui/actions/runs/38916424114)
+on prior main `dd0d8d17` was cancelled while its remaining Rust jobs were
+active, avoiding another complete qualification cycle before #1366 lands.
+Preserve that run as incomplete evidence; dispatch fresh full-main CI on the
+exact merge commit after protected merge.
