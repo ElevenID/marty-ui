@@ -23090,3 +23090,15 @@ corrects the self-host handoff guide to require remote TLS signers and public
 certificate/CA inputs, consistent with production Compose. Release run
 `38865841692` remained live with Keycloak and OpenBao images built; do not
 infer publication from those completed build jobs.
+
+The K10/K12 grouped local cutover branch now uses the same read-only
+`keycloak-kms-only-verify.sql` in beta's pre-release gate and after Keycloak
+configuration (`35bdd75b2`), retiring its narrower KeyProvider-only count.
+The shared SQL therefore rejects unrelated private-key component fields and
+private-key-named schema objects before a normal beta release can start. The
+PowerShell source parses, and the SQL passed the disposable live Keycloak
+journey while rejecting both installed dirty databases; the installed clean
+replacement and coordinated rollback are still missing. The Stack CD workflow
+publishes artifacts but does not itself run `run_selfhost_business_journey.py`;
+the exact published self-host installed journey must be invoked and qualified
+separately after publication.
