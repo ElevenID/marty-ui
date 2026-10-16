@@ -28,16 +28,21 @@ Additional hook inputs:
 | Variable | Value |
 | --- | --- |
 | `SELFHOST_BAO_AUDIT_URL` | Loopback HTTPS URL for the **same** disposable OpenBao instance used by `signing-keys`; port must match the installed `BAO_ADDR` and its CA must be staged as `openbao_tls_ca_cert` in the private secret root |
-| `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit`, at most one-hour TTL, and only `read` on `transit/keys/cred-issuer-*`, `transit/keys/oid4vp-verifier-*`, and the exact custody signer metadata path |
+| `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit` and at most one-hour TTL; see the exact metadata and self-inspection ACL below |
 | `SELFHOST_KMS_JWK_TOOL` | Set by the installed runner to a fresh `public-kms-jwk` build from the clean exact release source; the Rust converter parses the audited OpenBao PEM and its public coordinates must equal the resolved issuer JWK |
 | `SELFHOST_CUSTODY_SIGNING_TOKEN_FILE` | Outside-repo file containing a short-lived token scoped to the source-approved, non-exportable Ed25519 Transit signer |
 | `SELFHOST_CUSTODY_CHALLENGE`, `SELFHOST_RUN_ID`, `SELFHOST_FIXTURE_SHA256` | Fresh runner-generated challenge and exact prepared run/fixture identity; never supply or reuse these manually |
 
 Before issuing the audit token, the operator must inspect the actual
-`selfhost-qualification-audit` ACL and confirm it grants only `read` on the
-two transit key metadata path families and exact custody signer above. The fixture checks the token's
-policy names and TTL, but does **not** prove the policy's ACL contents or
-record them as verified custody evidence.
+`selfhost-qualification-audit` ACL. It must grant `read` on the two transit
+key metadata families and exact custody signer, `read` on
+`auth/token/lookup-self`, and `update` on `sys/capabilities-self` for the
+runner's own effective-capability check. It must grant no other paths. OpenBao
+returns HTTP 403 for `sys/capabilities-self` without that explicit `update`
+capability; this was verified against the disposable Raft instance. The
+fixture checks policy names and TTL, and the runner checks effective access
+to the signer and selected forbidden paths. The operator must still review
+the full ACL for unrelated grants.
 
 After starting the disposable Raft-backed OpenBao project, provision its
 non-exportable custody signer with the reviewed source helper. Run it as root

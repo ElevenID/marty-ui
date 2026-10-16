@@ -57,6 +57,9 @@ def test_fresh_openbao_instances_enroll_distinct_custody_keys(
 
         def __init__(self, endpoint: str, ca: Path, token: str) -> None:
             assert token == "audit"
+            assert ca == secrets / "openbao_tls_ca_cert"
+            if ca.read_text(encoding="ascii") == "substituted":
+                raise ValueError("invalid installed CA")
             self.ca = ca
 
         def request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -86,11 +89,15 @@ def test_fresh_openbao_instances_enroll_distinct_custody_keys(
         (state / "tls").mkdir(parents=True)
         (state / "tls" / "ca.crt").write_text(f"pem-{suffix}", encoding="ascii")
         (secrets / "openbao_tls_ca_cert").write_text(f"pem-{suffix}", encoding="ascii")
-        observed.append(live_custody_signer(install, state, secrets,
-                                            f"openbao-{suffix}", model, {
-            "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
-            "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
-        }))
+        (state / "tls").chmod(0o000)  # The real Raft state is root-only.
+        try:
+            observed.append(live_custody_signer(install, state, secrets,
+                                                f"openbao-{suffix}", model, {
+                "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+                "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+            }))
+        finally:
+            (state / "tls").chmod(0o700)
     assert observed == [(1, "pem-a"), (1, "pem-b")]
     assert [entry[3] for entry in owned] == [
         {"expected_host_port": 18200}, {"expected_host_port": 18200}]

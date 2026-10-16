@@ -385,12 +385,13 @@ def live_custody_signer(install_root: Path, openbao_state_root: Path,
             or not openbao_state_root.is_dir()):
         raise ValueError("custody OpenBao state root is invalid")
     state_root = openbao_state_root.resolve()
-    ca = state_root / "tls" / "ca.crt"
     staged_ca = secret_root / "openbao_tls_ca_cert"
-    if (ca.is_symlink() or staged_ca.is_symlink() or not ca.is_file()
-            or not staged_ca.is_file() or ca.stat().st_size > 65536
-            or ca.read_bytes() != staged_ca.read_bytes()):
-        raise ValueError("custody OpenBao CA differs from the installed CA")
+    # The Raft state directory is root-only. The installed public CA is the
+    # readable copy supplied to application workloads; the owned container's
+    # loopback binding below ties its verified TLS endpoint to that state.
+    if (staged_ca.is_symlink() or not staged_ca.is_file()
+            or not 0 < staged_ca.stat().st_size <= 65536):
+        raise ValueError("custody OpenBao installed CA is invalid")
     _, image = exact_images(install_root)
     openbao_network(openbao_project, state_root, image,
                     expected_host_port=int(match.group(1)))
@@ -401,7 +402,7 @@ def live_custody_signer(install_root: Path, openbao_state_root: Path,
     token = token_file.read_text(encoding="ascii").strip()
     if not token:
         raise ValueError("custody audit token is absent")
-    bao = Bao(endpoint, ca, token)
+    bao = Bao(endpoint, staged_ca, token)
     lookup = bao.request("GET", "auth/token/lookup-self").get("data", {})
     policies = lookup.get("policies")
     if (not isinstance(policies, list) or "selfhost-qualification-audit" not in policies
