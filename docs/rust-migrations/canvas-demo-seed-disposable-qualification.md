@@ -21,3 +21,24 @@ The example env deliberately contains a placeholder organization actor key. `see
 - Run `MARTY_CANVAS_SEED_REQUIRE_DATABASE_TEST=1` and `MARTY_CANVAS_SEED_TEST_DATABASE_URL` against disposable PostgreSQL in the hosted Rust contracts lane. The test checks current and optional legacy schema upsert, rollback, and transition lookup.
 - Recheck the image build, disposable two-run journey, local Canvas launch, wallet/mirror result, and demo recording at the exact PR head.
 - Obtain independent maintainer review with no P1–P3 findings on the Rust target and Python deletion before merging.
+
+## Retired manual helper scope
+
+The eight unreferenced root `scripts/*.rb` snippets are retired at Git checkpoint
+`b78bd98ac`. They performed Canvas admin/pseudonym lookup and initialization,
+LTI developer-key and course/tool/learner bootstrap, development key/token minting,
+and session inspection. Their hardcoded beta defaults and identifiers are not
+current configuration or a supported provisioning contract.
+
+The supported implementation owner remains `rust/crates/canvas-demo-seed`.
+Its `assets/canvas_lti_setup.rb` and `assets/mint_canvas_admin_token.rb` are still
+embedded by the Rust Rails adapter and used by the actual seed runner; neither
+asset is removed. Existing Rails, CLI, disposable ownership and idempotence tests
+remain. Removing loose snippets does not declare the pending two-run disposable
+journey, browser launch, wallet/mirror behavior or recording complete.
+
+Admin/session troubleshooting remains a potential operator feature, not an
+implemented replacement CLI. If needed, add a bounded, authorized diagnostic to
+the current owner with explicit disposable/tenant scope and secret-safe output.
+Do not recreate standalone credential minting or a hardcoded shared environment
+as a shortcut. The seeder's existing controlled token/bootstrap paths remain.
