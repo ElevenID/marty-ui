@@ -1,6 +1,11 @@
 # Post-deletion Rust passport beta cutover
 
-This is the operative handoff for the first Rust-only aggregate beta release.
+Historical handoff, superseded on 2026-10-16. The non-public beta and
+self-host installations are replaced with fresh KMS-only stacks; do not run
+this in-place fence or data-migration procedure. Follow the
+[installed KMS-only cutover](../keycloak-kms-installed-cutover.md) instead.
+
+The original handoff for the first Rust-only aggregate beta release follows.
 Run it from a clean checkout of the exact protected-main source behind the
 published signed stack manifest. Keep all receipts and operator session files
 outside the checkout. The target is `elevenid-beta`; production is a continuity
