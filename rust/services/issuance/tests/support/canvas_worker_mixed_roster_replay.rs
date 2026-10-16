@@ -288,6 +288,7 @@ pub async fn replay(
             "BAO_ADDR".into(),
             std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_ORIGIN").unwrap(),
         ),
+        ("BAO_CACERT".into(), std::env::var("SSL_CERT_FILE").unwrap()),
         (
             "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE".into(),
             std::env::var("MARTY_CANVAS_WORKER_MIXED_ROSTER_GRANT_TOKEN_FILE").unwrap(),

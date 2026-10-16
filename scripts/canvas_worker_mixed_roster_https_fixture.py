@@ -328,11 +328,14 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                         _respond(self, {}, 500)
 
             self.grant_server = GrantServer(("127.0.0.1", 0), GrantHandler)
+            self.grant_server.socket = self.server.socket.context.wrap_socket(
+                self.grant_server.socket, server_side=True
+            )
             self.grant_thread = Thread(
                 target=self.grant_server.serve_forever, daemon=True
             )
             self.grant_thread.start()
-            self.grant_origin = f"http://127.0.0.1:{self.grant_server.server_port}"
+            self.grant_origin = f"https://127.0.0.1:{self.grant_server.server_port}"
             self.grant_token_file = Path(self.certificates.name) / "grant-mint-token"
             self.grant_token_file.write_text(GRANT_MINT_TOKEN + "\n", encoding="ascii")
             self.signer_server = SignerServer(("127.0.0.1", 0), SignerHandler)
