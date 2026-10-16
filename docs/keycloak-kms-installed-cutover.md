@@ -34,6 +34,20 @@ database recoverability, not recovery of beta's in-memory KMS or the new
 Raft stack. Do not treat the older procedure below as authorization for live
 mutation.
 
+The current self-host Compose source supports a parallel local rehearsal:
+`docker-compose.selfhost.prod.yml` exposes configurable loopback Keycloak,
+Gateway, and edge ports (`SELFHOST_*_HOST_PORT`), while
+`docker-compose.selfhost.openbao.yml` exposes a configurable OpenBao loopback
+port and `SELFHOST_OPENBAO_STATE_DIR`. An explicit distinct Compose project
+name and separate state/secret roots can isolate the new Raft instance and
+databases. Do not enable the old fixed-name beta proxy/tunnel services in the
+parallel project: their `container_name` values would collide. Test the
+rendered all-profile model and actual Docker ownership/port bindings before
+starting it, and make the traffic switch at the external edge only after
+installed acceptance. The disposable self-host journey runner already
+requires an empty named project and empty state root, but its report alone is
+unqualified; KMS custody and Raft restore proof remain separate gates.
+
 ## Superseded database-only design and historical rehearsal evidence
 
 The following design records earlier work for review. Its implementation
