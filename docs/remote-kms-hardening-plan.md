@@ -23274,3 +23274,11 @@ run after the final documentation commit; exact-head [CI run
 38924603611](https://github.com/ElevenID/marty-ui/actions/runs/38924603611)
 is running. These are candidate and local evidence until protected merge and
 exact-main/release qualification.
+
+Final PR #1366 head `3ef38fdc8` passed its complete exact-head CI
+[run 38924603611](https://github.com/ElevenID/marty-ui/actions/runs/38924603611)
+and all required PR checks. It entered the protected merge queue as synthetic
+commit `45e6ce7d`; policy, Organization Quality and CodeQL Actions passed,
+while merge-group CI and CodeQL Rust remain active. Do not dispatch full-main
+CI or claim the tag until the protected merge and resulting main SHA are
+verified.
