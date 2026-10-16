@@ -78,9 +78,10 @@ integration contract in its process environment before it touches Docker.
 Supply the test password through an operator secret runner. Supply a separate
 absolute Compose env file outside source control; it must resolve
 `SELFHOST_STATE_DIR`, `SELFHOST_SECRET_DIR`, hostnames, external `BAO_ADDR`, and
-all other variables in the prepared ZIP. Populate every required secret file,
-including scoped OpenBao tokens and workload TLS identity material, in the
-secret root before running. The state root must exist and be empty. Provide
+all other variables in the prepared ZIP. Populate the required scoped OpenBao
+tokens and public certificate/CA files in the secret root before running.
+Workload TLS identity private-key files are forbidden; use the reviewed remote
+signer bootstrap. The state root must exist and be empty. Provide
 `--fixture-setup` as the absolute path to
 `scripts/setup_selfhost_synthetic_fixture.py` in the exact prepared source
 checkout, and `--fixture-setup-sha256` as its exact SHA-256. The runner rejects
