@@ -23005,3 +23005,16 @@ not replace the quiesced coordinated PostgreSQL/Raft/Redis/applicant restore
 rehearsal or authorize the cutover. Details are on local branch
 `feat/kms-keycloak-clean-cutover-20261016` in
 `docs/keycloak-kms-installed-cutover.md`.
+
+PR #1362 second head `ac7c9d323` preserved the frozen harness and its
+published-worker parity preflight passed in
+[CI run 38855872698](https://github.com/ElevenID/marty-ui/actions/runs/38855872698)
+(Canvas job step 24, 05:37:56–05:39:57Z). Release Contract Tests found one
+remaining synthetic fixture assertion requiring the obsolete HTTP grant URL;
+6,881 tests passed and that one failed. The run was cancelled after the
+specific parity gate passed to avoid spending further CI on the superseded
+head. Local correction requires HTTPS for the grant endpoint in the fixture
+transport contract and its driver doubles, while retaining the distinct
+internal signer HTTP test path. All 15 fixture and 36 driver focused tests,
+Ruff, Python compilation and diff checks passed. Updated PR head
+`de001b4ba` is pushed; await its fresh exact-head checks before merge.
