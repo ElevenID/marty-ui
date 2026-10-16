@@ -18,7 +18,7 @@ import subprocess
 import sys
 from urllib.error import HTTPError, URLError
 
-from with_disposable_event_stream_kms import Bao, public_key_der
+from selfhost_openbao_client import Bao, public_key_der
 
 
 REALMS = ("master", "11id")
@@ -175,19 +175,20 @@ def provision(bao: Bao) -> dict[str, str]:
     return outputs
 
 
-def require_empty_private_root(root: Path) -> None:
+def require_available_private_root(root: Path) -> None:
+    if os.name != "posix":
+        raise RuntimeError("disposable Keycloak provisioning requires a POSIX filesystem")
     if not root.is_absolute() or root.is_symlink() or not root.is_dir():
         raise RuntimeError("disposable Keycloak output root must be an existing private directory")
-    if os.name != "nt":
-        owner = root.stat()
-        if owner.st_uid != os.getuid() or owner.st_mode & 0o077:
-            raise RuntimeError("disposable Keycloak output root is not owner-private")
-    if any(root.iterdir()):
-        raise RuntimeError("disposable Keycloak output root must be empty")
+    owner = root.stat()
+    if owner.st_uid != os.getuid() or owner.st_mode & 0o077:
+        raise RuntimeError("disposable Keycloak output root is not owner-private")
+    if any((root / name).exists() or (root / name).is_symlink() for name in OUTPUTS):
+        raise RuntimeError("disposable Keycloak output would overwrite an existing secret")
 
 
 def write_outputs(root: Path, outputs: dict[str, str]) -> None:
-    require_empty_private_root(root)
+    require_available_private_root(root)
     if set(outputs) != OUTPUTS:
         raise RuntimeError("disposable Keycloak output would overwrite or omit a secret")
     if any(not isinstance(content, str) or not content or "PRIVATE KEY" in content
@@ -201,6 +202,10 @@ def write_outputs(root: Path, outputs: dict[str, str]) -> None:
             created.append(path)
             with os.fdopen(fd, "w", encoding="ascii") as stream:
                 stream.write(content)
+                stream.flush()
+                # Compose bind-mounts these files into non-root containers.
+                # The owner-private host directory protects their contents.
+                os.fchmod(stream.fileno(), 0o444)
     except (OSError, UnicodeError):
         for path in created:
             try:
@@ -223,7 +228,7 @@ def main() -> int:
         token = token_file.read_text(encoding="ascii").strip()
         if len(token) < 20:
             raise RuntimeError("disposable Keycloak root token is absent")
-        require_empty_private_root(root)
+        require_available_private_root(root)
         write_outputs(root, provision(KeycloakBao(endpoint, ca, token)))
     except (KeyError, OSError, ValueError, RuntimeError, HTTPError, URLError,
             HTTPException) as error:

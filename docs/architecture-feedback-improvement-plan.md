@@ -88,6 +88,19 @@ Six optional integration files may be empty only when the rendered integrations
 are disabled. The Cloudflare tunnel token is not used by the local journey.
 This does not close the installed secret roster or qualify the bundle.
 
+October 16 handoff continuation: the reviewed disposable text credential and
+HAIP-token follow-up [#1361](https://github.com/ElevenID/marty-ui/pull/1361)
+merged as `c0a06263f` after protected merge-group qualification. The next
+candidate puts the seven Keycloak disposable remote-key inputs in the same
+owner-private install root without overwriting existing files, gives them
+non-root-readable final modes for Compose bind mounts, and includes only its
+small shared HTTPS OpenBao client and provisioner in the extracted bundle.
+Independent review found that native Windows could not enforce the private
+POSIX root/mode contract; the candidate now rejects non-POSIX hosts.
+Focused Linux and Windows tests pass; this is not an installed journey, new
+published preview, or supported handoff. The remaining secret inputs and
+fresh installed acceptance still need evidence.
+
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and
 Canvas acceptance ownership, narrow compatibility code, and fast test layers
