@@ -283,6 +283,32 @@ def verify_database_gate(container: str) -> None:
         input_text=(ROOT / "scripts/sql/keycloak-kms-only-verify.sql").read_text())
 
 
+def verify_private_jwk_rejected(container: str) -> None:
+    """Prove that an unrelated component cannot hide a private JWK as `jwk`."""
+    marker = "9c7b45e8-b06c-4f41-bb2f-e181812cf72a"
+    inserted = run(
+        "docker", "exec", container, "psql", "-U", "keycloak", "-d", "keycloak",
+        "-At", "-c",
+        "INSERT INTO component_config (id, component_id, name, value) "
+        f"SELECT '{marker}', id, 'jwk', '{{\"kty\":\"RSA\",\"d\":\"synthetic\"}}' "
+        "FROM component LIMIT 1 RETURNING id",
+    )
+    if marker not in inserted:
+        raise RuntimeError("synthetic private JWK was not inserted")
+    try:
+        try:
+            verify_database_gate(container)
+        except RuntimeError as error:
+            if "Keycloak KMS-only custody failed" not in str(error):
+                raise
+        else:
+            raise RuntimeError("Keycloak custody gate accepted a private JWK")
+    finally:
+        run("docker", "exec", container, "psql", "-U", "keycloak", "-d", "keycloak",
+            "-c", f"DELETE FROM component_config WHERE id = '{marker}'")
+    verify_database_gate(container)
+
+
 def verify_jwt(jwt: str, jwks: dict, expected_kid: str,
                expected_issuer: str) -> bytes:
     parts = jwt.split(".")
@@ -933,6 +959,7 @@ def probe(keycloak_image: str, openbao_image: str, jar: Path,
             if database_key_counts(pg_name) != (0, 0):
                 raise RuntimeError("Keycloak token issuance stored private key material")
             verify_database_gate(pg_name)
+            verify_private_jwk_rejected(pg_name)
             scoped_token.write_text("invalid-disposable-token", encoding="ascii")
             for realm, username in (
                 ("master", "probe"),

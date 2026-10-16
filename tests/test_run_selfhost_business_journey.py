@@ -1,12 +1,14 @@
 """Installed journey status gate refuses incomplete service closure and health."""
 
 import hashlib
+from io import BytesIO
 import json
 import shutil
 import subprocess
 import sys
 import uuid
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -30,6 +32,136 @@ from run_selfhost_business_journey import (  # noqa: E402
     verify_kms_custody,
 )
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
+
+
+def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    sql_path = source / "scripts/sql/keycloak-kms-only-verify.sql"
+    sql_path.parent.mkdir(parents=True)
+    # A local replacement with the expected markers must never be executed.
+    sql_path.write_text("-- Read-only release check\nBEGIN READ ONLY;\nCOMMIT;\n",
+                        encoding="utf-8")
+    reviewed_sql = "-- Read-only release check\nBEGIN READ ONLY;\nSELECT 1;\nCOMMIT;\n"
+    source_sha = "a" * 40
+    observed: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_command(argv: list[str], **kwargs: object) -> str:
+        observed.append((argv, kwargs))
+        if argv[:2] == ["git", "show"]:
+            return reviewed_sql
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    compose = ["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"]
+    environment = {"DOCKER_CONFIG": str(tmp_path / "anonymous")}
+    runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                            source_sha, environment)
+    assert len(observed) == 2
+    assert observed[0][0] == ["git", "show", f"{source_sha}:{runner.KEYCLOAK_SQL_PATH}"]
+    assert observed[0][1]["cwd"] == source
+    argv, kwargs = observed[1]
+    assert argv[:len(compose)] == compose
+    assert argv[len(compose):] == ["exec", "-T", "postgres", "psql", "-X", "-q",
+                                  "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"]
+    assert kwargs["cwd"] == tmp_path
+    assert kwargs["env"] == environment
+    assert kwargs["input_text"] == reviewed_sql
+
+    with pytest.raises(ValueError, match="custody source is invalid"):
+        runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                                "main", environment)
+    assert len(observed) == 2
+
+    def missing_reviewed_sql(argv: list[str], **_kwargs: object) -> str:
+        if argv[:2] == ["git", "show"]:
+            raise ValueError("installed journey command returned failure")
+        pytest.fail("database command ran without reviewed SQL")
+
+    monkeypatch.setattr(runner, "command", missing_reviewed_sql)
+    with pytest.raises(ValueError, match="installed journey command returned failure"):
+        runner.verify_keycloak_database_custody(compose, tmp_path, source,
+                                                source_sha, environment)
+
+
+def test_installed_keycloak_probe_issues_and_refreshes_both_realms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "keycloak_admin_password").write_text("admin-secret\n", encoding="utf-8")
+    requests: list[tuple[str, dict[str, str]]] = []
+
+    class Opener:
+        def open(self, request, *, timeout: int):
+            assert timeout == 20
+            fields = {key: values[0] for key, values in
+                      parse_qs(request.data.decode("ascii")).items()}
+            requests.append((request.full_url, fields))
+            return BytesIO(json.dumps({"token_type": "Bearer",
+                                       "access_token": "access",
+                                       "refresh_token": "refresh"}).encode("utf-8"))
+
+    monkeypatch.setattr(runner, "build_opener", lambda *_args: Opener())
+    runner.exercise_installed_keycloak_keys(
+        {"SELFHOST_KEYCLOAK_URL": "http://127.0.0.1:18080",
+         "SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
+         "SELFHOST_TEST_PASSWORD": "operator-secret"}, tmp_path)
+    assert [(url.split("/realms/")[1].split("/")[0], fields["grant_type"])
+            for url, fields in requests] == [
+                ("master", "password"), ("master", "refresh_token"),
+                ("11id", "password"), ("11id", "refresh_token")]
+    assert requests[0][1]["username"] == "admin"
+    assert requests[2][1]["username"] == "operator@selfhost.marty.invalid"
+    assert all(fields["client_id"] == "admin-cli" for _, fields in requests)
+
+
+def test_installed_keycloak_probe_fails_closed_without_leaking_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "keycloak_admin_password").write_text("admin-secret", encoding="utf-8")
+
+    class Opener:
+        def open(self, _request, *, timeout: int):
+            raise RuntimeError("admin-secret operator-secret")
+
+    monkeypatch.setattr(runner, "build_opener", lambda *_args: Opener())
+    environment = {"SELFHOST_KEYCLOAK_URL": "http://localhost:18080",
+                   "SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
+                   "SELFHOST_TEST_PASSWORD": "operator-secret"}
+    with pytest.raises(ValueError, match="installed Keycloak token use failed") as error:
+        runner.exercise_installed_keycloak_keys(environment, tmp_path)
+    assert "admin-secret" not in str(error.value)
+    assert "operator-secret" not in str(error.value)
+    with pytest.raises(ValueError, match="disposable loopback"):
+        runner.exercise_installed_keycloak_keys(
+            {**environment, "SELFHOST_KEYCLOAK_URL": "https://external.example"}, tmp_path)
+
+
+def test_installed_marty_custody_scans_schema_and_written_content(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_command(argv: list[str], **kwargs: object) -> str:
+        observed.append((argv, kwargs))
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    compose = ["docker", "compose", "--project-name", "marty-selfhost-qual-1234567890abcdef"]
+    runner.verify_marty_database_custody(compose, tmp_path, {})
+    assert len(observed) == 2
+    assert all(argv[:len(compose)] == compose for argv, _ in observed)
+    assert all(argv[-3:-1] == ["-d", "marty"] for argv, _ in observed)
+    assert [argv[-1] for argv, _ in observed] == ["-At", "-q"]
+    assert observed[0][1]["input_text"] == runner.PRIVATE_KEY_SCHEMA_QUERY
+    assert observed[1][1]["input_text"] == runner.PRIVATE_KEY_CONTENT_QUERY
+
+    def dirty_schema(*_args: object, **_kwargs: object) -> str:
+        return "table:public.private_key_cache"
+
+    monkeypatch.setattr(runner, "command", dirty_schema)
+    with pytest.raises(ValueError, match="private-key schema"):
+        runner.verify_marty_database_custody(compose, tmp_path, {})
 
 
 def test_rust_public_key_converter_uses_clean_source_and_fresh_build(

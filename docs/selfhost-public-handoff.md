@@ -59,6 +59,12 @@ project and volumes after startup, including when the journey fails. It does
 not delete the external state or secret directories. A passing component
 report remains **unqualified**: an outer gate must own external OpenBao,
 KMS custody proof, trusted fixture creation, signatures, and publication.
+After the public journey, the runner executes source-bound read-only Keycloak
+database custody SQL inside its owned PostgreSQL service. It rejects local
+KeyProvider secrets, private-key fields and private-key-named schema objects
+before teardown without printing stored values. The same runner reuses the
+native migration verifier's Marty schema and content scans after the journey
+writes, rejecting private-key storage in the installed database.
 The integration test requires a real PKCE user, active issuer and verifier DID
 profiles, and proves issue/present/allow followed by revoke/present/deny
 through public routes.
@@ -78,9 +84,10 @@ integration contract in its process environment before it touches Docker.
 Supply the test password through an operator secret runner. Supply a separate
 absolute Compose env file outside source control; it must resolve
 `SELFHOST_STATE_DIR`, `SELFHOST_SECRET_DIR`, hostnames, external `BAO_ADDR`, and
-all other variables in the prepared ZIP. Populate every required secret file,
-including scoped OpenBao tokens and workload TLS identity material, in the
-secret root before running. The state root must exist and be empty. Provide
+all other variables in the prepared ZIP. Populate the required scoped OpenBao
+tokens and public certificate/CA files in the secret root before running.
+Workload TLS identity private-key files are forbidden; use the reviewed remote
+signer bootstrap. The state root must exist and be empty. Provide
 `--fixture-setup` as the absolute path to
 `scripts/setup_selfhost_synthetic_fixture.py` in the exact prepared source
 checkout, and `--fixture-setup-sha256` as its exact SHA-256. The runner rejects

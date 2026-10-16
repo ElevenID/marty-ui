@@ -20,11 +20,14 @@ import time
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
+from urllib.parse import urlencode, urlsplit
+from urllib.request import ProxyHandler, Request, build_opener
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
 from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
+from qualify_selfhost_migrations import PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
 
@@ -33,6 +36,7 @@ SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
 TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
 FIXTURE_PATH = "scripts/setup_selfhost_synthetic_fixture.py"
+KEYCLOAK_SQL_PATH = "scripts/sql/keycloak-kms-only-verify.sql"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
 JOURNEY_INPUTS = ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL",
                   "SELFHOST_PUBLIC_DOMAIN", "SELFHOST_TEST_USERNAME",
@@ -80,10 +84,12 @@ def measured(diagnostics: RunDiagnostics | None, name: str):
 
 
 def command(args: list[str], *, cwd: Path | None = None,
-            env: dict[str, str] | None = None, timeout: int = 60) -> str:
+            env: dict[str, str] | None = None, timeout: int = 60,
+            input_text: str | None = None) -> str:
     try:
         result = subprocess.run(args, cwd=cwd, env=env, timeout=timeout,
-                                capture_output=True, text=True, check=False)
+                                input=input_text, capture_output=True,
+                                text=True, check=False)
     except (OSError, subprocess.SubprocessError) as error:
         raise ValueError("installed journey command failed") from error
     if result.returncode:
@@ -91,6 +97,84 @@ def command(args: list[str], *, cwd: Path | None = None,
         # an artifact or exception; the private runner log is operator-owned.
         raise ValueError("installed journey command returned failure")
     return result.stdout
+
+
+def verify_keycloak_database_custody(compose: list[str], install_root: Path,
+                                     source_checkout: Path,
+                                     source_sha: str,
+                                     environment: dict[str, str]) -> None:
+    """Run the reviewed read-only custody gate inside the owned PostgreSQL service."""
+    if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
+        raise ValueError("reviewed Keycloak database custody source is invalid")
+    sql = command(["git", "show", f"{source_sha}:{KEYCLOAK_SQL_PATH}"],
+                  cwd=source_checkout)
+    if not sql.startswith("-- Read-only release check") or "BEGIN READ ONLY;" not in sql:
+        raise ValueError("reviewed Keycloak database custody SQL is invalid")
+    command([*compose, "exec", "-T", "postgres", "psql", "-X", "-q",
+             "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "keycloak"],
+            cwd=install_root, env=environment, input_text=sql)
+
+
+def exercise_installed_keycloak_keys(environment: dict[str, str],
+                                    secret_root: Path) -> None:
+    """Require issuance and refresh in both installed realms before the SQL scan."""
+    base = environment.get("SELFHOST_KEYCLOAK_URL", "")
+    parsed = urlsplit(base)
+    if (parsed.scheme != "http" or parsed.hostname not in {"127.0.0.1", "localhost"}
+            or parsed.username or parsed.password or parsed.path not in {"", "/"}
+            or parsed.query or parsed.fragment):
+        raise ValueError("installed Keycloak URL must use disposable loopback HTTP")
+    password_file = secret_root / "keycloak_admin_password"
+    if password_file.is_symlink() or not password_file.is_file():
+        raise ValueError("installed Keycloak admin password is absent or linked")
+    admin_password = password_file.read_text(encoding="utf-8").strip()
+    test_username = environment.get("SELFHOST_TEST_USERNAME", "")
+    test_password = environment.get("SELFHOST_TEST_PASSWORD", "")
+    if not admin_password or not test_username or not test_password:
+        raise ValueError("installed Keycloak probe credentials are absent")
+    opener = build_opener(ProxyHandler({}))
+
+    def token(realm: str, fields: dict[str, str]) -> dict:
+        request = Request(
+            f"{base.rstrip('/')}/realms/{realm}/protocol/openid-connect/token",
+            data=urlencode({"client_id": "admin-cli", **fields}).encode("ascii"),
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        try:
+            with opener.open(request, timeout=20) as response:
+                result = json.load(response)
+        except Exception:
+            # Never propagate an HTTP body, credential, or token to diagnostics.
+            raise ValueError("installed Keycloak token use failed") from None
+        if (not isinstance(result, dict) or result.get("token_type") != "Bearer"
+                or not isinstance(result.get("access_token"), str)
+                or not result["access_token"]
+                or not isinstance(result.get("refresh_token"), str)
+                or not result["refresh_token"]):
+            raise ValueError("installed Keycloak token response is incomplete")
+        return result
+
+    for realm, username, password in (
+        ("master", "admin", admin_password),
+        ("11id", test_username, test_password),
+    ):
+        issued = token(realm, {"grant_type": "password", "username": username,
+                               "password": password})
+        token(realm, {"grant_type": "refresh_token",
+                      "refresh_token": issued["refresh_token"]})
+
+
+def verify_marty_database_custody(compose: list[str], install_root: Path,
+                                  environment: dict[str, str]) -> None:
+    """Reject private-key schema and content after representative installed writes."""
+    psql = [*compose, "exec", "-T", "postgres", "psql", "-X",
+            "-v", "ON_ERROR_STOP=1", "-U", "postgres", "-d", "marty"]
+    schema = command([*psql, "-At"], cwd=install_root, env=environment,
+                     input_text=PRIVATE_KEY_SCHEMA_QUERY)
+    if schema.strip():
+        raise ValueError("installed Marty database retains private-key schema")
+    command([*psql, "-q"], cwd=install_root, env=environment,
+            input_text=PRIVATE_KEY_CONTENT_QUERY)
 
 
 def build_public_kms_jwk_tool(source_checkout: Path, target_root: Path) -> Path:
@@ -362,6 +446,7 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       evidence: Path, signature: Path, public_key: Path,
                       preflight: dict, trusted_keys: frozenset[str],
                       diagnostics: RunDiagnostics | None = None,
+                      source_checkout: Path | None = None,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     with measured(diagnostics, "fresh_project"):
@@ -413,6 +498,16 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         with measured(diagnostics, "public_journey"):
             command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                      JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
+        with measured(diagnostics, "keycloak_issuance_refresh"):
+            exercise_installed_keycloak_keys(journey_env, secret_root)
+        with measured(diagnostics, "keycloak_database_custody"):
+            if source_checkout is None:
+                raise ValueError("release source is required for Keycloak custody")
+            verify_keycloak_database_custody(compose, install_root,
+                                              source_checkout, preflight["source_sha"],
+                                              environment)
+        with measured(diagnostics, "marty_database_custody"):
+            verify_marty_database_custody(compose, install_root, environment)
     except Exception as error:
         failure = error
     finally:
@@ -502,7 +597,8 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight, trusted_keys, diagnostics)
+            args.kms_custody_public_key, preflight, trusted_keys, diagnostics,
+            source_checkout=args.source_checkout)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
@@ -512,6 +608,9 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             "fixture_setup_sha256": args.fixture_setup_sha256,
             "kms_custody_evidence_sha256": custody_sha256,
             "public_journey": "passed", "clean_start": "observed",
+            "keycloak_issuance_refresh": "passed",
+            "keycloak_database_custody": "passed",
+            "marty_database_custody": "passed",
             "owned_teardown": "observed", "observed_services": sorted(states)}
 
 
