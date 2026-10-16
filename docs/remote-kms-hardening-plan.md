@@ -23128,7 +23128,8 @@ Keep the old beta OpenBao process running during the temporary rollback
 window; after acceptance retire the old stack and private-key-bearing
 Keycloak database. No old key or private-key row migration, compatibility
 fallback, or migration script is planned. The local database-only swap helper
-and earlier in-place Keycloak cutover design are superseded, not approved for
+was removed from the cutover branch; it and the earlier in-place Keycloak
+cutover design are superseded, not approved for
 installed use. See the corrected local
 `feat/kms-keycloak-clean-cutover-20261016` document.
 
@@ -23143,3 +23144,13 @@ current UI release manifest adds the fifth, KMS-backed `keycloak` image.
 contract and its tests, cut and pin a new immutable harness release, then
 re-run the exact release gates; do not weaken the image-set check or treat
 the current release run as published acceptance.
+
+Integration harness fix [PR #438](https://github.com/ElevenID/marty-integration-tests/pull/438)
+is open at `2dc9c46` with auto-merge armed. It requires the five digest-bound
+images including Keycloak, validates installed evidence against the same
+manifest, and bumps the harness to `1.2.88`. Local validation passed 1,028
+unit tests with two skips, focused renderer and interoperability tests, Ruff
+for modified scripts, and diff checks. PR exact-head checks and protected
+merge are pending. Release run `38865841692` is terminal failure; its later
+publication jobs were skipped. A new published harness artifact and updated
+UI lock are needed before another qualified release attempt.
