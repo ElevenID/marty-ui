@@ -27,7 +27,7 @@ Additional hook inputs:
 
 | Variable | Value |
 | --- | --- |
-| `SELFHOST_BAO_AUDIT_URL` | Loopback HTTP URL for the **same** disposable OpenBao instance used by `signing-keys`; port must match the installed `BAO_ADDR` |
+| `SELFHOST_BAO_AUDIT_URL` | Loopback HTTPS URL for the **same** disposable OpenBao instance used by `signing-keys`; port must match the installed `BAO_ADDR` and its CA must be staged as `openbao_tls_ca_cert` in the private secret root |
 | `SELFHOST_BAO_AUDIT_TOKEN_FILE` | Outside-repo file containing a token with policy `selfhost-qualification-audit`, at most one-hour TTL, and only `read` on `transit/keys/cred-issuer-*` and `transit/keys/oid4vp-verifier-*` |
 | `SELFHOST_KMS_JWK_TOOL` | Set by the installed runner to a fresh `public-kms-jwk` build from the clean exact release source; the Rust converter parses the audited OpenBao PEM and its public coordinates must equal the resolved issuer JWK |
 | `SELFHOST_CUSTODY_SIGNING_KEY_FILE` | Outside-repo, short-lived Ed25519 private PEM approved for this exact qualification release |
@@ -60,8 +60,10 @@ disposable run. The signed statement records both managed transit key
 references, versions, and public profile selector tuples. The test separately
 exercises issue, present, verify, revoke, and denial through public routes.
 
-The hook requires `SELFHOST_GATEWAY_URL`, `SELFHOST_KEYCLOAK_URL`, and
-`SELFHOST_BAO_AUDIT_URL` to be loopback HTTP URLs. The installed Compose model
+The hook requires `SELFHOST_GATEWAY_URL` and `SELFHOST_KEYCLOAK_URL` to be
+loopback HTTP URLs, and `SELFHOST_BAO_AUDIT_URL` to be loopback HTTPS. It
+verifies OpenBao TLS with the staged CA, not ambient trust settings. The
+installed Compose model
 must show the same synthetic operator and organization in `db-migrate` and
 `keycloak-configurator`, with `signing-keys` using the matching
 `host.docker.internal` OpenBao port. The gateway and Keycloak URLs must match

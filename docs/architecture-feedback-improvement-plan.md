@@ -1,7 +1,7 @@
 # Architecture and development-feedback improvement tracker
 
 Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-16 UTC checkpoint; UI main `d2e2a114f`).
+Status: active implementation (2026-10-16 UTC checkpoint; UI main `a84443a8d`).
 Current delivery priority (2026-10-15): enable outside testers to anonymously
 download and install a self-host bundle. The v1.1.247 image-locked ZIP passed
 preparation and independent archive/Compose/image-pull checks; the same bytes
@@ -31,7 +31,8 @@ envelope. KMS-custody [#1344](https://github.com/ElevenID/marty-ui/pull/1344)
 has since merged; one-command disposable setup remains a prerequisite to a new
 tester bundle.
 
-October 16 handoff candidate: extend the existing Rust passport TLS bootstrap
+October 16 [#1358](https://github.com/ElevenID/marty-ui/pull/1358)
+merged the existing Rust passport TLS bootstrap extension
 with a disposable self-host profile for the 15 catalogued workload identities.
 It uses a separate workload PKI mount, non-exportable Transit keys, public
 certificates, and per-key scoped tokens; no private workload key is written to
@@ -40,11 +41,35 @@ the self-host catalog and environment example. A local disposable HTTPS
 OpenBao run passed certificate-chain, SAN/EKU, certificate-to-Transit-public-key
 binding, key-custody/version, positive own-key signing, and cross-key denial
 checks. The existing passport bootstrap/edge live probe also passed unchanged.
-Hosted/protected review is still pending.
-This does not provision seven Keycloak entries, the distinct OpenBao HTTPS CA,
-other application secrets, full Compose installation, or a measured 16 GiB
-operating envelope.
+The exact-head and protected merge-group checks passed.
+That workload-only profile does not provision the seven Keycloak entries,
+the distinct OpenBao HTTPS CA, other application secrets, full Compose
+installation, or a measured 16 GiB operating envelope.
 The preview .2 artifact is unchanged and remains unqualified.
+
+October 16 installed-fixture correction candidate: the synthetic custody hook
+required plain HTTP OpenBao while the self-host configuration and disposable
+TLS bootstrap require HTTPS. The hook now requires loopback HTTPS, matches
+the installed signing-keys OpenBao port, and verifies the staged public CA.
+Focused tests include a real accepted TLS handshake and wrong-host/foreign-CA
+rejections. This removes a protocol mismatch but does not establish a passing
+installed journey or qualify the tester bundle.
+
+October 16 Keycloak disposable setup candidate: a separate provisioner adds
+the seven catalogued Keycloak remote-key files to an operator-owned private
+root on the same HTTPS OpenBao: two non-exportable RSA-backed public certs,
+one scoped RSA/HMAC token, and four realm/purpose-scoped JWE tokens. The
+independent live oracle checks certificate-to-Transit binding, all four JWE
+round trips, and foreign-key/cross-realm denial. A current locally built
+DIDComm-plugin image passed; the older locally cached published image digest
+`c8d3a5cd` rejected the JWE path, so a new qualified plugin image is required
+for the next bundle. This is not an installed journey or a supported release.
+Its JWE policies deliberately cover the initial version only: a disposable
+run must reprovision scoped tokens after rotation. Rotation readiness is not
+claimed for an installed product.
+The two profiles passed separate disposable runs and a local sequential run
+against one HTTPS OpenBao with both independent output oracles. Installed
+Compose use and the clean-install journey remain unproven.
 
 Required PR and protected merge-group gates remain in force. The following
 October 10 checkpoint is historical: Gateway and

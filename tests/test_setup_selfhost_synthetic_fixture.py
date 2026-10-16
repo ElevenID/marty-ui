@@ -1,14 +1,20 @@
 """Synthetic fixture refuses unrelated identities and unbound transit keys."""
 
+import asyncio
+from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
+import ssl
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
+import httpx
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
+    audit_client,
     managed_key_binding,
     managed_reference,
     profile_proof,
@@ -17,6 +23,7 @@ from setup_selfhost_synthetic_fixture import (  # noqa: E402
     validate_installed_model,
     validate_profile_projection,
     validate_transit_binding,
+    trusted_audit_context,
 )
 
 
@@ -38,10 +45,26 @@ def fixture_env() -> dict[str, str]:
                   SELFHOST_ORG_ID="00000000-0000-0000-0000-000000000001",
                   SELFHOST_GATEWAY_URL="http://127.0.0.1:19080",
                   SELFHOST_KEYCLOAK_URL="http://127.0.0.1:18180",
-                  SELFHOST_BAO_AUDIT_URL="http://127.0.0.1:18200")
+                  SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200")
     did = "did:web:selfhost.marty.test:orgs:" + values["SELFHOST_ORG_ID"]
     values.update(SELFHOST_ISSUER_DID=did, SELFHOST_VERIFIER_DID=did)
     return values
+
+
+def fixture_model(values: dict[str, str]) -> dict:
+    return {"services": {
+        "db-migrate": {"environment": {"MARTY_ORG_ID": values["SELFHOST_ORG_ID"],
+                                       "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
+                                       "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
+        "keycloak-configurator": {"environment": {
+            "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
+            "KEYCLOAK_REALM": "11id", "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
+        "signing-keys": {"environment": {"BAO_ADDR": "https://host.docker.internal:18200"}},
+        "edge": {"ports": [{"host_ip": "127.0.0.1", "published": "19080",
+                            "target": 80, "protocol": "tcp"}]},
+        "keycloak": {"ports": [{"host_ip": "127.0.0.1", "published": "18180",
+                                "target": 8080, "protocol": "tcp"}]},
+    }}
 
 
 def test_synthetic_identity_is_bound_to_public_domain_and_seeded_org() -> None:
@@ -56,25 +79,104 @@ def test_synthetic_identity_is_bound_to_public_domain_and_seeded_org() -> None:
         required_environment(values)
 
 
+def test_audit_uses_https_on_disposable_loopback() -> None:
+    values = fixture_env()
+    required_environment(values)
+    for url in ("http://127.0.0.1:18200", "https://example.com:18200",
+                "https://127.0.0.1:18200/other"):
+        values["SELFHOST_BAO_AUDIT_URL"] = url
+        with pytest.raises(ValueError, match="loopback HTTPS"):
+            required_environment(values)
+
+
+def test_audit_ca_is_private_to_secret_root_and_contains_no_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="OpenBao TLS CA file is absent"):
+        trusted_audit_context(tmp_path)
+    ca = tmp_path / "openbao_tls_ca_cert"
+    ca.write_text("-----BEGIN PRIVATE KEY-----\nsecret\n", encoding="ascii")
+    with pytest.raises(ValueError, match="contains private key"):
+        trusted_audit_context(tmp_path)
+    ca.write_text("-----BEGIN CERTIFICATE-----\npublic\n", encoding="ascii")
+    observed = []
+    monkeypatch.setattr("setup_selfhost_synthetic_fixture.ssl.create_default_context",
+                        lambda *, cafile: observed.append(cafile) or "trusted-context")
+    assert trusted_audit_context(tmp_path) == "trusted-context"
+    assert observed == [str(ca)]
+
+
+def test_audit_client_verifies_real_tls_ca_and_hostname(tmp_path: Path) -> None:
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    def certificate(name: str) -> tuple[Path, Path]:
+        cert, key = tmp_path / f"{name}.crt", tmp_path / f"{name}.key"
+        config = tmp_path / "openssl.cnf"
+        config.write_text("[ req ]\ndistinguished_name = req_dn\n[ req_dn ]\n",
+                          encoding="ascii")
+        subprocess.run([
+            "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "1",
+            "-config", str(config), "-subj", "/CN=127.0.0.1",
+            "-addext", "subjectAltName=IP:127.0.0.1",
+        ], check=True, capture_output=True, timeout=15)
+        return cert, key
+
+    cert, key = certificate("server")
+    wrong_ca, _ = certificate("unrelated")
+    secret_root = tmp_path / "secrets"
+    secret_root.mkdir()
+    staged_ca = secret_root / "openbao_tls_ca_cert"
+    staged_ca.write_bytes(cert.read_bytes())
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(str(cert), str(key))
+    server.socket = tls.wrap_socket(server.socket, server_side=True)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        async def probe(url: str) -> bytes:
+            async with audit_client(url, secret_root) as client:
+                return (await client.get("/")).content
+
+        port = server.server_port
+        assert asyncio.run(probe(f"https://127.0.0.1:{port}")) == b"ok"
+        with pytest.raises(httpx.ConnectError, match="certificate verify failed"):
+            asyncio.run(probe(f"https://localhost:{port}"))
+        staged_ca.write_bytes(wrong_ca.read_bytes())
+        with pytest.raises(httpx.ConnectError, match="certificate verify failed"):
+            asyncio.run(probe(f"https://127.0.0.1:{port}"))
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+
+
 def test_migration_admin_must_match_synthetic_public_operator() -> None:
     values = fixture_env()
-    model = {"services": {
-        "db-migrate": {"environment": {"MARTY_ORG_ID": values["SELFHOST_ORG_ID"],
-                                       "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
-                                       "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
-        "keycloak-configurator": {"environment": {
-            "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
-            "KEYCLOAK_REALM": "11id", "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
-        "signing-keys": {"environment": {"BAO_ADDR": "http://host.docker.internal:18200"}},
-        "edge": {"ports": [{"host_ip": "127.0.0.1", "published": "19080",
-                            "target": 80, "protocol": "tcp"}]},
-        "keycloak": {"ports": [{"host_ip": "127.0.0.1", "published": "18180",
-                                "target": 8080, "protocol": "tcp"}]},
-    }}
+    model = fixture_model(values)
     validate_installed_model(model, values)
     model["services"]["db-migrate"]["environment"]["MARTY_ORG_ADMIN_EMAIL"] = "other@example.test"
     with pytest.raises(ValueError, match="migration-seeded organization"):
         validate_installed_model(model, values)
+
+
+def test_installed_signing_keys_must_use_same_https_openbao_port() -> None:
+    values = fixture_env()
+    model = fixture_model(values)
+    validate_installed_model(model, values)
+    for address in ("http://host.docker.internal:18200",
+                    "https://host.docker.internal:18201"):
+        model["services"]["signing-keys"]["environment"]["BAO_ADDR"] = address
+        with pytest.raises(ValueError, match="migration-seeded organization"):
+            validate_installed_model(model, values)
 
 
 @pytest.mark.parametrize("service,url_name,other_port", [
@@ -84,17 +186,7 @@ def test_migration_admin_must_match_synthetic_public_operator() -> None:
 def test_journey_urls_must_use_installed_published_ports(
         service: str, url_name: str, other_port: int) -> None:
     values = fixture_env()
-    model = {"services": {
-        "db-migrate": {"environment": {"MARTY_ORG_ID": values["SELFHOST_ORG_ID"],
-                                       "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
-                                       "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
-        "keycloak-configurator": {"environment": {
-            "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
-            "KEYCLOAK_REALM": "11id", "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
-        "signing-keys": {"environment": {"BAO_ADDR": "http://host.docker.internal:18200"}},
-        "edge": {"ports": [{"host_ip": "127.0.0.1", "published": "19080", "target": 80}]},
-        "keycloak": {"ports": [{"host_ip": "127.0.0.1", "published": "18180", "target": 8080}]},
-    }}
+    model = fixture_model(values)
     validate_installed_model(model, values)
     values[url_name] = f"http://127.0.0.1:{other_port}"
     with pytest.raises(ValueError, match="differs from installed"):
