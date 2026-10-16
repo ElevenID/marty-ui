@@ -23292,3 +23292,14 @@ CodeQL Actions `38927710287`, CodeQL Rust `38927710107`, open-source policy
 was dispatched with `workflow_dispatch` at that exact SHA for the full Canvas
 and stack-tag release gate. It is still running; no `v1.1.248` claim or release
 is justified until it succeeds.
+
+Exact-main full [CI 38930946134](https://github.com/ElevenID/marty-ui/actions/runs/38930946134)
+passed at `45e6ce7d`, including the full Canvas lane and OpenBao coordinated
+recovery. The first no-write `v1.1.248` [claim 38935732924](https://github.com/ElevenID/marty-ui/actions/runs/38935732924)
+failed its latest-qualification policy because a second CI dispatch
+`38930990313` at the same SHA was cancelled before any job started, twenty-one
+seconds after the successful run was dispatched. The policy selects that later
+cancelled run. Preserve both runs and the failed claim; do not weaken the
+policy or delete the cancelled evidence. One new full-main [CI 38935914328](https://github.com/ElevenID/marty-ui/actions/runs/38935914328)
+was dispatched at the unchanged exact main SHA; wait for it to succeed before
+retrying the no-write claim.
