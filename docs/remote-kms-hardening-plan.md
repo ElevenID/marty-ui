@@ -23282,3 +23282,13 @@ commit `45e6ce7d`; policy, Organization Quality and CodeQL Actions passed,
 while merge-group CI and CodeQL Rust remain active. Do not dispatch full-main
 CI or claim the tag until the protected merge and resulting main SHA are
 verified.
+
+PR #1366 merged through the protected queue at exact main commit
+`45e6ce7de1588fd7f15933fcaab5ac48c9b89066` after all five merge-group
+workflows passed: [CI 38927710174](https://github.com/ElevenID/marty-ui/actions/runs/38927710174),
+CodeQL Actions `38927710287`, CodeQL Rust `38927710107`, open-source policy
+`38927710098`, and Organization Quality `38927710786`. A fresh full-main
+[`CI 38930946134`](https://github.com/ElevenID/marty-ui/actions/runs/38930946134)
+was dispatched with `workflow_dispatch` at that exact SHA for the full Canvas
+and stack-tag release gate. It is still running; no `v1.1.248` claim or release
+is justified until it succeeds.
