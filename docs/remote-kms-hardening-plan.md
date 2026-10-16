@@ -18,9 +18,12 @@ published with signed manifest, five images, and passing public-stack smoke,
 but its optional self-host bundle preparation failed: the receipt verifier
 expected two OpenBao services while the package contains three. Preserve
 that terminal failed [workflow run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195)
-and do not call its unproduced bundle qualified. Grouped [PR #1371](https://github.com/ElevenID/marty-ui/pull/1371)
-fixes the exact OpenBao closure and advances the release lock to unused
-`v1.1.249`; protected checks and a new exact-main claim/release remain. The
+and do not call its unproduced bundle qualified. Concurrent PR #1370 has now
+landed the exact OpenBao receipt closure on protected main. Reconciled
+[PR #1371](https://github.com/ElevenID/marty-ui/pull/1371) advances the release
+lock to unused `v1.1.249`, strengthens the source-coupled receipt test, and
+prepares fresh Raft cutover guidance; its new protected checks and an
+exact-main claim/release remain. The
 `stack-release` environment does not require manual reviewer approval.
 Publication alone will not prove
 fresh installed Raft-backed KMS-only beta/self-host custody, cutover and
@@ -23402,3 +23405,5 @@ The published v1.1.248 Stack transaction finished with workflow failure after pu
 Candidate [Marty UI PR #1371](https://github.com/ElevenID/marty-ui/pull/1371) at `b2e9f1bba52100fb3773b73a0e72d920e1723ccd` requires exactly those three OpenBao services, each using the immutable locked image and no source build. It updates the consumer/descriptor fixtures, binds the receipt regression fixture to the actual OpenBao Compose source, and advances the stack lock to unused `v1.1.249`. It marks the old in-place beta migration playbook historical under the user's fresh-install decision. Local checks: 105 focused Python tests, Ruff, seven-component stack manifest, and 14 Rust packager contract tests passed. A real local v1.1.249 ZIP was produced from the candidate source with synthetic self-host role digests; receipt, product descriptor, archive-only consumer verification, and extracted 31-service consumer preflight all passed. This validates the package/receipt interface locally, not actual published digests or installed custody. Auto-merge is armed; retain the v1.1.248 failed workflow and signed release without rewriting them.
 
 Hosted [PR #1371 CI run 38964072306](https://github.com/ElevenID/marty-ui/actions/runs/38964072306) completed successfully at exact candidate `b2e9f1bba52100fb3773b73a0e72d920e1723ccd`, including Rust service, OpenBao DIDComm, Canvas, release and self-host gates. GitHub placed the PR in its protected merge queue on 2026-10-16; merge-group source `653728b3dd24d5e860cef854885877be694aaa25` has five checks, of which CodeQL Actions, Organization Quality and open-source policy already passed while CI and CodeQL Rust remain live. Do not treat the queued PR as merged or dispatch an exact-main claim until protected main and its own full CI are verified.
+
+Concurrency reconciliation (2026-10-16): all five merge-group checks at `653728b3dd24d5e860cef854885877be694aaa25` succeeded, but that commit landed [PR #1370](https://github.com/ElevenID/marty-ui/pull/1370), an independently prepared receipt fix, rather than #1371. The overlapping receipt edit made #1371 conflict with new protected main. I merged exact main `653728b3dd24d5e860cef854885877be694aaa25` into #1371, kept the stronger source-coupled fixture and negative cases, and preserved the `v1.1.249` release lock and fresh Raft cutover guidance. All 72 directly affected Python receipt/consumer/release-contract tests passed after reconciliation (one expected duplicate ZIP-entry warning). Reconciled branch head `7400c21e90328350e5e699634d960ec0f6de81a2` was pushed, PR title/body were updated to its final delta, and auto-merge was rearmed. The prior candidate and merge-group green checks are not proof for this new head; wait for its protected checks before claiming #1371 merged.
