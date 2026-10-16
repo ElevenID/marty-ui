@@ -10,14 +10,62 @@ import subprocess
 import sys
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import provision_selfhost_disposable_tls as stage  # noqa: E402
-from passport_remote_tls import PUBLIC_TLS_FILES, accept_remote_tls  # noqa: E402
+from generate_selfhost_disposable_credentials import GENERATED  # noqa: E402
+from passport_remote_tls import (  # noqa: E402
+    PUBLIC_TLS_FILES, SELFHOST_CERT_FILES, SELFHOST_TLS_FILES, accept_remote_tls,
+)
+from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa: E402
 
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 OPENBAO = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
+
+
+def test_selfhost_tls_acceptor_matches_catalog_not_passport_files() -> None:
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text(
+        encoding="utf-8"))["secrets"]
+    expected = {name for name in catalog if (
+        name == "workload_identity_ca_cert"
+        or name.endswith("_tls_kms_token")
+        or "_workload_" in name and name.endswith("_cert")
+    )}
+    assert SELFHOST_TLS_FILES == expected
+    assert len(SELFHOST_CERT_FILES) == 16
+    assert len(SELFHOST_TLS_FILES) == 31
+    assert "passport_edge_tls_cert" not in SELFHOST_TLS_FILES
+
+
+def test_disposable_producers_close_exact_local_secret_roster() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text(
+        encoding="utf-8"))
+    local_secrets = {
+        entry if isinstance(entry, str) else entry["source"]
+        for service, definition in compose["services"].items()
+        if service not in {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}
+        for entry in definition.get("secrets", [])
+    }
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text(
+        encoding="utf-8"))["secrets"]
+    optional = {entry["compose_secret"] for entry in catalog.values()
+                if entry.get("allow_empty") and entry.get("compose_secret") in local_secrets}
+    openbao = {
+        "openbao_tls_ca_cert", "openbao_service_token", "openbao_bootstrap_token",
+        "signing_keys_openbao_token", "didcomm_issuance_openbao_token",
+        "notification_openbao_token", "haip_kms_token", "sign_grant_verify_token",
+    } | {
+        f"sign_grant_mint_{role}_token" for role in (
+            "gateway_service", "gateway_issuer_did", "flow_wallet",
+            "issuance_credential", "issuance_canvas", "issuance_readiness",
+            "issuance_passport",
+        )
+    }
+    assert len(local_secrets) == 76
+    assert len(optional) == 6
+    assert local_secrets == GENERATED | KEYCLOAK_OUTPUTS | SELFHOST_TLS_FILES | openbao | optional
 
 
 def bundle(tmp_path: Path) -> Path:
@@ -97,18 +145,18 @@ def test_stages_only_public_tls_outputs_into_existing_private_root(
         mount = next(part for part in command if part.startswith("type=bind,")
                      and part.endswith(",dst=/output"))
         output = Path(mount.split(",src=", 1)[1].split(",dst=", 1)[0])
-        for name in PUBLIC_TLS_FILES:
+        for name in SELFHOST_TLS_FILES:
             value = certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct"
             (output / name).write_text(value, encoding="ascii")
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(stage.subprocess, "run", fake_run)
     stage.provision(root, secret_root, state, "marty-selfhost-openbao")
-    assert {path.name for path in secret_root.iterdir()} == PUBLIC_TLS_FILES | {existing.name}
+    assert {path.name for path in secret_root.iterdir()} == SELFHOST_TLS_FILES | {existing.name}
     assert existing.read_text(encoding="ascii") == "leave-alone"
     assert not (secret_root / "root.token").exists()
     assert all(stat.S_IMODE((secret_root / name).stat().st_mode) == 0o644
-               for name in PUBLIC_TLS_FILES)
+               for name in SELFHOST_TLS_FILES)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file-mode rollback")
@@ -163,7 +211,7 @@ def test_ownership_failure_removes_all_staged_tls_inputs(
         mount = next(part for part in command if part.startswith("type=bind,")
                      and part.endswith(",dst=/output"))
         output = Path(mount.split(",src=", 1)[1].split(",dst=", 1)[0])
-        for name in PUBLIC_TLS_FILES:
+        for name in SELFHOST_TLS_FILES:
             (output / name).write_text(
                 certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct",
                 encoding="ascii",

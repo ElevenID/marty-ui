@@ -119,9 +119,15 @@ contain the workload TLS bootstrap executable, then ship a Linux-only
 disposable helper that checks the extracted image lock, running OpenBao
 Compose owner/image/state mount, and stages only the 31 verified public
 certificates/scoped tokens into the existing private install root. The helper
-does not stage a root token or private workload key. Focused Linux tests pass
-(46 passed, 2 skipped), including injected chmod/chown and Docker-timeout
-cleanup failure handling; the frozen
+does not stage a root token or private workload key. A further roster audit
+found that the first Python acceptor used passport-style token filenames and
+omitted the self-host Verification client. The candidate now shares the
+certificate/token validation while selecting the exact self-host Rust/catalog
+output inventory. An independent Compose/source inventory closes all 76 local
+secret filenames with 17 scalar credentials, 31 workload TLS files, seven
+Keycloak files, 15 OpenBao outputs, and six disabled-optional placeholders.
+Focused Linux tests pass (48 passed, 2 skipped), including injected
+chmod/chown and Docker-timeout cleanup failure handling; the frozen
 deployment CLI and 14 bundle package-contract cases pass locally. This is
 not a fresh-image installed journey or qualification of preview .2.
 

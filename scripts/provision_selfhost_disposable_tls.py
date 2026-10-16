@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 
-from passport_remote_tls import PUBLIC_TLS_FILES, accept_remote_tls
+from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES, accept_remote_tls
 
 
 SERVICES_IMAGE = re.compile(
@@ -127,7 +127,7 @@ def provision(bundle: Path, secret_root: Path, state_root: Path, project: str) -
     image, openbao_image = exact_images(bundle)
     network = openbao_network(project, state_root, openbao_image)
     if any((secret_root / name).exists() or (secret_root / name).is_symlink()
-           for name in PUBLIC_TLS_FILES):
+           for name in SELFHOST_TLS_FILES):
         raise ValueError("workload TLS secrets already exist; refusing overwrite")
     with tempfile.TemporaryDirectory(prefix="marty-selfhost-tls-",
                                      dir=secret_root.parent) as temporary:
@@ -186,14 +186,17 @@ def provision(bundle: Path, secret_root: Path, state_root: Path, project: str) -
                 cidfile.unlink(missing_ok=True)
         if result.returncode:
             raise RuntimeError("keyless workload TLS bootstrap failed; no inputs were staged")
-        accept_remote_tls(output, secret_root, root_file.read_text(encoding="ascii").strip())
+        accept_remote_tls(
+            output, secret_root, root_file.read_text(encoding="ascii").strip(),
+            expected_files=SELFHOST_TLS_FILES, certificate_files=SELFHOST_CERT_FILES,
+        )
         owner = secret_root.stat()
         try:
-            for name in PUBLIC_TLS_FILES:
+            for name in SELFHOST_TLS_FILES:
                 os.chown(secret_root / name, owner.st_uid, owner.st_gid)
         except OSError as error:
             rollback_failed = False
-            for name in PUBLIC_TLS_FILES:
+            for name in SELFHOST_TLS_FILES:
                 try:
                     (secret_root / name).rename(output / name)
                 except OSError:
@@ -220,7 +223,7 @@ def main() -> int:
         print(f"disposable workload TLS staging failed: {type(error).__name__}",
               file=sys.stderr)
         return 2
-    print(f"Staged {len(PUBLIC_TLS_FILES)} keyless workload TLS inputs")
+    print(f"Staged {len(SELFHOST_TLS_FILES)} keyless workload TLS inputs")
     return 0
 
 
