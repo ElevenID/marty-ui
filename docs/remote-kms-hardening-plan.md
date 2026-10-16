@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-15 (America/Denver).
+Status: active. Updated: 2026-10-16 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,21 +8,21 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current gate (2026-10-14): Core #355, Credentials #313, grouped UI #1192,
-approval-free publisher #1328, clean-install follow-up #1330 and stack-lock
-successor #1331 are merged. UI `main` is
-`667da4e758a64793ce3bf127175cf3be7edab9c7`; exact-main full CI
-`38605156101` is still running on that commit. `v1.1.246` is immutable but its
-installed prepared-consumer check failed. The first no-write `v1.1.247` claim
-refused the old lock and created no tag. A fresh claim could now be run from the
-corrected lock, but K11 exposed production file-backed TLS/mTLS identity keys.
-Do not publish or describe this candidate as fully KMS-only until K11 is fixed
-and qualified. The `stack-release` environment no longer requires manual
-reviewer approval. After signed-image qualification, prove clean installed
-database/runtime writes, DIDComm and integration-secret recovery, feature
-journeys, cutover and rollback. Real AWS/Azure/GCP and physical-device
-acceptance remain open because access is not provisioned. Do not mark K6,
-K8/K9/K11 or the overall goal complete from local OpenBao tests.
+Current gate (2026-10-16): Core #355, Credentials #313, grouped native UI
+hardening #1192, the approval-free publisher #1328, clean-install follow-up
+#1330, stack-lock successor #1331, and installed custody gate #1366 are
+merged. The first `v1.1.248` Stack release failed in public smoke because its
+old harness used HTTP OpenBao and a workload TLS private-key file; preserve
+that failed evidence. The repaired, signed integration harness `v1.2.89` is
+published at protected main `9c636092`; grouped UI [PR #1368](https://github.com/ElevenID/marty-ui/pull/1368)
+pins its verified digest and is first in the protected merge queue after
+exact-head CI passed. Merge-group [CI 38951644944](https://github.com/ElevenID/marty-ui/actions/runs/38951644944)
+is running. After merge, exact-main full CI, a new no-write release claim,
+and the corrected Stack release are required. The `stack-release` environment
+does not require manual reviewer approval. Publication alone will not prove
+fresh installed Raft-backed KMS-only beta/self-host custody, cutover and
+rollback, or real AWS/Azure/GCP and physical-device behavior; provider/device
+access is not provisioned. Keep K6, K8/K9/K11 and the overall goal open.
 
 ## Objective and working agreement
 
