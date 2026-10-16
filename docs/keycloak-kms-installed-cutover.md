@@ -2,9 +2,11 @@
 
 ## Boundary and decision
 
-The non-public `elevenid-beta` and `marty-selfhost-prod` installations must
-be replaced as complete stacks. Do not perform an in-place Keycloak database
-swap. Direct runtime inspection on 2026-10-16 found:
+The non-public `elevenid-beta` and `marty-selfhost-prod` installations are
+disposable and may be replaced with fresh KMS-only stacks. No migration of
+users, sessions, databases, ciphertext, or key material is required. Do not
+perform an in-place Keycloak database swap. Direct runtime inspection on
+2026-10-16 found:
 
 | Installation | Running OpenBao storage | Keycloak local key material |
 | --- | --- | --- |
@@ -16,28 +18,29 @@ The released model instead requires fresh Raft OpenBao, non-exportable remote
 keys, scoped tokens, clean Marty and Keycloak databases, and the matched Rust
 services. Do not copy private-key rows, old OpenBao state, or local keys. No
 database migration script is required. Existing accounts and sessions are
-not carried into the new non-public installation; plan operator and test-user
-re-enrolment explicitly.
+not carried into the new non-public installation; create fresh operator and
+test-user accounts as part of installed acceptance.
 
-## Prepare the parallel stack
+## Prepare the fresh stack
 
 1. Resolve one published Stack transaction, every image by immutable digest,
    the matched Keycloak provider image, and the signed self-host bundle and
    image lock. Reject any unqualified preview or mixed release. The
    `v1.1.248` candidate is not yet a published installed qualification.
-2. Create distinct Compose project names, empty PostgreSQL/Redis/applicant
-   and OpenBao Raft state roots, and a private secret root. Set unique loopback
-   ports for the new OpenBao, Keycloak, Gateway, and edge. Render the full
+2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
+   private secret root. Choose the final Compose project names and loopback
+   ports. Render the full
    Compose model and compare the project, mounts, ports, images, and secret
    references against the approved manifest before starting anything.
    `docker-compose.selfhost.prod.yml` and
    `docker-compose.selfhost.openbao.yml` expose the relevant
    `SELFHOST_*_HOST_PORT` and `SELFHOST_OPENBAO_STATE_DIR` inputs.
-3. Keep the old stack running and out of the new project's network. In
-   particular, do not stop beta OpenBao: its in-memory KMS state would be
-   lost. Do not enable the old fixed-name beta proxy or tunnel containers
-   in the parallel project; their `container_name` values collide. Use
-   the new loopback edge for pre-switch tests.
+3. Quiesce and retire the old non-public installations under the deployment
+   lock before reusing their ports or project names. Stopping beta OpenBao
+   destroys its in-memory KMS state; this is accepted because no data or key
+   migration is required. Verify the old containers and private-key-bearing
+   database are no longer reachable. Keep the new project's volumes and
+   secrets separate from any old volumes; do not mount old state into it.
 4. Initialize fresh OpenBao Raft and remote keys with the matched plugin
    image, scope each workload token, and provision public certificates and
    CA material. Workload TLS private-key files are prohibited. The
@@ -51,7 +54,7 @@ The exact published bundle, environment and fixture inputs must pass
 an empty project and state root, but its result alone does not establish KMS
 custody or supported publication.
 
-## Acceptance before traffic moves
+## Acceptance before service opens
 
 - Verify OpenBao reports `storage_type=raft`, the expected plugin and
   non-exportable versioned keys, scoped token policies, HTTPS trust, and
@@ -78,20 +81,17 @@ AWS, Azure, GCP and physical wallet/device access is not provisioned. Their
 real-provider and physical-device gates remain open even if this local
 installed acceptance passes.
 
-## Switch, rollback and retirement
+## Open service and recover the new stack
 
-After acceptance, switch the external edge to the new loopback edge under a
-deployment lock. Keep the old stack, including beta OpenBao, running and
-isolated for a short, defined rollback window. If the new journey or custody
-gate fails, route traffic back to the unchanged old edge; do not copy old
-private-key data into the new stack. Rehearse the actual edge reversal and
-record both endpoint identities before declaring the switch supported.
-
-When the new stack and its recovery rehearsal have passed for the full
-window, retire the old services and private-key-bearing Keycloak database,
-and verify no old key-bearing volume, table or workload key file remains
-available in the active deployment. The emergency route back to the old
-stack is temporary recovery, not an allowed long-term local-key fallback.
+Keep public ingress closed until every installed acceptance gate passes, then
+point the external edge at the fresh KMS-only stack. If any gate fails, leave
+ingress closed and fix or recreate the fresh installation. Do not route back
+to an old local-key deployment. Rehearse a coordinated recovery of the new
+PostgreSQL, Raft, Redis and applicant state plus scoped token files before
+declaring the installation supported. After ingress opens, a failure closes
+ingress and restores that coordinated KMS-only recovery point; never import
+old private-key rows or old OpenBao state. Verify the old containers, old
+Keycloak database and old key-bearing volumes are retired.
 
 ## Evidence already obtained and limits
 
