@@ -652,9 +652,8 @@ def test_stack_release_allows_only_successful_one_shot_exits() -> None:
     assert (
         "docker compose --env-file .env.stack ps --status exited --services" in workflow
     )
-    assert '$0 != "migrations"' in workflow
-    assert '$0 != "issuance-migrations"' in workflow
-    assert '$0 != "revocation-profile-migrations"' in workflow
+    assert "migrations|issuance-migrations|revocation-profile-migrations|" in workflow
+    assert "docker inspect --format '{{.State.ExitCode}}'" in workflow
     assert "grep -v '^migrations$' || true" not in workflow
 
 
@@ -676,11 +675,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.88"
-    assert integration["commit"] == "1ff32cb439a9c32baaf6311a7bd5c6e7940a7118"
+    assert integration["version"] == "1.2.89"
+    assert integration["commit"] == "9c63609250274dc1edcf747827a29728ddd15d4a"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:07ec0892d9136e39f0802507fbbefb015a3a5d38c8442d0369027d2cd57ef650"
+            "sha256:3b81d939547d6fa97a1cc356dc13610165426a0530e9c396bb18b13823320cc8"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -706,7 +705,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.88"
+    assert components["marty-integration-tests"]["version"] == "1.2.89"
 
     # Detailed producer incident history belongs in the incident/runbook owners,
     # rather than being duplicated in the current migration requirements.
@@ -973,6 +972,16 @@ def test_public_stack_smoke_binds_all_five_kms_images() -> None:
     assert 'marty-ui-oss/openbao-didcomm' in script
     assert "build-openbao-didcomm" in plugin["needs"]
     assert "didcomm-plugin-image-qualification" in release["needs"]
+    run = next(step["run"] for step in smoke["steps"]
+               if step.get("name") == "Run the artifact-only public integration suite")
+    for service in (
+        "openbao-tls-init",
+        "openbao-ca-export",
+        "openbao-plugin-bootstrap",
+        "signing-integration-tls-bootstrap",
+    ):
+        assert service in run
+    assert "docker inspect --format '{{.State.ExitCode}}'" in run
 
 
 def test_release_qualifies_exact_keycloak_kms_image_before_promotion() -> None:

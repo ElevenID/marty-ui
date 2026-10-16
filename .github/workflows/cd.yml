@@ -920,12 +920,23 @@ jobs:
           python ../marty-ui/scripts/wait_for_public_services.py \
             --url http://127.0.0.1:28000/health/services --timeout 120
           exited_services="$(docker compose --env-file .env.stack ps --status exited --services)"
-          unexpected_exits="$(printf '%s\n' "$exited_services" | awk '$0 != "" && $0 != "migrations" && $0 != "issuance-migrations" && $0 != "revocation-profile-migrations" && $0 != "openbao-grant-bootstrap" && $0 != "signing-integration-tls-bootstrap"')"
-          if [ -n "$unexpected_exits" ]; then
-            echo "Public-stack services exited unexpectedly:"
-            echo "$unexpected_exits"
-            exit 1
-          fi
+          for service in $exited_services; do
+            case "$service" in
+              migrations|issuance-migrations|revocation-profile-migrations|\
+              openbao-tls-init|openbao-ca-export|openbao-plugin-bootstrap|\
+              openbao-grant-bootstrap|signing-integration-tls-bootstrap)
+                container_id="$(docker compose --env-file .env.stack ps --all -q "$service")"
+                if [ -z "$container_id" ] || [ "$(docker inspect --format '{{.State.ExitCode}}' "$container_id")" != 0 ]; then
+                  echo "Public-stack setup service failed: $service"
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "Public-stack service exited unexpectedly: $service"
+                exit 1
+                ;;
+            esac
+          done
           pytest tests/oss_stack -v
       - name: Record exact-digest public-stack evidence
         working-directory: integration-tests

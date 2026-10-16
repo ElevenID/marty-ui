@@ -112,7 +112,7 @@ contains a reviewed disposable test signer digest, but no installed custody
 evidence or qualification has been published. A different signer requires a
 reviewed source change and a new prepared release. The
 integration checkout is pinned to protected-main commit
-`1ff32cb439a9c32baaf6311a7bd5c6e7940a7118`; a PR head cannot qualify.
+`9c63609250274dc1edcf747827a29728ddd15d4a`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet
 passed an installed run, so no installed journey has qualified a release.
 
