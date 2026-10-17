@@ -169,21 +169,93 @@ PY
 
 ## Stage exact inputs
 
-1. After the current stack release is published, download all seven assets
-   from the exact release selected by `release/stack-lock.json`
-   into one directory: `prepared-selfhost-bundle.zip`,
-   `prepared-selfhost-images.json`, `prepared-selfhost-bundle.json`,
-   `prepared-selfhost-product-descriptor.json`,
-   `selfhost-preparation-transaction.json`, `SELFHOST-PREVIEW-README.md`, and
-   `SHA256SUMS`. Keep the original bytes and verify `sha256sum -c SHA256SUMS`
-   there. The staging helper checks the same exact set. Release operators may
-   separately retain the matching `stack-release-qualified-<RUN_ID>` Actions
-   artifact for internal evidence; testers do not need Actions artifact access.
-   Its promoted `release-transaction.json` is **not** a substitute for the
-   original preparation transaction bound to this ZIP and receipt.
-2. Check out that release's source tag in a clean `marty-ui` tree and confirm that
-   `git rev-parse HEAD` equals the source commit in the preparation receipt.
-   Check out `ElevenID/marty-integration-tests` separately at
+1. After the Stack release succeeds, check out its source tag in a clean
+   `marty-ui` tree and confirm it peels to the source SHA in the preparation
+   receipt. Before and after downloading, bind the successful first-attempt
+   protected-main `cd.yml` run and both unique artifact IDs/digests with
+   `check_selfhost_preparation_artifacts.py`; reject any changed binding.
+   Take the four prepared files from its
+   `selfhost-lock-preparation-unqualified-<RUN_ID>` Actions artifact. The public
+   release does **not** contain this ZIP. Take `release-transaction.json` from
+   the same run's `stack-release-qualified-<RUN_ID>` artifact, and verify the
+   public release transaction and manifest attestations separately. The
+   qualified transaction's SHA-256 must equal the preparation receipt's
+   `transaction_sha256`; the public promoted transaction has different bytes
+   and cannot replace it. Copy the qualified transaction into the private
+   staging directory as `selfhost-preparation-transaction.json`. For the
+   existing staging helper, write a local `SELFHOST-PREVIEW-README.md` stating
+   that this is an unqualified Actions-artifact handoff, then generate and
+   verify a six-file `SHA256SUMS` there. That checksum file protects the local
+   staging copy; it is **not** a published signature or release asset. Finally,
+   run `check_prepared_selfhost_consumer.py --verify-archive-only` against the
+   ZIP, lock, qualified transaction, receipt, descriptor, source SHA and run
+   ID before creating any private state. Keep the original four artifact
+   files unchanged.
+
+   ```bash
+   set -euo pipefail
+   run_id=39068340445 # v1.1.254 example; use the chosen successful release run
+   tag=v1.1.254
+   source_root=/absolute/path/to/clean/release-checkout
+   prepared=/absolute/path/to/prepared-artifact
+   qualified=/absolute/path/to/qualified-transaction-artifact
+   public=/absolute/path/to/public-release-assets
+   mkdir -p "$prepared" "$qualified" "$public"
+   source_sha=$(git -C "$source_root" rev-parse HEAD)
+   test "$(git -C "$source_root" rev-parse "$tag^{commit}")" = "$source_sha"
+   verify_producer() {
+     phase=$1
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id" \
+       > "$public/producer-run-$phase.json"
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id/artifacts?name=selfhost-lock-preparation-unqualified-$run_id" \
+       > "$public/bundle-artifacts-$phase.json"
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id/artifacts?name=stack-release-qualified-$run_id" \
+       > "$public/transaction-artifacts-$phase.json"
+     python3 "$source_root/scripts/check_selfhost_preparation_artifacts.py" \
+       --run "$public/producer-run-$phase.json" \
+       --bundle "$public/bundle-artifacts-$phase.json" \
+       --transaction "$public/transaction-artifacts-$phase.json" \
+       --run-id "$run_id" --source-sha "$source_sha" \
+       --output "$public/producer-binding-$phase.json"
+   }
+   verify_producer before
+   gh run download "$run_id" -R ElevenID/marty-ui \
+     -n "selfhost-lock-preparation-unqualified-$run_id" -D "$prepared"
+   gh run download "$run_id" -R ElevenID/marty-ui \
+     -n "stack-release-qualified-$run_id" -D "$qualified"
+   verify_producer after
+   cmp "$public/producer-binding-before.json" \
+     "$public/producer-binding-after.json"
+   gh release download "$tag" -R ElevenID/marty-ui -D "$public" \
+     -p release-transaction.json -p stack-manifest.json -p SHA256SUMS
+   (cd "$public" && sha256sum -c --ignore-missing SHA256SUMS)
+   for asset in release-transaction.json stack-manifest.json; do
+     gh attestation verify "$public/$asset" -R ElevenID/marty-ui \
+       --signer-workflow ElevenID/marty-ui/.github/workflows/cd.yml \
+       --source-digest "$source_sha" --source-ref refs/heads/main \
+       --deny-self-hosted-runners
+   done
+   cp "$qualified/release-transaction.json" \
+     "$prepared/selfhost-preparation-transaction.json"
+   test "$(sha256sum "$prepared/selfhost-preparation-transaction.json" | cut -d ' ' -f 1)" = \
+     "$(jq -r .transaction_sha256 "$prepared/prepared-selfhost-bundle.json")"
+   printf '%s\n' 'Private unqualified Actions-artifact handoff; not a public release asset.' \
+     > "$prepared/SELFHOST-PREVIEW-README.md"
+   (cd "$prepared" && sha256sum prepared-selfhost-bundle.zip \
+     prepared-selfhost-images.json prepared-selfhost-bundle.json \
+     prepared-selfhost-product-descriptor.json \
+     selfhost-preparation-transaction.json SELFHOST-PREVIEW-README.md \
+     > SHA256SUMS && sha256sum -c SHA256SUMS)
+   python3 "$source_root/scripts/check_prepared_selfhost_consumer.py" \
+     --archive "$prepared/prepared-selfhost-bundle.zip" \
+     --image-lock "$prepared/prepared-selfhost-images.json" \
+     --transaction "$prepared/selfhost-preparation-transaction.json" \
+     --receipt "$prepared/prepared-selfhost-bundle.json" \
+     --descriptor "$prepared/prepared-selfhost-product-descriptor.json" \
+     --expected-source-sha "$source_sha" --expected-run-id "$run_id" \
+     --verify-archive-only
+   ```
+2. Check out `ElevenID/marty-integration-tests` separately at
    `5b3ec6a802a5e13201be8883741889405a86d146`. The runner verifies that
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
