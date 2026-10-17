@@ -25,9 +25,9 @@ after independently rendering the exact install and proving their integrations
 disabled. The local branch integrates the custody signer and verifies its
 locked OpenBao owner before reading a root token; 109 focused Linux tests pass.
 They are not yet published or installed-journey evidence. Custody signer
-[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) has cleared its PR
-checks but must merge through the protected queue before the installer branch
-is proposed against main and a new preview is prepared.
+[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) must merge through
+the protected queue before the installer branch is proposed against main and a
+new preview is prepared.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
