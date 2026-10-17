@@ -699,6 +699,8 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
     assert release_tag in cutover_guide
+    kms_tracker = _text("docs/remote-kms-hardening-plan.md")
+    assert f"source stack lock currently selects `{lock['release']}`" in kms_tracker
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
