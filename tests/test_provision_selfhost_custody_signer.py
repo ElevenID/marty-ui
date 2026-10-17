@@ -27,7 +27,9 @@ def test_scoped_validation_failure_revokes_or_preserves_new_token(
     output_root = private_root / "secrets"
     (state_root / "tls").mkdir(parents=True)
     output_root.mkdir()
-    (state_root / "root.token").write_text("r" * 16, encoding="ascii")
+    root_token = state_root / "root.token"
+    root_token.write_text("r" * 16, encoding="ascii")
+    root_token.chmod(0o400)
     (state_root / "tls" / "ca.crt").write_text("ca", encoding="ascii")
     (output_root / "selfhost_custody_signer_token").write_text("old", encoding="ascii")
     (output_root / "selfhost_custody_signer.pub").write_text("pem", encoding="ascii")
@@ -241,5 +243,26 @@ def test_rejects_unowned_docker_binding_before_root_token_use(
     monkeypatch.setattr(signer, "Bao", lambda *_args: pytest.fail("root token leaked"))
     monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
     with pytest.raises(RuntimeError, match="does not own"):
+        signer.provision("https://127.0.0.1:18200", state, output,
+                         "marty-selfhost-openbao-qualification")
+
+
+def test_rejects_readable_root_token_before_openbao_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
+    (state / "tls").mkdir(parents=True)
+    output.mkdir()
+    token = state / "root.token"
+    token.write_text("r" * 16, encoding="ascii")
+    token.chmod(0o444)
+    (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
+    monkeypatch.setattr(signer, "private_directory", lambda path: path)
+    monkeypatch.setattr(signer, "verified_openbao_owner", lambda *_args: "locked-image")
+    monkeypatch.setattr(signer, "Bao", lambda *_args: pytest.fail("root token leaked"))
+    monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+    with pytest.raises(ValueError, match="unsafe ownership or mode"):
         signer.provision("https://127.0.0.1:18200", state, output,
                          "marty-selfhost-openbao-qualification")

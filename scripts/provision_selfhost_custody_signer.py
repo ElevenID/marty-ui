@@ -89,6 +89,11 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
             raise ValueError("pending custody token refresh requires operator recovery")
     elif token_file.exists() or public_file.exists():
         raise ValueError("OpenBao custody signer outputs must be fresh")
+    root_stat = root_file.stat()
+    if root_stat.st_uid != 0 or stat.S_IMODE(root_stat.st_mode) != 0o400:
+        raise ValueError("OpenBao root token has unsafe ownership or mode")
+    if not 0 < ca_file.stat().st_size <= 65536:
+        raise ValueError("OpenBao signer CA is missing or invalid")
     root_token = root_file.read_text(encoding="ascii").strip()
     if not 16 <= len(root_token) <= 2048 or not re.fullmatch(r"[A-Za-z0-9._-]+", root_token):
         raise ValueError("OpenBao root token is invalid")
