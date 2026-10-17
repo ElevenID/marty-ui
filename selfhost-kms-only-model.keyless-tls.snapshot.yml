@@ -111,10 +111,10 @@ services:
   redis:
     image: redis:7-alpine
     # The official entrypoint chowns /data (including this project-scoped socket
-    # volume) before dropping privileges. Redis and the Rust workload images
-    # share GID 1000, so only their processes can access the socket. No Redis
-    # TCP listener or TLS key file is needed.
-    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 770 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    # volume) before dropping privileges. The socket mode serves heterogeneous
+    # workload UIDs; only the named consumers mount this volume. No Redis TCP
+    # listener or TLS key file is needed.
+    command: redis-server --port 0 --unixsocket /data/run/redis.sock --unixsocketperm 777 --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     volumes:
       - type: bind
         source: ${SELFHOST_STATE_DIR:?SELFHOST_STATE_DIR must be set}/redis
