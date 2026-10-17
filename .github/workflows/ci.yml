@@ -1583,27 +1583,8 @@ jobs:
             echo "Unable to locate the compiled Application Template PostgreSQL contract executable." >&2
             exit 1
           fi
-          mapfile -t canvas_issuance_contract_executables < <(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(
-                ((.target.name | startswith("canvas_")) and
-                 (.target.name | endswith("_postgres_contract"))) or
-                .target.name == "proof_nonce_postgres_contract"
-              )
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
-          if (( ${#canvas_issuance_contract_executables[@]} != 11 )); then
-            printf 'Expected eleven issuance PostgreSQL contracts (ten Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contract_executables[@]}" >&2
-            exit 1
-          fi
-          for contract_executable in "${canvas_issuance_contract_executables[@]}"; do
-            if [[ ! -x "$contract_executable" ]]; then
-              printf 'Canvas Issuance PostgreSQL contract is not executable: %s.\n' "$contract_executable" >&2
-              exit 1
-            fi
-          done
+          source ../scripts/ci/rust_contract_execution.sh
+          resolve_issuance_canvas_contracts >/dev/null
           trust_profile_executable="$(jq -r '
             select(.reason == "compiler-artifact")
             | select(.target.name == "migration_contract")
