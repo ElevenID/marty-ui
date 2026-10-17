@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-16 (America/Denver).
+Status: active. Updated: 2026-10-17 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,36 +8,26 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current gate (2026-10-16): Core #355, Credentials #313, grouped native UI
-hardening #1192, publisher #1328, clean-install #1330, stack-lock #1331,
-installed custody #1366, grouped release #1368, receipt repair #1370, and
-fresh Raft release/cutover [#1371](https://github.com/ElevenID/marty-ui/pull/1371)
-are merged. Signed integration harness `v1.2.89` is published. The signed
-[v1.1.248 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
-passed public-stack smoke, but its self-host receipt gate failed; preserve
-[run 38959969195](https://github.com/ElevenID/marty-ui/actions/runs/38959969195)
-as failed evidence. Protected main `26d73baa4fc29fdd6153d9c812863aada9665253`
-selects unused `v1.1.249`; full
-[exact-main CI 38974982594](https://github.com/ElevenID/marty-ui/actions/runs/38974982594)
-passed. [PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) replaces
-the installed fixture's private PEM signer with scoped non-exportable OpenBao
-Transit signing. Its runner enrolls the signer from the owned, image-locked
-live OpenBao instance and verifies a fresh signed challenge; no install-specific
-public key is pinned in source. The PR also updates Rust ZIP for newly published
-advisories and verifies its signer token is orphaned. Earlier exact-head
-[CI 38983770780](https://github.com/ElevenID/marty-ui/actions/runs/38983770780)
-passed, but is superseded by current head `6dd05b68816c759f9398a837153827efbe85391f`;
-[CI 38986049045](https://github.com/ElevenID/marty-ui/actions/runs/38986049045)
-is pending. Await protected merge and a fresh exact-main CI before a new claim
-and Stack release. The
-`stack-release` environment needs no manual reviewer approval. Then run a
-fresh isolated Raft-backed installation in Ubuntu WSL against this machine's
-16 GiB Docker engine, measuring resource use while preserving the existing
-production website. An isolated local Raft signer is provisioned; its source
-change is not yet merged. Publication alone
-does not prove installed KMS-only custody or cutover. Real AWS/Azure/GCP and
-physical-device access is also unprovisioned. Keep K6, K8/K9/K11 and the
-overall goal open.
+Current handoff gate (2026-10-17): Core #355, Credentials #313, grouped native
+UI hardening #1192, and subsequent release/installed-custody work are merged.
+Signed [v1.1.254](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.254)
+passed publication and provenance checks; its separate, unqualified prepared
+archive passed the archive-only consumer check.
+Its first fresh Raft-backed installed journey passed startup, public protocol
+and live custody but failed a diagnostics phase-list error; a separate local
+rehearsal with a private candidate overlay passed the complete journey but is
+not signed-artifact acceptance. [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
+fixes that error and the artifact producer verification, and selects v1.1.255.
+Its final-head PR checks passed; the protected merge-group full
+[CI 39073332440](https://github.com/ElevenID/marty-ui/actions/runs/39073332440)
+is still running. After merge, require exact-main CI, no-write release claim,
+signed v1.1.255 publication, and an overlay-free fresh 28-service Raft install
+with full journey, custody/database scans, resource and production-site checks.
+Then qualify the supported fresh cutover and rollback; the two old installations
+may be replaced without migration. Real AWS/Azure/GCP credentials and a physical
+wallet are unprovisioned, so provider/device acceptance and the overall KMS goal
+remain open. The milestone table below includes historical in-progress text;
+use the dated evidence log and live run/PR states for the latest gate.
 
 ## Objective and working agreement
 
