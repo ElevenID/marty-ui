@@ -32,6 +32,19 @@ existing stack was left running. Future evidence must include separate OpenBao
 cleanup as well as the main runner's teardown, and distinguish remaining shared
 host workloads from the new installation's own container measurements.
 
+Current-main CI evidence: the completed contracts lane of full qualification
+[run #39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
+recorded a 113.029-second ordinary DB group, including 98.520 seconds in
+`canvas_sync_worker_postgres_contract`. Its nested phase timings included
+50.947 seconds renewal job outcomes, 30.301 seconds renewal write failures and
+10.085 seconds renewal generation; these overlap the parent timing and must
+not be added to it. The separately running Canvas acceptance lane was still
+pending when this evidence was collected. The host compile cache report showed
+645 Rust hits and four Rust misses, with four cache-write errors. These are
+single-run observations, not before/after speedup measurements; preserve real
+renewal semantics and investigate the write errors before drawing conclusions
+about cache capacity or changing cache configuration.
+
 Next handoff work, in order:
 
 1. Produce the signed v1.1.255 Stack release and its exact prepared bundle.
