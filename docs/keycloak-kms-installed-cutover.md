@@ -27,8 +27,9 @@ test-user accounts as part of installed acceptance.
    the matched Keycloak provider image, and the signed self-host bundle and
    image lock. Reject any unqualified preview or mixed release. The
    Published `v1.1.249` has not passed installed qualification: its prepared
-   Compose pinned the production default network. Use the corrected
-   `v1.1.250` candidate only after its own release and installed gates pass.
+   Compose pinned the production default network. Published `v1.1.250`
+   failed installed startup after its signed release. Use the
+   `v1.1.251` candidate only after its own release and installed gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full
