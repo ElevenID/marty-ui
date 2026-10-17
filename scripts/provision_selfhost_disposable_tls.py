@@ -48,6 +48,22 @@ def regular_input(path: Path) -> Path:
     return path
 
 
+def protected_root_token_metadata(uid: int, mode: int) -> bool:
+    return uid == 0 and stat.S_IMODE(mode) == 0o400
+
+
+def read_protected_root_token(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("OpenBao root token is missing or invalid")
+    metadata = path.stat()
+    if not protected_root_token_metadata(metadata.st_uid, metadata.st_mode):
+        raise ValueError("OpenBao root token has unsafe ownership or mode")
+    value = path.read_text(encoding="ascii").strip()
+    if not 16 <= len(value) <= 2048 or not re.fullmatch(r"[A-Za-z0-9._-]+", value):
+        raise ValueError("OpenBao root token is invalid")
+    return value
+
+
 def docker_json(args: list[str]) -> object:
     result = subprocess.run(["docker", *args], capture_output=True, text=True,
                             timeout=30, check=False)

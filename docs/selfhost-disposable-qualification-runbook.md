@@ -103,29 +103,38 @@ directory on `PYTHONPATH`; `BAO_ADDR` must name the same locally controlled
 HTTPS OpenBao used to provision the secrets. Repeat the check before a longer
 test session, and stop before the earliest reported expiry. Set
 `openbao_state_root` to that project's private state directory (the one
-containing `root.token` and `tls/ca.crt`). Set all four paths/address for
-your isolated install; the root token is mode 0400, so the inspection needs
-`sudo`:
+containing `root.token` and `tls/ca.crt`). Supply the exact started Compose
+project and extracted locked install as well; the root token is mode 0400, so
+the inspection needs `sudo` and verifies the live owner before reading it:
 
 ```bash
 source_root=/path/to/clean/release-source
-secret_root=/path/to/private/selfhost-secrets
-openbao_state_root=/path/to/private/openbao-state
+private_root=/path/to/private
+secret_root="$private_root/secrets"
+openbao_state_root="$private_root/openbao-state"
+install_root="$private_root/install/selfhost-prepared"
+openbao_project=${openbao_project:?Set the exact started OpenBao Compose project}
 BAO_ADDR="https://127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT:-18200}"
-sudo env PYTHONPATH="$source_root/scripts" python3 - "$secret_root" "$openbao_state_root" "$BAO_ADDR" <<'PY'
+sudo env PYTHONPATH="$source_root/scripts" python3 - \
+  "$secret_root" "$openbao_state_root" "$BAO_ADDR" \
+  "$openbao_project" "$install_root" <<'PY'
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 import subprocess
 import sys
 from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TOKEN_FILES
+from provision_selfhost_disposable_tls import verified_openbao_owner, read_protected_root_token
 from selfhost_openbao_client import Bao
 
 secret_root, bao_state = map(Path, sys.argv[1:3])
-address = sys.argv[3]
-if not address.startswith("https://"):
-    raise SystemExit("OpenBao endpoint must use HTTPS")
+address, project = sys.argv[3:5]
+install = Path(sys.argv[5])
+if not re.fullmatch(r"https://127\.0\.0\.1:[0-9]{2,5}", address):
+    raise SystemExit("OpenBao endpoint must be loopback HTTPS")
+verified_openbao_owner(project, bao_state, install, int(address.rsplit(":", 1)[1]))
 client = Bao(address, bao_state / "tls/ca.crt",
-             (bao_state / "root.token").read_text(encoding="ascii").strip())
+             read_protected_root_token(bao_state / "root.token"))
 expiries = []
 for name in sorted(SELFHOST_CERT_FILES):
     result = subprocess.run(["openssl", "x509", "-enddate", "-noout",
@@ -237,6 +246,12 @@ openbao_port=${SELFHOST_OPENBAO_HOST_PORT:?Set the started OpenBao host port}
 sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
+  --project-name "$openbao_project"
+sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
+  --endpoint "https://127.0.0.1:$openbao_port" \
+  --state-root "$openbao_state_root" --output-root "$secret_root" \
+  --org-id "${MARTY_ORG_ID:?Set the seeded organization ID}" \
+  --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
   --project-name "$openbao_project"
 docker compose --project-name "$project" --env-file "$env_file" \
   -f "$install_root/docker-compose.yml" --profile '*' config --format json \

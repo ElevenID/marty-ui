@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.error import HTTPError
 
-from provision_selfhost_disposable_tls import verified_openbao_owner
+from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
     CUSTODY_SIGNER_POLICY,
@@ -89,14 +89,9 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
             raise ValueError("pending custody token refresh requires operator recovery")
     elif token_file.exists() or public_file.exists():
         raise ValueError("OpenBao custody signer outputs must be fresh")
-    root_stat = root_file.stat()
-    if root_stat.st_uid != 0 or stat.S_IMODE(root_stat.st_mode) != 0o400:
-        raise ValueError("OpenBao root token has unsafe ownership or mode")
     if not 0 < ca_file.stat().st_size <= 65536:
         raise ValueError("OpenBao signer CA is missing or invalid")
-    root_token = root_file.read_text(encoding="ascii").strip()
-    if not 16 <= len(root_token) <= 2048 or not re.fullmatch(r"[A-Za-z0-9._-]+", root_token):
-        raise ValueError("OpenBao root token is invalid")
+    root_token = read_protected_root_token(root_file)
     bao = Bao(endpoint, ca_file, root_token)
     exists = True
     try:

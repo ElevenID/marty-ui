@@ -25,6 +25,14 @@ SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 OPENBAO = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
 
 
+@pytest.mark.parametrize("uid,mode,allowed", [
+    (0, 0o400, True), (1000, 0o400, False),
+    (0, 0o444, False), (0, 0o600, False),
+])
+def test_root_token_metadata_contract(uid: int, mode: int, allowed: bool) -> None:
+    assert stage.protected_root_token_metadata(uid, mode) is allowed
+
+
 def test_selfhost_tls_acceptor_matches_catalog_not_passport_files() -> None:
     catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text(
         encoding="utf-8"))["secrets"]

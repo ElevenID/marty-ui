@@ -63,6 +63,7 @@ def test_scoped_validation_failure_revokes_or_preserves_new_token(
 
     monkeypatch.setattr(signer, "private_directory", lambda path: path)
     monkeypatch.setattr(signer, "verified_openbao_owner", lambda *_args: "locked-image")
+    monkeypatch.setattr(signer, "read_protected_root_token", lambda _path: "r" * 16)
     monkeypatch.setattr(signer, "Bao", FakeBao)
     monkeypatch.setattr(signer, "ed25519_public_pem", lambda _raw: "pem")
 

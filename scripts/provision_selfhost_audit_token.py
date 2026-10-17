@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from urllib.error import HTTPError
 
+from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from selfhost_openbao_client import Bao
 from setup_selfhost_synthetic_fixture import managed_reference
 
@@ -63,22 +64,30 @@ def write_token(path: Path, value: str, owner: os.stat_result) -> None:
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path,
-              org: str, did: str) -> None:
+              org: str, did: str, project: str) -> None:
     if os.name != "posix" or os.geteuid() != 0:
         raise ValueError("OpenBao audit provisioning requires root on Linux")
     if not re.fullmatch(r"https://127\.0\.0\.1:[0-9]{2,5}", endpoint):
         raise ValueError("OpenBao audit endpoint must be loopback HTTPS")
     state_root = private_directory(state_root)
     output_root = private_directory(output_root)
+    private_root = state_root.parent
+    if (state_root != private_root / "openbao-state"
+            or output_root != private_root / "secrets"):
+        raise ValueError("audit inputs must share the private install root")
+    port = int(endpoint.rsplit(":", 1)[1])
+    verified_openbao_owner(
+        project, state_root, private_root / "install" / "selfhost-prepared", port,
+    )
     root_file = state_root / "root.token"
     ca_file = state_root / "tls" / "ca.crt"
     token_file = output_root / "selfhost_audit_token"
     if (root_file.is_symlink() or not root_file.is_file() or ca_file.is_symlink()
             or not ca_file.is_file() or token_file.exists() or token_file.is_symlink()):
         raise ValueError("OpenBao audit input or output is invalid")
-    root_token = root_file.read_text(encoding="ascii").strip()
-    if not 16 <= len(root_token) <= 2048 or not re.fullmatch(r"[A-Za-z0-9._-]+", root_token):
-        raise ValueError("OpenBao root token is invalid")
+    if not 0 < ca_file.stat().st_size <= 65536:
+        raise ValueError("OpenBao audit CA is missing or invalid")
+    root_token = read_protected_root_token(root_file)
     policy, paths = policy_for(org, did)
     bao = Bao(endpoint, ca_file, root_token)
     bao.request("PUT", f"sys/policies/acl/{POLICY}", {"policy": policy})
@@ -122,10 +131,11 @@ def main() -> int:
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--org-id", required=True)
     parser.add_argument("--did", required=True)
+    parser.add_argument("--project-name", required=True)
     args = parser.parse_args()
     try:
         provision(args.endpoint, args.state_root, args.output_root,
-                  args.org_id, args.did)
+                  args.org_id, args.did, args.project_name)
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"OpenBao audit provisioning failed: {type(error).__name__}", file=sys.stderr)
         return 2

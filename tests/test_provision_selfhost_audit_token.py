@@ -40,13 +40,17 @@ def test_provision_validates_and_recovers_token(
 ) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
-    state = tmp_path / "state"
-    output = tmp_path / "output"
+    monkeypatch.setattr(audit.os, "geteuid", lambda: 0)
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
     (state / "tls").mkdir(parents=True)
     output.mkdir()
     state.chmod(0o700)
     output.chmod(0o700)
-    (state / "root.token").write_text("r" * 16, encoding="ascii")
+    root_token = state / "root.token"
+    root_token.write_text("r" * 16, encoding="ascii")
+    root_token.chmod(0o400)
     (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
     calls: list[tuple[str, str, dict | None]] = []
     _, allowed = audit.policy_for(ORG, DID)
@@ -83,14 +87,19 @@ def test_provision_validates_and_recovers_token(
             return {}
 
     monkeypatch.setattr(audit, "Bao", FakeBao)
+    monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
+    monkeypatch.setattr(audit, "read_protected_root_token", lambda _path: "r" * 16)
     if orphan and not excess:
-        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID)
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+                        "marty-selfhost-openbao-qualification")
     elif revoke_fails:
         with pytest.raises(RuntimeError, match="operator recovery"):
-            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID)
+            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+                            "marty-selfhost-openbao-qualification")
     else:
         with pytest.raises(ValueError, match="not orphaned|capabilities"):
-            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID)
+            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+                            "marty-selfhost-openbao-qualification")
     token_file = output / "selfhost_audit_token"
     assert token_file.exists() is (orphan and not excess or revoke_fails)
     if token_file.exists():
@@ -100,17 +109,53 @@ def test_provision_validates_and_recovers_token(
         orphan and not excess)
 
 
-def test_existing_output_refuses_to_create_token(tmp_path: Path) -> None:
+def test_existing_output_refuses_to_create_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
-    state = tmp_path / "state"
-    output = tmp_path / "output"
+    monkeypatch.setattr(audit.os, "geteuid", lambda: 0)
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
     (state / "tls").mkdir(parents=True)
     output.mkdir()
     state.chmod(0o700)
     output.chmod(0o700)
-    (state / "root.token").write_text("r" * 16, encoding="ascii")
+    root_token = state / "root.token"
+    root_token.write_text("r" * 16, encoding="ascii")
+    root_token.chmod(0o400)
     (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
     (output / "selfhost_audit_token").write_text("old", encoding="ascii")
+    monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
     with pytest.raises(ValueError, match="input or output"):
-        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID)
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+                        "marty-selfhost-openbao-qualification")
+
+
+def test_rejects_foreign_binding_before_reading_root_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX private-file behavior")
+    monkeypatch.setattr(audit.os, "geteuid", lambda: 0)
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    output = private / "secrets"
+    state.mkdir(parents=True, mode=0o700)
+    output.mkdir(mode=0o700)
+    state.chmod(0o700)
+    output.chmod(0o700)
+    def reject_foreign_port(project: str, selected_state: Path,
+                            install: Path, port: int) -> None:
+        assert project == "marty-selfhost-openbao-qualification"
+        assert selected_state == state
+        assert install == private / "install" / "selfhost-prepared"
+        assert port == 18201
+        raise RuntimeError("foreign OpenBao port")
+
+    monkeypatch.setattr(audit, "verified_openbao_owner", reject_foreign_port)
+    monkeypatch.setattr(audit, "Bao", lambda *_args: pytest.fail("root token leaked"))
+    with pytest.raises(RuntimeError, match="foreign OpenBao port"):
+        audit.provision("https://127.0.0.1:18201", state, output, ORG, DID,
+                        "marty-selfhost-openbao-qualification")
