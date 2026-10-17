@@ -47,12 +47,19 @@ the full ACL for unrelated grants.
 After starting the disposable Raft-backed OpenBao project, provision its
 non-exportable custody signer with the reviewed source helper. Run it as root
 because it reads OpenBao's protected root token from its state directory; the
-helper does not copy that token into the stack secret root:
+helper first checks the staged image lock, exact Compose project, state mount,
+healthy container and loopback port. It does not copy the root token into the
+stack secret root:
 
 ```bash
-python3 scripts/provision_selfhost_custody_signer.py \
+source_root=/srv/qualification/marty-ui-release
+# Use the exact started Compose project; staged previews record it in
+# openbao.json, while the full-qualification runbook sets this variable.
+openbao_project=${openbao_project:?Set the started OpenBao Compose project}
+sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
   --endpoint "https://127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}" \
-  --state-root "$openbao_state_root" --output-root "$secret_root"
+  --state-root "$openbao_state_root" --output-root "$secret_root" \
+  --project-name "$openbao_project"
 ```
 
 The printed public-key digest is an install-local diagnostic, not a release

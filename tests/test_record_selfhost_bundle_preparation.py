@@ -154,6 +154,15 @@ class BundlePreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "special ZIP member"):
             self.check()
 
+    def test_rejects_privileged_zip_file_mode(self):
+        member = zipfile.ZipInfo("bundle/privileged")
+        member.create_system = 3
+        member.external_attr = (stat.S_IFREG | 0o4755) << 16
+        with zipfile.ZipFile(self.archive, "a") as bundle:
+            bundle.writestr(member, b"not executable")
+        with self.assertRaisesRegex(ValueError, "unsafe ZIP member permissions"):
+            self.check()
+
     def test_rejects_path_traversal(self):
         with zipfile.ZipFile(self.archive, "a") as bundle:
             bundle.writestr("bundle/../escape", b"bad")

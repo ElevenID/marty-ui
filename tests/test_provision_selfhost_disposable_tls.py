@@ -25,6 +25,14 @@ SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 OPENBAO = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
 
 
+@pytest.mark.parametrize("uid,mode,allowed", [
+    (0, 0o400, True), (1000, 0o400, False),
+    (0, 0o444, False), (0, 0o600, False),
+])
+def test_root_token_metadata_contract(uid: int, mode: int, allowed: bool) -> None:
+    assert stage.protected_root_token_metadata(uid, mode) is allowed
+
+
 def test_selfhost_tls_acceptor_matches_catalog_not_passport_files() -> None:
     catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text(
         encoding="utf-8"))["secrets"]
@@ -85,6 +93,8 @@ def test_locked_images_and_bundle_assets(tmp_path: Path) -> None:
     assets = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text(
         encoding="utf-8"))["assets"]
     assert {"scripts/provision_selfhost_disposable_tls.py",
+            "scripts/start_selfhost_disposable_openbao.py",
+            "scripts/stage_selfhost_keycloak_inputs.py",
             "scripts/passport_remote_tls.py",
             "docs/selfhost-disposable-qualification-runbook.md"} <= set(assets)
     lock = root / ".marty-selfhost-images.json"
@@ -101,7 +111,10 @@ def test_openbao_network_requires_exact_running_project_and_state(
     state = tmp_path / "state"
     state.mkdir()
     details = [{
-        "State": {"Running": True}, "Config": {"Image": OPENBAO, "Labels": {
+        "State": {"Running": True, "Health": {"Status": "healthy"}},
+        "HostConfig": {"PortBindings": {"8200/tcp": [
+            {"HostIp": "127.0.0.1", "HostPort": "18200"}]}},
+        "Config": {"Image": OPENBAO, "Labels": {
             "com.docker.compose.project": "marty-selfhost-openbao",
             "com.docker.compose.service": "openbao",
         }},
@@ -125,6 +138,16 @@ def test_openbao_network_requires_exact_running_project_and_state(
         stage.openbao_network("marty-selfhost-openbao", state, OPENBAO,
                               expected_host_port=18200)
     details[0]["NetworkSettings"]["Ports"]["8200/tcp"][0]["HostIp"] = "127.0.0.1"
+    details[0]["HostConfig"]["PortBindings"]["8200/tcp"][0]["HostPort"] = "18201"
+    with pytest.raises(RuntimeError, match="loopback HTTPS port"):
+        stage.openbao_network("marty-selfhost-openbao", state, OPENBAO,
+                              expected_host_port=18200)
+    details[0]["HostConfig"]["PortBindings"]["8200/tcp"][0]["HostPort"] = "18200"
+    details[0]["State"]["Health"]["Status"] = "unhealthy"
+    with pytest.raises(RuntimeError, match="loopback HTTPS port"):
+        stage.openbao_network("marty-selfhost-openbao", state, OPENBAO,
+                              expected_host_port=18200)
+    details[0]["State"]["Health"]["Status"] = "healthy"
     details[0]["Config"]["Image"] = SERVICES
     with pytest.raises(RuntimeError, match="locked bundle image"):
         stage.openbao_network("marty-selfhost-openbao", state, OPENBAO)
