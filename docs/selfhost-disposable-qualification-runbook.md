@@ -24,6 +24,40 @@ journey and custody checks pass, the lower-memory operating envelope is
 reviewed, and this qualification target is updated. A Compose render or image
 pull alone does not establish a smaller supported minimum.
 
+## Next-preview installer work in progress
+
+The next preview's Linux-only staging helper verifies all downloaded checksums,
+the exact source/receipt lineage and the extracted ZIP, then creates a new
+operator-private root with disposable scalar credentials. From a **clean,
+matching source checkout**, use an operator-owned `0700` parent and a fresh
+child path:
+
+```bash
+python3 scripts/stage_selfhost_disposable_preview.py \
+  --assets-dir /absolute/path/to/next-preview-assets \
+  --source-checkout /absolute/path/to/matching-clean-source \
+  --private-root /absolute/path/to/operator-private/new-run
+python3 scripts/start_selfhost_disposable_openbao.py \
+  --private-root /absolute/path/to/operator-private/new-run \
+  --host-port 18200
+```
+
+The OpenBao helper renders and checks the three-service Compose model before
+starting a fresh project. It uses only the locked plugin image, an isolated
+state directory and a selected loopback port. It does not qualify the stack or
+complete the workload TLS, Keycloak, custody or installed business journey.
+These helpers do **not** make the older `v1.1.247-selfhost-preview.2` image
+installable; obtain a newly prepared preview with matching source and images.
+
+If startup fails, `openbao-pending.json` in the private root records the
+project name and port, never a token. Inspect that marker and remove only its
+named Docker project with the same Compose file and locked image environment.
+Verify that no container or network with that project label remains before
+discarding the disposable root. Do not remove the root while a bootstrap
+container may still have its private state mounted; do not reuse a partly
+initialized state directory. A failed `docker compose down` requires manual
+operator cleanup of that exact project before any retry.
+
 The disposable Keycloak and workload TLS credentials request eight-hour
 lifetimes. Seven hours is an upper bound, not a guaranteed operating window:
 check the effective expiry of workload TLS credentials, which OpenBao may cap,
