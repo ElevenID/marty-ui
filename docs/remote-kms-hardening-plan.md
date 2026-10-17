@@ -1320,10 +1320,12 @@ specific operational context; prepare a concrete reviewed operation first.
 The protected KMS consumer changes landed as UI #1192
 (`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`) and Credentials #313
 (`7ac622015a220992fbae84177a1518fec7b75849`). Core v0.2.2 is the
-shared dependency. The source stack lock currently selects `marty-ui@1.1.250`
-with `release_state: eligible`; eligibility does not establish signed-image,
-installation, provider/device or cutover acceptance. The earlier v1.1.244/245
-candidate handoff history is superseded; use the current lock and release gates.
+shared dependency. The source stack lock currently selects `marty-ui@1.1.251`
+with `release_state: eligible`. The signed v1.1.250 bundle failed installed
+startup and must not be used for cutover. Eligibility does not establish
+signed-image, installation, provider/device or cutover acceptance. The earlier
+v1.1.244/245 candidate handoff history is superseded; use the current lock and
+release gates.
 
 The dated implementation log and 14 local KMS probe receipts were retired from
 the working tree. Their original contents remain recoverable at Git commit
