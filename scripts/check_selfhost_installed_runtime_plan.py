@@ -142,6 +142,7 @@ EXPECTED_ROLE_SECRETS = {
                      "workload_identity_ca_cert"},
     "postgres": {"postgres_password", "keycloak_db_password", "marty_db_password"},
     "presentation-policy": {"marty_db_password", "grpc_service_token",
+                            "issuance_api_key",
                             "pp_workload_server_cert", "pp_tls_kms_token",
                             "openbao_tls_ca_cert", "workload_identity_ca_cert"},
     "revocation-profile": {"marty_db_password", "grpc_service_token",

@@ -18,7 +18,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import uuid
 from contextlib import nullcontext
 from pathlib import Path
 from urllib.error import HTTPError
@@ -33,6 +32,7 @@ from qualify_selfhost_migrations import PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_S
 from provision_selfhost_disposable_tls import exact_images, openbao_network
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
+from selfhost_managed_reference import managed_reference
 from selfhost_openbao_client import Bao, CUSTODY_SIGNER, custody_signer_public
 
 
@@ -476,16 +476,14 @@ def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
     proofs = document.get("profile_proofs")
     if not isinstance(proofs, list) or len(proofs) != 2:
         raise ValueError("signed KMS custody profile proofs are incomplete")
-    for proof, did, purpose, prefix in zip(
+    for proof, did, purpose in zip(
         proofs,
         (environment["SELFHOST_ISSUER_DID"], environment["SELFHOST_VERIFIER_DID"]),
         ("vc_jwt_issuer", "oid4vp_request_signing"),
-        ("cred-issuer-", "oid4vp-verifier-"),
     ):
         selector = {"issuer_did": did, "key_purpose": purpose,
                     "credential_format": "SD_JWT_VC", "algorithm": "ES256"}
-        tuple_value = f'{environment["SELFHOST_ORG_ID"]}|{did}|{purpose}|SD_JWT_VC|ES256'
-        reference = f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256"
+        reference = managed_reference(environment["SELFHOST_ORG_ID"], purpose)
         if (not isinstance(proof, dict)
                 or set(proof) != {"profile_selector", "key_reference", "key_version"}
                 or proof["profile_selector"] != selector

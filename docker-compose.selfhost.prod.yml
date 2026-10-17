@@ -1034,11 +1034,13 @@ services:
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       MARTY_ORG_SLUG: ${MARTY_ORG_SLUG:-marty}
       MIP_CREDENTIAL_STATUS_URL_TEMPLATE: "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/credentials/{credential_id}/status}"
+      ISSUANCE_API_KEY_FILE: /run/secrets/issuance_api_key
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_SERVICE_URL: http://issuance:8005
     secrets:
       - marty_db_password
       - grpc_service_token
+      - issuance_api_key
       - pp_workload_server_cert
       - openbao_tls_ca_cert
       - pp_tls_kms_token

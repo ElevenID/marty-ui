@@ -14,7 +14,7 @@ from urllib.error import HTTPError
 
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from selfhost_openbao_client import Bao
-from setup_selfhost_synthetic_fixture import managed_reference
+from selfhost_managed_reference import managed_reference
 
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -41,7 +41,7 @@ def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
             or not re.fullmatch(r"did:web:[A-Za-z0-9.%-]+:orgs:" +
                                 re.escape(slug), did)):
         raise ValueError("synthetic DID does not match organization slug")
-    keys = tuple(managed_reference(org, did, purpose)
+    keys = tuple(managed_reference(org, purpose)
                  for purpose in ("vc_jwt_issuer", "oid4vp_request_signing"))
     paths = tuple(f"transit/keys/{name}" for name in (*keys, SIGNER))
     policy = "".join(f'path "{path}" {{ capabilities = ["read"] }}\n'

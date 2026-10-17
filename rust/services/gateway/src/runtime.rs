@@ -4725,6 +4725,11 @@ fn upstream_response(upstream: GatewayResponse) -> Response {
     for (name, value) in upstream.headers {
         insert_header(&mut response, &name, &value);
     }
+    for cookie in upstream.set_cookies {
+        if let Ok(value) = HeaderValue::from_str(&cookie) {
+            response.headers_mut().append(header::SET_COOKIE, value);
+        }
+    }
     response
 }
 
@@ -5156,6 +5161,30 @@ mod tests {
     };
     use mmf_security::InMemoryRateLimiter;
     use tower::ServiceExt;
+
+    #[test]
+    fn upstream_response_appends_both_auth_cookies() {
+        let response = upstream_response(GatewayResponse {
+            status_code: 302,
+            headers: BTreeMap::from([("location".into(), "/console".into())]),
+            set_cookies: vec![
+                "sessionId=synthetic; Path=/; Secure".into(),
+                "marty_impersonation_handoff=; Max-Age=0; Path=/; Secure".into(),
+            ],
+            body: None,
+            response_time_ms: None,
+            upstream_service: Some("auth".into()),
+        });
+        let cookies = response
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(cookies.len(), 2);
+        assert!(cookies[0].starts_with("sessionId="));
+        assert!(cookies[1].starts_with("marty_impersonation_handoff="));
+    }
 
     use crate::{
         contract::GatewayContract,
@@ -5635,6 +5664,7 @@ mod tests {
                 assert_eq!(request.header("x-api-key"), Some("issuance-service-key"));
                 return Ok(GatewayResponse {
                     status_code: 404,
+                    set_cookies: Vec::new(),
                     headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                     body: Some(br#"{"detail":"Application not found"}"#.to_vec()),
                     response_time_ms: None,
@@ -5988,6 +6018,7 @@ mod tests {
                     if request.method == HttpMethod::Get && request.query.contains_key("limit") {
                         return Ok(GatewayResponse {
                             status_code: 200,
+                            set_cookies: Vec::new(),
                             headers: BTreeMap::from([(
                                 "content-type".into(),
                                 "application/json".into(),
@@ -6398,6 +6429,7 @@ mod tests {
             };
             Ok(GatewayResponse {
                 status_code: 200,
+                set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                 body: Some(body),
                 response_time_ms: None,
@@ -6709,6 +6741,7 @@ mod tests {
                 .push((instance.service_name.clone(), request));
             Ok(GatewayResponse {
                 status_code: 200,
+                set_cookies: Vec::new(),
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
                 body: Some(if issued_credential {
                     serde_json::to_vec(&json!({

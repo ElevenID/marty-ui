@@ -362,6 +362,7 @@ mod tests {
     fn response(value: &Value) -> GatewayResponse {
         GatewayResponse {
             status_code: 200,
+            set_cookies: Vec::new(),
             headers: BTreeMap::from([
                 ("content-type".into(), "application/json".into()),
                 ("content-length".into(), "999".into()),

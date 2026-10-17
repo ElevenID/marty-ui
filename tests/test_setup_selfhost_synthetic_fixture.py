@@ -8,6 +8,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 import httpx
@@ -17,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
     audit_client,
     custody_signer_public,
+    keycloak_user,
     managed_key_binding,
     managed_reference,
     profile_proof,
@@ -29,6 +31,49 @@ from setup_selfhost_synthetic_fixture import (  # noqa: E402
     write_signed_evidence,
     trusted_audit_context,
 )
+
+
+@pytest.mark.parametrize("existing_without_name", [False, True])
+def test_synthetic_keycloak_operator_satisfies_required_profile(
+    existing_without_name: bool,
+) -> None:
+    seen: list[str] = []
+    user = {"id": "synthetic-id", "firstName": "Self-host", "lastName": "Operator"}
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        seen.append(f"{request.method} {path}")
+        if path.endswith("/protocol/openid-connect/token"):
+            return httpx.Response(200, json={"access_token": "synthetic-admin-token"})
+        if path.endswith("/users") and request.method == "GET":
+            if existing_without_name:
+                return httpx.Response(200, json=[{"id": "synthetic-id"}])
+            return httpx.Response(200, json=[user] if "POST /admin/realms/11id/users" in seen else [])
+        if path.endswith("/users") and request.method == "POST":
+            body = json.loads(request.content)
+            assert (body["firstName"], body["lastName"]) == ("Self-host", "Operator")
+            return httpx.Response(201)
+        if path.endswith("/users/synthetic-id") and request.method == "PUT":
+            assert json.loads(request.content) == {"firstName": "Self-host", "lastName": "Operator"}
+            return httpx.Response(204)
+        if path.endswith("/reset-password"):
+            return httpx.Response(204)
+        if path.endswith("/roles/administrator"):
+            return httpx.Response(200, json={"name": "administrator"})
+        if path.endswith("/role-mappings/realm"):
+            return httpx.Response(204)
+        pytest.fail(f"unexpected Keycloak request: {request.method} {path}")
+
+    async def run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond),
+                                     base_url="http://127.0.0.1:38180") as client:
+            await keycloak_user(client, {"SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
+                                         "SELFHOST_TEST_PASSWORD": "synthetic-password"},
+                                "synthetic-admin-password")
+
+    asyncio.run(run())
+    update = "PUT /admin/realms/11id/users/synthetic-id"
+    assert (update in seen) == existing_without_name
 
 
 def fixture_env() -> dict[str, str]:
@@ -322,14 +367,16 @@ def test_signed_profile_selector_has_no_null_private_id() -> None:
 
 def test_purpose_specific_managed_key_references_are_distinct() -> None:
     values = fixture_env()
-    org, did = values["SELFHOST_ORG_ID"], values["SELFHOST_ISSUER_DID"]
-    issuer = managed_reference(org, did, "vc_jwt_issuer")
-    verifier = managed_reference(org, did, "oid4vp_request_signing")
-    assert issuer.startswith("cred-issuer-")
-    assert verifier.startswith("oid4vp-verifier-")
+    org = values["SELFHOST_ORG_ID"]
+    issuer = managed_reference(org, "vc_jwt_issuer")
+    verifier = managed_reference(org, "oid4vp_request_signing")
+    tenant = uuid.uuid5(uuid.NAMESPACE_URL, org).hex
+    assert issuer == f"cred-issuer-{tenant}-marty-es256"
+    assert verifier == f"oid4vp-verifier-{tenant}-marty-es256"
     assert issuer != verifier
     with pytest.raises(ValueError, match="unsupported"):
-        managed_reference(org, did, "mdoc_dsc")
+        managed_reference(org, "mdoc_dsc")
+    assert managed_reference("another-org", "vc_jwt_issuer") != issuer
 
 
 def test_managed_key_binding_is_scoped_to_org_service_and_reference() -> None:

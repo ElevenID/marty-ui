@@ -201,6 +201,7 @@ impl UpstreamClient for PassportRouterUpstream {
         Ok(GatewayResponse {
             status_code,
             headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+            set_cookies: Vec::new(),
             body: Some(body.to_vec()),
             response_time_ms: None,
             upstream_service: None,

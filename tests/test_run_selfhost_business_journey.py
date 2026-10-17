@@ -34,6 +34,7 @@ from run_selfhost_business_journey import (  # noqa: E402
     verify_kms_custody,
 )
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
+from selfhost_managed_reference import managed_reference  # noqa: E402
 
 
 def test_fresh_openbao_instances_enroll_distinct_custody_keys(
@@ -717,6 +718,16 @@ def test_frozen_ed25519_signature_oracle_and_live_custody_bytes(tmp_path: Path) 
                    "SELFHOST_VERIFIER_DID": "did:example:verifier",
                    "SELFHOST_FIXTURE_SHA256": "f" * 64,
                    "SELFHOST_CUSTODY_CHALLENGE": "d" * 64}
+    # Preserve the original public-only signature oracle byte-for-byte. Its
+    # historical tuple reference is never accepted by the current verifier.
+    frozen_proofs = custody_profile_proofs(environment)
+    for proof, prefix in zip(frozen_proofs, ("cred-issuer-", "oid4vp-verifier-")):
+        selector = proof["profile_selector"]
+        tuple_value = (f'{environment["SELFHOST_ORG_ID"]}|{selector["issuer_did"]}|'
+                       f'{selector["key_purpose"]}|SD_JWT_VC|ES256')
+        proof["key_reference"] = (
+            f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256"
+        )
     frozen_document = {"schema": "marty.selfhost-kms-custody/v1",
                 "source_sha": preflight["source_sha"],
                 "archive_sha256": preflight["archive_sha256"],
@@ -726,7 +737,7 @@ def test_frozen_ed25519_signature_oracle_and_live_custody_bytes(tmp_path: Path) 
                 "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
                 "attestation_key_reference": "selfhost-qualification-custody-v1",
                 "attestation_key_version": 1, "attestation_key_non_exportable": True,
-                "profile_proofs": custody_profile_proofs(environment)}
+                "profile_proofs": frozen_proofs}
     evidence.write_bytes((json.dumps(frozen_document, indent=2, sort_keys=True) + "\n")
                          .encode("utf-8"))
     subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin",
@@ -739,7 +750,8 @@ def test_frozen_ed25519_signature_oracle_and_live_custody_bytes(tmp_path: Path) 
                    check=True, capture_output=True)
     subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-out", str(public)],
                    check=True, capture_output=True)
-    document = {**frozen_document, "run_id": preflight["run_id"],
+    document = {**frozen_document, "profile_proofs": custody_profile_proofs(environment),
+                "run_id": preflight["run_id"],
                 "fixture_sha256": environment["SELFHOST_FIXTURE_SHA256"],
                 "challenge": environment["SELFHOST_CUSTODY_CHALLENGE"]}
     evidence.write_bytes((json.dumps(document, indent=2, sort_keys=True) + "\n")
@@ -760,15 +772,14 @@ def test_frozen_ed25519_signature_oracle_and_live_custody_bytes(tmp_path: Path) 
 
 def custody_profile_proofs(environment: dict[str, str]) -> list[dict]:
     proofs = []
-    for did, purpose, prefix in (
-        (environment["SELFHOST_ISSUER_DID"], "vc_jwt_issuer", "cred-issuer-"),
-        (environment["SELFHOST_VERIFIER_DID"], "oid4vp_request_signing", "oid4vp-verifier-"),
+    for did, purpose in (
+        (environment["SELFHOST_ISSUER_DID"], "vc_jwt_issuer"),
+        (environment["SELFHOST_VERIFIER_DID"], "oid4vp_request_signing"),
     ):
-        tuple_value = f'{environment["SELFHOST_ORG_ID"]}|{did}|{purpose}|SD_JWT_VC|ES256'
         proofs.append({
             "profile_selector": {"issuer_did": did, "key_purpose": purpose,
                                  "credential_format": "SD_JWT_VC", "algorithm": "ES256"},
-            "key_reference": f"{prefix}{uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]}-es256",
+            "key_reference": managed_reference(environment["SELFHOST_ORG_ID"], purpose),
             "key_version": 1,
         })
     return proofs
