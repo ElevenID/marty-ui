@@ -26,6 +26,11 @@ neither clarification changes preview assets or installation qualification.
 The disposable staging, isolated locked-image OpenBao startup, Keycloak inputs,
 workload TLS and custody helpers are on protected main after reviewed
 [PR #1375](https://github.com/ElevenID/marty-ui/pull/1375) and its prerequisites.
+The fresh-install KMS/startup repair from reviewed
+[PR #1379](https://github.com/ElevenID/marty-ui/pull/1379) is also on protected
+main. The published preview predates that repair; a new exact-source
+experimental candidate is needed before installed replay. Neither merge
+constitutes installed acceptance.
 The preview guide uses the original preparation transaction and a clean exact
 source checkout; it requires a non-root Linux operator and disposable private
 state. [Issue #1350](https://github.com/ElevenID/marty-ui/issues/1350)
@@ -124,7 +129,7 @@ This document coordinates the new architecture work. [The original build audit](
 
 | ID | Work | Dependencies | Status | Remaining boundary |
 | --- | --- | --- | --- | --- |
-| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | Effective execution, runtime inputs and complete dependency/obligation inventory remain incomplete; source-name or positive-summary sentinels are not a complete graph. |
+| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | The eleven Issuance Canvas/proof-nonce database executables now resolve from this run's Cargo compiler artifacts in CI; effective execution, runtime inputs and complete dependency/obligation inventory remain incomplete. Source-name or positive-summary sentinels are not a complete graph. |
 | A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | Dedicated acceptance owners and the zero service-to-service dev-edge guard have landed. Preserve all moved obligations; installed system acceptance remains distinct from component tests. |
 | A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | The narrow shared Rust extraction is landed. Keep one implementation and public/error/resource-limit compatibility across consumers. |
 | A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | UI planning remains shadow-only until the complete non-Cargo graph and conservative fallback are qualified; preserve Core feature/security owners. |

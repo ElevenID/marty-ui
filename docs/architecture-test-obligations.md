@@ -20,6 +20,18 @@ This is the initial group inventory for A0, the exact obligation record for the 
 
 For remaining A0 work, enumerate each group's scenario obligations and non-Cargo input closure in a reusable manifest before activating selection. The groups above deliberately remain broad where ownership has not yet been proven.
 
+The contracts lane records Cargo `compiler-artifact` events for its exact
+workspace build. Both the workflow's executable preparation and the database
+runner resolve the ten Issuance Canvas PostgreSQL targets plus the proof-nonce
+target through one guarded resolver: package identity, test target kind,
+executable path, uniqueness and the eleven-target count must agree. CI fails
+closed if the run-bound artifact log is missing; a local ad-hoc invocation
+without `RUNNER_TEMP` retains its previous directory-scan fallback. In CI,
+this prevents an older executable hash left in `target/debug/deps` from being
+silently substituted for a compiled case. The local fallback is not
+exact-source evidence. This does not prove the full
+non-Cargo input graph or authorize any selection skip.
+
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ## First extraction: managed passport KMS chain

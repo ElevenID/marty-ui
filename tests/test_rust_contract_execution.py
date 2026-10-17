@@ -127,6 +127,94 @@ def test_database_runner_uses_positive_execution_guard() -> None:
     assert source.count("run_timed ") == 19
 
 
+def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    [step] = [
+        entry
+        for entry in steps
+        if entry.get("name") == "Prepare database contract executables"
+    ]
+    assert "source ../scripts/ci/rust_contract_execution.sh" in step["run"]
+    assert "resolve_issuance_canvas_contracts >/dev/null" in step["run"]
+    runner = RUNNER.read_text(encoding="utf-8")
+    assert 'if [[ -n "${RUNNER_TEMP:-}" ]]; then' in runner
+    canvas_block = runner.split('if [[ -n "${RUNNER_TEMP:-}" ]]; then', 1)[1]
+    assert (
+        'canvas_contract_paths="$(resolve_issuance_canvas_contracts)"' in canvas_block
+    )
+    assert canvas_block.index("resolve_issuance_canvas_contracts") < canvas_block.index(
+        "find target/debug/deps"
+    )
+
+
+@pytest.mark.skipif(
+    BASH is None or shutil.which("jq") is None,
+    reason="Bash and jq are required to exercise the Cargo artifact resolver",
+)
+def test_canvas_database_contracts_resolve_only_this_runs_artifacts(
+    tmp_path: Path,
+) -> None:
+    names = sorted(
+        path.stem
+        for path in (ROOT / "rust/services/issuance/tests").glob(
+            "canvas_*_postgres_contract.rs"
+        )
+    ) + ["proof_nonce_postgres_contract"]
+    assert len(names) == 11
+    records = []
+    paths = []
+    for name in names:
+        executable = tmp_path / name
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+        paths.append(str(executable))
+        records.append(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "path+file:///test#marty-issuance-service@0.1.0",
+                "target": {"name": name, "kind": ["test"]},
+                "executable": str(executable),
+            }
+        )
+    unrelated = dict(records[0], package_id="path+file:///test#other@0.1.0")
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    env = {**os.environ, "RUNNER_TEMP": str(tmp_path)}
+
+    def resolve(entries: list[dict]) -> subprocess.CompletedProcess[str]:
+        artifacts.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8"
+        )
+        return subprocess.run(
+            [
+                BASH,
+                "-c",
+                "set -euo pipefail; source scripts/ci/rust_contract_execution.sh; "
+                "resolve_issuance_canvas_contracts",
+            ],
+            cwd=ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    valid = resolve([*records, unrelated])
+    assert valid.returncode == 0, valid.stderr
+    assert valid.stdout.splitlines() == sorted(paths)
+    assert resolve(records[:-1]).returncode != 0
+    duplicate = dict(records[0], executable=str(tmp_path / names[1]))
+    assert resolve([*records, duplicate]).returncode != 0
+    assert (
+        resolve(
+            [*records[:1], dict(records[1], executable="/missing"), *records[2:]]
+        ).returncode
+        != 0
+    )
+
+
 def test_canvas_serial_runner_uses_positive_execution_guard() -> None:
     source = CANVAS_RUNNER.read_text(encoding="utf-8")
     assert (

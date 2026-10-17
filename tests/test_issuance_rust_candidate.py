@@ -39,12 +39,15 @@ def test_canvas_postgres_contracts_are_required_in_ci() -> None:
         in text("scripts/ci/run-rust-db-contracts.sh")
     )
     assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
-    workflow += text("scripts/ci/run-rust-db-contracts.sh")
-    assert 'startswith("canvas_")' in workflow
-    assert 'endswith("_postgres_contract")' in workflow
-    assert "canvas_*_postgres_contract-*" in workflow
-    assert workflow.count("Expected eleven issuance PostgreSQL contract") == 2
-    assert workflow.count("ten Canvas plus proof nonce") == 2
+    runner = text("scripts/ci/run-rust-db-contracts.sh")
+    resolver = text("scripts/ci/rust_contract_execution.sh")
+    assert "resolve_issuance_canvas_contracts" in workflow
+    assert "resolve_issuance_canvas_contracts" in runner
+    assert 'startswith("canvas_")' in resolver
+    assert 'endswith("_postgres_contract")' in resolver
+    assert "canvas_*_postgres_contract-*" in runner  # local no-artifact fallback
+    assert "Expected eleven issuance PostgreSQL contracts" in resolver
+    assert "ten Canvas plus proof nonce" in resolver
     manifest = text("rust/services/issuance/Cargo.toml")
     assert 'name = "canvas_mirror_postgres_contract"' in manifest
     assert 'path = "tests/canvas_mirror_postgres_contract.rs"' in manifest
