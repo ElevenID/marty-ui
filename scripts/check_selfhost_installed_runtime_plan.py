@@ -201,6 +201,10 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
             or not keycloak_env["BAO_ADDR"].startswith("https://")
             or keycloak_env.get("BAO_CACERT") != "/run/secrets/openbao_tls_ca_cert"
             or keycloak_env.get("BAO_TOKEN_FILE") != "/run/secrets/keycloak_signing_kms_token"
+            or "BAO_TOKEN" in keycloak_env
+            or not isinstance(keycloak_env.get("PUBLIC_DOMAIN"), str)
+            or not keycloak_env["PUBLIC_DOMAIN"]
+            or keycloak_env.get("KC_HOSTNAME") != "https://" + keycloak_env.get("PUBLIC_DOMAIN", "")
             or keycloak_env.get("MARTY_KEYCLOAK_RS256_CERT_DIR") != "/run/secrets"
             or keycloak_env.get("MARTY_KEYCLOAK_JWE_TOKEN_DIR") != "/run/secrets"
             or keycloak_env.get("MARTY_KEYCLOAK_JWE_MOUNT") != "didcomm"

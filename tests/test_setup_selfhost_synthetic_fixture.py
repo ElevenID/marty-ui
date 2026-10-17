@@ -54,7 +54,7 @@ def fixture_env() -> dict[str, str]:
                   SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200",
                   SELFHOST_FIXTURE_SHA256="f" * 64,
                   SELFHOST_CUSTODY_CHALLENGE="c" * 64)
-    did = "did:web:selfhost.marty.test:orgs:" + values["SELFHOST_ORG_ID"]
+    did = "did:web:selfhost.marty.test:orgs:marty"
     values.update(SELFHOST_ISSUER_DID=did, SELFHOST_VERIFIER_DID=did)
     return values
 
@@ -62,6 +62,7 @@ def fixture_env() -> dict[str, str]:
 def fixture_model(values: dict[str, str]) -> dict:
     return {"services": {
         "db-migrate": {"environment": {"MARTY_ORG_ID": values["SELFHOST_ORG_ID"],
+                                       "MARTY_ORG_SLUG": "marty",
                                        "MARTY_ORG_ADMIN_EMAIL": values["SELFHOST_TEST_USERNAME"],
                                        "PUBLIC_DOMAIN": values["SELFHOST_PUBLIC_DOMAIN"]}},
         "keycloak-configurator": {"environment": {
@@ -255,6 +256,15 @@ def test_migration_admin_must_match_synthetic_public_operator() -> None:
     validate_installed_model(model, values)
     model["services"]["db-migrate"]["environment"]["MARTY_ORG_ADMIN_EMAIL"] = "other@example.test"
     with pytest.raises(ValueError, match="migration-seeded organization"):
+        validate_installed_model(model, values)
+
+
+def test_synthetic_did_must_match_installed_slug() -> None:
+    values = fixture_env()
+    model = fixture_model(values)
+    validate_installed_model(model, values)
+    model["services"]["db-migrate"]["environment"]["MARTY_ORG_SLUG"] = "other"
+    with pytest.raises(ValueError, match="organization slug"):
         validate_installed_model(model, values)
 
 

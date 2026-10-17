@@ -530,8 +530,19 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                     env=environment, timeout=1200)
         started = True
         with measured(diagnostics, "startup"):
-            command([*compose, "up", "-d", "--no-build", *selected],
-                    cwd=install_root, env=environment, timeout=900)
+            # Compose can report an initially unhealthy dependency while Rust
+            # services are still connecting to freshly started peers. Retry
+            # only within this bounded startup window; readiness below still
+            # requires the full selected service closure to become healthy.
+            for attempt in range(8):
+                try:
+                    command([*compose, "up", "-d", "--no-build", *selected],
+                            cwd=install_root, env=environment, timeout=900)
+                    break
+                except ValueError:
+                    if attempt == 7:
+                        raise
+                    time.sleep(10)
         with measured(diagnostics, "readiness"):
             deadline = time.monotonic() + 300
             while True:
