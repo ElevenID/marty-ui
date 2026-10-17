@@ -18,9 +18,11 @@ and live custody but failed a diagnostics phase-list error; a separate local
 rehearsal with a private candidate overlay passed the complete journey but is
 not signed-artifact acceptance. [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
 fixes that error and the artifact producer verification, and selects v1.1.255.
-Its final-head PR checks passed; the protected merge-group full
-[CI 39073332440](https://github.com/ElevenID/marty-ui/actions/runs/39073332440)
-is still running. After merge, require exact-main CI, no-write release claim,
+Its final-head PR checks and all protected merge-group checks passed, including
+[CI 39073332440](https://github.com/ElevenID/marty-ui/actions/runs/39073332440).
+It merged at `76a7fb4ef6e2ad594dc431da511686a1664979ab`; protected main matches.
+Full manual [exact-main CI 39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
+is queued at that SHA. Require its success, no-write release claim,
 signed v1.1.255 publication, and an overlay-free fresh 28-service Raft install
 with full journey, custody/database scans, resource and production-site checks.
 Then qualify the supported fresh cutover and rollback; the two old installations
