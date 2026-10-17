@@ -38,8 +38,11 @@ recorded a 113.029-second ordinary DB group, including 98.520 seconds in
 `canvas_sync_worker_postgres_contract`. Its nested phase timings included
 50.947 seconds renewal job outcomes, 30.301 seconds renewal write failures and
 10.085 seconds renewal generation; these overlap the parent timing and must
-not be added to it. The separately running Canvas acceptance lane was still
-pending when this evidence was collected. The host compile cache report showed
+not be added to it. Full qualification subsequently passed. The separate
+published Canvas group recorded 1,105.244 seconds (18m25s), including a
+611.035-second worker target and a 347.953-second composition target. These
+target timings are included in that group; they are distinct from the ordinary
+DB worker above. The contracts-lane host compile cache report showed
 645 Rust hits and four Rust misses, with four cache-write errors. These are
 single-run observations, not before/after speedup measurements; preserve real
 renewal semantics and investigate the write errors before drawing conclusions
