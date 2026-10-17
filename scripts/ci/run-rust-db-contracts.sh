@@ -3,19 +3,20 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"
 resolve_contract_executable() {
   local target="$1"
-  local artifacts="${RUNNER_TEMP:-}/rust-test-artifacts.json"
-  if [[ -n "${RUNNER_TEMP:-}" && -f "$artifacts" ]]; then
-    # Later focused Cargo runs can leave a second binary hash in deps. Use
-    # the exact workspace test artifact selected before those runs instead.
-    jq -r --arg target "$target" '
-      select(.reason == "compiler-artifact")
-      | select(.target.name == $target)
-      | select(.executable != null)
-      | .executable
-    ' "$artifacts" | tail -n 1
-  else
+  if [[ -z "${RUNNER_TEMP:-}" ]]; then
     find target/debug/deps -maxdepth 1 -type f -name "$target-*" -perm -u+x
+    return
   fi
+  local package
+  case "$target" in
+    contracts) package=marty-revocation-profile ;;
+    registry_storage_contract|document_storage_contract|issuer_profile_storage_contract)
+      package=marty-signing-keys ;;
+    oid4vci_migration_postgres_contract|issuance_transaction_postgres_contract|credential_postgres_contract|retention_postgres_contract|passport_postgres_contract|application_template_postgres_contract|internal_application_postgres_contract)
+      package=marty-issuance-service ;;
+    *) printf 'Unknown database contract target: %s\n' "$target" >&2; return 1 ;;
+  esac
+  resolve_recorded_contract_executable "$package" "$target"
 }
 export MARTY_TEST_POSTGRES_URL=postgresql://postgres:postgres@127.0.0.1:5432/marty_db_contracts_test
 export MARTY_TEST_REDIS_URL=redis://127.0.0.1:6379/0

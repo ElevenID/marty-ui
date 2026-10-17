@@ -32,6 +32,14 @@ silently substituted for a compiled case. The local fallback is not
 exact-source evidence. This does not prove the full
 non-Cargo input graph or authorize any selection skip.
 
+The other DB-contract targets now use the same run-bound artifact source for
+both preparation and execution. Their selector requires the exact Cargo
+package, test target kind, target name, one unique executable and an executable
+file; a missing run log or ambiguous target fails closed in CI. The local
+no-`RUNNER_TEMP` ad-hoc fallback remains non-exact evidence. This tightens
+which compiled case executes but does not change the required case roster or
+establish transitive runtime-input closure.
+
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ## First extraction: managed passport KMS chain
