@@ -12,12 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import provision_selfhost_custody_signer as signer
 
 
-@pytest.mark.parametrize("cleanup_fails,write_fails", [
-    (False, False), (True, False), (False, True),
+@pytest.mark.parametrize("cleanup_fails,write_fails,valid_policy,orphan", [
+    (False, False, False, True), (True, False, False, True),
+    (False, True, True, True), (False, False, True, False),
 ])
 def test_scoped_validation_failure_revokes_or_preserves_new_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    cleanup_fails: bool, write_fails: bool,
+    cleanup_fails: bool, write_fails: bool, valid_policy: bool, orphan: bool,
 ) -> None:
     state_root = tmp_path / "state"
     output_root = tmp_path / "output"
@@ -41,10 +42,14 @@ def test_scoped_validation_failure_revokes_or_preserves_new_token(
                                  "latest_version": 1,
                                  "keys": {"1": {"public_key": "raw"}}}}
             if path == "auth/token/create":
+                assert body is not None
+                assert body["no_parent"] is True
+                assert "orphan" not in body
                 return {"auth": {"client_token": "new"}}
             if path == "auth/token/lookup-self":
                 return {"data": {"policies": ([signer.CUSTODY_SIGNER_POLICY]
-                                               if write_fails else []), "ttl": 3600}}
+                                               if valid_policy else []),
+                                 "orphan": orphan, "ttl": 3600}}
             if path == f"transit/export/signing-key/{signer.CUSTODY_SIGNER}":
                 raise HTTPError("https://127.0.0.1", 403, "denied", {}, None)
             if path == "auth/token/revoke" and cleanup_fails:

@@ -124,7 +124,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
 
     created = bao.request("POST", "auth/token/create", {
         "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
-        "orphan": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
+        "no_parent": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
     })
     token = created.get("auth", {}).get("client_token")
     if not isinstance(token, str) or not token:
@@ -133,9 +133,10 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
         scoped = Bao(endpoint, ca_file, token)
         lookup = scoped.request("GET", "auth/token/lookup-self").get("data", {})
         if (lookup.get("policies") != [CUSTODY_SIGNER_POLICY]
+                or lookup.get("orphan") is not True
                 or type(lookup.get("ttl")) is not int
                 or not 0 < lookup["ttl"] <= 3600):
-            raise ValueError("OpenBao custody signer token is not scoped or short-lived")
+            raise ValueError("OpenBao custody signer token is not orphaned, scoped or short-lived")
         scoped.request("GET", f"transit/keys/{CUSTODY_SIGNER}")
         try:
             scoped.request("GET", f"transit/export/signing-key/{CUSTODY_SIGNER}")
