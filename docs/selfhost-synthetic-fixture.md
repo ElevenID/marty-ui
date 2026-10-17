@@ -60,7 +60,10 @@ source edit. Each fresh OpenBao instance may generate a distinct signer.
 Only the public PEM and scoped token leave OpenBao; no custody private key file is
 created. If the token expires before the installed run, repeat the helper with
 `--refresh-token`; it verifies that the public key still matches and revokes
-the prior token. The hook checks the token's policy and TTL, reads the
+the prior token. The helper uses the OpenBao API's `no_parent` field and checks
+that token lookup reports an orphan, so revoking the provisioning root token
+does not revoke the scoped signer token. The hook independently checks the
+orphan flag, policy, and TTL, then reads the
 non-exportable Ed25519 key metadata, proves export and unrelated signing are
 denied, and calls Transit `sign` on the exact source/ZIP/lock-bound evidence
 bytes, including the runner's fresh challenge and prepared run/fixture identity.

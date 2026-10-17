@@ -196,6 +196,7 @@ def validate_custody_signer_token(metadata: dict) -> None:
     policies = metadata.get("policies")
     ttl = metadata.get("ttl")
     if (not isinstance(policies, list) or set(policies) != {CUSTODY_SIGNER_POLICY}
+            or metadata.get("orphan") is not True
             or type(ttl) is not int or not 0 < ttl <= 3600):
         raise ValueError("OpenBao custody signer token is not scoped or short-lived")
 

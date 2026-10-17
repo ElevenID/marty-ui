@@ -113,10 +113,14 @@ def test_custody_signer_is_non_exportable_and_scoped() -> None:
     with pytest.raises(ValueError, match="public key is invalid"):
         custody_signer_public({**metadata, "keys": {"1": {"public_key": "bad"}}})
     validate_custody_signer_token({"policies": ["selfhost-qualification-custody-signer"],
-                                   "ttl": 3600})
+                                   "ttl": 3600, "orphan": True})
     for policy in (["root"], ["default", "selfhost-qualification-custody-signer"]):
         with pytest.raises(ValueError, match="not scoped"):
-            validate_custody_signer_token({"policies": policy, "ttl": 3600})
+            validate_custody_signer_token({"policies": policy, "ttl": 3600,
+                                           "orphan": True})
+    with pytest.raises(ValueError, match="not scoped"):
+        validate_custody_signer_token({"policies": ["selfhost-qualification-custody-signer"],
+                                       "ttl": 3600, "orphan": False})
 
 
 @pytest.mark.parametrize("export_status", [403, 200])
@@ -140,7 +144,8 @@ def test_custody_evidence_uses_scoped_transit_signing(
         path = request.url.path
         if path.endswith("/auth/token/lookup-self"):
             return httpx.Response(200, json={"data": {
-                "policies": ["selfhost-qualification-custody-signer"], "ttl": 300}})
+                "policies": ["selfhost-qualification-custody-signer"], "ttl": 300,
+                "orphan": True}})
         if path.endswith("/transit/keys/selfhost-qualification-custody-v1"):
             return httpx.Response(200, json={"data": {
                 "type": "ed25519", "exportable": False,

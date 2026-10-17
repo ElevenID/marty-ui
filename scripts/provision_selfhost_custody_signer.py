@@ -9,8 +9,8 @@ import os
 import re
 import stat
 import sys
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 from urllib.error import HTTPError
 
 from selfhost_openbao_client import (
