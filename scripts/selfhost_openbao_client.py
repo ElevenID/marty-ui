@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import ssl
 import subprocess
@@ -15,9 +16,47 @@ from urllib.request import (
 )
 
 
+CUSTODY_SIGNER = "selfhost-qualification-custody-v1"
+CUSTODY_SIGNER_POLICY = "selfhost-qualification-custody-signer"
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, request, response, code, message, headers, new_url):
         return None
+
+
+def ed25519_public_pem(raw_base64: str) -> str:
+    """Encode OpenBao's raw public Ed25519 bytes as a standard SPKI PEM."""
+    if not isinstance(raw_base64, str):
+        raise ValueError("OpenBao Ed25519 public key is invalid")
+    try:
+        raw = base64.b64decode(raw_base64, validate=True)
+    except ValueError as error:
+        raise ValueError("OpenBao Ed25519 public key is invalid") from error
+    if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != raw_base64:
+        raise ValueError("OpenBao Ed25519 public key is invalid")
+    der = bytes.fromhex("302a300506032b6570032100") + raw
+    pem = "-----BEGIN PUBLIC KEY-----\n"
+    pem += base64.b64encode(der).decode("ascii") + "\n"
+    pem += "-----END PUBLIC KEY-----\n"
+    if public_key_der(pem) != der:
+        raise ValueError("OpenBao Ed25519 public key is invalid")
+    return pem
+
+
+def custody_signer_public(metadata: dict) -> tuple[int, str]:
+    """Read the current non-exportable Transit signer version and public key."""
+    if (not isinstance(metadata, dict) or metadata.get("type") != "ed25519"
+            or metadata.get("exportable") is not False
+            or metadata.get("allow_plaintext_backup") is not False
+            or type(metadata.get("latest_version")) is not int
+            or metadata["latest_version"] <= 0):
+        raise ValueError("OpenBao custody signer is not non-exportable Ed25519")
+    version = metadata["latest_version"]
+    entry = metadata.get("keys", {}).get(str(version), {})
+    if not isinstance(entry, dict):
+        raise ValueError("OpenBao custody signer public key is absent")
+    return version, ed25519_public_pem(entry.get("public_key"))
 
 
 def public_key_der(pem: str) -> bytes:

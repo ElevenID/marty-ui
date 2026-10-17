@@ -1,6 +1,7 @@
 """Synthetic fixture refuses unrelated identities and unbound transit keys."""
 
 import asyncio
+import base64
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 import ssl
@@ -15,14 +16,17 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from setup_selfhost_synthetic_fixture import (  # noqa: E402
     audit_client,
+    custody_signer_public,
     managed_key_binding,
     managed_reference,
     profile_proof,
     required_environment,
     validate_audit_token,
+    validate_custody_signer_token,
     validate_installed_model,
     validate_profile_projection,
     validate_transit_binding,
+    write_signed_evidence,
     trusted_audit_context,
 )
 
@@ -35,9 +39,11 @@ def fixture_env() -> dict[str, str]:
         "SELFHOST_SECRET_ROOT", "SELFHOST_COMPOSE_MODEL_PATH",
         "SELFHOST_BAO_AUDIT_URL", "SELFHOST_BAO_AUDIT_TOKEN_FILE",
         "SELFHOST_KMS_JWK_TOOL",
-        "SELFHOST_CUSTODY_SIGNING_KEY_FILE", "SELFHOST_SOURCE_SHA",
+        "SELFHOST_CUSTODY_SIGNING_TOKEN_FILE", "SELFHOST_SOURCE_SHA",
         "SELFHOST_ARCHIVE_SHA256", "SELFHOST_IMAGE_LOCK_SHA256",
+        "SELFHOST_RUN_ID", "SELFHOST_FIXTURE_SHA256", "SELFHOST_CUSTODY_CHALLENGE",
         "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH", "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH",
+        "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH",
     )
     values = {name: "fixture" for name in names}
     values.update(SELFHOST_PUBLIC_DOMAIN="selfhost.marty.test",
@@ -45,7 +51,9 @@ def fixture_env() -> dict[str, str]:
                   SELFHOST_ORG_ID="00000000-0000-0000-0000-000000000001",
                   SELFHOST_GATEWAY_URL="http://127.0.0.1:19080",
                   SELFHOST_KEYCLOAK_URL="http://127.0.0.1:18180",
-                  SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200")
+                  SELFHOST_BAO_AUDIT_URL="https://127.0.0.1:18200",
+                  SELFHOST_FIXTURE_SHA256="f" * 64,
+                  SELFHOST_CUSTODY_CHALLENGE="c" * 64)
     did = "did:web:selfhost.marty.test:orgs:" + values["SELFHOST_ORG_ID"]
     values.update(SELFHOST_ISSUER_DID=did, SELFHOST_VERIFIER_DID=did)
     return values
@@ -87,6 +95,88 @@ def test_audit_uses_https_on_disposable_loopback() -> None:
         values["SELFHOST_BAO_AUDIT_URL"] = url
         with pytest.raises(ValueError, match="loopback HTTPS"):
             required_environment(values)
+
+
+def test_custody_signer_is_non_exportable_and_scoped() -> None:
+    raw = "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM="
+    metadata = {"type": "ed25519", "exportable": False,
+                "allow_plaintext_backup": False, "latest_version": 1,
+                "keys": {"1": {"public_key": raw}}}
+    version, pem = custody_signer_public(metadata)
+    assert version == 1
+    assert pem.startswith("-----BEGIN PUBLIC KEY-----\n")
+    for changed in ({**metadata, "exportable": True},
+                    {**metadata, "allow_plaintext_backup": True},
+                    {**metadata, "type": "ecdsa-p256"}):
+        with pytest.raises(ValueError, match="non-exportable Ed25519"):
+            custody_signer_public(changed)
+    with pytest.raises(ValueError, match="public key is invalid"):
+        custody_signer_public({**metadata, "keys": {"1": {"public_key": "bad"}}})
+    validate_custody_signer_token({"policies": ["selfhost-qualification-custody-signer"],
+                                   "ttl": 3600, "orphan": True})
+    for policy in (["root"], ["default", "selfhost-qualification-custody-signer"]):
+        with pytest.raises(ValueError, match="not scoped"):
+            validate_custody_signer_token({"policies": policy, "ttl": 3600,
+                                           "orphan": True})
+    with pytest.raises(ValueError, match="not scoped"):
+        validate_custody_signer_token({"policies": ["selfhost-qualification-custody-signer"],
+                                       "ttl": 3600, "orphan": False})
+
+
+@pytest.mark.parametrize("export_status", [403, 200])
+def test_custody_evidence_uses_scoped_transit_signing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, export_status: int,
+) -> None:
+    values = fixture_env()
+    token = tmp_path / "signer.token"
+    token.write_text("scoped-token", encoding="ascii")
+    values.update(SELFHOST_SECRET_ROOT=str(tmp_path),
+                  SELFHOST_CUSTODY_SIGNING_TOKEN_FILE=str(token),
+                  SELFHOST_KMS_CUSTODY_EVIDENCE_PATH=str(tmp_path / "custody.json"),
+                  SELFHOST_KMS_CUSTODY_SIGNATURE_PATH=str(tmp_path / "custody.sig"),
+                  SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH=str(tmp_path / "custody.pub"))
+    raw_public = "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM="
+    observed = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        observed.append(request)
+        assert request.headers["x-vault-token"] == "scoped-token"
+        path = request.url.path
+        if path.endswith("/auth/token/lookup-self"):
+            return httpx.Response(200, json={"data": {
+                "policies": ["selfhost-qualification-custody-signer"], "ttl": 300,
+                "orphan": True}})
+        if path.endswith("/transit/keys/selfhost-qualification-custody-v1"):
+            return httpx.Response(200, json={"data": {
+                "type": "ed25519", "exportable": False,
+                "allow_plaintext_backup": False, "latest_version": 1,
+                "keys": {"1": {"public_key": raw_public}}}})
+        if path.endswith("/transit/export/signing-key/selfhost-qualification-custody-v1"):
+            return httpx.Response(export_status)
+        if path.endswith("/transit/sign/cred-issuer-qualification-denied"):
+            return httpx.Response(403)
+        if path.endswith("/transit/sign/selfhost-qualification-custody-v1"):
+            return httpx.Response(200, json={"data": {
+                "signature": "vault:v1:" + base64.b64encode(b"s" * 64).decode("ascii")}})
+        pytest.fail("unexpected OpenBao custody request")
+
+    transport = httpx.MockTransport(respond)
+    monkeypatch.setattr("setup_selfhost_synthetic_fixture.audit_client",
+                        lambda url, _root: httpx.AsyncClient(base_url=url, transport=transport))
+    if export_status == 200:
+        with pytest.raises(ValueError, match="excess capabilities"):
+            asyncio.run(write_signed_evidence(values, {"test": "custody"}))
+        assert not (tmp_path / "custody.json").exists()
+        return
+    asyncio.run(write_signed_evidence(values, {"test": "custody"}))
+    document = json.loads((tmp_path / "custody.json").read_text(encoding="utf-8"))
+    assert document == {"test": "custody", "attestation_key_non_exportable": True,
+                        "attestation_key_reference": "selfhost-qualification-custody-v1",
+                        "attestation_key_version": 1}
+    assert (tmp_path / "custody.sig").read_bytes() == b"s" * 64
+    sent = observed[-1]
+    assert base64.b64decode(json.loads(sent.content)["input"]) == (
+        tmp_path / "custody.json").read_bytes()
 
 
 def test_audit_ca_is_private_to_secret_root_and_contains_no_key(

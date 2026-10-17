@@ -1,5 +1,6 @@
 """Installed journey status gate refuses incomplete service closure and health."""
 
+import base64
 import hashlib
 from io import BytesIO
 import json
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import parse_qs
 
 import pytest
@@ -25,13 +27,113 @@ from run_selfhost_business_journey import (  # noqa: E402
     build_public_kms_jwk_tool,
     installed_journey,
     live_services,
+    live_custody_signer,
     parse_status,
     required_secrets,
     source_bound_fixture,
-    trusted_custody_keys,
     verify_kms_custody,
 )
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
+
+
+def test_fresh_openbao_instances_enroll_distinct_custody_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install = tmp_path / "install"
+    install.mkdir()
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    audit_token = tmp_path / "audit.token"
+    audit_token.write_text("audit", encoding="ascii")
+    owned = []
+    monkeypatch.setattr(runner, "exact_images", lambda _root: ("services", "pinned-openbao"))
+    monkeypatch.setattr(runner, "openbao_network", lambda project, state, image,
+                        **kwargs: owned.append((project, state, image, kwargs)) or "private")
+    monkeypatch.setattr(runner, "custody_signer_public", lambda metadata:
+                        (1, metadata["keys"]["1"]["public_key"]))
+
+    class FakeBao:
+        excess_capability = False
+
+        def __init__(self, endpoint: str, ca: Path, token: str) -> None:
+            assert token == "audit"
+            assert ca == secrets / "openbao_tls_ca_cert"
+            if ca.read_text(encoding="ascii") == "substituted":
+                raise ValueError("invalid installed CA")
+            self.ca = ca
+
+        def request(self, method: str, path: str, body: dict | None = None) -> dict:
+            if path == "auth/token/lookup-self":
+                return {"data": {"policies": ["selfhost-qualification-audit"],
+                                 "ttl": 900}}
+            if path == "sys/capabilities-self":
+                assert method == "POST" and body is not None
+                paths = body["paths"]
+                assert paths[0] == f"transit/keys/{runner.CUSTODY_SIGNER}"
+                result = {item: ["deny"] for item in paths[1:]}
+                result[paths[0]] = ["read"]
+                if self.excess_capability:
+                    result[f"transit/sign/{runner.CUSTODY_SIGNER}"] = ["update"]
+                return result
+            if path == f"transit/keys/{runner.CUSTODY_SIGNER}":
+                return {"data": {"keys": {"1": {"public_key": self.ca.read_text(
+                    encoding="ascii")}}}}
+            raise HTTPError("https://127.0.0.1", 403, "denied", {}, None)
+
+    monkeypatch.setattr(runner, "Bao", FakeBao)
+    model = {"services": {"signing-keys": {"environment": {
+        "BAO_ADDR": "https://host.docker.internal:18200"}}}}
+    observed = []
+    for suffix in ("a", "b"):
+        state = tmp_path / f"state-{suffix}"
+        (state / "tls").mkdir(parents=True)
+        (state / "tls" / "ca.crt").write_text(f"pem-{suffix}", encoding="ascii")
+        (secrets / "openbao_tls_ca_cert").write_text(f"pem-{suffix}", encoding="ascii")
+        (state / "tls").chmod(0o000)  # The real Raft state is root-only.
+        try:
+            observed.append(live_custody_signer(install, state, secrets,
+                                                f"openbao-{suffix}", model, {
+                "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+                "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+            }))
+        finally:
+            (state / "tls").chmod(0o700)
+    assert observed == [(1, "pem-a"), (1, "pem-b")]
+    assert [entry[3] for entry in owned] == [
+        {"expected_host_port": 18200}, {"expected_host_port": 18200}]
+    FakeBao.excess_capability = True
+    with pytest.raises(ValueError, match="excess effective capabilities"):
+        live_custody_signer(install, state, secrets, "openbao-b", model, {
+            "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+            "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+        })
+    FakeBao.excess_capability = False
+    (secrets / "openbao_tls_ca_cert").write_text("substituted", encoding="ascii")
+    with pytest.raises(ValueError, match="installed CA"):
+        live_custody_signer(install, state, secrets, "openbao-b", model, {
+            "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+            "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+        })
+    (secrets / "openbao_tls_ca_cert").write_text("pem-b", encoding="ascii")
+    model["services"]["signing-keys"]["environment"]["BAO_ADDR"] = (
+        "https://host.docker.internal:18201")
+    with pytest.raises(ValueError, match="different OpenBao port"):
+        live_custody_signer(install, state, secrets, "openbao-b", model, {
+            "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+            "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+        })
+    model["services"]["signing-keys"]["environment"]["BAO_ADDR"] = (
+        "https://host.docker.internal:18200")
+
+    def wrong_owner(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("OpenBao container does not own the selected state root")
+
+    monkeypatch.setattr(runner, "openbao_network", wrong_owner)
+    with pytest.raises(RuntimeError, match="does not own"):
+        live_custody_signer(install, state, secrets, "openbao-b", model, {
+            "SELFHOST_BAO_AUDIT_URL": "https://127.0.0.1:18200",
+            "SELFHOST_BAO_AUDIT_TOKEN_FILE": str(audit_token),
+        })
 
 
 def test_installed_keycloak_custody_uses_release_sql_and_owned_database(
@@ -386,6 +488,7 @@ def test_custody_failure_tears_down_owned_project(
 
     monkeypatch.setattr(runner, "command", fake_command)
     diagnostics = RunDiagnostics(tmp_path)
+    monkeypatch.setattr(runner, "live_custody_signer", lambda *_args: (1, "public"))
     error = ("KMS custody output exists before fresh fixture setup" if stale_name
              else "signed custody evidence is absent")
     with pytest.raises(ValueError, match=error):
@@ -396,7 +499,8 @@ def test_custody_failure_tears_down_owned_project(
                           tmp_path / "custody.json", tmp_path / "custody.sig",
                           tmp_path / "custody.pub",
                           {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                           "image_lock_sha256": "c" * 64}, frozenset(), diagnostics)
+                           "image_lock_sha256": "c" * 64, "run_id": "123"}, diagnostics,
+                          openbao_state_root=state, openbao_project="openbao")
     assert any("pull" in call for call in calls)
     assert any("down" in call for call in calls)
     assert active is False
@@ -424,7 +528,7 @@ def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
                           {}, tmp_path, {},
                           tmp_path / "setup.py", "0" * 64, tmp_path / "custody.json",
                           tmp_path / "custody.sig", tmp_path / "custody.pub", {},
-                          frozenset())
+                          None)
 
 
 def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) -> None:
@@ -435,11 +539,12 @@ def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) ->
     public_key = tmp_path / "custody.pub"
     signature.write_text("signature", encoding="utf-8")
     public_key.write_text("public key", encoding="utf-8")
-    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
     preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                 "image_lock_sha256": "c" * 64}
+                 "image_lock_sha256": "c" * 64, "run_id": "123"}
     environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
-                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier",
+                   "SELFHOST_FIXTURE_SHA256": "f" * 64,
+                   "SELFHOST_CUSTODY_CHALLENGE": "d" * 64}
     document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
                 "organization_id": "org", "issuer_did": "did:example:wrong",
                 "verifier_did": "did:example:verifier",
@@ -448,7 +553,7 @@ def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) ->
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
     with pytest.raises(ValueError, match="does not bind installed fixture"):
         verify_kms_custody(evidence, signature, public_key, preflight, environment,
-                           trusted_keys)
+                           (1, "public key"))
 
 
 def test_unapproved_custody_signer_fails_before_signature_check(monkeypatch,
@@ -461,20 +566,46 @@ def test_unapproved_custody_signer_fails_before_signature_check(monkeypatch,
     for path in (evidence, signature, public_key):
         path.write_text("attacker", encoding="utf-8")
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("cosign was called"))
-    with pytest.raises(ValueError, match="signer is not approved"):
+    with pytest.raises(ValueError, match="differs from owned OpenBao metadata"):
         verify_kms_custody(evidence, signature, public_key, {}, {},
-                           frozenset({"a" * 64}))
+                           (1, "reviewed public key"))
 
 
-def test_source_policy_with_no_approved_keys_fails_closed(monkeypatch,
-                                                         tmp_path: Path) -> None:
-    import run_selfhost_business_journey as runner
-
-    policy = {"schema": "marty.selfhost-kms-custody-trust-roots/v1",
-              "approved_public_key_sha256": []}
-    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: json.dumps(policy))
-    with pytest.raises(ValueError, match="signer is not approved"):
-        trusted_custody_keys(tmp_path, "a" * 40)
+@pytest.mark.parametrize("changed_field", [
+    "source_sha", "archive_sha256", "image_lock_sha256", "run_id",
+    "fixture_sha256", "challenge",
+])
+def test_custody_rejects_replayed_or_changed_release_binding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, changed_field: str,
+) -> None:
+    evidence = tmp_path / "custody.json"
+    signature = tmp_path / "custody.sig"
+    public_key = tmp_path / "custody.pub"
+    public_key.write_text("public", encoding="ascii")
+    signature.write_bytes(b"signature")
+    preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
+                 "image_lock_sha256": "c" * 64, "run_id": "123"}
+    environment = {"SELFHOST_ORG_ID": "org",
+                   "SELFHOST_ISSUER_DID": "did:example:issuer",
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier",
+                   "SELFHOST_FIXTURE_SHA256": "f" * 64,
+                   "SELFHOST_CUSTODY_CHALLENGE": "d" * 64}
+    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "fixture_sha256": environment["SELFHOST_FIXTURE_SHA256"],
+                "challenge": environment["SELFHOST_CUSTODY_CHALLENGE"],
+                "organization_id": "org", "issuer_did": environment["SELFHOST_ISSUER_DID"],
+                "verifier_did": environment["SELFHOST_VERIFIER_DID"],
+                "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "attestation_key_reference": runner.CUSTODY_SIGNER,
+                "attestation_key_version": 1, "attestation_key_non_exportable": True,
+                "profile_proofs": custody_profile_proofs(environment)}
+    document[changed_field] = "previous-run-value"
+    evidence.write_text(json.dumps(document), encoding="utf-8")
+    monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs:
+                        pytest.fail("signature check was reached"))
+    with pytest.raises(ValueError, match="does not bind installed fixture"):
+        verify_kms_custody(evidence, signature, public_key, preflight, environment,
+                           (1, "public"))
 
 
 @pytest.mark.parametrize("placeholder", [
@@ -511,38 +642,65 @@ def test_fixture_hook_must_match_prepared_source_commit(monkeypatch,
         source_bound_fixture(tmp_path / "other.py", digest, tmp_path, "a" * 40)
 
 
-def test_source_approved_ed25519_signature_binds_custody_bytes(tmp_path: Path) -> None:
+def test_frozen_ed25519_signature_oracle_and_live_custody_bytes(tmp_path: Path) -> None:
     if shutil.which("openssl") is None:
         pytest.skip("OpenSSL is unavailable")
-    private = tmp_path / "short-lived.key"
     public = tmp_path / "short-lived.pub"
     evidence = tmp_path / "evidence.json"
     signature = tmp_path / "evidence.sig"
-    subprocess.run(["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
-                   check=True, capture_output=True)
-    subprocess.run(["openssl", "pkey", "-in", str(private), "-pubout", "-out", str(public)],
-                   check=True, capture_output=True)
+    # Public-only fixture signed once by a non-exportable disposable Transit key.
+    public.write_bytes(base64.b64decode(
+        "LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0KTUNvd0JRWURLMlZ3QXlFQVY0UjVEcmNORU9haEwwNDZqZmsv"
+        "UVlPK2hENDREQ1ovTE16U0hxY01Jck09Ci0tLS0tRU5EIFBVQkxJQyBLRVktLS0tLQo="
+    ))
+    signature.write_bytes(base64.b64decode(
+        "27o1srHYD4e0kJ6/nlvdJ45L6c0A3agoJrvwCAfzpK9ooqgIg6eJueJ0uuZbpaHtHqJOOWHSQXjfyowKusjqAA=="
+    ))
     preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                 "image_lock_sha256": "c" * 64}
+                 "image_lock_sha256": "c" * 64, "run_id": "123"}
     environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
-                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
-    document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier",
+                   "SELFHOST_FIXTURE_SHA256": "f" * 64,
+                   "SELFHOST_CUSTODY_CHALLENGE": "d" * 64}
+    frozen_document = {"schema": "marty.selfhost-kms-custody/v1",
+                "source_sha": preflight["source_sha"],
+                "archive_sha256": preflight["archive_sha256"],
+                "image_lock_sha256": preflight["image_lock_sha256"],
                 "organization_id": "org", "issuer_did": "did:example:issuer",
                 "verifier_did": "did:example:verifier",
                 "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "attestation_key_reference": "selfhost-qualification-custody-v1",
+                "attestation_key_version": 1, "attestation_key_non_exportable": True,
                 "profile_proofs": custody_profile_proofs(environment)}
-    evidence.write_text(json.dumps(document), encoding="utf-8")
-    subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(private),
+    evidence.write_bytes((json.dumps(frozen_document, indent=2, sort_keys=True) + "\n")
+                         .encode("utf-8"))
+    subprocess.run(["openssl", "pkeyutl", "-verify", "-rawin", "-pubin",
+                    "-inkey", str(public), "-sigfile", str(signature),
+                    "-in", str(evidence)], check=True, capture_output=True)
+
+    # The current runner additionally binds a fresh, unpredictable challenge.
+    key = tmp_path / "local-test-key.pem"
+    subprocess.run(["openssl", "genpkey", "-algorithm", "Ed25519", "-out", str(key)],
+                   check=True, capture_output=True)
+    subprocess.run(["openssl", "pkey", "-in", str(key), "-pubout", "-out", str(public)],
+                   check=True, capture_output=True)
+    document = {**frozen_document, "run_id": preflight["run_id"],
+                "fixture_sha256": environment["SELFHOST_FIXTURE_SHA256"],
+                "challenge": environment["SELFHOST_CUSTODY_CHALLENGE"]}
+    evidence.write_bytes((json.dumps(document, indent=2, sort_keys=True) + "\n")
+                         .encode("utf-8"))
+    subprocess.run(["openssl", "pkeyutl", "-sign", "-rawin", "-inkey", str(key),
                     "-in", str(evidence), "-out", str(signature)],
                    check=True, capture_output=True)
-    approved = frozenset({hashlib.sha256(public.read_bytes()).hexdigest()})
     assert verify_kms_custody(evidence, signature, public, preflight,
-                              environment, approved) == hashlib.sha256(evidence.read_bytes()).hexdigest()
+                              environment, (1, public.read_text(encoding="ascii"))) == (
+                                  hashlib.sha256(evidence.read_bytes()).hexdigest())
     changed = json.loads(json.dumps(document))
     changed["profile_proofs"][0]["key_version"] = 2
     evidence.write_text(json.dumps(changed), encoding="utf-8")
     with pytest.raises(ValueError, match="installed journey command returned failure"):
-        verify_kms_custody(evidence, signature, public, preflight, environment, approved)
+        verify_kms_custody(evidence, signature, public, preflight, environment,
+                           (1, public.read_text(encoding="ascii")))
 
 
 def custody_profile_proofs(environment: dict[str, str]) -> list[dict]:
@@ -574,11 +732,12 @@ def test_custody_rejects_unbound_profile_proofs(monkeypatch, tmp_path: Path,
     public_key = tmp_path / "custody.pub"
     signature.write_text("signature", encoding="utf-8")
     public_key.write_text("public key", encoding="utf-8")
-    trusted_keys = frozenset({hashlib.sha256(public_key.read_bytes()).hexdigest()})
     preflight = {"source_sha": "a" * 40, "archive_sha256": "b" * 64,
-                 "image_lock_sha256": "c" * 64}
+                 "image_lock_sha256": "c" * 64, "run_id": "123"}
     environment = {"SELFHOST_ORG_ID": "org", "SELFHOST_ISSUER_DID": "did:example:issuer",
-                   "SELFHOST_VERIFIER_DID": "did:example:verifier"}
+                   "SELFHOST_VERIFIER_DID": "did:example:verifier",
+                   "SELFHOST_FIXTURE_SHA256": "f" * 64,
+                   "SELFHOST_CUSTODY_CHALLENGE": "d" * 64}
     proofs = custody_profile_proofs(environment)
     if mutation == "missing":
         proofs = []
@@ -597,12 +756,16 @@ def test_custody_rejects_unbound_profile_proofs(monkeypatch, tmp_path: Path,
     else:
         proofs[0]["extra"] = "unreviewed"
     document = {"schema": "marty.selfhost-kms-custody/v1", **preflight,
+                "fixture_sha256": environment["SELFHOST_FIXTURE_SHA256"],
+                "challenge": environment["SELFHOST_CUSTODY_CHALLENGE"],
                 "organization_id": "org", "issuer_did": environment["SELFHOST_ISSUER_DID"],
                 "verifier_did": environment["SELFHOST_VERIFIER_DID"],
                 "issuer_key_non_exportable": True, "verifier_key_non_exportable": True,
+                "attestation_key_reference": "selfhost-qualification-custody-v1",
+                "attestation_key_version": 1, "attestation_key_non_exportable": True,
                 "profile_proofs": proofs}
     evidence.write_text(json.dumps(document), encoding="utf-8")
     monkeypatch.setattr(runner, "command", lambda *_args, **_kwargs: pytest.fail("signature check was called"))
     with pytest.raises(ValueError, match="signed KMS custody profile proof"):
         verify_kms_custody(evidence, signature, public_key, preflight, environment,
-                           trusted_keys)
+                           (1, "public key"))
