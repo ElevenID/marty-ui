@@ -1435,11 +1435,11 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             # workspace-level inputs. The current graph cannot prove isolation.
             return full(f"unowned Rust input: {path}")
         direct.add(max(owners)[1])
-        if path == SELFHOST_CLEANUP_INPUT:
+        if path in (SELFHOST_CLEANUP_INPUT, SELFHOST_CLEANUP_CONSUMER):
             # The acceptance target imports this source outside its Cargo
             # package. A removed/changed witness cannot grant a narrow plan.
             consumer = root / SELFHOST_CLEANUP_CONSUMER
-            source = root / path
+            source = root / SELFHOST_CLEANUP_INPUT
             try:
                 witness = consumer.read_text(encoding="utf-8")
             except (OSError, UnicodeError):
@@ -1454,7 +1454,8 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
                 != source.resolve()
             ):
                 return full(f"missing cross-package test input witness: {path}")
-            direct.add("marty-selfhost-acceptance")
+            if path == SELFHOST_CLEANUP_INPUT:
+                direct.add("marty-selfhost-acceptance")
 
     reverse: dict[str, set[str]] = defaultdict(set)
     for package in packages:

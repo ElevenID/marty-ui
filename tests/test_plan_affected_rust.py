@@ -743,8 +743,12 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
             changed = [source.relative_to(root).as_posix()]
             self.assertFalse(planner.plan(changed, metadata, root)["all"])
+            consumer_changed = [consumer.relative_to(root).as_posix()]
+            consumer_result = planner.plan(consumer_changed, metadata, root)
+            self.assertFalse(consumer_result["all"], consumer_result)
             consumer.write_text("mod owned_cleanup;\n", encoding="utf-8")
             self.assertTrue(planner.plan(changed, metadata, root)["all"])
+            self.assertTrue(planner.plan(consumer_changed, metadata, root)["all"])
             consumer.write_text(
                 '#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]\n',
                 encoding="utf-8",
