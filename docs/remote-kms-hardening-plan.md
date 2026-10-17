@@ -30,6 +30,22 @@ provider/device acceptance and the overall KMS goal remain open. The milestone
 table below includes historical status text; use the dated evidence log and
 live run/PR states for the latest gate.
 
+Recovery follow-up (2026-10-17): an isolated cold copy of the successful
+v1.1.255 installation reproduced a release-image restart defect: native
+`db-migrate` rejected a managed signing-key purpose binding solely because the
+runtime registry had sorted its purpose array. The original cold backup was
+preserved. Local branch `fix/kms-raft-restore-idempotency-20261017` compares
+the purpose sets while still rejecting changed or malformed bindings; all
+seven bootstrap unit tests, focused Clippy, formatting and diff checks passed.
+A fresh second restore clone using only a Debian-built candidate migration
+binary passed OpenBao Raft bootstrap, all 28 service states, the public
+issue/present/verify/revoke journey, Keycloak issuance/refresh and both database
+custody checks. Its private evidence is
+`/home/canvasrunner/kms-qualification/v1.1.255/private/recovery-39077407940-d/recovery-candidate-report.json`.
+This is candidate-fix evidence, not a signed release or qualified off-host
+backup/cutover. Publish the fix in the next grouped UI PR, then repeat exact
+signed-artifact recovery before treating coordinated rollback as supported.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
