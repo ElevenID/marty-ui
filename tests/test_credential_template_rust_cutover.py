@@ -47,7 +47,14 @@ def test_native_migration_and_repository_contracts_run_against_postgresql_in_ci(
     assert "python3 ../scripts/ci/run-db-contract-groups.py" in workflow
     assert "export CREDENTIAL_TEMPLATE_POSTGRES_TEST_URL=" in runtime
     assert "target/debug/credential-template-migration-contract --test-threads=1" in runtime
-    assert 'contains("marty-credential-template")' in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-credential-template "
+        "migration_contract"
+    ) in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-credential-template "
+        "postgres_integration"
+    ) in workflow
 
 
 def test_compose_supplies_every_fail_closed_native_dependency() -> None:

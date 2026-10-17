@@ -31,6 +31,32 @@ run_timed() {
   run_timed_rust_test contract "$@"
 }
 
+# Select exactly one test executable from this job's Cargo compiler output.
+# Target names alone are not unique across packages (e.g. migration_contract).
+resolve_recorded_contract_executable() {
+  local package="$1" target="$2"
+  local artifacts="${RUNNER_TEMP:?RUNNER_TEMP must identify this run}/rust-test-artifacts.json"
+  [[ -f "$artifacts" ]] || {
+    printf 'Missing recorded Rust test artifacts: %s\n' "$artifacts" >&2
+    return 1
+  }
+  local paths executable
+  paths="$(jq -er --arg package "#$package@" --arg target "$target" '
+    select(.reason == "compiler-artifact")
+    | select(.package_id | contains($package))
+    | select(.target.kind | index("test"))
+    | select(.target.name == $target)
+    | select(.executable != null)
+    | .executable
+  ' "$artifacts" | sort -u)" || return 1
+  if [[ -z "$paths" || "$paths" == *$'\n'* || ! -x "$paths" ]]; then
+    printf 'Expected one executable for %s/%s in this Cargo build.\n' "$package" "$target" >&2
+    return 1
+  fi
+  executable="$paths"
+  printf '%s\n' "$executable"
+}
+
 # The contracts lane compiles these targets once and records Cargo's exact
 # executable paths. Do not rediscover hashes in target/debug/deps: old local
 # builds can leave extra executables there, and a successful libtest invocation
