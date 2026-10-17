@@ -283,7 +283,18 @@ mod physical_provider_tests {
 fn redis_database_url(value: &str, database: u8) -> Result<String, FlowConnectionError> {
     let mut url = Url::parse(value)
         .map_err(|_| FlowConnectionError::Configuration("Redis URL is invalid".into()))?;
-    url.set_path(&format!("/{database}"));
+    if url.scheme() == "unix" {
+        if url.host_str().is_some() || !url.path().starts_with('/') {
+            return Err(FlowConnectionError::Configuration(
+                "Redis Unix socket must be local and absolute".into(),
+            ));
+        }
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+    } else {
+        url.set_path(&format!("/{database}"));
+    }
     Ok(url.into())
 }
 
@@ -307,5 +318,10 @@ mod tests {
             "redis://user:secret@redis:6379/3"
         );
         assert!(redis_database_url("not a URL", 3).is_err());
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 3).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=3"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 3).is_err());
     }
 }

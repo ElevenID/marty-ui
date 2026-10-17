@@ -318,10 +318,18 @@ fn email(
 
 fn redis_url(value: &str, database: u32) -> Result<String, OrganizationConfigError> {
     let mut url = Url::parse(value).map_err(|_| invalid("REDIS_URL"))?;
-    if !matches!(url.scheme(), "redis" | "rediss") {
+    if !matches!(url.scheme(), "redis" | "rediss" | "unix")
+        || (url.scheme() == "unix" && (url.host_str().is_some() || !url.path().starts_with('/')))
+    {
         return Err(invalid("REDIS_URL"));
     }
-    url.set_path(&format!("/{database}"));
+    if url.scheme() == "unix" {
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+    } else {
+        url.set_path(&format!("/{database}"));
+    }
     Ok(url.to_string())
 }
 
@@ -367,6 +375,15 @@ mod tests {
         assert_eq!(config.redis_url, "redis://localhost:6379/2");
         assert!(config.database_url.starts_with("postgresql://"));
         assert!(config.organization_creation_enabled);
+    }
+
+    #[test]
+    fn local_redis_socket_preserves_its_path_and_selects_database() {
+        assert_eq!(
+            redis_url("unix:///run/marty-redis/redis.sock", 2).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=2"
+        );
+        assert!(redis_url("unix://remote/run/redis.sock", 2).is_err());
     }
 
     #[test]

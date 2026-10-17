@@ -38,9 +38,10 @@ published signed standard assets, but its [self-host preparation
 job](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) failed before
 producing a customer ZIP. The receipt verifier expected two OpenBao services
 after the packager added `openbao-tls-init`. PR #1370 repaired the exact
-three-service image check on main. The v1.1.249 lock is a new release
-candidate, not installed qualification; do not rewrite or present v1.1.248
-as a supported self-host handoff.
+three-service image check on main. `v1.1.249` published signed assets and a
+prepared ZIP, but its rendered Compose pinned the production default network,
+so the fresh isolated installation was unqualified. The `v1.1.250` lock is the
+next candidate; neither earlier release is a supported self-host handoff.
 
 ## Installed setup requirements
 

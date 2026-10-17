@@ -80,7 +80,8 @@ def test_deployed_manifests_require_distributed_gateway_state() -> None:
     assert "REDIS_DB_GATEWAY:" in base_gateway
     assert "ENVIRONMENT: beta" in beta_gateway
     assert "REDIS_PASSWORD must be set for beta" in beta_gateway
-    assert "REDIS_URL: redis://redis:6379" in selfhost_gateway
+    assert "REDIS_URL: unix:///run/marty-redis/redis.sock" in selfhost_gateway
+    assert "- *redis-socket-mount" in selfhost_gateway
     assert 'value(values, "REDIS_URL")' in config
     assert 'url::Url::parse(raw).map_err(|_| error("REDIS_URL is invalid"))' in config
 

@@ -29,12 +29,41 @@ def test_selfhost_openbao_requires_transactional_raft_storage():
     assert "bao operator raft list-peers" in bootstrap
 
 
+def test_selfhost_redis_is_socket_only_and_available_to_exact_consumers():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    assert all("container_name" not in service for service in services.values())
+    redis = services["redis"]
+    assert redis["command"].split()[0:3] == ["redis-server", "--port", "0"]
+    assert "--unixsocket /data/run/redis.sock" in redis["command"]
+    assert "--unixsocketperm 777" in redis["command"]
+    assert model["volumes"] == {"redis-socket": None}
+    consumers = {
+        "db-migrate", "gateway", "auth", "organization", "signing-keys",
+        "flow", "verification", "revocation-profile", "device-registration",
+    }
+    for name, service in services.items():
+        mounts = [item for item in service.get("volumes", [])
+                  if isinstance(item, dict) and item.get("source") == "redis-socket"]
+        if name == "redis":
+            assert len(mounts) == 1 and mounts[0]["target"] == "/data/run"
+        elif name in consumers:
+            assert len(mounts) == 1 and mounts[0]["target"] == "/run/marty-redis"
+            assert mounts[0]["read_only"] is True
+            key = "SIGNING_KEYS_REDIS_URL" if name == "signing-keys" else "REDIS_URL"
+            assert service["environment"][key].startswith(
+                "unix:///run/marty-redis/redis.sock"
+            )
+        else:
+            assert not mounts, name
+
+
 def test_reference_identity_and_descriptor_closure():
     GATE["assert_input_inventory"]()
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "c2127eb97ec34753a766b7afaf3eedea1dcc1c2ded9b6685d972d229739c9365"
+        == "0ef89dccc35748b85f3dbb5d1c8d05cb0ef10612fdfdf316248d4bc0b5263699"
     )
     import json
 

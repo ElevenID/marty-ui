@@ -664,7 +664,7 @@ impl ClosedSelfhostModel {
                 environment.insert("DATABASE_URL_TEMPLATE".into(), mapped);
             }
             if *owner != "issuance-native" {
-                require(environment["REDIS_URL"] == "redis://redis:6379")?;
+                require(environment["REDIS_URL"] == "unix:///run/marty-redis/redis.sock")?;
                 environment.insert(
                     "REDIS_URL".into(),
                     format!("redis://127.0.0.1:{}", endpoints.port(Role::Redis)),

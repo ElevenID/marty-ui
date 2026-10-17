@@ -4,6 +4,61 @@ use std::collections::{BTreeMap, BTreeSet};
 use regex::Regex;
 use serde_yaml::Value;
 
+/// Compose expands project-scoped network and volume names during `config`.
+/// Remove only renderer-generated names so a customer can use `--project-name`
+/// without joining another installation's network or Redis socket volume.
+pub fn restore_project_scoped_resources(text: &str) -> Result<String, String> {
+    let mut compose: Value =
+        serde_yaml::from_str(text).map_err(|_| "Rendered Compose is invalid YAML")?;
+    if compose.get("networks").is_none() && compose.get("volumes").is_none() {
+        return Ok(text.into());
+    }
+    let project = compose
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("Rendered Compose has no project name")?
+        .to_owned();
+    if let Some(networks) = compose.get_mut("networks") {
+        let default = networks
+            .get_mut("default")
+            .and_then(Value::as_mapping_mut)
+            .ok_or("Rendered Compose has no default network")?;
+        let generated = format!("{project}_default");
+        if default.len() != 1
+            || default
+                .get(Value::String("name".into()))
+                .and_then(Value::as_str)
+                != Some(generated.as_str())
+        {
+            return Err("Rendered default network is not project-scoped".into());
+        }
+        default.remove(Value::String("name".into()));
+    }
+    if let Some(volumes) = compose.get_mut("volumes") {
+        let volumes = volumes
+            .as_mapping_mut()
+            .ok_or("Rendered Compose volumes are invalid")?;
+        if volumes.len() != 1 {
+            return Err("Rendered Redis socket volume is not project-scoped".into());
+        }
+        let socket = volumes
+            .get_mut(Value::String("redis-socket".into()))
+            .and_then(Value::as_mapping_mut)
+            .ok_or("Rendered Compose has no Redis socket volume")?;
+        let generated = format!("{project}_redis-socket");
+        if socket.len() != 1
+            || socket
+                .get(Value::String("name".into()))
+                .and_then(Value::as_str)
+                != Some(generated.as_str())
+        {
+            return Err("Rendered Redis socket volume is not project-scoped".into());
+        }
+        socket.remove(Value::String("name".into()));
+    }
+    serde_yaml::to_string(&compose).map_err(|_| "Cannot serialize project-scoped Compose".into())
+}
+
 /// Bind every rendered service to an exact OCI digest. Keep this separate from
 /// the legacy text rules so the default package path remains byte-compatible.
 pub fn pin_service_images(
@@ -256,6 +311,49 @@ pub fn validate_customer_text(text: &str) -> Result<(), String> {
         return Err("Customer bundle contains mutable image tags".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::restore_project_scoped_resources;
+
+    #[test]
+    fn rendered_default_network_stays_scoped_to_the_install_project() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\nservices:\n  postgres:\n    image: postgres@example\n    networks:\n      default: null\n";
+        let output = restore_project_scoped_resources(rendered).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert!(parsed["networks"]["default"].get("name").is_none());
+        assert!(parsed["services"]["postgres"]["networks"]
+            .get("default")
+            .is_some());
+    }
+
+    #[test]
+    fn never_rewrites_an_explicit_or_unexpected_default_network() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: shared-production-network\nservices: {}\n";
+        assert!(restore_project_scoped_resources(rendered).is_err());
+        let external = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\n    external: true\nservices: {}\n";
+        assert!(restore_project_scoped_resources(external).is_err());
+    }
+
+    #[test]
+    fn rendered_redis_socket_volume_stays_scoped_to_install_project() {
+        let rendered = "name: marty-selfhost-prod\nvolumes:\n  redis-socket:\n    name: marty-selfhost-prod_redis-socket\nservices: {}\n";
+        let output = restore_project_scoped_resources(rendered).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert!(parsed["volumes"]["redis-socket"].get("name").is_none());
+        for named in ["shared-socket", "marty-selfhost-prod_redis-socket"] {
+            let bad = rendered.replace(
+                "name: marty-selfhost-prod_redis-socket\nservices",
+                &format!("name: {named}\n    external: true\nservices"),
+            );
+            assert!(restore_project_scoped_resources(&bad).is_err());
+        }
+        assert!(restore_project_scoped_resources(
+            &rendered.replace("marty-selfhost-prod_redis-socket", "shared-socket")
+        )
+        .is_err());
+    }
 }
 
 #[cfg(test)]

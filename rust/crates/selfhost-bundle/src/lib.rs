@@ -708,6 +708,7 @@ fn package_with_publication(
     }
     let rendered = renderer(stage.path(), &render_arguments(&manifest.render))?;
     let rendered = relativize(&transform::strip_build_blocks(&rendered), stage.path())?;
+    let rendered = transform::restore_project_scoped_resources(&rendered)?;
     let rendered = if let Some(path) = image_lock_path {
         check_ancestors(path)?;
         let bytes = fs::read(path).map_err(failure("Cannot read image lock"))?;

@@ -303,13 +303,23 @@ def test_signing_dependency_has_only_existing_declared_bindings(fault):
 
 
 def test_signing_existing_service_and_kubernetes_dependency_sources_are_connected():
-    for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
+    for path, redis_url in (
+        ("docker-compose.base.yml", "redis://redis:6379/2"),
+        ("docker-compose.selfhost.prod.yml", "unix:///run/marty-redis/redis.sock?db=2"),
+    ):
         service = yaml.safe_load((ROOT / path).read_text())["services"]["signing-keys"]
         assert service["build"]["args"]["SERVICE_NAME"] == "signing-keys"
         assert service["environment"]["SIGNING_KEYS_SERVICE_PORT"] == "8017"
-        assert (
-            service["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
-        )
+        assert service["environment"]["SIGNING_KEYS_REDIS_URL"] == redis_url
+        if path == "docker-compose.selfhost.prod.yml":
+            assert service["volumes"] == [
+                {
+                    "type": "volume",
+                    "source": "redis-socket",
+                    "target": "/run/marty-redis",
+                    "read_only": True,
+                }
+            ]
         assert (
             service["depends_on"]["db-migrate"]["condition"]
             == "service_completed_successfully"

@@ -208,10 +208,17 @@ impl VerificationServiceConfig {
         if environment.is_deployed() && redis_url.is_none() {
             return Err(VerificationConfigError::Missing { name: "REDIS_URL" });
         }
-        if redis_url
-            .as_deref()
-            .is_some_and(|url| !(url.starts_with("redis://") || url.starts_with("rediss://")))
-        {
+        if redis_url.as_deref().is_some_and(|url| {
+            !Url::parse(url).is_ok_and(|parsed| match parsed.scheme() {
+                "redis" | "rediss" => parsed.host_str().is_some() && parsed.fragment().is_none(),
+                "unix" => {
+                    parsed.host_str().is_none()
+                        && parsed.path().starts_with('/')
+                        && parsed.fragment().is_none()
+                }
+                _ => false,
+            })
+        }) {
             return Err(invalid("REDIS_URL"));
         }
         let workload_tls = workload_tls(&values, environment)?;
@@ -585,6 +592,18 @@ mod tests {
         let config = VerificationServiceConfig::from_values(configured.clone()).unwrap();
         assert_eq!(config.environment, Environment::Beta);
         assert!(!config.grpc_enabled);
+        let mut socket_config = configured.clone();
+        socket_config.retain(|(name, _)| name != "REDIS_URL");
+        socket_config.push((
+            "REDIS_URL".into(),
+            "unix:///run/marty-redis/redis.sock?db=3".into(),
+        ));
+        assert!(VerificationServiceConfig::from_values(socket_config.clone()).is_ok());
+        socket_config.last_mut().unwrap().1 = "unix://remote/run/redis.sock".into();
+        assert!(matches!(
+            VerificationServiceConfig::from_values(socket_config),
+            Err(VerificationConfigError::Invalid { name: "REDIS_URL" })
+        ));
         assert!(config.providers.workload_tls.is_some());
         assert!(config.credentials_governance.is_none());
         assert!(!config.credentials_compat_enabled);
