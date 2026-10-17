@@ -104,7 +104,8 @@ def test_selfhost_stack_runs_rust_signing_keys_with_secret_files() -> None:
     assert "BAO_TOKEN_FILE: /run/secrets/signing_keys_openbao_token" in signing_keys
     assert "- signing_keys_openbao_token" in signing_keys
     assert "- openbao_service_token" not in signing_keys
-    assert "SIGNING_KEYS_REDIS_URL: redis://redis:6379/2" in compose
+    assert "SIGNING_KEYS_REDIS_URL: unix:///run/marty-redis/redis.sock?db=2" in signing_keys
+    assert "- *redis-socket-mount" in signing_keys
     assert "- workload_identity_ca_cert" in signing_keys
     assert (
         "--cacert /run/secrets/workload_identity_ca_cert https://signing-keys:8018/health"
