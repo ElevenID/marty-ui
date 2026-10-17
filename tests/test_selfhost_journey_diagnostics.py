@@ -1,6 +1,7 @@
 """Disposable installation diagnostics never become qualification evidence."""
 
 import argparse
+import ast
 import json
 import sys
 from pathlib import Path
@@ -10,6 +11,21 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import run_selfhost_business_journey as runner  # noqa: E402
 import selfhost_journey_diagnostics as diag  # noqa: E402
+
+
+def test_runner_measurements_match_redacted_diagnostic_phases() -> None:
+    tree = ast.parse(Path(runner.__file__).read_text(encoding="utf-8"))
+    measured_phases = {
+        call.args[1].value
+        for call in ast.walk(tree)
+        if (isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id == "measured"
+            and len(call.args) == 2
+            and isinstance(call.args[1], ast.Constant)
+            and isinstance(call.args[1].value, str))
+    }
+    assert measured_phases == diag.PHASES
 
 
 def test_memory_parser_requires_complete_kib_counters(monkeypatch: pytest.MonkeyPatch) -> None:
