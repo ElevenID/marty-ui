@@ -14,6 +14,14 @@ a clean Linux installed journey, KMS custody proof, signed qualified assets,
 and independent anonymous download/install replay. Defer unrelated A0-A7
 optimization behind this handoff.
 
+The next-preview installer is in local branch
+`codex/selfhost-preview-installer-20261016`: exact asset/source staging,
+disposable scalar credentials, an isolated locked-image OpenBao startup, and a
+scoped audit-token helper have focused Linux tests and independent review.
+They are not yet published or installed-journey evidence. Custody signer
+[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) must clear protected
+checks before the installer is integrated and a new preview is prepared.
+
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
 job](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) failed before
