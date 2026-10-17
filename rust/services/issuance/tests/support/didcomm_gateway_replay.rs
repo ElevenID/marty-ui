@@ -239,6 +239,7 @@ impl UpstreamClient for CountedHttp {
             return Ok(GatewayResponse {
                 status_code: 200,
                 headers: BTreeMap::from([("content-type".into(), "application/json".into())]),
+                set_cookies: Vec::new(),
                 body: Some(serde_json::to_vec(&body).unwrap()),
                 response_time_ms: None,
                 upstream_service: None,
