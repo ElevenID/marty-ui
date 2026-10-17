@@ -530,8 +530,24 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                     env=environment, timeout=1200)
         started = True
         with measured(diagnostics, "startup"):
-            command([*compose, "up", "-d", "--no-build", *selected],
-                    cwd=install_root, env=environment, timeout=900)
+            # Compose can report an initially unhealthy dependency while Rust
+            # services are still connecting to freshly started peers. Retry
+            # within one deadline so the one-hour custody tokens remain valid.
+            # Readiness below still requires every selected service to recover.
+            startup_deadline = time.monotonic() + 600
+            for attempt in range(8):
+                remaining = startup_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError("installed service startup exceeded ten minutes")
+                try:
+                    command([*compose, "up", "-d", "--no-build", *selected],
+                            cwd=install_root, env=environment,
+                            timeout=max(1, min(240, int(remaining))))
+                    break
+                except ValueError:
+                    if attempt == 7 or startup_deadline - time.monotonic() <= 10:
+                        raise
+                    time.sleep(10)
         with measured(diagnostics, "readiness"):
             deadline = time.monotonic() + 300
             while True:

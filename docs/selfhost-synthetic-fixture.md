@@ -12,10 +12,11 @@ does not require a CSCA, DSC, or external CA.
 Use a disposable loopback stack only. Set `MARTY_ORG_ADMIN_EMAIL` in the
 Compose env file to a synthetic address such as
 `operator@selfhost.marty.invalid` **before** the fresh migrations. Set
-`MARTY_ORG_ID` to the exact seeded organization UUID and `PUBLIC_DOMAIN` to a
-local test domain that resolves to the installed edge. The selected issuer and
-verifier DID values must both equal
-`did:web:<PUBLIC_DOMAIN>:orgs:<MARTY_ORG_ID>` (percent-encode `:` in a domain
+`MARTY_ORG_ID` and `SELFHOST_ORG_ID` to the same seeded organization UUID, and
+`PUBLIC_DOMAIN` to a local test domain that resolves to the installed edge.
+Use the installed `MARTY_ORG_SLUG` (default `marty`) for the DID path. The
+selected `SELFHOST_ISSUER_DID` and `SELFHOST_VERIFIER_DID` must both equal
+`did:web:<PUBLIC_DOMAIN>:orgs:<MARTY_ORG_SLUG>` (percent-encode `:` in a domain
 port). The fixture provisions separate `vc_jwt_issuer` and
 `oid4vp_request_signing` managed keys for that DID. Set the eight
 `SELFHOST_*` public-journey inputs documented in the integration suite,

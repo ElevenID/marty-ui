@@ -87,7 +87,9 @@ load_secret_env() {
     load_secret_var GRPC_SERVICE_TOKEN
     load_secret_var FLOW_WEBHOOK_SECRET
     load_secret_var CANVAS_CREDENTIALS_SHARED_SECRET
-    load_secret_var BAO_TOKEN
+    if [ "${PRESERVE_BAO_TOKEN_FILE:-}" != "1" ]; then
+        load_secret_var BAO_TOKEN
+    fi
     load_secret_var OPENBAO_SERVICE_TOKEN
     load_secret_var SMTP_PASSWORD
     load_secret_var CLOUDFLARE_TUNNEL_TOKEN

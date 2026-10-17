@@ -51,10 +51,6 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
         raise ValueError("synthetic custody challenge or fixture digest is invalid")
     if values["SELFHOST_ISSUER_DID"] != values["SELFHOST_VERIFIER_DID"]:
         raise ValueError("synthetic issuer and verifier must share the local organization DID")
-    did = "did:web:" + values["SELFHOST_PUBLIC_DOMAIN"].replace(":", "%3A")
-    did += ":orgs:" + values["SELFHOST_ORG_ID"]
-    if values["SELFHOST_ISSUER_DID"] != did:
-        raise ValueError("synthetic DID differs from installed public domain and organization")
     if not values["SELFHOST_TEST_USERNAME"].lower().endswith("@selfhost.marty.invalid"):
         raise ValueError("synthetic operator email must use the reserved test domain")
     for name in ("SELFHOST_GATEWAY_URL", "SELFHOST_KEYCLOAK_URL"):
@@ -118,6 +114,13 @@ def validate_installed_model(model: dict, fixture: dict[str, str]) -> None:
             or bao.scheme != "https" or bao.hostname != "host.docker.internal"
             or bao.port is None or bao.port != audit.port):
         raise ValueError("synthetic operator differs from migration-seeded organization")
+    slug = migration.get("MARTY_ORG_SLUG", "marty")
+    if not isinstance(slug, str) or not slug:
+        raise ValueError("installed organization slug is absent")
+    did = "did:web:" + fixture["SELFHOST_PUBLIC_DOMAIN"].replace(":", "%3A")
+    did += ":orgs:" + slug
+    if fixture["SELFHOST_ISSUER_DID"] != did:
+        raise ValueError("synthetic DID differs from installed organization slug")
 
 
 def trusted_audit_context(secret_root: Path) -> ssl.SSLContext:

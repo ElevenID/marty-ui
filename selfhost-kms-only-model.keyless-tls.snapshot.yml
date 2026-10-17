@@ -150,7 +150,7 @@ services:
       KC_DB_PASSWORD_FILE: /run/secrets/keycloak_db_password
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
-      KC_HOSTNAME: ${PUBLIC_DOMAIN:-localhost}
+      KC_HOSTNAME: https://${PUBLIC_DOMAIN:-localhost}
       KC_HOSTNAME_STRICT: "true"
       KC_HOSTNAME_STRICT_HTTPS: "true"
       KC_HTTP_ENABLED: "true"

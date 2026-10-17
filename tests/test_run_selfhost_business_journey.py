@@ -531,6 +531,43 @@ def test_nonempty_state_refuses_start(monkeypatch, tmp_path: Path) -> None:
                           None)
 
 
+def test_startup_retries_share_one_deadline_and_clean_up(monkeypatch, tmp_path: Path) -> None:
+    import run_selfhost_business_journey as runner
+
+    clock = [0.0]
+    timeouts = []
+    calls = []
+    state = tmp_path / "state"
+    state.mkdir()
+    setup_script = tmp_path / "setup.py"
+    setup_script.write_text("pass\n", encoding="utf-8")
+
+    def fake_command(argv, **kwargs):
+        calls.append(argv)
+        if "ps" in argv:
+            return "[]"
+        if "up" in argv:
+            timeout = kwargs["timeout"]
+            timeouts.append(timeout)
+            clock[0] += timeout
+            raise ValueError("installed journey command returned failure")
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
+    with pytest.raises(ValueError, match="installed journey command returned failure"):
+        installed_journey(["docker", "compose"], tmp_path, state,
+                          tmp_path / "compose.json", tmp_path / "secrets", {},
+                          tmp_path, {}, setup_script,
+                          hashlib.sha256(setup_script.read_bytes()).hexdigest(),
+                          tmp_path / "custody.json", tmp_path / "custody.sig",
+                          tmp_path / "custody.pub", {})
+    assert timeouts == [240, 240, 100]
+    assert clock[0] == 600
+    assert any("down" in call for call in calls)
+
+
 def test_kms_custody_must_bind_installed_profile(monkeypatch, tmp_path: Path) -> None:
     import run_selfhost_business_journey as runner
 

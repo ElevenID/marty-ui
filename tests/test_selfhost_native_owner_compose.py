@@ -4,6 +4,7 @@ from copy import deepcopy
 import hashlib
 from pathlib import Path
 import runpy
+import subprocess
 
 import pytest
 import yaml
@@ -30,6 +31,27 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     )
     assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
+def test_keycloak_preserves_scoped_openbao_token_file(tmp_path):
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    env = model["services"]["keycloak"]["environment"]
+    assert env["BAO_TOKEN_FILE"] == "/run/secrets/keycloak_signing_kms_token"
+    assert "BAO_TOKEN" not in env
+    assert env["KC_HOSTNAME"] == "https://${PUBLIC_DOMAIN:-localhost}"
+    assert "PRESERVE_BAO_TOKEN_FILE=1" in (
+        ROOT / "scripts/keycloak-selfhost-start.sh"
+    ).read_text()
+    token_file = tmp_path / "token"
+    token_file.write_text("synthetic-scoped-token", encoding="ascii")
+    result = subprocess.run(
+        ["sh", "-c", '. "$1"; test -n "$BAO_TOKEN_FILE" && test -z "${BAO_TOKEN:-}"',
+         "sh", str(ROOT / "scripts/load-secrets-env.sh")],
+        env={"PATH": "/usr/bin:/bin", "BAO_TOKEN_FILE": str(token_file),
+             "PRESERVE_BAO_TOKEN_FILE": "1"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_selfhost_openbao_requires_transactional_raft_storage():
@@ -74,7 +96,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "34904063005afb1cc617207822fea07cf04968d3b8a5d88a819d88435e87b32b"
+        == "5d7b01a2a7f7f57ae9d2810e821fb7c4f2665dc7c62d06ab2b4dcc94de6f018d"
     )
     import json
 

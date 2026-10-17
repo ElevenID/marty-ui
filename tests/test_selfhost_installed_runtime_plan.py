@@ -59,6 +59,8 @@ def model() -> dict:
         "BAO_ADDR": "https://openbao.example.com:8200",
         "BAO_CACERT": "/run/secrets/openbao_tls_ca_cert",
         "BAO_TOKEN_FILE": "/run/secrets/keycloak_signing_kms_token",
+        "PUBLIC_DOMAIN": "selfhost.example.com",
+        "KC_HOSTNAME": "https://selfhost.example.com",
         "MARTY_KEYCLOAK_RS256_CERT_DIR": "/run/secrets",
         "MARTY_KEYCLOAK_JWE_TOKEN_DIR": "/run/secrets",
         "MARTY_KEYCLOAK_JWE_MOUNT": "didcomm",
