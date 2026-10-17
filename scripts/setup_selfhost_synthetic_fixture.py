@@ -17,7 +17,6 @@ import re
 import ssl
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 from urllib.parse import quote, urlsplit
 
@@ -26,6 +25,7 @@ import httpx
 from selfhost_openbao_client import (
     CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, custody_signer_public,
 )
+from selfhost_managed_reference import managed_reference
 
 
 def required_environment(values: dict[str, str]) -> dict[str, str]:
@@ -65,15 +65,6 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
             or audit.path not in {"", "/"} or audit.query or audit.fragment):
         raise ValueError("SELFHOST_BAO_AUDIT_URL must use disposable loopback HTTPS")
     return {name: values[name] for name in names}
-
-
-def managed_reference(org: str, did: str, purpose: str) -> str:
-    if purpose not in {"vc_jwt_issuer", "oid4vp_request_signing"}:
-        raise ValueError("unsupported synthetic profile purpose")
-    tuple_value = f"{org}|{did}|{purpose}|SD_JWT_VC|ES256"
-    token = uuid.uuid5(uuid.NAMESPACE_URL, tuple_value).hex[:20]
-    prefix = "cred-issuer-" if purpose == "vc_jwt_issuer" else "oid4vp-verifier-"
-    return f"{prefix}{token}-es256"
 
 
 def checked_file(value: str, label: str) -> Path:
@@ -252,6 +243,7 @@ async def keycloak_user(client: httpx.AsyncClient, fixture: dict[str, str],
     if not users:
         created = await client.post(f"/admin/realms/{realm}/users", headers=headers,
                                     json={"username": email, "email": email,
+                                          "firstName": "Self-host", "lastName": "Operator",
                                           "enabled": True, "emailVerified": True,
                                           "attributes": {"user_type": ["administrator"],
                                                          "onboarding_completed": ["true"]}})
@@ -263,6 +255,12 @@ async def keycloak_user(client: httpx.AsyncClient, fixture: dict[str, str],
     if not isinstance(users, list) or len(users) != 1 or not users[0].get("id"):
         raise ValueError("synthetic Keycloak user was not created")
     user_id = str(users[0]["id"])
+    if (users[0].get("firstName") != "Self-host"
+            or users[0].get("lastName") != "Operator"):
+        updated = await client.put(f"/admin/realms/{realm}/users/{user_id}",
+                                   headers=headers,
+                                   json={"firstName": "Self-host", "lastName": "Operator"})
+        updated.raise_for_status()
     password = await client.put(
         f"/admin/realms/{realm}/users/{user_id}/reset-password", headers=headers,
         json={"type": "password", "value": fixture["SELFHOST_TEST_PASSWORD"],
@@ -324,7 +322,7 @@ async def provision(fixture: dict[str, str]) -> dict:
                     credential_format="SD_JWT_VC", algorithm="ES256")
                 if not isinstance(resolved, dict) or resolved.get("identity") != profile:
                     raise ValueError("resolved public identity differs from created profile")
-                reference = managed_reference(org, did, purpose)
+                reference = managed_reference(org, purpose)
                 if resolved.get("managed_key_binding_sha256") != managed_key_binding(org,
                                                                                      reference):
                     raise ValueError("resolved public identity uses an unexpected managed key")

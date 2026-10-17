@@ -112,7 +112,7 @@ and verifies the signature before issuing. Each fresh installation may have a
 different signer; no private key or per-install digest enters release source.
 The v1.1.247 source has no installed custody qualification. The
 integration checkout is pinned to protected-main commit
-`9c63609250274dc1edcf747827a29728ddd15d4a`; a PR head cannot qualify.
+`5b3ec6a802a5e13201be8883741889405a86d146`; a PR head cannot qualify.
 The synthetic fixture hook is an opt-in follow-on candidate and has not yet
 passed an installed run, so no installed journey has qualified a release.
 

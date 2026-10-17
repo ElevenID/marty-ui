@@ -675,11 +675,11 @@ def test_deletion_release_uses_the_reviewed_integration_suite_and_rust_candidate
         for component in lock["components"]
         if component["name"] == "marty-integration-tests"
     )
-    assert integration["version"] == "1.2.89"
-    assert integration["commit"] == "9c63609250274dc1edcf747827a29728ddd15d4a"
+    assert integration["version"] == "1.2.90"
+    assert integration["commit"] == "5b3ec6a802a5e13201be8883741889405a86d146"
     assert PINNED_INTEGRATION_SHA == integration["commit"]
     assert integration["artifacts"][0]["digest"] == (
-            "sha256:3b81d939547d6fa97a1cc356dc13610165426a0530e9c396bb18b13823320cc8"
+            "sha256:2dddf814b58d0214c41407c92eca331e54ff85ee30990c224fb3a82dccec589c"
     )
 
     assert all(component["name"] != "marty-credentials-issuance"
@@ -693,9 +693,9 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.253"
+    assert lock["release"] == "marty-ui@1.1.254"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.253")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.254")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
     assert release_tag in cutover_guide
@@ -704,7 +704,7 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     with pytest.raises(stack_tag_gate.StackTagGateError, match="release"):
         stack_tag_gate.require_release_eligible(ROOT, "v1.1.244")
     assert "marty-credentials-issuance" not in components
-    assert components["marty-integration-tests"]["version"] == "1.2.89"
+    assert components["marty-integration-tests"]["version"] == "1.2.90"
 
     # Detailed producer incident history belongs in the incident/runbook owners,
     # rather than being duplicated in the current migration requirements.

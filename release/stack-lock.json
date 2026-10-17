@@ -1,6 +1,6 @@
 {
   "schema": "marty.stack-lock/v1",
-  "release": "marty-ui@1.1.253",
+  "release": "marty-ui@1.1.254",
   "release_state": "eligible",
   "components": [
     {
@@ -84,14 +84,14 @@
     {
       "name": "marty-integration-tests",
       "repository": "ElevenID/marty-integration-tests",
-      "version": "1.2.89",
-      "commit": "9c63609250274dc1edcf747827a29728ddd15d4a",
+      "version": "1.2.90",
+      "commit": "5b3ec6a802a5e13201be8883741889405a86d146",
       "artifacts": [{
         "type": "release",
-        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.89/marty-integration-tests-1.2.89-source.tar.gz",
-        "digest": "sha256:3b81d939547d6fa97a1cc356dc13610165426a0530e9c396bb18b13823320cc8",
-        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.89/marty-integration-tests.spdx.json",
-        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.89/marty-integration-tests-1.2.89-source.tar.gz.sigstore.json"
+        "uri": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.90/marty-integration-tests-1.2.90-source.tar.gz",
+        "digest": "sha256:2dddf814b58d0214c41407c92eca331e54ff85ee30990c224fb3a82dccec589c",
+        "sbom": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.90/marty-integration-tests.spdx.json",
+        "provenance": "https://github.com/ElevenID/marty-integration-tests/releases/download/v1.2.90/marty-integration-tests-1.2.90-source.tar.gz.sigstore.json"
       }]
     }
   ]

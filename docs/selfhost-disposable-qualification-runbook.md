@@ -169,8 +169,8 @@ PY
 
 ## Stage exact inputs
 
-1. For an external tester, anonymously download all seven assets from the
-   [v1.1.250 experimental prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+1. After the current stack release is published, download all seven assets
+   from the exact release selected by `release/stack-lock.json`
    into one directory: `prepared-selfhost-bundle.zip`,
    `prepared-selfhost-images.json`, `prepared-selfhost-bundle.json`,
    `prepared-selfhost-product-descriptor.json`,
@@ -181,10 +181,10 @@ PY
    artifact for internal evidence; testers do not need Actions artifact access.
    Its promoted `release-transaction.json` is **not** a substitute for the
    original preparation transaction bound to this ZIP and receipt.
-2. Check out the `v1.1.250` source tag in a clean `marty-ui` tree and confirm that
+2. Check out that release's source tag in a clean `marty-ui` tree and confirm that
    `git rev-parse HEAD` equals the source commit in the preparation receipt.
    Check out `ElevenID/marty-integration-tests` separately at
-   `9c63609250274dc1edcf747827a29728ddd15d4a`. The runner verifies that
+   `5b3ec6a802a5e13201be8883741889405a86d146`. The runner verifies that
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
 3. Use the staging helper below to create a fresh private operator directory
@@ -211,7 +211,7 @@ PY
    audit hook; its audit token must meet the policy and TTL contract in
    [the synthetic fixture guide](selfhost-synthetic-fixture.md).
 4. Supply the eight public journey `SELFHOST_*` values from the
-   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/9c63609250274dc1edcf747827a29728ddd15d4a/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
+   [integration contract](https://github.com/ElevenID/marty-integration-tests/blob/5b3ec6a802a5e13201be8883741889405a86d146/tests/oss_stack/SELFHOST_CUSTOMER_JOURNEY.md)
    through an operator secret runner. Supply a loopback HTTPS
    `SELFHOST_BAO_AUDIT_URL` for the same OpenBao port, stage its public CA as
    `openbao_tls_ca_cert` in the private secret root, and supply
@@ -317,7 +317,7 @@ python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --source-checkout "$source_root" --integration-checkout "$integration_root" \
   --compose-model "$private/compose-model.json" \
   --source-sha "$source_sha" --run-id "$run_id" \
-  --integration-sha 9c63609250274dc1edcf747827a29728ddd15d4a \
+  --integration-sha 5b3ec6a802a5e13201be8883741889405a86d146 \
   --project-name "$project" --fixture-setup "$fixture" \
   --fixture-setup-sha256 "$fixture_sha" \
   --kms-custody-evidence "$private/custody.json" \

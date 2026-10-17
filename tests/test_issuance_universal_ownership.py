@@ -168,6 +168,10 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/"
         "credentials/{credential_id}/status}"
     )
+    assert presentation_environment["ISSUANCE_API_KEY_FILE"] == (
+        "/run/secrets/issuance_api_key"
+    )
+    assert "issuance_api_key" in services["presentation-policy"]["secrets"]
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
         "https://issuance-native:9005"
     )
