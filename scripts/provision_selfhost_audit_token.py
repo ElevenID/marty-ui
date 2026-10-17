@@ -117,7 +117,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
     except Exception:
         try:
             bao.request("POST", "auth/token/revoke", {"token": token})
-        except (OSError, RuntimeError, HTTPError) as error:
+        except (OSError, ValueError, RuntimeError, HTTPError) as error:
             if not token_file.exists():
                 write_token(token_file, token, output_root.stat())
             raise RuntimeError("audit token requires operator recovery") from error

@@ -30,13 +30,14 @@ def test_policy_uses_exact_managed_references() -> None:
         audit.policy_for(ORG, f"did:web:foreign:orgs:{ORG[:-1]}2")
 
 
-@pytest.mark.parametrize("orphan,excess,revoke_fails", [
-    (True, False, False), (False, False, False), (True, True, False),
-    (False, False, True),
+@pytest.mark.parametrize("orphan,excess,revoke_fails,revoke_malformed", [
+    (True, False, False, False), (False, False, False, False),
+    (True, True, False, False), (False, False, True, False),
+    (False, False, False, True),
 ])
 def test_provision_validates_and_recovers_token(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    orphan: bool, excess: bool, revoke_fails: bool,
+    orphan: bool, excess: bool, revoke_fails: bool, revoke_malformed: bool,
 ) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
@@ -84,6 +85,8 @@ def test_provision_validates_and_recovers_token(
                 return access
             if path == "auth/token/revoke" and revoke_fails:
                 raise HTTPError("https://127.0.0.1", 503, "unavailable", {}, None)
+            if path == "auth/token/revoke" and revoke_malformed:
+                raise ValueError("malformed revoke response")
             return {}
 
     monkeypatch.setattr(audit, "Bao", FakeBao)
@@ -92,7 +95,7 @@ def test_provision_validates_and_recovers_token(
     if orphan and not excess:
         audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
                         "marty-selfhost-openbao-qualification")
-    elif revoke_fails:
+    elif revoke_fails or revoke_malformed:
         with pytest.raises(RuntimeError, match="operator recovery"):
             audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
                             "marty-selfhost-openbao-qualification")
@@ -101,7 +104,8 @@ def test_provision_validates_and_recovers_token(
             audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
                             "marty-selfhost-openbao-qualification")
     token_file = output / "selfhost_audit_token"
-    assert token_file.exists() is (orphan and not excess or revoke_fails)
+    assert token_file.exists() is (orphan and not excess or revoke_fails
+                                   or revoke_malformed)
     if token_file.exists():
         assert token_file.read_text(encoding="ascii") == "scoped"
         assert stat.S_IMODE(token_file.stat().st_mode) == 0o400

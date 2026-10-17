@@ -16,6 +16,7 @@ import provision_selfhost_disposable_tls as tls  # noqa: E402
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "a" * 64
 OPERATOR = 1000
+OPENBAO = 1001
 
 
 def staged(tmp_path: Path) -> Path:
@@ -40,6 +41,8 @@ def staged(tmp_path: Path) -> Path:
     }), encoding="utf-8")
     for path in (root, root / "secrets", state):
         os.chown(path, OPERATOR, OPERATOR)
+    # selfhost-tls-init changes the bind-mounted state directory owner.
+    os.chown(state, OPENBAO, OPENBAO)
     return root
 
 

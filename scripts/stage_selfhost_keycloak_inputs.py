@@ -24,6 +24,15 @@ def owned_dir(path: Path, uid: int) -> Path:
     return path.resolve()
 
 
+def openbao_state_dir(path: Path) -> Path:
+    # The TLS init container chowns its bind-mounted state to the OpenBao UID.
+    # The locked container and exact state bind mount are verified below.
+    if (not path.is_absolute() or path.is_symlink() or not path.is_dir()
+            or stat.S_IMODE(path.stat().st_mode) != 0o700):
+        raise ValueError("disposable OpenBao state is not a private directory")
+    return path.resolve()
+
+
 def input_file(path: Path) -> Path:
     if (path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 65536):
         raise ValueError("disposable OpenBao input is missing or invalid")
@@ -36,7 +45,7 @@ def stage(private_root: Path, operator_uid: int) -> int:
         raise ValueError("Keycloak input transfer requires sudo from a non-root operator")
     root = owned_dir(private_root, operator_uid)
     secrets = owned_dir(root / "secrets", operator_uid)
-    state = owned_dir(root / "openbao-state", operator_uid)
+    state = openbao_state_dir(root / "openbao-state")
     install = root / "install" / "selfhost-prepared"
     if install.is_symlink() or not install.is_dir():
         raise ValueError("staged preview install is missing")
