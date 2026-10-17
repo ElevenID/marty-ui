@@ -106,14 +106,20 @@ if (( ${#internal_application_contracts[@]} != 1 )); then
   exit 1
 fi
 run_timed internal_application "${internal_application_contracts[0]}" --test-threads=1
-mapfile -t canvas_issuance_contracts < <(
-  find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-    \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
-    | sort
-)
-if (( ${#canvas_issuance_contracts[@]} != 11 )); then
-  printf 'Expected eleven issuance PostgreSQL contract executables (ten Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
-  exit 1
+if [[ -n "${RUNNER_TEMP:-}" ]]; then
+  canvas_contract_paths="$(resolve_issuance_canvas_contracts)"
+  mapfile -t canvas_issuance_contracts <<< "$canvas_contract_paths"
+else
+  # Preserve the local ad-hoc runner path when there is no Cargo artifact log.
+  mapfile -t canvas_issuance_contracts < <(
+    find target/debug/deps -maxdepth 1 -type f -perm -u+x \
+      \( -name 'canvas_*_postgres_contract-*' -o -name 'proof_nonce_postgres_contract-*' \) \
+      | sort
+  )
+  if (( ${#canvas_issuance_contracts[@]} != 11 )); then
+    printf 'Expected eleven issuance PostgreSQL contract executables (ten Canvas plus proof nonce), found %s.\n' "${#canvas_issuance_contracts[@]}" >&2
+    exit 1
+  fi
 fi
 for contract in "${canvas_issuance_contracts[@]}"; do
   contract_name=$(basename "$contract")

@@ -30,3 +30,43 @@ run_timed_rust_test() (
 run_timed() {
   run_timed_rust_test contract "$@"
 }
+
+# The contracts lane compiles these targets once and records Cargo's exact
+# executable paths. Do not rediscover hashes in target/debug/deps: old local
+# builds can leave extra executables there, and a successful libtest invocation
+# alone does not identify which source revision was compiled.
+resolve_issuance_canvas_contracts() {
+  local artifacts="${RUNNER_TEMP:?RUNNER_TEMP must identify this run}/rust-test-artifacts.json"
+  [[ -f "$artifacts" ]] || {
+    echo "Missing recorded Rust test artifacts: $artifacts" >&2
+    return 1
+  }
+  local rows name executable
+  local -a executables=()
+  local -A seen=()
+  rows="$(jq -er '
+    select(.reason == "compiler-artifact")
+    | select(.package_id | contains("#marty-issuance-service@"))
+    | select(.target.kind | index("test"))
+    | select(
+        ((.target.name | startswith("canvas_")) and
+         (.target.name | endswith("_postgres_contract"))) or
+        .target.name == "proof_nonce_postgres_contract"
+      )
+    | select(.executable != null)
+    | [.target.name, .executable] | @tsv
+  ' "$artifacts" | sort -u)" || return 1
+  while IFS=$'\t' read -r name executable; do
+    [[ -n "$name" && -n "$executable" && -z "${seen[$name]:-}" && -x "$executable" ]] || {
+      printf 'Missing, duplicate, or non-executable Issuance PostgreSQL contract: %s\n' "$name" >&2
+      return 1
+    }
+    seen[$name]=1
+    executables+=("$executable")
+  done <<< "$rows"
+  if (( ${#executables[@]} != 11 )) || [[ -z "${seen[proof_nonce_postgres_contract]:-}" ]]; then
+    printf 'Expected eleven issuance PostgreSQL contracts (ten Canvas plus proof nonce), found %s.\n' "${#executables[@]}" >&2
+    return 1
+  fi
+  printf '%s\n' "${executables[@]}"
+}
