@@ -105,6 +105,25 @@ class BundlePreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Compose image closure"):
             self.check()
 
+    def test_rejects_network_name_that_joins_another_installation(self):
+        self.contents["docker-compose.yml"] = (
+            b"name: marty-selfhost-prod\nnetworks:\n  default:\n"
+            b"    name: marty-selfhost-prod_default\nservices:\n  app:\n"
+            + f"    image: {self.image}\n".encode()
+        )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "pins or changes the default network"):
+            self.check()
+
+    def test_rejects_external_default_network(self):
+        self.contents["docker-compose.yml"] = (
+            b"networks:\n  default:\n    external: true\nservices:\n  app:\n"
+            + f"    image: {self.image}\n".encode()
+        )
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "pins or changes the default network"):
+            self.check()
+
     def test_rejects_openbao_compose_image_mismatch(self):
         self.contents["docker-compose.selfhost.openbao.yml"] = self.contents[
             "docker-compose.selfhost.openbao.yml"

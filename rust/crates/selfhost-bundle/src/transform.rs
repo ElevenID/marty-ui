@@ -4,6 +4,38 @@ use std::collections::{BTreeMap, BTreeSet};
 use regex::Regex;
 use serde_yaml::Value;
 
+/// Compose expands its implicit default network to `<project>_default` during
+/// `config`. Remove only that renderer-generated name so a customer can use
+/// `--project-name` without joining another installation's network.
+pub fn restore_project_scoped_default_network(text: &str) -> Result<String, String> {
+    let mut compose: Value =
+        serde_yaml::from_str(text).map_err(|_| "Rendered Compose is invalid YAML")?;
+    if compose.get("networks").is_none() {
+        return Ok(text.into());
+    }
+    let project = compose
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("Rendered Compose has no project name")?
+        .to_owned();
+    let networks = compose.get_mut("networks").unwrap();
+    let default = networks
+        .get_mut("default")
+        .and_then(Value::as_mapping_mut)
+        .ok_or("Rendered Compose has no default network")?;
+    let generated = format!("{project}_default");
+    if default.len() != 1
+        || default
+            .get(Value::String("name".into()))
+            .and_then(Value::as_str)
+            != Some(generated.as_str())
+    {
+        return Err("Rendered default network is not project-scoped".into());
+    }
+    default.remove(Value::String("name".into()));
+    serde_yaml::to_string(&compose).map_err(|_| "Cannot serialize project-scoped Compose".into())
+}
+
 /// Bind every rendered service to an exact OCI digest. Keep this separate from
 /// the legacy text rules so the default package path remains byte-compatible.
 pub fn pin_service_images(
@@ -256,6 +288,30 @@ pub fn validate_customer_text(text: &str) -> Result<(), String> {
         return Err("Customer bundle contains mutable image tags".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::restore_project_scoped_default_network;
+
+    #[test]
+    fn rendered_default_network_stays_scoped_to_the_install_project() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\nservices:\n  postgres:\n    image: postgres@example\n    networks:\n      default: null\n";
+        let output = restore_project_scoped_default_network(rendered).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert!(parsed["networks"]["default"].get("name").is_none());
+        assert!(parsed["services"]["postgres"]["networks"]
+            .get("default")
+            .is_some());
+    }
+
+    #[test]
+    fn never_rewrites_an_explicit_or_unexpected_default_network() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: shared-production-network\nservices: {}\n";
+        assert!(restore_project_scoped_default_network(rendered).is_err());
+        let external = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\n    external: true\nservices: {}\n";
+        assert!(restore_project_scoped_default_network(external).is_err());
+    }
 }
 
 #[cfg(test)]

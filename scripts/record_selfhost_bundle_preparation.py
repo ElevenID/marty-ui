@@ -98,6 +98,12 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         if actual != expected:
             raise ValueError("ZIP inventory differs from owned bundle")
         compose = yaml.safe_load((extracted / root / "docker-compose.yml").read_bytes())
+        networks = compose.get("networks", {})
+        if not isinstance(networks, dict):
+            raise TypeError("ZIP Compose networks are invalid")
+        default_network = networks.get("default", {})
+        if default_network != {}:
+            raise ValueError("ZIP Compose pins or changes the default network")
         images = {name: service.get("image") for name, service in compose["services"].items()
                   if "image" in service}
         if images != lock["services"]:

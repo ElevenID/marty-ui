@@ -26,12 +26,16 @@ test-user accounts as part of installed acceptance.
 1. Resolve one published Stack transaction, every image by immutable digest,
    the matched Keycloak provider image, and the signed self-host bundle and
    image lock. Reject any unqualified preview or mixed release. The
-   `v1.1.249` candidate is not yet a published installed qualification.
+   Published `v1.1.249` has not passed installed qualification: its prepared
+   Compose pinned the production default network. Use the corrected
+   `v1.1.250` candidate only after its own release and installed gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full
    Compose model and compare the project, mounts, ports, images, and secret
-   references against the approved manifest before starting anything.
+   references against the approved manifest before starting anything. The
+   rendered default network must be named for the selected project and must
+   not join another installation's network.
    `docker-compose.selfhost.prod.yml` and
    `docker-compose.selfhost.openbao.yml` expose the relevant
    `SELFHOST_*_HOST_PORT` and `SELFHOST_OPENBAO_STATE_DIR` inputs.
