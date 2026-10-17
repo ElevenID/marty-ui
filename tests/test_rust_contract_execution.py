@@ -380,6 +380,9 @@ def test_db_inventory_is_run_bound_and_excludes_runtime_values(
         != 0
     )
     assert "--payload=secret" not in output.read_text()
+    for threads in ("--test-threads=thread-credential-value", "--test-threads=0"):
+        assert INVENTORY.run_contract("issuer_profile", [str(executable), threads]) != 0
+        assert threads not in output.read_text() + capsys.readouterr().out
 
 
 def test_db_inventory_rejects_stale_foreign_ambiguous_or_missing_artifacts(

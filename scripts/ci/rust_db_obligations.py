@@ -265,7 +265,9 @@ def selection(arguments: list[str]) -> tuple[list[str], str]:
             if mode != "default":
                 raise ValueError("ambiguous_ignored_selection")
             mode = argument.removeprefix("--")
-        elif argument == "--exact" or argument.startswith("--test-threads="):
+        elif argument == "--exact" or re.fullmatch(
+            r"--test-threads=[1-9][0-9]*", argument
+        ):
             selectors.append(argument)
         elif re.fullmatch(CASE, argument):
             selectors.append(argument)
