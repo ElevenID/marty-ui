@@ -44,13 +44,27 @@ sudo python3 scripts/stage_selfhost_keycloak_inputs.py \
   --private-root /absolute/path/to/operator-private/new-run
 ```
 
+Then stage workload TLS from the **extracted bundle's** helper, whose parent
+contains the exact image lock (the source checkout root does not). The project
+name is public metadata in `openbao.json`; do not print any token files:
+
+```bash
+private_root=/absolute/path/to/operator-private/new-run
+openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
+  "$private_root/openbao.json")
+sudo python3 "$private_root/install/selfhost-prepared/scripts/provision_selfhost_disposable_tls.py" \
+  --secret-root "$private_root/secrets" \
+  --openbao-state-root "$private_root/openbao-state" \
+  --openbao-project "$openbao_project"
+```
+
 The OpenBao helper renders and checks the three-service Compose model before
 starting a fresh project. It uses only the locked plugin image, an isolated
 state directory and a selected loopback port. The Keycloak bridge runs the
 existing remote-key provisioner in a root-owned temporary directory, then
 transfers only its seven scoped/public outputs to the private secret root;
 the root token remains in the OpenBao state directory. These steps do not
-qualify the stack or complete workload TLS, custody or the installed business
+qualify the stack or complete custody or the installed business
 journey.
 The bridge verifies that the locked, healthy OpenBao container owns the exact
 loopback port before contacting it. The Linux host must expose the **same

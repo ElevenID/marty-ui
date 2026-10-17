@@ -18,6 +18,9 @@ The next-preview installer is in local branch
 `codex/selfhost-preview-installer-20261016`: exact asset/source staging,
 disposable scalar credentials, an isolated locked-image OpenBao startup, and a
 scoped audit-token helper have focused Linux tests and independent review.
+The root-only Keycloak provisioning bridge is also committed and reviewed;
+the extracted-bundle workload TLS step is documented but awaits installed
+replay against the next locked image.
 They are not yet published or installed-journey evidence. Custody signer
 [PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) must clear protected
 checks before the installer is integrated and a new preview is prepared.
