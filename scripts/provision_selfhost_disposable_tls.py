@@ -75,7 +75,8 @@ def exact_images(bundle: Path) -> tuple[str, str]:
     return image, openbao
 
 
-def openbao_network(project: str, state_root: Path, expected_image: str) -> str:
+def openbao_network(project: str, state_root: Path, expected_image: str,
+                    host_port: int | None = None) -> str:
     if not PROJECT.fullmatch(project):
         raise ValueError("OpenBao Compose project name is invalid")
     listed = subprocess.run(
@@ -105,6 +106,15 @@ def openbao_network(project: str, state_root: Path, expected_image: str) -> str:
                and Path(mount.get("Source", "")).resolve() == state_root
                for mount in mounts):
         raise RuntimeError("OpenBao container does not own the selected state root")
+    if host_port is not None:
+        binding = [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+        ports = container.get("NetworkSettings", {}).get("Ports", {})
+        configured = container.get("HostConfig", {}).get("PortBindings", {})
+        health = container.get("State", {}).get("Health", {}).get("Status")
+        if (ports.get("8200/tcp") != binding
+                or configured.get("8200/tcp") != binding
+                or health != "healthy"):
+            raise RuntimeError("OpenBao loopback endpoint is not bound to the owned container")
     networks = container.get("NetworkSettings", {}).get("Networks", {})
     matches = [name for name, binding in networks.items()
                if "openbao" in binding.get("Aliases", [])]

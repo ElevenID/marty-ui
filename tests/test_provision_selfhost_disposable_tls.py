@@ -101,17 +101,26 @@ def test_openbao_network_requires_exact_running_project_and_state(
     state = tmp_path / "state"
     state.mkdir()
     details = [{
-        "State": {"Running": True}, "Config": {"Image": OPENBAO, "Labels": {
+        "State": {"Running": True, "Health": {"Status": "healthy"}},
+        "HostConfig": {"PortBindings": {"8200/tcp": [
+            {"HostIp": "127.0.0.1", "HostPort": "18200"}]}},
+        "Config": {"Image": OPENBAO, "Labels": {
             "com.docker.compose.project": "marty-selfhost-openbao",
             "com.docker.compose.service": "openbao",
         }},
         "Mounts": [{"Destination": "/bao/data", "Type": "bind", "Source": str(state)}],
-        "NetworkSettings": {"Networks": {"private": {"Aliases": ["openbao"]}}},
+        "NetworkSettings": {"Ports": {"8200/tcp": [
+            {"HostIp": "127.0.0.1", "HostPort": "18200"}]},
+                            "Networks": {"private": {"Aliases": ["openbao"]}}},
     }]
     monkeypatch.setattr(stage.subprocess, "run", lambda *args, **kwargs:
                         subprocess.CompletedProcess(args[0], 0, "123456789abc\n", ""))
     monkeypatch.setattr(stage, "docker_json", lambda args: details)
     assert stage.openbao_network("marty-selfhost-openbao", state, OPENBAO) == "private"
+    assert stage.openbao_network("marty-selfhost-openbao", state, OPENBAO,
+                                 18200) == "private"
+    with pytest.raises(RuntimeError, match="loopback endpoint"):
+        stage.openbao_network("marty-selfhost-openbao", state, OPENBAO, 18201)
     details[0]["Config"]["Image"] = SERVICES
     with pytest.raises(RuntimeError, match="locked bundle image"):
         stage.openbao_network("marty-selfhost-openbao", state, OPENBAO)

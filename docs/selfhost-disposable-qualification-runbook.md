@@ -40,12 +40,22 @@ python3 scripts/stage_selfhost_disposable_preview.py \
 python3 scripts/start_selfhost_disposable_openbao.py \
   --private-root /absolute/path/to/operator-private/new-run \
   --host-port 18200
+sudo python3 scripts/stage_selfhost_keycloak_inputs.py \
+  --private-root /absolute/path/to/operator-private/new-run
 ```
 
 The OpenBao helper renders and checks the three-service Compose model before
 starting a fresh project. It uses only the locked plugin image, an isolated
-state directory and a selected loopback port. It does not qualify the stack or
-complete the workload TLS, Keycloak, custody or installed business journey.
+state directory and a selected loopback port. The Keycloak bridge runs the
+existing remote-key provisioner in a root-owned temporary directory, then
+transfers only its seven scoped/public outputs to the private secret root;
+the root token remains in the OpenBao state directory. These steps do not
+qualify the stack or complete workload TLS, custody or the installed business
+journey.
+The bridge verifies that the locked, healthy OpenBao container owns the exact
+loopback port before contacting it. The Linux host must expose the **same
+rootful Docker daemon** to the non-root starter and `sudo` bridge; rootless
+Docker contexts are not yet supported by this installer path.
 These helpers do **not** make the older `v1.1.247-selfhost-preview.2` image
 installable; obtain a newly prepared preview with matching source and images.
 
@@ -57,6 +67,12 @@ discarding the disposable root. Do not remove the root while a bootstrap
 container may still have its private state mounted; do not reuse a partly
 initialized state directory. A failed `docker compose down` requires manual
 operator cleanup of that exact project before any retry.
+If Keycloak input staging fails after it has contacted OpenBao, do not rerun
+it against that state: the provisioner may already have created its PKI mount,
+keys or tokens. Remove the named OpenBao project, verify no labelled container
+or network remains, discard the entire disposable root, and start with a new
+stage and fresh OpenBao state. Its local output transfer rolls back files it
+created, but cannot roll back OpenBao's remote mutations.
 
 The disposable Keycloak and workload TLS credentials request eight-hour
 lifetimes. Seven hours is an upper bound, not a guaranteed operating window:
