@@ -33,6 +33,16 @@ def test_policy_uses_exact_managed_references() -> None:
         audit.policy_for(ORG, "other", DID)
 
 
+def test_policy_accepts_the_production_slug_character_set() -> None:
+    slug = "Acme_team.v2"
+    did = f"did:web:localhost:orgs:{slug}"
+    _, paths = audit.policy_for(ORG, slug, did)
+    assert paths[0] == f"transit/keys/{audit.managed_reference(ORG, did, 'vc_jwt_issuer')}"
+    audit.policy_for(ORG, "a" * 128, f"did:web:localhost:orgs:{'a' * 128}")
+    with pytest.raises(ValueError, match="slug"):
+        audit.policy_for(ORG, "a" * 129, f"did:web:localhost:orgs:{'a' * 129}")
+
+
 @pytest.mark.parametrize("orphan,excess,revoke_fails,revoke_malformed", [
     (True, False, False, False), (False, False, False, False),
     (True, True, False, False), (False, False, True, False),

@@ -37,7 +37,7 @@ def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
         canonical = str(uuid.UUID(org))
     except ValueError as error:
         raise ValueError("synthetic organization ID is invalid") from error
-    if (org != canonical or not re.fullmatch(r"[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?", slug)
+    if (org != canonical or not re.fullmatch(r"[a-zA-Z0-9._-]{1,128}", slug)
             or not re.fullmatch(r"did:web:[A-Za-z0-9.%-]+:orgs:" +
                                 re.escape(slug), did)):
         raise ValueError("synthetic DID does not match organization slug")
