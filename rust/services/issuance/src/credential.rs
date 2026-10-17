@@ -656,7 +656,7 @@ impl CredentialIssuanceService {
             Ok(true) => {}
             Ok(false) => return Err(CredentialIssuanceError::InvalidNonce),
             Err(ProofNonceError::RepositoryUnavailable) => {
-                return Err(CredentialIssuanceError::NonceRepositoryUnavailable)
+                return Err(CredentialIssuanceError::NonceRepositoryUnavailable);
             }
         }
         let issuer = self
@@ -1943,6 +1943,43 @@ mod tests {
             credential_configuration_id_for_format("OpenBadgeCredential", "w3c_vcdm_v2_sd_jwt"),
             "OpenBadgeCredential#sd-jwt"
         );
+    }
+
+    #[test]
+    fn mdoc_aliases_select_the_native_builder_and_wire_format() {
+        let request = CredentialRequest::default();
+        for alias in ["mso_mdoc", "MDOC", "mdoc"] {
+            let mut transaction = transaction();
+            transaction.credential_payload_format = alias.to_owned();
+            let policy = format_policy(&request, &transaction).expect("supported mdoc alias");
+            assert_eq!(policy.kind, CredentialBuilderKind::Mdoc, "{alias}");
+            assert_eq!(policy.response_format, "mso_mdoc", "{alias}");
+            assert_eq!(policy.remote_format, "mso_mdoc", "{alias}");
+            assert_eq!(
+                credential_configuration_id_for_format("DriverLicense", alias),
+                "DriverLicense#mdoc",
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_payload_formats_do_not_select_the_mdoc_builder() {
+        let request = CredentialRequest::default();
+        for format in ["vc+sd-jwt", "jwt_vc_json", "ldp_vc"] {
+            let mut transaction = transaction();
+            transaction.credential_payload_format = format.to_owned();
+            let policy = format_policy(&request, &transaction).expect("supported non-mdoc format");
+            assert_ne!(policy.kind, CredentialBuilderKind::Mdoc, "{format}");
+            assert_ne!(policy.remote_format, "mso_mdoc", "{format}");
+            assert_ne!(policy.response_format, "mso_mdoc", "{format}");
+        }
+        let mut transaction = transaction();
+        transaction.credential_payload_format.clear();
+        assert!(matches!(
+            format_policy(&request, &transaction),
+            Err(super::CredentialIssuanceError::UnsupportedFormat(_))
+        ));
     }
 
     #[test]

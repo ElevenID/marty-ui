@@ -1,6 +1,6 @@
 # Architecture and development-feedback improvement tracker
 
-Status: active requirements and queue, 2026-10-16.
+Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
@@ -13,6 +13,25 @@ installation evidence, documented hardware limits and the 16 GiB envelope,
 a clean Linux installed journey, KMS custody proof, signed qualified assets,
 and independent anonymous download/install replay. Defer unrelated A0-A7
 optimization behind this handoff.
+
+The next-preview installer is in local branch
+`codex/selfhost-preview-installer-20261016`: exact asset/source staging,
+disposable scalar credentials, an isolated locked-image OpenBao startup, and a
+scoped audit-token helper have focused Linux tests and independent review.
+The root-only Keycloak provisioning bridge is also committed and reviewed;
+the extracted-bundle workload TLS step is documented but awaits installed
+replay against the next locked image. Six optional empty files are staged only
+after independently rendering the exact install and proving their integrations
+disabled. The local branch integrates the custody signer and verifies its
+locked OpenBao owner before reading a root token; 115 focused Linux tests pass.
+The clean-install runbook now follows the staged installer flow and uses the
+original preparation transaction throughout; independent review found no
+remaining actionable issue in that command sequence. These changes are not
+yet published or installed-journey evidence. Custody signer
+[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) merged through the
+protected queue. The reviewed installer is now
+[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375), awaiting its own
+protected checks and merge before a new preview is prepared.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation

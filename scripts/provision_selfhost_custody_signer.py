@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.error import HTTPError
 
+from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
     CUSTODY_SIGNER_POLICY,
@@ -55,7 +56,7 @@ def private_directory(path: Path) -> Path:
     return resolved
 
 
-def provision(endpoint: str, state_root: Path, output_root: Path,
+def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
               *, refresh_token: bool = False) -> str:
     if os.name != "posix" or os.geteuid() != 0:
         raise ValueError("OpenBao signer provisioning requires root on Linux")
@@ -63,6 +64,15 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
         raise ValueError("OpenBao signer endpoint must be loopback HTTPS")
     state_root = private_directory(state_root)
     output_root = private_directory(output_root)
+    private_root = state_root.parent
+    if (state_root != private_root / "openbao-state"
+            or output_root != private_root / "secrets"):
+        raise ValueError("signer inputs must share the private install root")
+    _, port_text = endpoint.rsplit(":", 1)
+    port = int(port_text)
+    verified_openbao_owner(
+        project, state_root, private_root / "install" / "selfhost-prepared", port,
+    )
     root_file = state_root / "root.token"
     ca_file = state_root / "tls" / "ca.crt"
     token_file = output_root / "selfhost_custody_signer_token"
@@ -79,9 +89,9 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
             raise ValueError("pending custody token refresh requires operator recovery")
     elif token_file.exists() or public_file.exists():
         raise ValueError("OpenBao custody signer outputs must be fresh")
-    root_token = root_file.read_text(encoding="ascii").strip()
-    if not 16 <= len(root_token) <= 2048 or not re.fullmatch(r"[A-Za-z0-9._-]+", root_token):
-        raise ValueError("OpenBao root token is invalid")
+    if not 0 < ca_file.stat().st_size <= 65536:
+        raise ValueError("OpenBao signer CA is missing or invalid")
+    root_token = read_protected_root_token(root_file)
     bao = Bao(endpoint, ca_file, root_token)
     exists = True
     try:
@@ -173,10 +183,12 @@ def main() -> int:
     parser.add_argument("--endpoint", required=True)
     parser.add_argument("--state-root", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--project-name", required=True)
     parser.add_argument("--refresh-token", action="store_true")
     args = parser.parse_args()
     try:
         digest = provision(args.endpoint, args.state_root, args.output_root,
+                           args.project_name,
                            refresh_token=args.refresh_token)
     except ValueError as error:
         print(f"OpenBao custody signer provisioning failed: {error}", file=sys.stderr)
