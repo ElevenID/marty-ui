@@ -698,6 +698,64 @@ class AffectedRustPlannerTests(unittest.TestCase):
         self.assertNotIn("marty-canvas-worker-acceptance", result["packages"])
         self.assertIn("marty-selfhost-bundle", result["packages"])
 
+    def test_canvas_cleanup_helper_includes_selfhost_acceptance_in_shadow_plan(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs"],
+            metadata,
+            ROOT,
+        )
+        self.assertFalse(result["all"])
+        self.assertEqual(
+            result["direct"],
+            ["marty-canvas-acceptance", "marty-selfhost-acceptance"],
+        )
+        self.assertIn("marty-selfhost-acceptance", result["packages"])
+
+    def test_canvas_cleanup_helper_requires_exact_cross_package_witness(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = self.metadata(root)
+            for name, owner in (
+                ("marty-canvas-acceptance", "rust/crates/canvas-acceptance"),
+                ("marty-selfhost-acceptance", "rust/crates/selfhost-acceptance"),
+            ):
+                metadata["packages"].append(
+                    {
+                        "id": name,
+                        "name": name,
+                        "manifest_path": str(root / owner / "Cargo.toml"),
+                        "dependencies": [],
+                    }
+                )
+                metadata["workspace_members"].append(name)
+            source = root / planner.SELFHOST_CLEANUP_INPUT
+            source.parent.mkdir(parents=True)
+            source.write_text("// owned cleanup\n", encoding="utf-8")
+            consumer = root / planner.SELFHOST_CLEANUP_CONSUMER
+            consumer.parent.mkdir(parents=True)
+            consumer.write_text(
+                '#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]\n'
+                "mod owned_cleanup;\n",
+                encoding="utf-8",
+            )
+            changed = [source.relative_to(root).as_posix()]
+            self.assertFalse(planner.plan(changed, metadata, root)["all"])
+            consumer_changed = [consumer.relative_to(root).as_posix()]
+            consumer_result = planner.plan(consumer_changed, metadata, root)
+            self.assertFalse(consumer_result["all"], consumer_result)
+            consumer.write_text("mod owned_cleanup;\n", encoding="utf-8")
+            self.assertTrue(planner.plan(changed, metadata, root)["all"])
+            self.assertTrue(planner.plan(consumer_changed, metadata, root)["all"])
+            consumer.write_text(
+                '#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]\n',
+                encoding="utf-8",
+            )
+            source.unlink()
+            self.assertTrue(planner.plan(changed, metadata, root)["all"])
+
     def test_selfhost_bundle_document_requires_existing_owned_asset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
