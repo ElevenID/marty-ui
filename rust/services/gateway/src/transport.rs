@@ -16,8 +16,10 @@ pub struct ReqwestUpstream {
 impl ReqwestUpstream {
     pub fn new(maximum_response_bytes: usize) -> Result<Self, PlatformError> {
         Self::validate_response_limit(maximum_response_bytes)?;
+        // Return browser redirects to callers; internal upstreams cannot follow public origins.
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| PlatformError::ProviderUnavailable(error.to_string()))?;
         Self::with_client(maximum_response_bytes, client)
@@ -245,7 +247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn injected_client_preserves_no_redirect_policy_without_target_requests() {
+    async fn both_upstream_constructors_preserve_redirects_without_target_requests() {
         use std::sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -279,31 +281,35 @@ mod tests {
                 }),
             ))
             .await;
-        let upstream = ReqwestUpstream::with_client(1_024, isolated_client()).unwrap();
-        let control = upstream
-            .send(
-                &instance(target, 1_000),
-                GatewayRequest::new(HttpMethod::Post, "/target", 0),
+        for upstream in [
+            ReqwestUpstream::with_client(1_024, isolated_client()).unwrap(),
+            ReqwestUpstream::new(1_024).unwrap(),
+        ] {
+            let control = upstream
+                .send(
+                    &instance(target, 1_000),
+                    GatewayRequest::new(HttpMethod::Post, "/target", 0),
+                )
+                .await
+                .unwrap();
+            assert_eq!(control.status_code, 200);
+            assert_eq!(target_calls.swap(0, Ordering::SeqCst), 1);
+            let response = tokio::time::timeout(
+                Duration::from_secs(2),
+                upstream.send(
+                    &instance(origin, 1_000),
+                    GatewayRequest::new(HttpMethod::Post, "/redirect", 0),
+                ),
             )
             .await
+            .unwrap()
             .unwrap();
-        assert_eq!(control.status_code, 200);
-        assert_eq!(target_calls.swap(0, Ordering::SeqCst), 1);
-        let response = tokio::time::timeout(
-            Duration::from_secs(2),
-            upstream.send(
-                &instance(origin, 1_000),
-                GatewayRequest::new(HttpMethod::Post, "/redirect", 0),
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(response.status_code, 307);
-        assert_eq!(response.headers.get("location"), Some(&location));
-        assert_eq!(redirect_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(response.status_code, 307);
+            assert_eq!(response.headers.get("location"), Some(&location));
+            assert_eq!(redirect_calls.swap(0, Ordering::SeqCst), 1);
+            assert_eq!(target_calls.load(Ordering::SeqCst), 0);
+        }
         servers.close().await;
-        assert_eq!(target_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

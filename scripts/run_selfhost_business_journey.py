@@ -245,12 +245,16 @@ def live_services(raw: str, model: dict) -> dict[str, str]:
     states: dict[str, str] = {}
     for name, item in actual.items():
         state, health, exit_code = item.get("State"), item.get("Health"), item.get("ExitCode")
+        healthcheck = services[name].get("healthcheck")
+        if healthcheck is not None and not isinstance(healthcheck, dict):
+            raise ValueError(f"installed healthcheck model is invalid: {name}")
         if name in COMPLETED:
             if state != "exited" or exit_code != 0:
                 raise ValueError(f"installed one-shot service did not complete: {name}")
         elif state != "running":
             raise ValueError(f"installed runtime service is not running: {name}")
-        elif "healthcheck" in services[name] and health != "healthy":
+        elif (healthcheck is not None and healthcheck.get("disable") is not True
+              and health != "healthy"):
             raise ValueError(f"installed runtime service is not healthy: {name}")
         states[name] = state
     return states

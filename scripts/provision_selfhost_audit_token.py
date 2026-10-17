@@ -32,14 +32,15 @@ def private_directory(path: Path) -> Path:
     return resolved
 
 
-def policy_for(org: str, did: str) -> tuple[str, tuple[str, ...]]:
+def policy_for(org: str, slug: str, did: str) -> tuple[str, tuple[str, ...]]:
     try:
         canonical = str(uuid.UUID(org))
     except ValueError as error:
         raise ValueError("synthetic organization ID is invalid") from error
-    if (org != canonical or not re.fullmatch(r"did:web:[A-Za-z0-9.%-]+:orgs:" +
-                                               re.escape(org), did)):
-        raise ValueError("synthetic DID does not match organization")
+    if (org != canonical or not re.fullmatch(r"[a-zA-Z0-9._-]{1,128}", slug)
+            or not re.fullmatch(r"did:web:[A-Za-z0-9.%-]+:orgs:" +
+                                re.escape(slug), did)):
+        raise ValueError("synthetic DID does not match organization slug")
     keys = tuple(managed_reference(org, did, purpose)
                  for purpose in ("vc_jwt_issuer", "oid4vp_request_signing"))
     paths = tuple(f"transit/keys/{name}" for name in (*keys, SIGNER))
@@ -64,7 +65,7 @@ def write_token(path: Path, value: str, owner: os.stat_result) -> None:
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path,
-              org: str, did: str, project: str) -> None:
+              org: str, slug: str, did: str, project: str) -> None:
     if os.name != "posix" or os.geteuid() != 0:
         raise ValueError("OpenBao audit provisioning requires root on Linux")
     if not re.fullmatch(r"https://127\.0\.0\.1:[0-9]{2,5}", endpoint):
@@ -88,7 +89,7 @@ def provision(endpoint: str, state_root: Path, output_root: Path,
     if not 0 < ca_file.stat().st_size <= 65536:
         raise ValueError("OpenBao audit CA is missing or invalid")
     root_token = read_protected_root_token(root_file)
-    policy, paths = policy_for(org, did)
+    policy, paths = policy_for(org, slug, did)
     bao = Bao(endpoint, ca_file, root_token)
     bao.request("PUT", f"sys/policies/acl/{POLICY}", {"policy": policy})
     created = bao.request("POST", "auth/token/create", {
@@ -130,12 +131,13 @@ def main() -> int:
     parser.add_argument("--state-root", required=True, type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--org-id", required=True)
+    parser.add_argument("--org-slug", required=True)
     parser.add_argument("--did", required=True)
     parser.add_argument("--project-name", required=True)
     args = parser.parse_args()
     try:
         provision(args.endpoint, args.state_root, args.output_root,
-                  args.org_id, args.did, args.project_name)
+                  args.org_id, args.org_slug, args.did, args.project_name)
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"OpenBao audit provisioning failed: {type(error).__name__}", file=sys.stderr)
         return 2
