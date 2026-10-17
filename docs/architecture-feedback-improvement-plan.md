@@ -4,6 +4,33 @@ Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
+Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
+predates known fresh-install repairs and should not be the next tester handoff.
+Stack v1.1.254 published its standard signed assets and an unqualified prepared
+bundle in [run #39068340445](https://github.com/ElevenID/marty-ui/actions/runs/39068340445).
+Its fresh installed journey completed the public issue/present/verify/revoke
+flow and live OpenBao custody verification, but failed when diagnostics rejected
+later custody phase names. Reviewed [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
+repairs that reporting contract on protected main
+`76a7fb4ef6e2ad594dc431da511686a1664979ab` and selects v1.1.255.
+A fresh local rehearsal with the candidate diagnostics module passed the public
+journey, Keycloak refresh, both database custody checks and owned teardown;
+that overlay run does not qualify an immutable release.
+
+Next handoff work, in order:
+
+1. Produce the signed v1.1.255 Stack release and its exact prepared bundle.
+2. Replay a fresh installation from those unchanged artifacts, retaining the
+   original qualified preparation transaction and source/run/digest binding.
+   Record the complete journey, custody checks, cleanup and hardware measurements.
+3. Publish a separate explicitly unsupported experimental preview with the ZIP,
+   image lock, receipt, descriptor, original preparation transaction, tester
+   guide and checksums. Verify anonymous downloads independently and hand that
+   version to outside testers. Existing approval permits this experimental
+   distribution before supported qualification; retain accurate limitations.
+4. Finish independent installed replay and review the measured hardware envelope
+   before publishing qualified self-host assets or making support claims.
+
 Enable outside testers to anonymously download and try a disposable self-host
 bundle. The [v1.1.250 experimental preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
 is published from protected-main source
@@ -39,8 +66,9 @@ KMS custody, measured RAM/CPU/disk/swap/OOM and owned cleanup. Before a
 **supported** handoff, also establish a reviewed 16 GiB operating envelope or
 document the actual minimum, complete Linux qualification on suitable hardware,
 signed qualified self-host assets and independent anonymous install replay.
-The current 15.1 GiB local Docker VM has only passed preflight. Defer unrelated
-A0-A7 optimization behind this handoff.
+The 15.1 GiB local Docker VM has completed a candidate-overlay rehearsal;
+fresh immutable-release acceptance and a reviewed measured hardware envelope
+remain pending. Defer unrelated A0-A7 optimization behind this handoff.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
