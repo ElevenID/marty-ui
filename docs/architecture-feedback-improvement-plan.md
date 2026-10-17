@@ -1,6 +1,6 @@
 # Architecture and development-feedback improvement tracker
 
-Status: active requirements and queue, 2026-10-16.
+Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
@@ -28,9 +28,10 @@ The clean-install runbook now follows the staged installer flow and uses the
 original preparation transaction throughout; independent review found no
 remaining actionable issue in that command sequence. These changes are not
 yet published or installed-journey evidence. Custody signer
-[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) must merge through
-the protected queue before the installer branch is proposed against main and a
-new preview is prepared.
+[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) merged through the
+protected queue. The reviewed installer is now
+[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375), awaiting its own
+protected checks and merge before a new preview is prepared.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
