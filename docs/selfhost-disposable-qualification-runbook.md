@@ -261,8 +261,9 @@ project="marty-selfhost-qual-$(openssl rand -hex 8)"
 fixture="$source_root/scripts/setup_selfhost_synthetic_fixture.py"
 fixture_sha=$(sha256sum "$fixture" | cut -d ' ' -f 1)
 
-# The operator secret runner supplies the public-journey SELFHOST_* values
-# and the env file resolves Compose settings, including these same absolute
+# The operator secret runner exports the public-journey SELFHOST_* values and
+# MARTY_ORG_ID (matching the Compose env file). The env file resolves Compose
+# settings, including these same absolute
 # state/secret roots and loopback published ports. The helpers below stage
 # the scoped audit and signer tokens; do not copy a root token into the install.
 docker compose --project-name "$project" --env-file "$env_file" \
@@ -275,6 +276,9 @@ docker compose --project-name "$project" --env-file "$env_file" \
 python3 "$source_root/scripts/stage_selfhost_disabled_optional_secrets.py" \
   --secret-root "$secret_root" --install-root "$install_root" \
   --env-file "$env_file" --project-name "$project"
+# The audit policy must target the same seeded organization as the fixture.
+test "${MARTY_ORG_ID:?Set the migration organization ID}" = \
+  "${SELFHOST_ORG_ID:?Set the matching journey organization ID}"
 # Mint one-hour custody and audit tokens only after preparation is complete.
 # Each helper verifies the locked, healthy OpenBao owner before reading its
 # protected root token. Start the journey immediately; do not reuse expired
