@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import stage_selfhost_keycloak_inputs as bridge  # noqa: E402
+import provision_selfhost_disposable_tls as tls  # noqa: E402
 
 
 IMAGE = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "a" * 64
@@ -53,8 +54,8 @@ def test_moves_only_scoped_outputs_to_operator_directory(
     require_root_linux()
     root = staged(tmp_path)
     monkeypatch.setenv("TMPDIR", str(root))
-    monkeypatch.setattr(bridge, "exact_images", lambda _bundle: ("services", IMAGE))
-    monkeypatch.setattr(bridge, "openbao_network", lambda *_args: "owned-network")
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
 
     def fake_run(_args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         env = kwargs["env"]
@@ -84,8 +85,8 @@ def test_incomplete_root_provisioning_leaves_no_operator_outputs(
 ) -> None:
     require_root_linux()
     root = staged(tmp_path)
-    monkeypatch.setattr(bridge, "exact_images", lambda _bundle: ("services", IMAGE))
-    monkeypatch.setattr(bridge, "openbao_network", lambda *_args: "owned-network")
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
 
     def fake_run(_args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         output = Path(kwargs["env"]["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
@@ -104,10 +105,13 @@ def test_rejects_foreign_image_and_unsafe_root_token(
 ) -> None:
     require_root_linux()
     root = staged(tmp_path)
-    monkeypatch.setattr(bridge, "exact_images", lambda _bundle: ("services", IMAGE))
-    monkeypatch.setattr(bridge, "openbao_network", lambda *_args: "owned-network")
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
     marker = root / "openbao.json"
     report = json.loads(marker.read_text(encoding="utf-8"))
+    marker.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="lineage"):
+        bridge.stage(root, OPERATOR)
     report["image"] = "other"
     marker.write_text(json.dumps(report), encoding="utf-8")
     with pytest.raises(ValueError, match="differs"):
@@ -125,8 +129,8 @@ def test_partial_transfer_failure_removes_all_operator_outputs(
 ) -> None:
     require_root_linux()
     root = staged(tmp_path)
-    monkeypatch.setattr(bridge, "exact_images", lambda _bundle: ("services", IMAGE))
-    monkeypatch.setattr(bridge, "openbao_network", lambda *_args: "owned-network")
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
 
     def fake_run(_args: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         output = Path(kwargs["env"]["SELFHOST_KEYCLOAK_OUTPUT_DIR"])

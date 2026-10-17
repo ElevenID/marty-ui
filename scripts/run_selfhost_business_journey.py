@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -20,6 +21,7 @@ import time
 import uuid
 from contextlib import nullcontext
 from pathlib import Path
+from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
@@ -28,13 +30,14 @@ from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
 from qualify_selfhost_migrations import PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY
+from provision_selfhost_disposable_tls import exact_images, openbao_network
 from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
+from selfhost_openbao_client import Bao, CUSTODY_SIGNER, custody_signer_public
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 PROJECT = re.compile(r"marty-selfhost-qual-[0-9a-f]{16}\Z")
-TRUST_ROOTS_PATH = "deploy-config/selfhost-kms-custody-trust-roots.json"
 FIXTURE_PATH = "scripts/setup_selfhost_synthetic_fixture.py"
 KEYCLOAK_SQL_PATH = "scripts/sql/keycloak-kms-only-verify.sql"
 JOURNEY = "tests/oss_stack/selfhost_customer_journey.py"
@@ -365,46 +368,107 @@ def source_bound_fixture(script: Path, digest: str, source_checkout: Path,
         raise ValueError("fixture hook differs from the prepared source commit")
 
 
-def trusted_custody_keys(source_checkout: Path, source_sha: str) -> frozenset[str]:
-    raw = command(["git", "show", f"{source_sha}:{TRUST_ROOTS_PATH}"],
-                  cwd=source_checkout)
-    policy = json.loads(raw)
-    if (not isinstance(policy, dict)
-            or set(policy) != {"schema", "approved_public_key_sha256"}
-            or policy["schema"] != "marty.selfhost-kms-custody-trust-roots/v1"
-            or not isinstance(policy["approved_public_key_sha256"], list)
-            or any(SHA256.fullmatch(str(value)) is None
-                   for value in policy["approved_public_key_sha256"])):
-        raise ValueError("source-bound KMS custody trust roots are invalid")
-    keys = frozenset(policy["approved_public_key_sha256"])
-    if not keys or len(keys) != len(policy["approved_public_key_sha256"]):
-        raise ValueError("source-bound KMS custody signer is not approved")
-    return keys
+def live_custody_signer(install_root: Path, openbao_state_root: Path,
+                        secret_root: Path, openbao_project: str, model: dict,
+                        environment: dict[str, str]) -> tuple[int, str]:
+    """Enroll the signer from the owned, image-locked local OpenBao instance."""
+    endpoint = environment.get("SELFHOST_BAO_AUDIT_URL", "")
+    match = re.fullmatch(r"https://127\.0\.0\.1:([0-9]{2,5})", endpoint)
+    if match is None or not 1 <= int(match.group(1)) <= 65535:
+        raise ValueError("custody audit endpoint is not the installed loopback OpenBao")
+    signing = model.get("services", {}).get("signing-keys", {}).get("environment", {})
+    service_url = urlsplit(str(signing.get("BAO_ADDR", "")))
+    if (service_url.scheme != "https" or service_url.hostname != "host.docker.internal"
+            or service_url.port != int(match.group(1))):
+        raise ValueError("installed signing-keys uses a different OpenBao port")
+    if (not openbao_state_root.is_absolute() or openbao_state_root.is_symlink()
+            or not openbao_state_root.is_dir()):
+        raise ValueError("custody OpenBao state root is invalid")
+    state_root = openbao_state_root.resolve()
+    staged_ca = secret_root / "openbao_tls_ca_cert"
+    # The Raft state directory is root-only. The installed public CA is the
+    # readable copy supplied to application workloads; the owned container's
+    # loopback binding below ties its verified TLS endpoint to that state.
+    if (staged_ca.is_symlink() or not staged_ca.is_file()
+            or not 0 < staged_ca.stat().st_size <= 65536):
+        raise ValueError("custody OpenBao installed CA is invalid")
+    _, image = exact_images(install_root)
+    openbao_network(openbao_project, state_root, image,
+                    expected_host_port=int(match.group(1)))
+    token_file = Path(environment.get("SELFHOST_BAO_AUDIT_TOKEN_FILE", ""))
+    if (not token_file.is_absolute() or token_file.is_symlink()
+            or not token_file.is_file() or token_file.stat().st_size > 2048):
+        raise ValueError("custody audit token file is invalid")
+    token = token_file.read_text(encoding="ascii").strip()
+    if not token:
+        raise ValueError("custody audit token is absent")
+    bao = Bao(endpoint, staged_ca, token)
+    lookup = bao.request("GET", "auth/token/lookup-self").get("data", {})
+    policies = lookup.get("policies")
+    if (not isinstance(policies, list) or "selfhost-qualification-audit" not in policies
+            or set(policies) - {"selfhost-qualification-audit", "default"}
+            or type(lookup.get("ttl")) is not int or not 0 < lookup["ttl"] <= 3600):
+        raise ValueError("custody audit token has excess authority or expired")
+    metadata_path = f"transit/keys/{CUSTODY_SIGNER}"
+    forbidden_paths = (
+        f"{metadata_path}/config", f"{metadata_path}/rotate",
+        f"{metadata_path}/import", f"transit/sign/{CUSTODY_SIGNER}",
+        f"transit/export/signing-key/{CUSTODY_SIGNER}",
+        "auth/token/create", "sys/policies/acl/selfhost-qualification-audit",
+    )
+    capabilities = bao.request("POST", "sys/capabilities-self", {
+        "paths": [metadata_path, *forbidden_paths],
+    })
+    if (capabilities.get(metadata_path) != ["read"]
+            or any(capabilities.get(path) not in (["deny"], [])
+                   for path in forbidden_paths)):
+        raise ValueError("custody audit token has excess effective capabilities")
+    metadata = bao.request("GET", f"transit/keys/{CUSTODY_SIGNER}").get("data", {})
+    version, pem = custody_signer_public(metadata)
+    for method, path, body in (
+        ("GET", f"transit/export/signing-key/{CUSTODY_SIGNER}", None),
+        ("POST", f"transit/sign/{CUSTODY_SIGNER}", {"input": "YQ=="}),
+    ):
+        try:
+            bao.request(method, path, body)
+        except HTTPError as error:
+            if error.code != 403:
+                raise ValueError("custody audit token denial is invalid") from None
+        else:
+            raise ValueError("custody audit token can export or sign")
+    return version, pem
 
 
 def verify_kms_custody(evidence: Path, signature: Path, public_key: Path,
                        preflight: dict, environment: dict[str, str],
-                       trusted_keys: frozenset[str]) -> str:
+                       live_signer: tuple[int, str]) -> str:
     for label, path in (("custody evidence", evidence), ("custody signature", signature),
                         ("custody public key", public_key)):
         if not path.is_absolute() or path.is_symlink() or not path.is_file():
             raise ValueError(f"signed {label} is absent")
-    if hashlib.sha256(public_key.read_bytes()).hexdigest() not in trusted_keys:
-        raise ValueError("KMS custody signer is not approved by release source")
+    if public_key.read_text(encoding="ascii") != live_signer[1]:
+        raise ValueError("KMS custody signer differs from owned OpenBao metadata")
     document = json.loads(evidence.read_text(encoding="utf-8"))
     expected = {
         "schema": "marty.selfhost-kms-custody/v1",
         "source_sha": preflight["source_sha"],
         "archive_sha256": preflight["archive_sha256"],
         "image_lock_sha256": preflight["image_lock_sha256"],
+        "run_id": preflight["run_id"],
+        "fixture_sha256": environment["SELFHOST_FIXTURE_SHA256"],
+        "challenge": environment["SELFHOST_CUSTODY_CHALLENGE"],
         "organization_id": environment["SELFHOST_ORG_ID"],
         "issuer_did": environment["SELFHOST_ISSUER_DID"],
         "verifier_did": environment["SELFHOST_VERIFIER_DID"],
         "issuer_key_non_exportable": True,
         "verifier_key_non_exportable": True,
+        "attestation_key_reference": CUSTODY_SIGNER,
+        "attestation_key_non_exportable": True,
     }
     if not isinstance(document, dict) or any(document.get(k) != v for k, v in expected.items()):
         raise ValueError("signed KMS custody evidence does not bind installed fixture")
+    if document.get("attestation_key_version") != live_signer[0]:
+        raise ValueError("signed KMS custody signer version is invalid")
     proofs = document.get("profile_proofs")
     if not isinstance(proofs, list) or len(proofs) != 2:
         raise ValueError("signed KMS custody profile proofs are incomplete")
@@ -444,9 +508,11 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
                       environment: dict[str, str], setup_script: Path,
                       setup_sha256: str,
                       evidence: Path, signature: Path, public_key: Path,
-                      preflight: dict, trusted_keys: frozenset[str],
+                      preflight: dict,
                       diagnostics: RunDiagnostics | None = None,
                       source_checkout: Path | None = None,
+                      openbao_state_root: Path | None = None,
+                      openbao_project: str | None = None,
                       ) -> tuple[dict[str, str], str]:
     """Own only a preflighted, empty disposable project; always tear it down."""
     with measured(diagnostics, "fresh_project"):
@@ -481,11 +547,15 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
         journey_env = {**environment, "PYTHONDONTWRITEBYTECODE": "1",
                        "SELFHOST_KMS_CUSTODY_EVIDENCE_PATH": str(evidence),
                        "SELFHOST_KMS_CUSTODY_SIGNATURE_PATH": str(signature),
+                       "SELFHOST_KMS_CUSTODY_PUBLIC_KEY_PATH": str(public_key),
                        "SELFHOST_COMPOSE_MODEL_PATH": str(compose_model_path),
                        "SELFHOST_SECRET_ROOT": str(secret_root),
                        "SELFHOST_SOURCE_SHA": preflight["source_sha"],
                        "SELFHOST_ARCHIVE_SHA256": preflight["archive_sha256"],
-                       "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"]}
+                       "SELFHOST_IMAGE_LOCK_SHA256": preflight["image_lock_sha256"],
+                       "SELFHOST_RUN_ID": preflight["run_id"],
+                       "SELFHOST_FIXTURE_SHA256": setup_sha256,
+                       "SELFHOST_CUSTODY_CHALLENGE": secrets.token_hex(32)}
         with measured(diagnostics, "fixture_setup"):
             if evidence.exists() or signature.exists():
                 raise ValueError("KMS custody output exists before fresh fixture setup")
@@ -493,8 +563,13 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
             command([sys.executable, str(setup_script)], cwd=integration_checkout,
                     env=journey_env, timeout=600)
         with measured(diagnostics, "custody_verification"):
+            if openbao_state_root is None or openbao_project is None:
+                raise ValueError("owned OpenBao custody inputs are absent")
+            live_signer = live_custody_signer(
+                install_root, openbao_state_root, secret_root, openbao_project, model,
+                journey_env)
             custody_sha256 = verify_kms_custody(evidence, signature, public_key,
-                                                preflight, journey_env, trusted_keys)
+                                                preflight, journey_env, live_signer)
         with measured(diagnostics, "public_journey"):
             command([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider",
                      JOURNEY], cwd=integration_checkout, env=journey_env, timeout=900)
@@ -525,14 +600,14 @@ def installed_journey(compose: list[str], install_root: Path, state_root: Path,
     return states, custody_sha256
 
 
-def validate_inputs(args: argparse.Namespace) -> frozenset[str]:
+def validate_inputs(args: argparse.Namespace) -> None:
     if sys.platform != "linux":
         raise ValueError("installed business journey requires Linux Docker")
     if PROJECT.fullmatch(args.project_name) is None:
         raise ValueError("qualification project name is not disposable and owned")
     for name in ("archive", "image_lock", "transaction", "receipt", "descriptor",
                  "install_root", "state_root", "secret_root", "env_file", "source_checkout",
-                 "integration_checkout"):
+                 "integration_checkout", "openbao_state_root"):
         path = getattr(args, name)
         if not path.is_absolute():
             raise ValueError(f"{name} must be an absolute path")
@@ -557,15 +632,13 @@ def validate_inputs(args: argparse.Namespace) -> frozenset[str]:
     pinned_integration_checkout(args.integration_checkout, args.integration_sha)
     if command(["git", "rev-parse", "HEAD^{commit}"], cwd=args.source_checkout).strip() != args.source_sha:
         raise ValueError("source checkout differs from prepared ZIP source")
-    trusted_keys = trusted_custody_keys(args.source_checkout, args.source_sha)
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
-    return trusted_keys
 
 
 def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> dict:
     with measured(diagnostics, "input_validation"):
-        trusted_keys = validate_inputs(args)
+        validate_inputs(args)
     environment = os.environ.copy()
     compose = ["docker", "compose", "--project-name", args.project_name,
                "--env-file", str(args.env_file),
@@ -597,8 +670,10 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
             args.integration_checkout, environment, args.fixture_setup,
             args.fixture_setup_sha256,
             args.kms_custody_evidence, args.kms_custody_signature,
-            args.kms_custody_public_key, preflight, trusted_keys, diagnostics,
-            source_checkout=args.source_checkout)
+            args.kms_custody_public_key, preflight, diagnostics,
+            source_checkout=args.source_checkout,
+            openbao_state_root=args.openbao_state_root,
+            openbao_project=args.openbao_project)
     return {"schema": "marty.selfhost-installed-business-journey/v1",
             "qualification": "unqualified", "source_sha": args.source_sha,
             "archive_sha256": preflight["archive_sha256"],
@@ -634,12 +709,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("archive", "image-lock", "transaction", "receipt", "descriptor",
                  "install-root", "state-root", "secret-root", "env-file",
+                 "openbao-state-root",
                  "source-checkout", "integration-checkout", "compose-model", "output",
                  "fixture-setup", "kms-custody-evidence", "kms-custody-signature",
                  "kms-custody-public-key"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     for name in ("source-sha", "run-id", "integration-sha", "project-name",
-                 "fixture-setup-sha256"):
+                 "fixture-setup-sha256", "openbao-project"):
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--diagnostic-output", type=Path,
                         help="optional redacted timing and host-resource report")

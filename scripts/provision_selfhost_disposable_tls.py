@@ -76,7 +76,7 @@ def exact_images(bundle: Path) -> tuple[str, str]:
 
 
 def openbao_network(project: str, state_root: Path, expected_image: str,
-                    host_port: int | None = None) -> str:
+                    *, expected_host_port: int | None = None) -> str:
     if not PROJECT.fullmatch(project):
         raise ValueError("OpenBao Compose project name is invalid")
     listed = subprocess.run(
@@ -106,21 +106,53 @@ def openbao_network(project: str, state_root: Path, expected_image: str,
                and Path(mount.get("Source", "")).resolve() == state_root
                for mount in mounts):
         raise RuntimeError("OpenBao container does not own the selected state root")
-    if host_port is not None:
-        binding = [{"HostIp": "127.0.0.1", "HostPort": str(host_port)}]
+    if expected_host_port is not None:
+        if not 1 <= expected_host_port <= 65535:
+            raise RuntimeError("OpenBao container does not own the loopback HTTPS port")
+        binding = [{"HostIp": "127.0.0.1", "HostPort": str(expected_host_port)}]
         ports = container.get("NetworkSettings", {}).get("Ports", {})
         configured = container.get("HostConfig", {}).get("PortBindings", {})
         health = container.get("State", {}).get("Health", {}).get("Status")
         if (ports.get("8200/tcp") != binding
                 or configured.get("8200/tcp") != binding
                 or health != "healthy"):
-            raise RuntimeError("OpenBao loopback endpoint is not bound to the owned container")
+            raise RuntimeError("OpenBao container does not own the loopback HTTPS port")
     networks = container.get("NetworkSettings", {}).get("Networks", {})
     matches = [name for name, binding in networks.items()
                if "openbao" in binding.get("Aliases", [])]
     if len(matches) != 1:
         raise RuntimeError("OpenBao has no unique private service network")
     return matches[0]
+
+
+def verified_openbao_owner(project: str, state_root: Path, install_root: Path,
+                           port: int) -> str:
+    """Verify the selected endpoint belongs to the locked, healthy container."""
+    if install_root.is_symlink() or not install_root.is_dir():
+        raise ValueError("extracted self-host install is missing")
+    _, image = exact_images(install_root)
+    openbao_network(project, state_root, image, expected_host_port=port)
+    return image
+
+
+def preview_openbao_owner(root: Path, state_root: Path, install_root: Path) -> tuple[str, int]:
+    """Bind a staged preview's OpenBao report to its locked running container."""
+    marker = regular_input(root / "openbao.json")
+    report = json.loads(marker.read_text(encoding="utf-8"))
+    if not isinstance(report, dict):
+        raise ValueError("disposable OpenBao lineage is invalid")
+    project = report.get("project")
+    port = report.get("host_port")
+    if (report.get("schema") != "marty.selfhost-disposable-openbao/v1"
+            or report.get("qualification") != "unqualified"
+            or not isinstance(project, str)
+            or not re.fullmatch(r"marty-preview-[0-9a-f]{16}", project)
+            or type(port) is not int or not 1024 <= port <= 65535):
+        raise ValueError("disposable OpenBao lineage is invalid")
+    image = verified_openbao_owner(project, state_root, install_root, port)
+    if report.get("image") != image:
+        raise ValueError("OpenBao runtime image differs from preview lock")
+    return project, port
 
 
 def provision(bundle: Path, secret_root: Path, state_root: Path, project: str) -> None:

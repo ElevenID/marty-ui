@@ -7,13 +7,12 @@ import argparse
 import json
 import os
 from pathlib import Path
-import re
 import stat
 import subprocess
 import sys
 import tempfile
 
-from provision_selfhost_disposable_tls import exact_images, openbao_network
+from provision_selfhost_disposable_tls import preview_openbao_owner
 from provision_selfhost_keycloak_kms import OUTPUTS
 
 
@@ -41,20 +40,7 @@ def stage(private_root: Path, operator_uid: int) -> int:
     install = root / "install" / "selfhost-prepared"
     if install.is_symlink() or not install.is_dir():
         raise ValueError("staged preview install is missing")
-    marker = input_file(root / "openbao.json")
-    report = json.loads(marker.read_text(encoding="utf-8"))
-    project = report.get("project")
-    port = report.get("host_port")
-    if (report.get("schema") != "marty.selfhost-disposable-openbao/v1"
-            or report.get("qualification") != "unqualified"
-            or not isinstance(project, str)
-            or not re.fullmatch(r"marty-preview-[0-9a-f]{16}", project)
-            or type(port) is not int or not 1024 <= port <= 65535):
-        raise ValueError("disposable OpenBao lineage is invalid")
-    _, image = exact_images(install)
-    if report.get("image") != image:
-        raise ValueError("OpenBao runtime image differs from preview lock")
-    openbao_network(project, state, image, port)
+    _, port = preview_openbao_owner(root, state, install)
     ca = input_file(state / "tls" / "ca.crt")
     token = input_file(state / "root.token")
     if (stat.S_IMODE(token.stat().st_mode) != 0o400
