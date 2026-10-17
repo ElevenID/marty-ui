@@ -29,7 +29,7 @@ test-user accounts as part of installed acceptance.
    Published `v1.1.249` has not passed installed qualification: its prepared
    Compose pinned the production default network. Published `v1.1.250`
    and `v1.1.251` failed installed startup after their signed releases. Use
-   the `v1.1.252` candidate only after its own release and installed gates pass.
+   the `v1.1.253` candidate only after its own release and installed gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full

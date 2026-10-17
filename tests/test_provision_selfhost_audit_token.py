@@ -13,11 +13,12 @@ import provision_selfhost_audit_token as audit  # noqa: E402
 
 
 ORG = "00000000-0000-0000-0000-000000000001"
-DID = f"did:web:localhost%3A19080:orgs:{ORG}"
+SLUG = "marty"
+DID = f"did:web:localhost%3A19080:orgs:{SLUG}"
 
 
 def test_policy_uses_exact_managed_references() -> None:
-    policy, paths = audit.policy_for(ORG, DID)
+    policy, paths = audit.policy_for(ORG, SLUG, DID)
     assert len(paths) == 3
     assert paths[0].startswith("transit/keys/cred-issuer-")
     assert paths[1].startswith("transit/keys/oid4vp-verifier-")
@@ -27,7 +28,9 @@ def test_policy_uses_exact_managed_references() -> None:
     assert "*" not in policy
     assert 'path "sys/capabilities-self" { capabilities = ["update"] }' in policy
     with pytest.raises(ValueError, match="organization"):
-        audit.policy_for(ORG, f"did:web:foreign:orgs:{ORG[:-1]}2")
+        audit.policy_for(ORG, SLUG, "did:web:foreign:orgs:other")
+    with pytest.raises(ValueError, match="slug"):
+        audit.policy_for(ORG, "other", DID)
 
 
 @pytest.mark.parametrize("orphan,excess,revoke_fails,revoke_malformed", [
@@ -54,7 +57,7 @@ def test_provision_validates_and_recovers_token(
     root_token.chmod(0o400)
     (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
     calls: list[tuple[str, str, dict | None]] = []
-    _, allowed = audit.policy_for(ORG, DID)
+    _, allowed = audit.policy_for(ORG, SLUG, DID)
 
     class FakeBao:
         def __init__(self, endpoint: str, ca: Path, token: str) -> None:
@@ -93,15 +96,15 @@ def test_provision_validates_and_recovers_token(
     monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
     monkeypatch.setattr(audit, "read_protected_root_token", lambda _path: "r" * 16)
     if orphan and not excess:
-        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                         "marty-selfhost-openbao-qualification")
     elif revoke_fails or revoke_malformed:
         with pytest.raises(RuntimeError, match="operator recovery"):
-            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+            audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                             "marty-selfhost-openbao-qualification")
     else:
         with pytest.raises(ValueError, match="not orphaned|capabilities"):
-            audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+            audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                             "marty-selfhost-openbao-qualification")
     token_file = output / "selfhost_audit_token"
     assert token_file.exists() is (orphan and not excess or revoke_fails
@@ -133,7 +136,7 @@ def test_existing_output_refuses_to_create_token(
     (output / "selfhost_audit_token").write_text("old", encoding="ascii")
     monkeypatch.setattr(audit, "verified_openbao_owner", lambda *_args: "locked-image")
     with pytest.raises(ValueError, match="input or output"):
-        audit.provision("https://127.0.0.1:18200", state, output, ORG, DID,
+        audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                         "marty-selfhost-openbao-qualification")
 
 
@@ -161,5 +164,5 @@ def test_rejects_foreign_binding_before_reading_root_token(
     monkeypatch.setattr(audit, "verified_openbao_owner", reject_foreign_port)
     monkeypatch.setattr(audit, "Bao", lambda *_args: pytest.fail("root token leaked"))
     with pytest.raises(RuntimeError, match="foreign OpenBao port"):
-        audit.provision("https://127.0.0.1:18201", state, output, ORG, DID,
+        audit.provision("https://127.0.0.1:18201", state, output, ORG, SLUG, DID,
                         "marty-selfhost-openbao-qualification")

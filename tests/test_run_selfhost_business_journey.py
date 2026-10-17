@@ -345,6 +345,24 @@ def test_exact_local_service_closure_passes_without_tunnel() -> None:
     assert set(states) == EXPECTED_SERVICES - BETA_SERVICES - {"cloudflared"}
 
 
+def test_explicitly_disabled_worker_healthcheck_does_not_block_closure() -> None:
+    raw, model = status_fixture()
+    model["services"]["canvas-sync-worker"]["healthcheck"] = {"disable": True}
+    rows = json.loads(raw)
+    for row in rows:
+        if row["Service"] == "canvas-sync-worker":
+            row["Health"] = ""
+    assert len(live_services(json.dumps(rows), model)) == len(LOCAL_SERVICES)
+    model["services"]["canvas-sync-worker"]["healthcheck"] = {
+        "test": ["CMD", "true"],
+    }
+    with pytest.raises(ValueError, match="not healthy: canvas-sync-worker"):
+        live_services(json.dumps(rows), model)
+    model["services"]["canvas-sync-worker"]["healthcheck"] = "disabled"
+    with pytest.raises(ValueError, match="healthcheck model is invalid"):
+        live_services(json.dumps(rows), model)
+
+
 def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) -> None:
     from check_selfhost_installed_runtime_plan import (
         EXPECTED_ROLE_SECRETS, EXPECTED_SECRET_NAMES,

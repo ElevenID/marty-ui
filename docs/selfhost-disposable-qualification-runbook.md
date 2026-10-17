@@ -273,7 +273,7 @@ fixture="$source_root/scripts/setup_selfhost_synthetic_fixture.py"
 fixture_sha=$(sha256sum "$fixture" | cut -d ' ' -f 1)
 
 # The operator secret runner exports the public-journey SELFHOST_* values and
-# MARTY_ORG_ID (matching the Compose env file). The env file resolves Compose
+# MARTY_ORG_ID and MARTY_ORG_SLUG (matching the Compose env file). The env file resolves Compose
 # settings, including these same absolute
 # state/secret roots and loopback published ports. The helpers below stage
 # the scoped audit and signer tokens; do not copy a root token into the install.
@@ -302,6 +302,7 @@ sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
   --org-id "${MARTY_ORG_ID:?Set the seeded organization ID}" \
+  --org-slug "${MARTY_ORG_SLUG:?Set the seeded organization slug}" \
   --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
   --project-name "$openbao_project"
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \

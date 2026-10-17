@@ -1320,7 +1320,7 @@ specific operational context; prepare a concrete reviewed operation first.
 The protected KMS consumer changes landed as UI #1192
 (`62607e860e3fe57abef39e29dfb59ae1c8bbd2a8`) and Credentials #313
 (`7ac622015a220992fbae84177a1518fec7b75849`). Core v0.2.2 is the
-shared dependency. The source stack lock currently selects `marty-ui@1.1.252`
+shared dependency. The source stack lock currently selects `marty-ui@1.1.253`
 with `release_state: eligible`. The signed v1.1.250 bundle failed installed
 startup and must not be used for cutover. Eligibility does not establish
 signed-image, installation, provider/device or cutover acceptance. The earlier
@@ -1332,3 +1332,5 @@ the working tree. Their original contents remain recoverable at Git commit
 `0ff6000f24e59feb3b5fea0fae0cb156ab545aaf`. New probe receipts belong in ignored
 `artifacts/` or uploaded CI artifacts. Keep current test sources, supported
 runbooks and unresolved acceptance requirements in the repository.
+
+2026-10-17 v1.1.252 installed-qualification repair candidate: the signed release and prepared bundle passed publication and source-bound staging, but fresh 16 GiB workstation qualification remains unpassed. The exact installed runner rejected a 28-service closure because the Canvas worker explicitly disables its healthcheck; a diagnostic runner overlay passed closure and then found the audit helper still required a UUID DID suffix instead of the configured organization slug. The fixture's first public PKCE request returned 503 through the healthy gateway even though Auth returned 302 directly: the production `ReqwestUpstream::new` followed Auth's browser redirect toward `https://localhost` inside the gateway container. This v1.1.253 source-lock candidate groups the slug-bound scoped audit policy, disabled-healthcheck interpretation and Rust proxy redirect preservation with regression tests. The diagnostic overlays and reused-state HTTP probes are unqualified evidence only. A clean v1.1.253 release and fresh Raft-backed installed journey must pass before cutover.
