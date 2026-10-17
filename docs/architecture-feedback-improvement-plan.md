@@ -25,6 +25,12 @@ memory and OOM evidence were not collected, so this run cannot establish a
 supported memory minimum. Reports remain local at
 `/home/canvasrunner/kms-qualification/v1.1.254/private/install-39068340445-b/installed-diagnostic.json`
 and the sibling `installed-journey.json`.
+The subsequent cleanup audit found nine older disposable OpenBao services still
+running. Each was matched to its stage marker, exact Compose path and owned state
+mount before being stopped; containers, state and reports were retained. The
+existing stack was left running. Future evidence must include separate OpenBao
+cleanup as well as the main runner's teardown, and distinguish remaining shared
+host workloads from the new installation's own container measurements.
 
 Next handoff work, in order:
 
