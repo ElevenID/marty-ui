@@ -215,7 +215,8 @@ python3 "$source_root/scripts/check_prepared_selfhost_consumer.py" \
   --descriptor "$prepared/prepared-selfhost-product-descriptor.json" \
   --expected-source-sha "$source_sha" --expected-run-id "$run_id" \
   --verify-archive-only
-mkdir -p "$private/install" "$state_root" "$secret_root"
+mkdir -p "$private/install" "$state_root"
+install -d -m 0700 "$secret_root"
 unzip -q "$prepared/prepared-selfhost-bundle.zip" -d "$private/install"
 project="marty-selfhost-qual-$(openssl rand -hex 8)"
 fixture="$source_root/scripts/setup_selfhost_synthetic_fixture.py"
