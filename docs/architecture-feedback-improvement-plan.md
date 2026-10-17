@@ -4,34 +4,32 @@ Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
-Enable outside testers to anonymously download and install a self-host bundle.
-The `v1.1.247-selfhost-preview.2` archive is an unsupported experimental preview,
-not a qualified standalone verifier or supported deployment. Preparation,
-archive/Compose/image-pull checks and exploratory lower-memory runs are not
-installation acceptance. Before a supported handoff, require disposable tester
-installation evidence, documented hardware limits and the 16 GiB envelope,
-a clean Linux installed journey, KMS custody proof, signed qualified assets,
-and independent anonymous download/install replay. Defer unrelated A0-A7
-optimization behind this handoff.
+Enable outside testers to anonymously download and try a disposable self-host
+bundle. The [v1.1.250 experimental preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+is published from protected-main source
+`5a89b3915f19e35c3f77bf9f278c212663e1150f`, with seven anonymously
+downloadable assets. An independent anonymous download passed checksum,
+archive, receipt, descriptor, source and run-lineage checks. Local Docker/Compose
+preflight passed all 31 locked services and confirmed that two project names
+produce separate default networks and Redis socket volumes. The
+[Stack release run](https://github.com/ElevenID/marty-ui/actions/runs/39007886412)
+passed image, security, integration, anonymous-pull and prepared-consumer gates.
+These are preparation checks, **not** installed acceptance; the preview remains
+unsupported and unqualified.
 
-The next-preview installer is in local branch
-`codex/selfhost-preview-installer-20261016`: exact asset/source staging,
-disposable scalar credentials, an isolated locked-image OpenBao startup, and a
-scoped audit-token helper have focused Linux tests and independent review.
-The root-only Keycloak provisioning bridge is also committed and reviewed;
-the extracted-bundle workload TLS step is documented but awaits installed
-replay against the next locked image. Six optional empty files are staged only
-after independently rendering the exact install and proving their integrations
-disabled. The local branch integrates the custody signer and verifies its
-locked OpenBao owner before reading a root token; 115 focused Linux tests pass.
-The clean-install runbook now follows the staged installer flow and uses the
-original preparation transaction throughout; independent review found no
-remaining actionable issue in that command sequence. These changes are not
-yet published or installed-journey evidence. Custody signer
-[PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) merged through the
-protected queue. The reviewed installer is now
-[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375), awaiting its own
-protected checks and merge before a new preview is prepared.
+The disposable staging, isolated locked-image OpenBao startup, Keycloak inputs,
+workload TLS and custody helpers are on protected main after reviewed
+[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375) and its prerequisites.
+The preview guide uses the original preparation transaction and a clean exact
+source checkout; it requires a non-root Linux operator and disposable private
+state. [Issue #1350](https://github.com/ElevenID/marty-ui/issues/1350)
+tracks the next evidence: an external tester's fresh installed journey with
+KMS custody, measured RAM/CPU/disk/swap/OOM and owned cleanup. Before a
+**supported** handoff, also establish a reviewed 16 GiB operating envelope or
+document the actual minimum, complete Linux qualification on suitable hardware,
+signed qualified self-host assets and independent anonymous install replay.
+The current 15.1 GiB local Docker VM has only passed preflight. Defer unrelated
+A0-A7 optimization behind this handoff.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
@@ -40,8 +38,11 @@ producing a customer ZIP. The receipt verifier expected two OpenBao services
 after the packager added `openbao-tls-init`. PR #1370 repaired the exact
 three-service image check on main. `v1.1.249` published signed assets and a
 prepared ZIP, but its rendered Compose pinned the production default network,
-so the fresh isolated installation was unqualified. The `v1.1.250` lock is the
-next candidate; neither earlier release is a supported self-host handoff.
+so the fresh isolated installation was unqualified.
+[PR #1377](https://github.com/ElevenID/marty-ui/pull/1377) fixed project
+network/Redis isolation. `v1.1.250` published the signed standard Stack assets,
+but that qualification does **not** qualify its separate self-host preview or
+either earlier bundle.
 
 ## Installed setup requirements
 
@@ -51,7 +52,7 @@ public certificates bind to the selected remote keys, and per-key/realm/purpose
 policies reject foreign-key and cross-realm use. Provisioning and TLS-oracle
 success do not establish installed Compose or supported release acceptance.
 
-- The next bundle needs a qualified DIDComm-plugin image supporting the
+- The exact v1.1.250 DIDComm-plugin image passed its release image gate for the
   Keycloak JWE path; the older cached published image did not support it.
   Current disposable JWE policies cover the initial key version only and
   require scoped-token reprovisioning after rotation. Installed rotation
@@ -76,11 +77,12 @@ extracted bundle includes the small shared HTTPS OpenBao client and provisioner;
 focused Linux/Windows tests are not installed-journey acceptance.
 
 The exact services digest pinned by preview .2 lacks
-`/usr/local/bin/marty-passport-tls-bootstrap`; current source containing the
-binary does not repair or qualify that older image. The release gate must check
-the executable on the exact already-pulled services digest after native-schema
-qualification, without another build. A healthy source-built stack with existing
-state on a 15.15 GiB VM is not a fresh install or measured 16 GiB customer envelope.
+`/usr/local/bin/marty-passport-tls-bootstrap`; newer source does not repair
+that immutable older image. The v1.1.250 release gate passed the executable
+check on its exact services digest after native-schema qualification. This does
+not prove extracted-image startup or installed acceptance. A healthy
+source-built stack with existing state on a 15.1 GiB VM is not a fresh install
+or measured 16 GiB customer envelope.
 
 The Linux-only disposable TLS helper verifies the extracted image lock and the
 running OpenBao Compose owner, image and state mount. It stages only the 31
