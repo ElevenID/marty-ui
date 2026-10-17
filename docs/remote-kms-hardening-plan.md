@@ -23,10 +23,12 @@ passed. [PR #1373](https://github.com/ElevenID/marty-ui/pull/1373) replaces
 the installed fixture's private PEM signer with scoped non-exportable OpenBao
 Transit signing. Its runner enrolls the signer from the owned, image-locked
 live OpenBao instance and verifies a fresh signed challenge; no install-specific
-public key is pinned in source. Current PR head `c9f4629549d04cea5929acca7d4adf00a5cb64d2`
-also updates the Rust ZIP dependency for newly published advisories. Its
-[exact-head CI 38983770780](https://github.com/ElevenID/marty-ui/actions/runs/38983770780)
-is running. Await protected merge and a fresh exact-main CI before a new claim
+public key is pinned in source. The PR also updates Rust ZIP for newly published
+advisories and verifies its signer token is orphaned. Earlier exact-head
+[CI 38983770780](https://github.com/ElevenID/marty-ui/actions/runs/38983770780)
+passed, but is superseded by current head `6dd05b68816c759f9398a837153827efbe85391f`;
+[CI 38986049045](https://github.com/ElevenID/marty-ui/actions/runs/38986049045)
+is pending. Await protected merge and a fresh exact-main CI before a new claim
 and Stack release. The
 `stack-release` environment needs no manual reviewer approval. Then run a
 fresh isolated Raft-backed installation in Ubuntu WSL against this machine's
