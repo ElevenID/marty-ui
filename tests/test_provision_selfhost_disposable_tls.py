@@ -85,6 +85,8 @@ def test_locked_images_and_bundle_assets(tmp_path: Path) -> None:
     assets = json.loads((ROOT / "deploy-config/bundles/selfhost.json").read_text(
         encoding="utf-8"))["assets"]
     assert {"scripts/provision_selfhost_disposable_tls.py",
+            "scripts/start_selfhost_disposable_openbao.py",
+            "scripts/stage_selfhost_keycloak_inputs.py",
             "scripts/passport_remote_tls.py",
             "docs/selfhost-disposable-qualification-runbook.md"} <= set(assets)
     lock = root / ".marty-selfhost-images.json"
