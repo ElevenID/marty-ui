@@ -31,6 +31,8 @@ use marty_issuance_service::oid4vci_authorization::{
     DeferredCredentialLookup, DeferredStatus, NotificationLookup, Oid4vciAuthorizationRepository,
 };
 use marty_issuance_service::oid4vci_authorization_postgres::PostgresOid4vciAuthorizationRepository;
+use marty_issuance_service::tenant_discovery::TenantDiscoveryRepository;
+use marty_issuance_service::tenant_postgres::PostgresTenantDiscoveryRepository;
 use marty_issuance_service::token_postgres::PostgresTokenExchangeRepository;
 use serde_json::json;
 use sha2::Sha256;
@@ -40,6 +42,73 @@ use url::Url;
 use uuid::Uuid;
 
 static POSTGRES_CONTRACT_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test]
+async fn tenant_discovery_queries_current_status_and_tenant_boundaries() {
+    let Ok(database_url) = std::env::var("ISSUANCE_POSTGRES_TEST_URL") else {
+        return;
+    };
+    let _database_guard = POSTGRES_CONTRACT_LOCK.lock().await;
+    let url = url::Url::parse(&database_url).expect("PostgreSQL test URL");
+    assert!(
+        url.path().ends_with("_test"),
+        "dedicated test database required"
+    );
+    let pool = PgPoolOptions::new()
+        .max_connections(2)
+        .connect(&database_url)
+        .await
+        .expect("PostgreSQL test connection");
+    create_contract_schema(&pool).await;
+    for (organization, credential_type, status, name) in [
+        ("org-a", Some("DriverLicense"), "active", "Active driver"),
+        ("org-a", Some("DriverLicense"), "draft", "Draft driver"),
+        ("org-a", Some("NationalID"), "draft", "Draft ID"),
+        ("org-a", Some("Passport"), "deprecated", "Deprecated"),
+        ("org-a", Some("EmployeeBadge"), "suspended", "Suspended"),
+        ("org-a", Some("AccessPass"), "revoked", "Revoked"),
+        ("org-a", None, "active", "Missing credential type"),
+        ("org-b", Some("ForeignOnly"), "active", "Foreign tenant"),
+    ] {
+        sqlx::query(
+            "INSERT INTO credential_template_service.credential_templates
+                 (organization_id, credential_type, status, name, updated_at)
+             VALUES ($1, $2, $3, $4, clock_timestamp())",
+        )
+        .bind(organization)
+        .bind(credential_type)
+        .bind(status)
+        .bind(name)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let repository = PostgresTenantDiscoveryRepository::new(pool.clone());
+    let templates = repository.templates("org-a").await.unwrap();
+    assert_eq!(
+        templates
+            .iter()
+            .map(|t| t.credential_type.as_str())
+            .collect::<Vec<_>>(),
+        ["DriverLicense", "NationalID"]
+    );
+    assert_eq!(templates[0].metadata.name.as_deref(), Some("Active driver"));
+    let foreign = repository.templates("org-b").await.unwrap();
+    assert_eq!(
+        foreign
+            .iter()
+            .map(|t| t.credential_type.as_str())
+            .collect::<Vec<_>>(),
+        ["ForeignOnly"]
+    );
+    assert!(repository
+        .templates("unknown-org")
+        .await
+        .unwrap()
+        .is_empty());
+    drop_contract_schema(&pool).await;
+    pool.close().await;
+}
 
 fn token_digest(key: &[u8], token: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(key).unwrap();
@@ -2831,6 +2900,8 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE credential_template_service.credential_templates (
             id BIGSERIAL PRIMARY KEY, organization_id TEXT NOT NULL, credential_type TEXT,
             status TEXT NOT NULL, issuer_did TEXT, issuer_algorithm TEXT,
+            name TEXT, description TEXT, claims JSONB, display_style JSONB,
+            vct TEXT, supported_formats JSONB,
             updated_at TIMESTAMPTZ NOT NULL)",
     ] {
         sqlx::query(statement).execute(pool).await.unwrap();
