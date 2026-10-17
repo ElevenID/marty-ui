@@ -148,6 +148,8 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
         "scripts/selfhost_openbao_client.py",
         "scripts/passport_remote_tls.py",
         "scripts/provision_selfhost_disposable_tls.py",
+        "scripts/start_selfhost_disposable_openbao.py",
+        "scripts/stage_selfhost_keycloak_inputs.py",
     ] {
         assert_eq!(
             fs::read(extracted.join(helper)).unwrap(),
@@ -155,17 +157,23 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
         );
     }
     let python = if cfg!(windows) { "python" } else { "python3" };
-    let tls_help = Command::new(python)
-        .env("PYTHONDONTWRITEBYTECODE", "1")
-        .arg(extracted.join("scripts/provision_selfhost_disposable_tls.py"))
-        .arg("--help")
-        .output()
-        .unwrap();
-    assert!(
-        tls_help.status.success(),
-        "{}",
-        String::from_utf8_lossy(&tls_help.stderr)
-    );
+    for helper in [
+        "scripts/provision_selfhost_disposable_tls.py",
+        "scripts/start_selfhost_disposable_openbao.py",
+        "scripts/stage_selfhost_keycloak_inputs.py",
+    ] {
+        let help = Command::new(python)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .arg(extracted.join(helper))
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(
+            help.status.success(),
+            "{helper}: {}",
+            String::from_utf8_lossy(&help.stderr)
+        );
+    }
     assert!(String::from_utf8(packaged_helper).unwrap().contains(
         "quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf"
     ));
