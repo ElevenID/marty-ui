@@ -372,6 +372,7 @@ def interpolated_models():
         inputs = dict.fromkeys(required, "https://synthetic.example")
         inputs.update(
             BAO_ADDR="http://synthetic-bao:8200",
+            PUBLIC_DOMAIN="synthetic.example",
             SELFHOST_STATE_DIR=(directory / "state").as_posix(),
             SELFHOST_SECRET_DIR=(directory / "secrets").as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
@@ -402,6 +403,11 @@ def interpolated_models():
         ):
             values = {**inputs, **overrides}
             after = render(GATE["BASE"], values)
+            slug = values.get("MARTY_ORG_SLUG") or "marty"
+            issuer_did = f"did:web:synthetic.example:orgs:{slug}"
+            assert after["services"]["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == issuer_did
+            assert after["services"]["flow"]["environment"]["OID4VP_ISSUER_DID"] == issuer_did
+            assert after["services"]["trust-profile"]["environment"]["MARTY_ORG_SLUG"] == slug
             expected_publication = rendered_additions(PUBLICATION_SETTINGS, values)
             for owner in ("issuance", "issuance-native"):
                 actual_publication = {
@@ -440,7 +446,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "89a0b05fe9046b9d7ba12e01f559d5b166503bf40c73aa6faeceda4461f831eb"
+        == "34904063005afb1cc617207822fea07cf04968d3b8a5d88a819d88435e87b32b"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])
