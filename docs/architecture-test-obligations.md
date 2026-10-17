@@ -48,6 +48,16 @@ case identities and summary counts. A missing/zero selection, missing runtime
 input, missing summary or selected/executed mismatch fails closed. Every test
 body still executes once; the additional invocations only list tests.
 
+Case completion comes from libtest's separate `--logfile` result stream. Raw
+stdout/stderr still stream live: migration child processes and direct writes
+can split the human `test name ... ok` display, which is not a reliable case
+record. The stable result-file interface is deprecated but available on pinned
+Rust 1.95; a real compiled harness probe covers direct stdout, inherited child
+stdout, stderr, failed cases and ignored/filter modes. Toolchain removal or a
+changed result format fails visibly instead of weakening case evidence. The
+temporary result log is removed on success and failure, and ignored reasons
+are excluded from the retained machine-readable inventory.
+
 The run-bound JSONL artifact is
 `rust-build-evidence/db-contract-obligations.jsonl`, retained by the existing
 two-day Rust build-evidence upload. Records contain the package/target, selection

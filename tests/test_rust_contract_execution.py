@@ -216,7 +216,15 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
     monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
-    monkeypatch.setattr(INVENTORY.subprocess, "Popen", lambda *args, **kwargs: Child())
+    result_paths = []
+
+    def fake_child(command, **kwargs):
+        result_log = Path(command[command.index("--logfile") + 1])
+        result_log.write_text("failed happy\n", encoding="utf-8")
+        result_paths.append(result_log)
+        return Child()
+
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
     assert INVENTORY.run_contract("issuer_profile", ["harness"]) == (child_status or 1)
     evidence = json.loads(
         (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
@@ -226,6 +234,7 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
     assert evidence["observed_cases"] == [{"name": "happy", "outcome": "FAILED"}]
     assert evidence["reason"] == "missing_or_ambiguous_libtest_summary"
     assert "private-credential-value" not in capsys.readouterr().out
+    assert all(not path.parent.exists() for path in result_paths)
 
 
 @pytest.fixture(scope="module")
@@ -268,12 +277,13 @@ def real_obligation_harness(tmp_path_factory):
     ],
 )
 def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
-    real_obligation_harness, arguments, selected, ignored
+    tmp_path, real_obligation_harness, arguments, selected, ignored
 ) -> None:
     executable = str(real_obligation_harness)
     actual_selected, actual_ignored = INVENTORY.expected_cases(executable, arguments)
     assert actual_selected == selected
     assert actual_ignored == ignored
+    result_log = tmp_path / "libtest-results.log"
     run = subprocess.run(
         [
             executable,
@@ -283,50 +293,140 @@ def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
             "pretty",
             "--color",
             "never",
+            "--logfile",
+            str(result_log),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
     assert run.returncode == 0, run.stderr
-    evidence = INVENTORY.verify_execution(run.stdout.splitlines(), selected, ignored)
+    evidence = INVENTORY.verify_execution(
+        run.stdout.splitlines(), result_log.read_text().splitlines(), selected, ignored
+    )
     assert evidence["executed"] == sorted(selected)
     assert evidence["ignored"] == sorted(ignored)
+    if "happy" in selected:
+        assert '"diagnostic":"direct-stdout"' in run.stdout
+        assert "child-inherited-stdout" in run.stdout
+        assert "test happy ... ok" not in run.stdout
 
 
 @pytest.mark.parametrize(
-    "lines,reason",
+    "lines,results,reason",
     [
         (
             [
-                "test other ... ok",
                 "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
             ],
+            ["ok other"],
             "selected_executed_mismatch",
         ),
-        (["test happy ... ok", "test happy ... ok"], "duplicate_executed_case"),
-        (["test happy ... ok"], "missing_or_ambiguous_libtest_summary"),
+        ([], ["ok happy", "ok happy"], "duplicate_executed_case"),
+        ([], ["ok happy"], "missing_or_ambiguous_libtest_summary"),
         (
             [
-                "test happy ... ok",
                 "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
             ],
+            ["ok happy"],
             "selected_executed_mismatch",
         ),
         (
             [
-                "test happy ... ignored",
                 "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
             ],
+            ["ignored happy"],
             "selected_executed_mismatch",
         ),
+        ([], ["private-runtime-value"], "unrecognized_libtest_result"),
     ],
 )
 def test_db_inventory_rejects_incomplete_or_inconsistent_execution(
-    lines, reason
+    lines, results, reason
 ) -> None:
     with pytest.raises(ValueError, match=reason):
-        INVENTORY.verify_execution(lines, {"happy"}, set())
+        INVENTORY.verify_execution(lines, results, {"happy"}, set())
+
+
+def test_db_inventory_discards_ignored_reason_values() -> None:
+    cases = INVENTORY.case_results(
+        ["ignored: credential-sentinel fixture_case", "ok happy"]
+    )
+    assert cases == {"fixture_case": "ignored", "happy": "ok"}
+    assert "credential-sentinel" not in json.dumps(cases)
+
+
+def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
+    tmp_path, monkeypatch
+) -> None:
+    import io
+
+    class Child:
+        stdout = io.BytesIO(
+            b"test happy ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def wait(self):
+            return 0
+
+    result_paths = []
+
+    def fake_child(command, **kwargs):
+        result_paths.append(Path(command[command.index("--logfile") + 1]))
+        return Child()
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
+    assert INVENTORY.run_contract("issuer_profile", ["harness"]) == 1
+    evidence = json.loads(
+        (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
+    )
+    assert evidence["reason"] == "missing_libtest_result_log"
+    assert evidence["status"] == "failed"
+    assert all(not path.parent.exists() for path in result_paths)
+
+
+def test_db_inventory_records_real_failed_case_without_repeating_it(
+    tmp_path, monkeypatch, real_obligation_harness, capsys
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
+    assert (
+        INVENTORY.run_contract(
+            "issuer_profile",
+            [
+                str(real_obligation_harness),
+                "fixture_case_extra",
+                "--ignored",
+                "--exact",
+                "--test-threads=1",
+            ],
+        )
+        != 0
+    )
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.PREFIX))
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith(INVENTORY.PREFIX)
+    )
+    assert record["status"] == "failed"
+    assert record["command_status"] != 0
+    assert record["failed"] == 1
+    assert record["executed"] == ["fixture_case_extra"]
+    assert record["observed_cases"] == [
+        {"name": "fixture_case_extra", "outcome": "FAILED"}
+    ]
 
 
 def test_db_inventory_is_run_bound_and_excludes_runtime_values(

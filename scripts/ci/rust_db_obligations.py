@@ -14,6 +14,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -24,7 +25,11 @@ RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_SHA
 FIXTURE_OWNER = ".github/compose/rust-ci-fixtures.yml"
 RUNNER_OWNER = "scripts/ci/run-rust-db-contracts.sh"
 CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
-CASE_RESULT = re.compile(rf"^test ({CASE}) \.\.\. (ok|FAILED|ignored)(?:, .*)?$")
+# Stable libtest's separate result log is unaffected by stdout inherited by a
+# tested process. --logfile is deprecated but supported by pinned Rust 1.95;
+# the real-harness regression check must fail visibly if that interface changes.
+CASE_RESULT = re.compile(rf"^(ok|failed|ignored) ({CASE})$")
+IGNORED_RESULT = re.compile(rf"^ignored: .* ({CASE})$")
 SUMMARY = re.compile(
     r"^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; "
     r"(\d+) ignored; (\d+) measured; (\d+) filtered out; finished in .+$"
@@ -313,16 +318,26 @@ def expected_cases(executable: str, arguments: list[str]) -> tuple[set[str], set
     return selected - ignored, ignored
 
 
-def verify_execution(lines: list[str], expected: set[str], ignored: set[str]) -> dict:
+def case_results(lines: list[str]) -> dict[str, str]:
     cases = {}
-    summaries = []
     for line in lines:
         if match := CASE_RESULT.fullmatch(line):
-            if match[1] in cases:
-                raise ValueError("duplicate_executed_case")
-            cases[match[1]] = match[2]
-        elif match := SUMMARY.fullmatch(line):
-            summaries.append(match.groups())
+            name, outcome = match[2], "FAILED" if match[1] == "failed" else match[1]
+        elif match := IGNORED_RESULT.fullmatch(line):
+            name, outcome = match[1], "ignored"
+        else:
+            raise ValueError("unrecognized_libtest_result")
+        if name in cases:
+            raise ValueError("duplicate_executed_case")
+        cases[name] = outcome
+    return cases
+
+
+def verify_execution(
+    lines: list[str], result_lines: list[str], expected: set[str], ignored: set[str]
+) -> dict:
+    cases = case_results(result_lines)
+    summaries = [match.groups() for line in lines if (match := SUMMARY.fullmatch(line))]
     executed = {name for name, status in cases.items() if status in {"ok", "FAILED"}}
     actually_ignored = {name for name, status in cases.items() if status == "ignored"}
     if len(summaries) != 1:
@@ -363,6 +378,7 @@ def run_contract(name: str, command: list[str]) -> int:
         "gate": "test-rust-services/contracts",
         "owner": RUNNER_OWNER,
         "runtime_fixture_owner": FIXTURE_OWNER,
+        "result_source": "libtest_logfile",
         "run": {key: os.environ.get(key) for key in RUN_IDENTITY},
         "status": "failed",
     }
@@ -392,34 +408,43 @@ def run_contract(name: str, command: list[str]) -> int:
             if item["requirement"] == "required" and not os.environ.get(item["name"]):
                 raise ValueError("missing_required_runtime_input")
         output = []
-        # Presentation only: retain every original selection/serialism argument.
-        # Pretty output makes individual case outcomes observable on stable Rust.
-        with subprocess.Popen(
-            [*command, "--format", "pretty", "--color", "never"],
-            # Inherit stderr to preserve live diagnostics, but do not parse it
-            # as libtest stdout. Composite timers write directly to stderr and
-            # can otherwise split a `test name ... ok` record after its prefix.
-            stdout=subprocess.PIPE,
-        ) as child:
-            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-            # Forward partial progress lines immediately, just like the outer
-            # timed guard's tee; readline would hide a long-running case prefix.
-            while chunk := child.stdout.read1(65536):
-                decoded = decoder.decode(chunk)
-                print(decoded, end="", flush=True)
-                output.append(decoded)
-            remaining = decoder.decode(b"", final=True)
-            print(remaining, end="", flush=True)
-            output.append(remaining)
-            status = child.wait()
+        # Preserve every selection/serialism argument and all live raw output.
+        # A separate libtest result stream identifies case completion even when
+        # inherited child stdout splits the human `test name ... ok` framing.
+        with tempfile.TemporaryDirectory(prefix="marty-libtest-results-") as directory:
+            result_log = Path(directory) / "results.log"
+            with subprocess.Popen(
+                [
+                    *command,
+                    "--format",
+                    "pretty",
+                    "--color",
+                    "never",
+                    "--logfile",
+                    str(result_log),
+                ],
+                stdout=subprocess.PIPE,
+            ) as child:
+                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+                # Forward partial progress immediately, like the outer tee.
+                while chunk := child.stdout.read1(65536):
+                    decoded = decoder.decode(chunk)
+                    print(decoded, end="", flush=True)
+                    output.append(decoded)
+                remaining = decoder.decode(b"", final=True)
+                print(remaining, end="", flush=True)
+                output.append(remaining)
+                status = child.wait()
+            evidence["command_status"] = status
+            if not result_log.is_file():
+                raise ValueError("missing_libtest_result_log")
+            result_lines = result_log.read_text(encoding="utf-8").splitlines()
         lines = "".join(output).splitlines()
-        evidence["command_status"] = status
         evidence["observed_cases"] = [
-            {"name": match[1], "outcome": match[2]}
-            for line in lines
-            if (match := CASE_RESULT.fullmatch(line))
+            {"name": name, "outcome": outcome}
+            for name, outcome in case_results(result_lines).items()
         ]
-        evidence.update(verify_execution(lines, expected, ignored))
+        evidence.update(verify_execution(lines, result_lines, expected, ignored))
         if status != 0 or evidence["failed"] or evidence["summary_status"] != "ok":
             raise ValueError("libtest_execution_failed")
         evidence["status"] = "ok"
