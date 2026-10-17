@@ -8,10 +8,12 @@ credentials are deliberately outside this generator's contract.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
 import secrets
+import string
 import sys
 from typing import Callable
 
@@ -37,6 +39,53 @@ GENERATED = frozenset({
 })
 HEX_32_BYTES = re.compile(r"[0-9a-f]{64}\Z")
 REPO = Path(__file__).resolve().parents[1]
+OPERATOR_PASSWORD_POLICY = "length(8) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)"
+
+
+def validate_operator_password(value: str, realm_file: Path | None = None) -> None:
+    """Validate a conservative character subset of the shipped 11id policy.
+
+    This is for the synthetic operator, not service credentials or master-realm
+    administration. A changed realm policy requires an explicit validator review.
+    Never include the password or failed character class in the exception.
+    """
+    realm_file = realm_file or REPO / "config/keycloak/11id-realm.json"
+    try:
+        realm = json.loads(realm_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ValueError("shipped operator password policy is unavailable") from None
+    if not isinstance(realm, dict) or realm.get("passwordPolicy") != OPERATOR_PASSWORD_POLICY:
+        raise ValueError("shipped operator password policy needs review")
+    if (not isinstance(value, str) or len(value) < 8
+            or not any(char in string.ascii_uppercase for char in value)
+            or not any(char in string.ascii_lowercase for char in value)
+            or not any(char in string.digits for char in value)
+            or not any(char in string.punctuation for char in value)):
+        raise ValueError("synthetic operator password does not satisfy the shipped realm policy")
+
+
+def generate_operator_password(random_hex: Callable[[int], str] = secrets.token_hex) -> str:
+    """Keep 256 random bits while guaranteeing all reviewed character classes."""
+    material = random_hex(32)
+    if not isinstance(material, str) or not HEX_32_BYTES.fullmatch(material):
+        raise ValueError("operator password generator returned invalid material")
+    value = "Aa1!" + material
+    validate_operator_password(value)
+    return value
+
+
+def write_operator_password(path: Path,
+                            random_hex: Callable[[int], str] = secrets.token_hex) -> None:
+    require_private_root(path.parent)
+    value = generate_operator_password(random_hex)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                         getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="ascii") as stream:
+            stream.write(value + "\n")
+    except (OSError, UnicodeError):
+        path.unlink(missing_ok=True)
+        raise
 
 
 def require_private_root(root: Path) -> None:
@@ -87,14 +136,21 @@ def generate(root: Path, random_hex: Callable[[int], str] = secrets.token_hex) -
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--secret-root", required=True, type=Path)
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--secret-root", type=Path)
+    target.add_argument("--operator-password-file", type=Path,
+                        help="fresh operator-only file in an existing private directory")
     args = parser.parse_args()
     try:
-        generate(args.secret_root)
+        if args.operator_password_file is not None:
+            write_operator_password(args.operator_password_file)
+        else:
+            generate(args.secret_root)
     except (OSError, ValueError) as error:
         print(f"disposable credential setup failed: {error}", file=sys.stderr)
         return 2
-    print(f"Created {len(GENERATED)} disposable credential files")
+    print("Created disposable operator password file" if args.operator_password_file is not None
+          else f"Created {len(GENERATED)} disposable credential files")
     return 0
 
 

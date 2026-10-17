@@ -68,7 +68,7 @@ def test_synthetic_keycloak_operator_satisfies_required_profile(
         async with httpx.AsyncClient(transport=httpx.MockTransport(respond),
                                      base_url="http://127.0.0.1:38180") as client:
             await keycloak_user(client, {"SELFHOST_TEST_USERNAME": "operator@selfhost.marty.invalid",
-                                         "SELFHOST_TEST_PASSWORD": "synthetic-password"},
+                                         "SELFHOST_TEST_PASSWORD": "Synthetic-password1!"},
                                 "synthetic-admin-password")
 
     asyncio.run(run())
@@ -92,6 +92,7 @@ def fixture_env() -> dict[str, str]:
     )
     values = {name: "fixture" for name in names}
     values.update(SELFHOST_PUBLIC_DOMAIN="selfhost.marty.test",
+                  SELFHOST_TEST_PASSWORD="Synthetic-password1!",
                   SELFHOST_TEST_USERNAME="operator@selfhost.marty.invalid",
                   SELFHOST_ORG_ID="00000000-0000-0000-0000-000000000001",
                   SELFHOST_GATEWAY_URL="http://127.0.0.1:19080",
@@ -102,6 +103,25 @@ def fixture_env() -> dict[str, str]:
     did = "did:web:selfhost.marty.test:orgs:marty"
     values.update(SELFHOST_ISSUER_DID=did, SELFHOST_VERIFIER_DID=did)
     return values
+
+
+def test_invalid_operator_password_is_rejected_before_keycloak_http() -> None:
+    values = fixture_env()
+    values["SELFHOST_TEST_PASSWORD"] = "Upperlower123"
+    with pytest.raises(ValueError, match="shipped realm policy") as caught:
+        required_environment(values)
+    assert values["SELFHOST_TEST_PASSWORD"] not in str(caught.value)
+    seen = []
+    def respond(request):
+        seen.append(request)
+        pytest.fail("invalid operator credential must not contact Keycloak")
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond),
+                                    base_url="http://127.0.0.1:38180") as client:
+            with pytest.raises(ValueError, match="shipped realm policy"):
+                await keycloak_user(client, values, "private-admin-value")
+    asyncio.run(run())
+    assert seen == []
 
 
 def fixture_model(values: dict[str, str]) -> dict:

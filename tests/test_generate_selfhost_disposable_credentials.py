@@ -13,7 +13,10 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from generate_selfhost_disposable_credentials import GENERATED, generate  # noqa: E402
+from generate_selfhost_disposable_credentials import (  # noqa: E402
+    GENERATED, OPERATOR_PASSWORD_POLICY, generate, generate_operator_password,
+    validate_operator_password, write_operator_password,
+)
 from run_selfhost_business_journey import LOCAL_SECRET_NAMES  # noqa: E402
 
 
@@ -27,6 +30,59 @@ EXPECTED = {
     "signing_keys_issuer_sign_key", "signing_keys_service_sign_gateway_key",
     "token_hmac_key",
 }
+
+
+def test_operator_generator_matches_shipped_policy_without_probabilistic_classes() -> None:
+    realm = json.loads((ROOT / "config/keycloak/11id-realm.json").read_text())
+    assert realm["passwordPolicy"] == OPERATOR_PASSWORD_POLICY
+    assert OPERATOR_PASSWORD_POLICY == "length(8) and upperCase(1) and lowerCase(1) and digits(1) and specialChars(1)"
+    for material in ("0" * 64, "a" * 64, "f" * 64):
+        requested = []
+        password = generate_operator_password(lambda size: requested.append(size) or material)
+        assert requested == [32]
+        assert password.endswith(material)
+        validate_operator_password(password)
+
+
+@pytest.mark.parametrize("value", [
+    "Aa1!abc", "lowercase123!", "UPPERCASE123!", "Upperlower!", "Upperlower123",
+])
+def test_invalid_operator_classes_fail_without_disclosing_password(value: str) -> None:
+    with pytest.raises(ValueError) as caught:
+        validate_operator_password(value)
+    assert str(caught.value) == "synthetic operator password does not satisfy the shipped realm policy"
+    assert value not in str(caught.value)
+
+
+def test_operator_policy_drift_and_invalid_randomness_fail_closed(tmp_path: Path) -> None:
+    realm = tmp_path / "realm.json"
+    realm.write_text(json.dumps({"passwordPolicy": OPERATOR_PASSWORD_POLICY + " and notUsername"}))
+    with pytest.raises(ValueError, match="policy needs review"):
+        validate_operator_password("Aa1!" + "a" * 64, realm)
+    with pytest.raises(ValueError, match="invalid material"):
+        generate_operator_password(lambda _: "private-invalid-value")
+    realm.write_text("{unparseable-public-realm}")
+    with pytest.raises(ValueError, match="policy is unavailable"):
+        validate_operator_password("Aa1!" + "a" * 64, realm)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private file modes")
+def test_operator_password_file_is_private_and_never_overwrites(tmp_path: Path, capsys) -> None:
+    tmp_path.chmod(0o700)
+    output = tmp_path / "operator-password"
+    write_operator_password(output)
+    original = output.read_text(encoding="ascii")
+    validate_operator_password(original.strip())
+    assert output.stat().st_mode & 0o777 == 0o600
+    assert not capsys.readouterr().out
+    with pytest.raises(FileExistsError):
+        write_operator_password(output)
+    assert output.read_text(encoding="ascii") == original
+    linked = tmp_path / "linked-password"
+    linked.symlink_to(output)
+    with pytest.raises(FileExistsError):
+        write_operator_password(linked)
+    assert output.read_text(encoding="ascii") == original
 
 
 def test_generated_names_match_local_catalog_without_managed_keys() -> None:
