@@ -4,6 +4,64 @@ Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
+Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
+predates known fresh-install repairs and should not be the next tester handoff.
+Stack v1.1.254 published its standard signed assets and an unqualified prepared
+bundle in [run #39068340445](https://github.com/ElevenID/marty-ui/actions/runs/39068340445).
+Its fresh installed journey completed the public issue/present/verify/revoke
+flow and live OpenBao custody verification, but failed when diagnostics rejected
+later custody phase names. Reviewed [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
+repairs that reporting contract on protected main
+`76a7fb4ef6e2ad594dc431da511686a1664979ab` and selects v1.1.255.
+A fresh local rehearsal with the candidate diagnostics module passed the public
+journey, Keycloak refresh, both database custody checks and owned teardown;
+that overlay run does not qualify an immutable release.
+Its redacted local diagnostic report recorded 173.885 seconds overall:
+113.953 seconds startup, 1.986 seconds public journey and 33.516 seconds cleanup.
+The Linux-visible VM had 16,265,674,752 bytes RAM; sampled host used memory
+reached 7,913,373,696 bytes and swap use reached 2,653,372,416 bytes. These are
+shared-host observations, not stack-specific requirements. Container peak
+memory and OOM evidence were not collected, so this run cannot establish a
+supported memory minimum. Reports remain local at
+`/home/canvasrunner/kms-qualification/v1.1.254/private/install-39068340445-b/installed-diagnostic.json`
+and the sibling `installed-journey.json`.
+The subsequent cleanup audit found nine older disposable OpenBao services still
+running. Each was matched to its stage marker, exact Compose path and owned state
+mount before being stopped; containers, state and reports were retained. The
+existing stack was left running. Future evidence must include separate OpenBao
+cleanup as well as the main runner's teardown, and distinguish remaining shared
+host workloads from the new installation's own container measurements.
+
+Current-main CI evidence: the completed contracts lane of full qualification
+[run #39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
+recorded a 113.029-second ordinary DB group, including 98.520 seconds in
+`canvas_sync_worker_postgres_contract`. Its nested phase timings included
+50.947 seconds renewal job outcomes, 30.301 seconds renewal write failures and
+10.085 seconds renewal generation; these overlap the parent timing and must
+not be added to it. Full qualification subsequently passed. The separate
+published Canvas group recorded 1,105.244 seconds (18m25s), including a
+611.035-second worker target and a 347.953-second composition target. These
+target timings are included in that group; they are distinct from the ordinary
+DB worker above. The contracts-lane host compile cache report showed
+645 Rust hits and four Rust misses, with four cache-write errors. These are
+single-run observations, not before/after speedup measurements; preserve real
+renewal semantics and investigate the write errors before drawing conclusions
+about cache capacity or changing cache configuration.
+
+Next handoff work, in order:
+
+1. Produce the signed v1.1.255 Stack release and its exact prepared bundle.
+2. Replay a fresh installation from those unchanged artifacts, retaining the
+   original qualified preparation transaction and source/run/digest binding.
+   Record the complete journey, custody checks, cleanup and hardware measurements.
+3. Publish a separate explicitly unsupported experimental preview with the ZIP,
+   image lock, receipt, descriptor, original preparation transaction, tester
+   guide and checksums. Verify anonymous downloads independently and hand that
+   version to outside testers. Existing approval permits this experimental
+   distribution before supported qualification; retain accurate limitations.
+4. Finish independent installed replay and review the measured hardware envelope
+   before publishing qualified self-host assets or making support claims.
+
 Enable outside testers to anonymously download and try a disposable self-host
 bundle. The [v1.1.250 experimental preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
 is published from protected-main source
@@ -39,8 +97,9 @@ KMS custody, measured RAM/CPU/disk/swap/OOM and owned cleanup. Before a
 **supported** handoff, also establish a reviewed 16 GiB operating envelope or
 document the actual minimum, complete Linux qualification on suitable hardware,
 signed qualified self-host assets and independent anonymous install replay.
-The current 15.1 GiB local Docker VM has only passed preflight. Defer unrelated
-A0-A7 optimization behind this handoff.
+The 15.1 GiB local Docker VM has completed a candidate-overlay rehearsal;
+fresh immutable-release acceptance and a reviewed measured hardware envelope
+remain pending. Defer unrelated A0-A7 optimization behind this handoff.
 
 The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
 published signed standard assets, but its [self-host preparation
@@ -129,7 +188,7 @@ This document coordinates the new architecture work. [The original build audit](
 
 | ID | Work | Dependencies | Status | Remaining boundary |
 | --- | --- | --- | --- | --- |
-| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | DB-contract executables now resolve by package, test target and unique path from this run's Cargo compiler artifacts in CI; effective execution, runtime inputs and complete dependency/obligation inventory remain incomplete. Source-name or positive-summary sentinels are not a complete graph. |
+| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | DB-contract executables resolve from this run's Cargo artifacts. The normal DB runner now records selected/executed libtest cases, ignored/filter semantics and declared runtime input names/owners in run-bound JSONL. The separate acceptance runners, assertion reachability and complete transitive dependency/obligation graph remain incomplete; no selective skip is authorized. |
 | A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | Dedicated acceptance owners and the zero service-to-service dev-edge guard have landed. Preserve all moved obligations; installed system acceptance remains distinct from component tests. |
 | A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | The narrow shared Rust extraction is landed. Keep one implementation and public/error/resource-limit compatibility across consumers. |
 | A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | UI planning remains shadow-only until the complete non-Cargo graph and conservative fallback are qualified; preserve Core feature/security owners. |

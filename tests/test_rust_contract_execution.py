@@ -1,7 +1,9 @@
 """Fail closed when direct Rust CI harnesses select no tests."""
 
 import json
+import importlib.util
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +12,11 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+INVENTORY_SPEC = importlib.util.spec_from_file_location(
+    "rust_db_obligations", ROOT / "scripts/ci/rust_db_obligations.py"
+)
+INVENTORY = importlib.util.module_from_spec(INVENTORY_SPEC)
+INVENTORY_SPEC.loader.exec_module(INVENTORY)
 RUNNER = ROOT / "scripts/ci/run-rust-db-contracts.sh"
 CANVAS_RUNNER = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
 GIT_BASH = Path("C:/Program Files/Git/bin/bash.exe")
@@ -57,7 +64,8 @@ def test_selfhost_tls_bootstrap_runs_live_scoped_openbao_probe() -> None:
     )
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     [step] = [
-        entry for entry in steps
+        entry
+        for entry in steps
         if entry.get("name")
         == "Exercise self-host workload TLS bootstrap against disposable OpenBao"
     ]
@@ -76,11 +84,15 @@ def test_https_grant_probe_requires_positive_rust_execution() -> None:
     )
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     [step] = [
-        entry for entry in steps
+        entry
+        for entry in steps
         if entry.get("name")
         == "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
     ]
-    assert step["run"] == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    assert (
+        step["run"]
+        == "python3 scripts/probe_signing_keys_openbao_policy.py --grant-verifier"
+    )
     probe = (ROOT / "scripts/probe_signing_keys_openbao_policy.py").read_text(
         encoding="utf-8"
     )
@@ -103,7 +115,8 @@ def test_release_operator_catalog_tests_require_positive_execution() -> None:
     )
     steps = workflow["jobs"]["build-operator-catalog"]["steps"]
     [step] = [
-        entry for entry in steps
+        entry
+        for entry in steps
         if entry.get("name") == "Build and test the native operator binary"
     ]
     script = step["run"]
@@ -125,6 +138,397 @@ def test_database_runner_uses_positive_execution_guard() -> None:
         'source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"' in source
     )
     assert source.count("run_timed ") == 19
+    assert 'run_timed_rust_test contract "$name" python3 "$obligation_runner"' in source
+    assert 'rust_db_obligations.py"' in source
+
+
+def test_db_inventory_covers_every_current_dispatch_and_owned_runtime_input() -> None:
+    source = RUNNER.read_text(encoding="utf-8")
+    names = re.findall(r"^\s*run_timed ([a-z0-9_]+) ", source, re.MULTILINE)
+    assert len(names) == len(set(names)) == 18
+    canvas = [
+        path.stem
+        for path in (ROOT / "rust/services/issuance/tests").glob(
+            "canvas_*_postgres_contract.rs"
+        )
+    ] + ["proof_nonce_postgres_contract"]
+    assert len(canvas) == 11
+    for name in [*names, *canvas]:
+        package, target, inputs = INVENTORY.obligation(name)
+        assert INVENTORY.libtest_harness(package, target)["harness"] == "libtest"
+        assert package.startswith("marty-")
+        assert target and inputs
+        assert all(item["consumer"] == package for item in inputs)
+        for item in inputs:
+            assert set(item) == {
+                "name",
+                "consumer",
+                "owner",
+                "provisioner",
+                "requirement",
+            }
+            assert re.fullmatch(r"[A-Z][A-Z0-9_]+", item["name"])
+            if item["requirement"] == "required":
+                assert (
+                    item["name"] in source
+                    or item["name"] == "MARTY_TEST_REDIS_DISPOSABLE_NONCE"
+                )
+    with pytest.raises(ValueError, match="unknown_dispatch"):
+        INVENTORY.obligation("unclassified_new_dispatch")
+
+
+def test_db_inventory_never_probes_custom_or_unregistered_harnesses(
+    tmp_path, monkeypatch
+) -> None:
+    manifest_dir = tmp_path / "rust/services/signing-keys"
+    manifest_dir.mkdir(parents=True)
+    manifest = manifest_dir / "Cargo.toml"
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    manifest.write_text('[package]\nname = "marty-signing-keys"\nautotests = false\n')
+    with pytest.raises(ValueError, match="missing_libtest_target"):
+        INVENTORY.libtest_harness("marty-signing-keys", "custom")
+    manifest.write_text(
+        manifest.read_text() + '\n[[test]]\nname = "custom"\nharness = false\n'
+    )
+    with pytest.raises(ValueError, match="unsupported_test_harness"):
+        INVENTORY.libtest_harness("marty-signing-keys", "custom")
+
+
+@pytest.mark.parametrize("child_status", [0, 7])
+def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
+    tmp_path, monkeypatch, capsys, child_status
+) -> None:
+    import io
+
+    class Child:
+        stdout = io.BytesIO(b"test happy ... FAILED\n")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def wait(self):
+            return child_status
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
+    result_paths = []
+
+    def fake_child(command, **kwargs):
+        result_log = Path(command[command.index("--logfile") + 1])
+        result_log.write_text("failed happy\n", encoding="utf-8")
+        result_paths.append(result_log)
+        return Child()
+
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
+    assert INVENTORY.run_contract("issuer_profile", ["harness"]) == (child_status or 1)
+    evidence = json.loads(
+        (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
+    )
+    assert evidence["status"] == "failed"
+    assert evidence["command_status"] == child_status
+    assert evidence["observed_cases"] == [{"name": "happy", "outcome": "FAILED"}]
+    assert evidence["reason"] == "missing_or_ambiguous_libtest_summary"
+    assert "private-credential-value" not in capsys.readouterr().out
+    assert all(not path.parent.exists() for path in result_paths)
+
+
+@pytest.fixture(scope="module")
+def real_obligation_harness(tmp_path_factory):
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc unavailable for the real libtest protocol check")
+    directory = tmp_path_factory.mktemp("libtest-obligation")
+    binary = directory / ("harness.exe" if os.name == "nt" else "harness")
+    build = subprocess.run(
+        [
+            rustc,
+            "--test",
+            str(ROOT / "tests/fixtures/rust_obligation_harness.rs"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    return binary
+
+
+@pytest.mark.parametrize(
+    "arguments,selected,ignored",
+    [
+        ([], {"happy", "happy_extra"}, {"fixture_case", "fixture_case_extra"}),
+        (["--ignored"], {"fixture_case", "fixture_case_extra"}, set()),
+        (
+            ["--include-ignored"],
+            {"happy", "happy_extra", "fixture_case", "fixture_case_extra"},
+            set(),
+        ),
+        (["happy"], {"happy", "happy_extra"}, set()),
+        (["happy", "--exact"], {"happy"}, set()),
+        (["fixture_case", "--ignored", "--exact"], {"fixture_case"}, set()),
+        (["fixture_case", "--exact"], set(), {"fixture_case"}),
+    ],
+)
+def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
+    tmp_path, real_obligation_harness, arguments, selected, ignored
+) -> None:
+    executable = str(real_obligation_harness)
+    actual_selected, actual_ignored = INVENTORY.expected_cases(executable, arguments)
+    assert actual_selected == selected
+    assert actual_ignored == ignored
+    result_log = tmp_path / "libtest-results.log"
+    run = subprocess.run(
+        [
+            executable,
+            *arguments,
+            "--test-threads=1",
+            "--format",
+            "pretty",
+            "--color",
+            "never",
+            "--logfile",
+            str(result_log),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert run.returncode == 0, run.stderr
+    evidence = INVENTORY.verify_execution(
+        run.stdout.splitlines(), result_log.read_text().splitlines(), selected, ignored
+    )
+    assert evidence["executed"] == sorted(selected)
+    assert evidence["ignored"] == sorted(ignored)
+    if "happy" in selected:
+        assert '"diagnostic":"direct-stdout"' in run.stdout
+        assert "child-inherited-stdout" in run.stdout
+        assert "test happy ... ok" not in run.stdout
+
+
+@pytest.mark.parametrize(
+    "lines,results,reason",
+    [
+        (
+            [
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            ],
+            ["ok other"],
+            "selected_executed_mismatch",
+        ),
+        ([], ["ok happy", "ok happy"], "duplicate_executed_case"),
+        ([], ["ok happy"], "missing_or_ambiguous_libtest_summary"),
+        (
+            [
+                "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            ],
+            ["ok happy"],
+            "selected_executed_mismatch",
+        ),
+        (
+            [
+                "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            ],
+            ["ignored happy"],
+            "selected_executed_mismatch",
+        ),
+        ([], ["private-runtime-value"], "unrecognized_libtest_result"),
+    ],
+)
+def test_db_inventory_rejects_incomplete_or_inconsistent_execution(
+    lines, results, reason
+) -> None:
+    with pytest.raises(ValueError, match=reason):
+        INVENTORY.verify_execution(lines, results, {"happy"}, set())
+
+
+def test_db_inventory_discards_ignored_reason_values() -> None:
+    cases = INVENTORY.case_results(
+        ["ignored: credential-sentinel fixture_case", "ok happy"]
+    )
+    assert cases == {"fixture_case": "ignored", "happy": "ok"}
+    assert "credential-sentinel" not in json.dumps(cases)
+
+
+def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
+    tmp_path, monkeypatch
+) -> None:
+    import io
+
+    class Child:
+        stdout = io.BytesIO(
+            b"test happy ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def wait(self):
+            return 0
+
+    result_paths = []
+
+    def fake_child(command, **kwargs):
+        result_paths.append(Path(command[command.index("--logfile") + 1]))
+        return Child()
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
+    assert INVENTORY.run_contract("issuer_profile", ["harness"]) == 1
+    evidence = json.loads(
+        (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).read_text()
+    )
+    assert evidence["reason"] == "missing_libtest_result_log"
+    assert evidence["status"] == "failed"
+    assert all(not path.parent.exists() for path in result_paths)
+
+
+def test_db_inventory_records_real_failed_case_without_repeating_it(
+    tmp_path, monkeypatch, real_obligation_harness, capsys
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
+    monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
+    assert (
+        INVENTORY.run_contract(
+            "issuer_profile",
+            [
+                str(real_obligation_harness),
+                "fixture_case_extra",
+                "--ignored",
+                "--exact",
+                "--test-threads=1",
+            ],
+        )
+        != 0
+    )
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.PREFIX))
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith(INVENTORY.PREFIX)
+    )
+    assert record["status"] == "failed"
+    assert record["command_status"] != 0
+    assert record["failed"] == 1
+    assert record["executed"] == ["fixture_case_extra"]
+    assert record["observed_cases"] == [
+        {"name": "fixture_case_extra", "outcome": "FAILED"}
+    ]
+
+
+def test_db_inventory_is_run_bound_and_excludes_runtime_values(
+    tmp_path, monkeypatch, real_obligation_harness, capsys
+) -> None:
+    executable = real_obligation_harness
+    metadata = {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///checkout#marty-signing-keys@0.1.0",
+        "target": {"kind": ["test"], "name": "issuer_profile_storage_contract"},
+        "executable": str(executable),
+        "features": ["default"],
+    }
+    (tmp_path / "rust-test-artifacts.json").write_text(json.dumps(metadata) + "\n")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    for key, value in zip(INVENTORY.RUN_IDENTITY, ("123", "2", "contracts", "a" * 40)):
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("MARTY_TEST_REDIS_URL", "redis://secret-value-never-recorded")
+    assert (
+        INVENTORY.run_contract("issuer_profile", [str(executable), "happy", "--exact"])
+        == 0
+    )
+    output = tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME
+    record = json.loads(output.read_text())
+    assert record["selected"] == record["executed"] == ["happy"]
+    assert record["target"] == metadata["target"]["name"]
+    assert record["package"] == "marty-signing-keys"
+    assert record["run"] == dict(
+        zip(INVENTORY.RUN_IDENTITY, ("123", "2", "contracts", "a" * 40))
+    )
+    assert record["executable_sha256"] == INVENTORY.digest(executable)
+    assert record["compiler_artifacts_sha256"] == INVENTORY.digest(
+        tmp_path / "rust-test-artifacts.json"
+    )
+    assert record["runtime_inputs"][0]["name"] == "MARTY_TEST_REDIS_URL"
+    assert record["runtime_inputs"][0]["owner"] == INVENTORY.RUNNER_OWNER
+    assert (
+        "secret-value-never-recorded"
+        not in output.read_text() + capsys.readouterr().out
+    )
+    assert (
+        INVENTORY.run_contract("issuer_profile", [str(executable), "absent", "--exact"])
+        != 0
+    )
+    assert (
+        json.loads(output.read_text().splitlines()[-1])["reason"]
+        == "zero_selected_tests"
+    )
+    assert (
+        INVENTORY.run_contract("issuer_profile", [str(executable), "--payload=secret"])
+        != 0
+    )
+    assert "--payload=secret" not in output.read_text()
+    for threads in ("--test-threads=thread-credential-value", "--test-threads=0"):
+        assert INVENTORY.run_contract("issuer_profile", [str(executable), threads]) != 0
+        assert threads not in output.read_text() + capsys.readouterr().out
+
+
+def test_db_inventory_rejects_stale_foreign_ambiguous_or_missing_artifacts(
+    tmp_path, monkeypatch, real_obligation_harness
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    executable = real_obligation_harness
+    record = {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///checkout#marty-signing-keys@0.1.0",
+        "target": {"kind": ["test"], "name": "registry_storage_contract"},
+        "executable": str(executable),
+    }
+    artifact_file = tmp_path / "rust-test-artifacts.json"
+    for records in (
+        [],
+        [dict(record, executable=str(tmp_path / "old-build"))],
+        [dict(record, package_id="path+file:///checkout#foreign@0.1.0")],
+        [dict(record, target={"kind": ["test"], "name": "document_storage_contract"})],
+        [record, dict(record, executable=str(tmp_path / "another-build"))],
+    ):
+        artifact_file.write_text("".join(json.dumps(value) + "\n" for value in records))
+        with pytest.raises(ValueError):
+            INVENTORY.artifact_identity(
+                executable, "marty-signing-keys", "registry_storage_contract"
+            )
+    artifact_file.write_text(json.dumps(record) + "\n")
+    assert (
+        INVENTORY.artifact_identity(
+            executable, "marty-signing-keys", "registry_storage_contract"
+        )["provenance"]
+        == "same_run_compiler_artifact"
+    )
+    copied = tmp_path / "readable-contract-alias"
+    shutil.copyfile(executable, copied)
+    assert (
+        INVENTORY.artifact_identity(
+            copied, "marty-signing-keys", "registry_storage_contract"
+        )["binding"]
+        == "byte_identical_copy"
+    )
+    copied.write_bytes(b"stale contract build")
+    with pytest.raises(ValueError, match="compiler_artifact_content_mismatch"):
+        INVENTORY.artifact_identity(
+            copied, "marty-signing-keys", "registry_storage_contract"
+        )
 
 
 def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:
