@@ -16,6 +16,15 @@ repairs that reporting contract on protected main
 A fresh local rehearsal with the candidate diagnostics module passed the public
 journey, Keycloak refresh, both database custody checks and owned teardown;
 that overlay run does not qualify an immutable release.
+Its redacted local diagnostic report recorded 173.885 seconds overall:
+113.953 seconds startup, 1.986 seconds public journey and 33.516 seconds cleanup.
+The Linux-visible VM had 16,265,674,752 bytes RAM; sampled host used memory
+reached 7,913,373,696 bytes and swap use reached 2,653,372,416 bytes. These are
+shared-host observations, not stack-specific requirements. Container peak
+memory and OOM evidence were not collected, so this run cannot establish a
+supported memory minimum. Reports remain local at
+`/home/canvasrunner/kms-qualification/v1.1.254/private/install-39068340445-b/installed-diagnostic.json`
+and the sibling `installed-journey.json`.
 
 Next handoff work, in order:
 
