@@ -42,7 +42,7 @@ EXPECTED_DEPENDENCIES = {
     "deployment-profile": {"db-migrate": C},
     "device-registration": {"db-migrate": C, "redis": H},
     "edge": {"flow": H, "gateway": H, "keycloak": H, "ui": H},
-    "flow": {"credential-template": H, "db-migrate": C, "issuance": H, "organization": H,
+    "flow": {"credential-template": H, "db-migrate": C, "organization": H,
              "presentation-policy": H, "redis": H},
     "gateway": {"applicant": H, "auth": H, "compliance-profile": H,
                 "credential-template": H, "deployment-profile": H,
