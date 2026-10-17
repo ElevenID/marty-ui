@@ -32,6 +32,10 @@ use crate::{
 #[path = "canvas_operation_http_prepared_tests.rs"]
 mod prepared_tests;
 
+#[cfg(test)]
+#[path = "canvas_operation_socket_test_io.rs"]
+pub(crate) mod socket_test_io;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum CanvasOperationHttpError {
     #[error("Provider origin is unavailable or disallowed")]
