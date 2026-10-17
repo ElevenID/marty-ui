@@ -227,6 +227,13 @@ fixture_sha=$(sha256sum "$fixture" | cut -d ' ' -f 1)
 docker compose --project-name "$project" --env-file "$env_file" \
   -f "$install_root/docker-compose.yml" --profile '*' config --format json \
   > "$private/compose-model.json"
+# This no-external-integration preview stages six empty optional files only
+# after the helper independently renders this exact install and proves each
+# corresponding integration disabled. For an integration-enabled install,
+# supply real credentials instead and omit this preview-only command.
+python3 "$source_root/scripts/stage_selfhost_disabled_optional_secrets.py" \
+  --secret-root "$secret_root" --install-root "$install_root" \
+  --env-file "$env_file" --project-name "$project"
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --archive "$prepared/prepared-selfhost-bundle.zip" \
   --image-lock "$prepared/prepared-selfhost-images.json" \
