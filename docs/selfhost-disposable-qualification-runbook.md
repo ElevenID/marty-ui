@@ -171,7 +171,10 @@ PY
 
 1. After the Stack release succeeds, check out its source tag in a clean
    `marty-ui` tree and confirm it peels to the source SHA in the preparation
-   receipt. Take the four prepared files from its
+   receipt. Before and after downloading, bind the successful first-attempt
+   protected-main `cd.yml` run and both unique artifact IDs/digests with
+   `check_selfhost_preparation_artifacts.py`; reject any changed binding.
+   Take the four prepared files from its
    `selfhost-lock-preparation-unqualified-<RUN_ID>` Actions artifact. The public
    release does **not** contain this ZIP. Take `release-transaction.json` from
    the same run's `stack-release-qualified-<RUN_ID>` artifact, and verify the
@@ -198,14 +201,33 @@ PY
    qualified=/absolute/path/to/qualified-transaction-artifact
    public=/absolute/path/to/public-release-assets
    mkdir -p "$prepared" "$qualified" "$public"
+   source_sha=$(git -C "$source_root" rev-parse HEAD)
+   test "$(git -C "$source_root" rev-parse "$tag^{commit}")" = "$source_sha"
+   verify_producer() {
+     phase=$1
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id" \
+       > "$public/producer-run-$phase.json"
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id/artifacts?name=selfhost-lock-preparation-unqualified-$run_id" \
+       > "$public/bundle-artifacts-$phase.json"
+     gh api "repos/ElevenID/marty-ui/actions/runs/$run_id/artifacts?name=stack-release-qualified-$run_id" \
+       > "$public/transaction-artifacts-$phase.json"
+     python3 "$source_root/scripts/check_selfhost_preparation_artifacts.py" \
+       --run "$public/producer-run-$phase.json" \
+       --bundle "$public/bundle-artifacts-$phase.json" \
+       --transaction "$public/transaction-artifacts-$phase.json" \
+       --run-id "$run_id" --source-sha "$source_sha" \
+       --output "$public/producer-binding-$phase.json"
+   }
+   verify_producer before
    gh run download "$run_id" -R ElevenID/marty-ui \
      -n "selfhost-lock-preparation-unqualified-$run_id" -D "$prepared"
    gh run download "$run_id" -R ElevenID/marty-ui \
      -n "stack-release-qualified-$run_id" -D "$qualified"
+   verify_producer after
+   cmp "$public/producer-binding-before.json" \
+     "$public/producer-binding-after.json"
    gh release download "$tag" -R ElevenID/marty-ui -D "$public" \
      -p release-transaction.json -p stack-manifest.json -p SHA256SUMS
-   source_sha=$(git -C "$source_root" rev-parse HEAD)
-   test "$(git -C "$source_root" rev-parse "$tag^{commit}")" = "$source_sha"
    (cd "$public" && sha256sum -c --ignore-missing SHA256SUMS)
    for asset in release-transaction.json stack-manifest.json; do
      gh attestation verify "$public/$asset" -R ElevenID/marty-ui \
