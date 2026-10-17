@@ -258,15 +258,15 @@ fn actual_directory_and_zip_preserve_frozen_members_and_binary_content() {
     for i in 0..zipped.len() {
         let mut member = zipped.by_index(i).unwrap();
         if member.is_dir() {
-            directories.push(member.name().to_owned());
+            directories.push(member.name().unwrap().into_owned());
             continue;
         }
-        let name = member.name().to_owned();
+        let name = member.name().unwrap().into_owned();
         let mut bytes = Vec::new();
         member.read_to_end(&mut bytes).unwrap();
         members.insert(name, hex(&bytes));
         #[cfg(unix)]
-        if member.name() == "bundle/scripts/launch.sh" {
+        if member.name().unwrap() == "bundle/scripts/launch.sh" {
             assert_eq!(member.unix_mode().unwrap() & 0o111, 0o111);
         }
     }

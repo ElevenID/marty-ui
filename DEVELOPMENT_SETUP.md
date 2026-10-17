@@ -102,6 +102,20 @@ make run-ui
 
 This is the usual fast feedback loop for frontend and gateway work.
 
+## Frontend tooling and remaining maintenance
+
+The UI uses Vite and Vitest; `ui/package.json` owns supported build, preview,
+test and bundle-analysis commands. Use `VITE_*` frontend variables and `ui/dist/`
+build output. The old CRA migration summary is retired; its estimated speedups
+and historical dependency versions are not current performance results.
+
+Incremental TypeScript coverage, service-worker/PWA qualification, build
+performance measurement, and environment-specific configuration remain
+maintenance proposals where not already qualified. Their completion requires
+current tests and deployment evidence; retiring the migration report closes none
+of them. Use the existing bundle-analysis command rather than adding another
+parallel build-analysis tool.
+
 ## Frequently used Make targets
 
 | Command | Description |
