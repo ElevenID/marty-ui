@@ -219,7 +219,17 @@ pub fn seed_signing_registry(
     for record in records {
         let purposes = json!(record.spec.purposes);
         if let Some(previous) = managed_bindings.get(&record.reference) {
-            if previous != &purposes {
+            // The registry normalizes purpose lists into sorted, deduplicated
+            // arrays. A restart must accept that representation of the same
+            // binding while still rejecting a changed or malformed binding.
+            let stored_purposes = previous.as_array().and_then(|values| {
+                values
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<BTreeSet<_>>>()
+            });
+            let expected_purposes: BTreeSet<&str> = record.spec.purposes.iter().copied().collect();
+            if stored_purposes.as_ref() != Some(&expected_purposes) {
                 return Err(BootstrapError::ConflictingPurpose(record.reference.clone()));
             }
         }
@@ -766,6 +776,24 @@ mod tests {
             result["services"],
             json!([{"id": "customer-hsm", "service_type": "aws-kms"}])
         );
+    }
+
+    #[test]
+    fn normalized_existing_purposes_are_idempotent_but_changed_bindings_fail() {
+        let records = records(&case("clean_apply"));
+        let seeded = seed_signing_registry(None, &records).unwrap();
+        let reference = &records[0].reference;
+        let mut normalized = seeded.clone();
+        normalized["key_reference_purposes"][MANAGED_SERVICE_ID][reference] =
+            json!(["jwks_signing", "vc_jwt_issuer"]);
+        assert!(seed_signing_registry(Some(normalized.clone()), &records).is_ok());
+
+        normalized["key_reference_purposes"][MANAGED_SERVICE_ID][reference] =
+            json!(["vc_jwt_issuer"]);
+        assert!(matches!(
+            seed_signing_registry(Some(normalized), &records),
+            Err(BootstrapError::ConflictingPurpose(key)) if key == *reference
+        ));
     }
 
     #[test]
