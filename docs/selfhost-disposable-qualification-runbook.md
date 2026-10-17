@@ -201,7 +201,10 @@ PY
    are not required for this local journey. The full all-profile Compose
    secret declarations and service bindings are still checked unchanged.
    Set `SELFHOST_STATE_DIR`, `SELFHOST_SECRET_DIR`, `MARTY_ORG_ID`,
-   `MARTY_ORG_ADMIN_EMAIL`, and `PUBLIC_DOMAIN` before rendering. The admin
+    `MARTY_ORG_ADMIN_EMAIL`, `MARTY_ORG_SLUG` (default `marty`), and
+    `PUBLIC_DOMAIN` before rendering. Set both journey DIDs to
+    `did:web:<PUBLIC_DOMAIN>:orgs:<MARTY_ORG_SLUG>`; the organization ID is
+    still the seeded UUID. The admin
    email must be a synthetic `@selfhost.marty.invalid` address. Use disposable
    workload TLS material and scoped OpenBao tokens. Configure the same
    disposable external OpenBao for the installed `signing-keys` service and the
