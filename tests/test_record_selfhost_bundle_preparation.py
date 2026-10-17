@@ -124,6 +124,32 @@ class BundlePreparationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pins or changes the default network"):
             self.check()
 
+    def test_rejects_fixed_or_external_redis_socket_volume(self):
+        for volume in (
+            {"name": "marty-selfhost-prod_redis-socket"},
+            {"external": True},
+        ):
+            compose = yaml.safe_load(self.contents["docker-compose.yml"])
+            compose["volumes"] = {"redis-socket": volume}
+            self.contents["docker-compose.yml"] = yaml.safe_dump(compose).encode()
+            self.write_archive()
+            with self.assertRaisesRegex(
+                ValueError, "pins or changes the Redis socket volume"
+            ):
+                self.check()
+
+    def test_redis_service_requires_a_project_scoped_socket_volume(self):
+        lock = json.loads(self.lock.read_text())
+        lock["services"]["redis"] = self.image
+        self.lock.write_text(json.dumps(lock))
+        self.contents[".marty-selfhost-images.json"] = self.lock.read_bytes()
+        compose = yaml.safe_load(self.contents["docker-compose.yml"])
+        compose["services"]["redis"] = {"image": self.image}
+        self.contents["docker-compose.yml"] = yaml.safe_dump(compose).encode()
+        self.write_archive()
+        with self.assertRaisesRegex(ValueError, "omits the project-scoped Redis socket"):
+            self.check()
+
     def test_rejects_openbao_compose_image_mismatch(self):
         self.contents["docker-compose.selfhost.openbao.yml"] = self.contents[
             "docker-compose.selfhost.openbao.yml"

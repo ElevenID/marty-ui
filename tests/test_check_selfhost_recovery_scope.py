@@ -49,6 +49,24 @@ def test_records_complete_writable_state_scope_without_secret_values(tmp_path: P
     assert "OpenBao state/export" in result["separate_recovery_inputs"]
 
 
+def test_project_scoped_redis_socket_is_ephemeral_and_not_backed_up(tmp_path: Path) -> None:
+    value = model(tmp_path)
+    value["name"] = "marty-qualification"
+    value["volumes"] = {
+        "redis-socket": {"name": "marty-qualification_redis-socket"}
+    }
+    value["services"]["redis"]["volumes"].append(
+        {"type": "volume", "source": "redis-socket", "target": "/data/run"}
+    )
+    result = GATE(value, tmp_path, "a" * 64)
+    assert result["ephemeral_project_volume_mounts"] == [
+        {"service": "redis", "target": "/data/run", "source": "redis-socket"}
+    ]
+    value["volumes"]["redis-socket"]["name"] = "shared-redis-socket"
+    with pytest.raises(ValueError, match="external or fixed name"):
+        GATE(value, tmp_path, "a" * 64)
+
+
 @pytest.mark.parametrize(
     "change",
     ["new-writable", "moved-state", "missing-state", "named-volume", "bad-mode"],

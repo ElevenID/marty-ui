@@ -18,6 +18,7 @@ STATE_MOUNTS = {
     ("redis", "/data"): "redis",
     ("applicant", "/app/data"): "applicant",
 }
+EPHEMERAL_SOCKET_MOUNT = ("redis", "/data/run")
 
 
 def has_symlink_component(path: Path) -> bool:
@@ -39,6 +40,7 @@ def recovery_scope(model: dict, state_root: Path, model_sha256: str) -> dict:
     if not isinstance(services, dict) or not services:
         raise ValueError("complete Compose service model is required")
     observed: dict[tuple[str, str], str] = {}
+    socket_volume = False
     for service_name, service in services.items():
         if not isinstance(service_name, str) or not isinstance(service, dict):
             raise ValueError("invalid Compose service")
@@ -55,6 +57,15 @@ def recovery_scope(model: dict, state_root: Path, model_sha256: str) -> dict:
                 continue
             target = mount["target"]
             key = (service_name, target)
+            if key == EPHEMERAL_SOCKET_MOUNT:
+                if (
+                    socket_volume
+                    or mount.get("type") != "volume"
+                    or mount.get("source") != "redis-socket"
+                ):
+                    raise ValueError("Redis socket volume must be project-scoped")
+                socket_volume = True
+                continue
             if key not in STATE_MOUNTS or key in observed or mount.get("type") != "bind":
                 raise ValueError(f"unaccounted writable mount: {service_name}:{target}")
             source = mount.get("source")
@@ -66,6 +77,18 @@ def recovery_scope(model: dict, state_root: Path, model_sha256: str) -> dict:
             observed[key] = STATE_MOUNTS[key]
     if set(observed) != set(STATE_MOUNTS):
         raise ValueError("required writable state mount is missing")
+    if socket_volume:
+        project = model.get("name")
+        volumes = model.get("volumes")
+        if (
+            not isinstance(project, str)
+            or not project
+            or not isinstance(volumes, dict)
+            or volumes.get("redis-socket") not in (
+                {}, {"name": f"{project}_redis-socket"}
+            )
+        ):
+            raise ValueError("Redis socket volume has an external or fixed name")
     return {
         "schema": "marty.selfhost-recovery-scope/v1",
         "qualification": "unqualified",
@@ -74,6 +97,10 @@ def recovery_scope(model: dict, state_root: Path, model_sha256: str) -> dict:
             {"service": service, "target": target, "state_subdir": observed[service, target]}
             for service, target in sorted(observed)
         ],
+        "ephemeral_project_volume_mounts": (
+            [{"service": "redis", "target": "/data/run", "source": "redis-socket"}]
+            if socket_volume else []
+        ),
         "separate_recovery_inputs": ["OpenBao state/export", "operator secrets and environment"],
     }
 

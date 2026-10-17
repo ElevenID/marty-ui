@@ -8,7 +8,9 @@ The existing
 prepared-consumer and runtime-DAG checks must first verify the bundle, image
 lock, and complete service model. This check records the Compose model hash and
 rejects any writable bind or named volume outside the reviewed Postgres, Redis,
-and Applicant state paths. The selected state root and its three data
+and Applicant state paths, except the project-scoped Redis Unix socket volume.
+The socket volume is ephemeral and excluded from backup; Redis recreates its
+socket on restart. The selected state root and its three data
 subdirectories must be direct paths, without symlinks.
 
 ```bash

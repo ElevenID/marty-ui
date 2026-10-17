@@ -754,8 +754,18 @@ fn validate_service_urls(urls: &BTreeMap<String, String>) -> Result<(), GatewayC
 
 fn redis_database_url(raw: &str, database: u8) -> Result<String, GatewayConfigError> {
     let mut parsed = url::Url::parse(raw).map_err(|_| error("REDIS_URL is invalid"))?;
+    if parsed.scheme() == "unix" {
+        if parsed.host_str().is_some() || !parsed.path().starts_with('/') {
+            return Err(error("REDIS_URL Unix socket must be local and absolute"));
+        }
+        parsed
+            .query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+        return Ok(parsed.to_string());
+    }
     if parsed.scheme() != "redis" && parsed.scheme() != "rediss" {
-        return Err(error("REDIS_URL must use redis or rediss"));
+        return Err(error("REDIS_URL must use redis, rediss, or unix"));
     }
     if matches!(parsed.path(), "" | "/") {
         parsed.set_path(&format!("/{database}"));
@@ -1363,6 +1373,11 @@ mod tests {
                 .as_deref(),
             Some("redis://redis:6379/7")
         );
+        assert_eq!(
+            redis_database_url("unix:///run/marty-redis/redis.sock", 7).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=7"
+        );
+        assert!(redis_database_url("unix://remote/run/redis.sock", 7).is_err());
     }
 
     #[test]

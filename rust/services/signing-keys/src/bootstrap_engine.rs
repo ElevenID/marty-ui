@@ -126,6 +126,16 @@ impl Config {
             return Ok(None);
         }
         let mut url = reqwest::Url::parse(configured).map_err(|error| error.to_string())?;
+        if url.scheme() == "unix" {
+            if url.host_str().is_some() || !url.path().starts_with('/') {
+                return Err("Redis Unix socket must be local and absolute".into());
+            }
+            let db = self.get("REDIS_DB_GATEWAY").trim();
+            url.query_pairs_mut()
+                .clear()
+                .append_pair("db", if db.is_empty() { "2" } else { db });
+            return Ok(Some(url.to_string()));
+        }
         if url.path().trim_matches('/').parse::<u32>().is_err() {
             let db = self.get("REDIS_DB_GATEWAY").trim();
             url.set_path(&format!("/{}", if db.is_empty() { "2" } else { db }));
@@ -435,4 +445,26 @@ pub async fn run<B: Backend>(config: &Config, backend: &mut B) -> Result<(), Run
         .await
         .map_err(RunError::Identity)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod redis_socket_tests {
+    use super::Config;
+
+    #[test]
+    fn bootstrap_preserves_local_socket_path_and_selects_gateway_database() {
+        let mut config = Config::default();
+        config.environment.insert(
+            "REDIS_URL".into(),
+            "unix:///run/marty-redis/redis.sock".into(),
+        );
+        assert_eq!(
+            config.redis_url().unwrap().as_deref(),
+            Some("unix:///run/marty-redis/redis.sock?db=2")
+        );
+        config
+            .environment
+            .insert("REDIS_URL".into(), "unix://remote/run/redis.sock".into());
+        assert!(config.redis_url().is_err());
+    }
 }

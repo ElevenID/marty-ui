@@ -118,6 +118,13 @@ def record(archive: Path, lock_path: Path, transaction: Path, source_sha: str, r
         default_network = networks.get("default", {})
         if default_network != {}:
             raise ValueError("ZIP Compose pins or changes the default network")
+        volumes = compose.get("volumes", {})
+        if not isinstance(volumes, dict):
+            raise TypeError("ZIP Compose volumes are invalid")
+        if volumes and volumes != {"redis-socket": {}}:
+            raise ValueError("ZIP Compose pins or changes the Redis socket volume")
+        if "redis" in compose["services"] and volumes != {"redis-socket": {}}:
+            raise ValueError("ZIP Compose omits the project-scoped Redis socket volume")
         images = {name: service.get("image") for name, service in compose["services"].items()
                   if "image" in service}
         if images != lock["services"]:

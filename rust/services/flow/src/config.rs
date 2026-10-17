@@ -378,7 +378,17 @@ impl FlowServiceConfig {
             100,
         )?;
         let redis_url = required(&values, "REDIS_URL")?;
-        validate_url(&redis_url, "REDIS_URL", &["redis", "rediss"])?;
+        let parsed_redis = Url::parse(&redis_url).map_err(|_| invalid("REDIS_URL"))?;
+        if parsed_redis.scheme() == "unix" {
+            if parsed_redis.host_str().is_some()
+                || !parsed_redis.path().starts_with('/')
+                || parsed_redis.fragment().is_some()
+            {
+                return Err(invalid("REDIS_URL"));
+            }
+        } else {
+            validate_url(&redis_url, "REDIS_URL", &["redis", "rediss"])?;
+        }
         let redis_database = u8::try_from(parse_bounded(
             value(&values, "REDIS_DB_FLOW").unwrap_or("3"),
             "REDIS_DB_FLOW",
