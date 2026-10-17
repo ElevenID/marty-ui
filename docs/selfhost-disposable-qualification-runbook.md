@@ -89,8 +89,14 @@ stage and fresh OpenBao state. Its local output transfer rolls back files it
 created, but cannot roll back OpenBao's remote mutations.
 
 The disposable Keycloak and workload TLS credentials request eight-hour
-lifetimes. Seven hours is an upper bound, not a guaranteed operating window:
-check the effective expiry of workload TLS credentials, which OpenBao may cap,
+lifetimes. Seven hours is an upper bound for those inputs, not a guaranteed
+journey window: the custody signer and audit tokens expire within **one hour**
+of issuance. Mint them immediately before the installed journey and leave
+enough time for its image pull, build, startup, and public test. A slow run may
+still fail on expiry; never extend token TTL or treat that failure as an
+installed pass. The audit helper does not overwrite an existing token, so
+retrying after expiry requires a new disposable OpenBao state and private root.
+Also check the effective expiry of workload TLS credentials, which OpenBao may cap,
 and complete the journey before the earliest expiration. Do not keep the stack
 running afterward. A new session requires teardown and
 fresh disposable OpenBao state and secret roots, followed by a new install and
@@ -160,19 +166,26 @@ PY
    `selfhost-lock-preparation-unqualified-<RUN_ID>` artifact. Keep its original
    `prepared-selfhost-bundle.zip`, `prepared-selfhost-images.json`,
    `prepared-selfhost-bundle.json`, and
-   `prepared-selfhost-product-descriptor.json` bytes. Download the matching
-   `stack-release-qualified-<RUN_ID>` transaction artifact. A later promoted
-   public transaction is **not** a substitute for these preparation bytes.
+   `prepared-selfhost-product-descriptor.json` bytes. For the next preview,
+   also keep the published `selfhost-preparation-transaction.json`,
+   `SELFHOST-PREVIEW-README.md`, and `SHA256SUMS` beside them; the staging
+   helper checks this exact set. Retain the matching
+   `stack-release-qualified-<RUN_ID>` artifact separately for release evidence.
+   Its promoted `release-transaction.json` is **not** a substitute for the
+   original preparation transaction bound to this ZIP and receipt.
 2. Check out the release tag in a clean `marty-ui` source tree and confirm that
    `git rev-parse HEAD` equals the source commit in the preparation receipt.
    Check out `ElevenID/marty-integration-tests` separately at
    `9c63609250274dc1edcf747827a29728ddd15d4a`. The runner verifies that
    this is a clean protected-main ancestor and selects only the public
    `tests/oss_stack/selfhost_customer_journey.py` test.
-3. In a private operator directory outside both repositories, create an empty
-   state directory, a secret directory containing every file named by
-   `LOCAL_SECRET_NAMES` in `scripts/run_selfhost_business_journey.py`, and a
-   Compose env file. Files explicitly marked `allow_empty` in the reviewed
+3. Use the staging helper below to create a fresh private operator directory
+   outside both repositories. It extracts the verified ZIP and creates the
+   state directory and disposable scalar credentials. Provision the remaining
+   files named by `LOCAL_SECRET_NAMES` in
+   `scripts/run_selfhost_business_journey.py` before running the journey;
+   the Compose env file is still operator supplied. Files explicitly marked
+   `allow_empty` in the reviewed
    secret catalog may stay empty only when the rendered Compose settings show
    their integrations are disabled (for example, Google login is off); an
    enabled integration needs non-placeholder material. The
@@ -201,23 +214,24 @@ PY
    OpenBao container. The signer token stays outside source and installation;
    no signer private key file is generated or mounted.
 
-The following commands use absolute, operator-owned paths. They deliberately
-leave credential creation and OpenBao bootstrap to the operator; the runner
-rejects missing inputs before it can report a pass. Keep the original artifact
-names and do not reuse an old state directory.
+The following commands use absolute, operator-owned paths and the reviewed
+disposable provisioning helpers. The runner rejects missing inputs before it
+can report a pass. Keep the original artifact names and use a new private root
+for every attempt.
 
 ```bash
 set -euo pipefail
 source_root=/srv/qualification/marty-ui-release
 integration_root=/srv/qualification/marty-integration-tests
 prepared=/srv/qualification/prepared
-private=/srv/qualification/private
+private_parent=/absolute/path/to/operator-owned-private-parent
+install -d -m 0700 "$private_parent"
+private="$private_parent/new-run"
 install_root="$private/install/selfhost-prepared"
 state_root="$private/state"
 secret_root="$private/secrets"
 env_file="$private/selfhost.env"
-openbao_state_root=/srv/qualification/private/openbao-state
-openbao_project=marty-selfhost-openbao-qualification
+openbao_state_root="$private/openbao-state"
 source_sha=$(git -C "$source_root" rev-parse HEAD)
 run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id"])' \
   "$prepared/prepared-selfhost-bundle.json")
@@ -225,34 +239,32 @@ run_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["run_id
 python3 "$source_root/scripts/check_prepared_selfhost_consumer.py" \
   --archive "$prepared/prepared-selfhost-bundle.zip" \
   --image-lock "$prepared/prepared-selfhost-images.json" \
-  --transaction "$prepared/release-transaction.json" \
+  --transaction "$prepared/selfhost-preparation-transaction.json" \
   --receipt "$prepared/prepared-selfhost-bundle.json" \
   --descriptor "$prepared/prepared-selfhost-product-descriptor.json" \
   --expected-source-sha "$source_sha" --expected-run-id "$run_id" \
   --verify-archive-only
-mkdir -p "$private/install" "$state_root"
-install -d -m 0700 "$secret_root"
-unzip -q "$prepared/prepared-selfhost-bundle.zip" -d "$private/install"
+python3 "$source_root/scripts/stage_selfhost_disposable_preview.py" \
+  --assets-dir "$prepared" --source-checkout "$source_root" \
+  --private-root "$private"
+openbao_port=${SELFHOST_OPENBAO_HOST_PORT:-18200}
+python3 "$source_root/scripts/start_selfhost_disposable_openbao.py" \
+  --private-root "$private" --host-port "$openbao_port"
+openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
+  "$private/openbao.json")
+sudo python3 "$source_root/scripts/stage_selfhost_keycloak_inputs.py" \
+  --private-root "$private"
+sudo python3 "$install_root/scripts/provision_selfhost_disposable_tls.py" \
+  --secret-root "$secret_root" --openbao-state-root "$openbao_state_root" \
+  --openbao-project "$openbao_project"
 project="marty-selfhost-qual-$(openssl rand -hex 8)"
 fixture="$source_root/scripts/setup_selfhost_synthetic_fixture.py"
 fixture_sha=$(sha256sum "$fixture" | cut -d ' ' -f 1)
 
-# The operator secret runner supplies all SELFHOST_* values and the external
-# OpenBao audit and signer inputs here. The env file resolves Compose settings, including
-# the same absolute state/secret roots and loopback published ports.
-# After the operator starts the named OpenBao project on the selected loopback
-# port, verify its locked image/state binding before the root token is read.
-openbao_port=${SELFHOST_OPENBAO_HOST_PORT:?Set the started OpenBao host port}
-sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
-  --endpoint "https://127.0.0.1:$openbao_port" \
-  --state-root "$openbao_state_root" --output-root "$secret_root" \
-  --project-name "$openbao_project"
-sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
-  --endpoint "https://127.0.0.1:$openbao_port" \
-  --state-root "$openbao_state_root" --output-root "$secret_root" \
-  --org-id "${MARTY_ORG_ID:?Set the seeded organization ID}" \
-  --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
-  --project-name "$openbao_project"
+# The operator secret runner supplies the public-journey SELFHOST_* values
+# and the env file resolves Compose settings, including these same absolute
+# state/secret roots and loopback published ports. The helpers below stage
+# the scoped audit and signer tokens; do not copy a root token into the install.
 docker compose --project-name "$project" --env-file "$env_file" \
   -f "$install_root/docker-compose.yml" --profile '*' config --format json \
   > "$private/compose-model.json"
@@ -263,10 +275,24 @@ docker compose --project-name "$project" --env-file "$env_file" \
 python3 "$source_root/scripts/stage_selfhost_disabled_optional_secrets.py" \
   --secret-root "$secret_root" --install-root "$install_root" \
   --env-file "$env_file" --project-name "$project"
+# Mint one-hour custody and audit tokens only after preparation is complete.
+# Each helper verifies the locked, healthy OpenBao owner before reading its
+# protected root token. Start the journey immediately; do not reuse expired
+# audit inputs or extend their TTL to compensate for a slow installation.
+sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
+  --endpoint "https://127.0.0.1:$openbao_port" \
+  --state-root "$openbao_state_root" --output-root "$secret_root" \
+  --project-name "$openbao_project"
+sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
+  --endpoint "https://127.0.0.1:$openbao_port" \
+  --state-root "$openbao_state_root" --output-root "$secret_root" \
+  --org-id "${MARTY_ORG_ID:?Set the seeded organization ID}" \
+  --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
+  --project-name "$openbao_project"
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --archive "$prepared/prepared-selfhost-bundle.zip" \
   --image-lock "$prepared/prepared-selfhost-images.json" \
-  --transaction "$prepared/release-transaction.json" \
+  --transaction "$prepared/selfhost-preparation-transaction.json" \
   --receipt "$prepared/prepared-selfhost-bundle.json" \
   --descriptor "$prepared/prepared-selfhost-product-descriptor.json" \
   --install-root "$install_root" --state-root "$state_root" \
