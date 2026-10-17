@@ -135,7 +135,11 @@ def test_start_uses_fresh_project_and_writes_no_tokens_to_report(
     monkeypatch.setattr(starter.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(starter, "exact_images", lambda _bundle: ("services", IMAGE))
     monkeypatch.setattr(starter, "free_loopback_port", lambda _port: None)
-    monkeypatch.setattr(starter, "openbao_network", lambda *_args: "owned-network")
+    def owned_network(*_args: object, expected_host_port: int) -> str:
+        assert expected_host_port == 18200
+        return "owned-network"
+
+    monkeypatch.setattr(starter, "openbao_network", owned_network)
     commands: list[list[str]] = []
     monkeypatch.setattr(starter, "wait_healthy",
                         lambda *_args: commands.append(["health-after-bootstrap"]))

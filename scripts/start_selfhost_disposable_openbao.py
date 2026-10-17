@@ -248,7 +248,7 @@ def start(private_root: Path, port: int) -> dict:
         run([*compose, "run", "--no-deps", "--rm", "openbao-bootstrap"],
             env=environment, timeout=240)
         wait_healthy(compose, environment)
-        openbao_network(project, state, image)
+        openbao_network(project, state, image, expected_host_port=port)
         for name in OUTPUTS:
             output = secret_root / name
             if output.is_symlink() or not output.is_file() or not output.stat().st_size:
