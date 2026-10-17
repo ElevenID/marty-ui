@@ -1463,169 +1463,83 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          contract_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "contracts")
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          source ../scripts/ci/rust_contract_execution.sh
+          contract_executable="$(resolve_recorded_contract_executable marty-revocation-profile contracts)"
           if [[ -z "$contract_executable" || ! -x "$contract_executable" ]]; then
             echo "Unable to locate the compiled revocation contracts executable." >&2
             exit 1
           fi
-          registry_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "registry_storage_contract")
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          registry_executable="$(resolve_recorded_contract_executable marty-signing-keys registry_storage_contract)"
           if [[ -z "$registry_executable" || ! -x "$registry_executable" ]]; then
             echo "Unable to locate the compiled signing registry contract executable." >&2
             exit 1
           fi
-          document_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "document_storage_contract")
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          document_executable="$(resolve_recorded_contract_executable marty-signing-keys document_storage_contract)"
           if [[ -z "$document_executable" || ! -x "$document_executable" ]]; then
             echo "Unable to locate the compiled signing document contract executable." >&2
             exit 1
           fi
-          issuer_profile_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "issuer_profile_storage_contract")
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          issuer_profile_executable="$(resolve_recorded_contract_executable marty-signing-keys issuer_profile_storage_contract)"
           if [[ -z "$issuer_profile_executable" || ! -x "$issuer_profile_executable" ]]; then
             echo "Unable to locate the compiled issuer profile contract executable." >&2
             exit 1
           fi
-          credential_template_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "postgres_integration")
-            | select(.package_id | contains("marty-credential-template"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          credential_template_executable="$(resolve_recorded_contract_executable marty-credential-template postgres_integration)"
           if [[ -z "$credential_template_executable" || ! -x "$credential_template_executable" ]]; then
             echo "Unable to locate the compiled Credential Template PostgreSQL contract executable." >&2
             exit 1
           fi
           cp "$credential_template_executable" target/debug/credential-template-postgres-contract
-          credential_template_migration_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "migration_contract")
-            | select(.package_id | contains("marty-credential-template"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          credential_template_migration_executable="$(resolve_recorded_contract_executable marty-credential-template migration_contract)"
           if [[ -z "$credential_template_migration_executable" || ! -x "$credential_template_migration_executable" ]]; then
             echo "Unable to locate the compiled Credential Template migration contract executable." >&2
             exit 1
           fi
           cp "$credential_template_migration_executable" target/debug/credential-template-migration-contract
-          presentation_policy_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "postgres_integration")
-            | select(.package_id | contains("marty-presentation-policy"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          presentation_policy_executable="$(resolve_recorded_contract_executable marty-presentation-policy postgres_integration)"
           if [[ -z "$presentation_policy_executable" || ! -x "$presentation_policy_executable" ]]; then
             echo "Unable to locate the compiled Presentation Policy PostgreSQL contract executable." >&2
             exit 1
           fi
           cp "$presentation_policy_executable" target/debug/presentation-policy-postgres-contract
-          issuance_transaction_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "issuance_transaction_postgres_contract")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          issuance_transaction_executable="$(resolve_recorded_contract_executable marty-issuance-service issuance_transaction_postgres_contract)"
           if [[ -z "$issuance_transaction_executable" || ! -x "$issuance_transaction_executable" ]]; then
             echo "Unable to locate the compiled Issuance transaction PostgreSQL contract executable." >&2
             exit 1
           fi
-          issuance_credential_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "credential_postgres_contract")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          issuance_credential_executable="$(resolve_recorded_contract_executable marty-issuance-service credential_postgres_contract)"
           if [[ -z "$issuance_credential_executable" || ! -x "$issuance_credential_executable" ]]; then
             echo "Unable to locate the compiled Issuance credential PostgreSQL contract executable." >&2
             exit 1
           fi
-          issuance_oid4vci_migration_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "oid4vci_migration_postgres_contract")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          issuance_oid4vci_migration_executable="$(resolve_recorded_contract_executable marty-issuance-service oid4vci_migration_postgres_contract)"
           if [[ -z "$issuance_oid4vci_migration_executable" || ! -x "$issuance_oid4vci_migration_executable" ]]; then
             echo "Unable to locate the compiled Issuance OID4VCI migration PostgreSQL contract executable." >&2
             exit 1
           fi
-          application_template_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "application_template_postgres_contract")
-            | select(.package_id | contains("marty-issuance-service"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          application_template_executable="$(resolve_recorded_contract_executable marty-issuance-service application_template_postgres_contract)"
           if [[ -z "$application_template_executable" || ! -x "$application_template_executable" ]]; then
             echo "Unable to locate the compiled Application Template PostgreSQL contract executable." >&2
             exit 1
           fi
-          source ../scripts/ci/rust_contract_execution.sh
           resolve_issuance_canvas_contracts >/dev/null
-          trust_profile_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "migration_contract")
-            | select(.package_id | contains("marty-trust-profile"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          trust_profile_executable="$(resolve_recorded_contract_executable marty-trust-profile migration_contract)"
           if [[ -z "$trust_profile_executable" || ! -x "$trust_profile_executable" ]]; then
             echo "Unable to locate the compiled Trust Profile PostgreSQL contract executable." >&2
             exit 1
           fi
           cp "$trust_profile_executable" target/debug/trust-profile-migration-contract
-          organization_migration_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "migration_contract")
-            | select(.package_id | contains("marty-organization"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          organization_migration_executable="$(resolve_recorded_contract_executable marty-organization migration_contract)"
           if [[ -z "$organization_migration_executable" || ! -x "$organization_migration_executable" ]]; then
             echo "Unable to locate the compiled Organization migration contract executable." >&2
             exit 1
           fi
-          organization_application_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "application_postgres_integration")
-            | select(.package_id | contains("marty-organization"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          organization_application_executable="$(resolve_recorded_contract_executable marty-organization application_postgres_integration)"
           if [[ -z "$organization_application_executable" || ! -x "$organization_application_executable" ]]; then
             echo "Unable to locate the compiled Organization application PostgreSQL contract executable." >&2
             exit 1
           fi
-          organization_repository_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "postgres_integration")
-            | select(.package_id | contains("marty-organization"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          organization_repository_executable="$(resolve_recorded_contract_executable marty-organization postgres_integration)"
           if [[ -z "$organization_repository_executable" || ! -x "$organization_repository_executable" ]]; then
             echo "Unable to locate the compiled Organization repository PostgreSQL contract executable." >&2
             exit 1
@@ -1633,27 +1547,9 @@ jobs:
           cp "$organization_migration_executable" target/debug/organization-migration-contract
           cp "$organization_application_executable" target/debug/organization-application-postgres-contract
           cp "$organization_repository_executable" target/debug/organization-repository-postgres-contract
-          flow_postgres_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "postgres_integration")
-            | select(.package_id | contains("marty-flow"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
-          verification_postgres_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "credentials_compat_postgres")
-            | select(.package_id | contains("marty-verification-service"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
-          gateway_redis_executable="$(jq -r '
-            select(.reason == "compiler-artifact")
-            | select(.target.name == "redis_runtime")
-            | select(.package_id | contains("marty-gateway"))
-            | select(.executable != null)
-            | .executable
-          ' "$RUNNER_TEMP/rust-test-artifacts.json" | tail -n 1)"
+          flow_postgres_executable="$(resolve_recorded_contract_executable marty-flow postgres_integration)"
+          verification_postgres_executable="$(resolve_recorded_contract_executable marty-verification-service credentials_compat_postgres)"
+          gateway_redis_executable="$(resolve_recorded_contract_executable marty-gateway redis_runtime)"
           for executable in "$flow_postgres_executable" "$verification_postgres_executable" "$gateway_redis_executable"; do
             if [[ -z "$executable" || ! -x "$executable" ]]; then
               echo "Unable to locate a compiled explicit Rust contract executable." >&2

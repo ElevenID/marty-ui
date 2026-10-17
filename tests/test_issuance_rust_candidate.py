@@ -92,7 +92,10 @@ def test_oid4vci_migration_postgres_contract_is_required_in_real_database_ci() -
     assert 'path = "tests/oid4vci_migration_postgres_contract.rs"' in manifest
     assert "resolve_contract_executable oid4vci_migration_postgres_contract" in runtime
     assert "Expected one Issuance OID4VCI migration PostgreSQL contract executable" in runtime
-    assert '.target.name == "oid4vci_migration_postgres_contract"' in workflow
+    assert (
+        "resolve_recorded_contract_executable marty-issuance-service "
+        "oid4vci_migration_postgres_contract"
+    ) in workflow
     assert "compiled Issuance OID4VCI migration PostgreSQL contract executable" in workflow
     assert runtime.index(
         "resolve_contract_executable oid4vci_migration_postgres_contract"

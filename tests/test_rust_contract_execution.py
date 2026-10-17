@@ -150,6 +150,112 @@ def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:
     )
 
 
+def test_database_contract_preparation_uses_package_scoped_artifacts() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["test-rust-services"]["steps"]
+    [step] = [
+        entry
+        for entry in steps
+        if entry.get("name") == "Prepare database contract executables"
+    ]
+    script = step["run"]
+    assert "source ../scripts/ci/rust_contract_execution.sh" in script
+    assert "tail -n 1" not in script
+    assert "jq -r" not in script
+    for package, target in (
+        ("marty-revocation-profile", "contracts"),
+        ("marty-signing-keys", "registry_storage_contract"),
+        ("marty-signing-keys", "document_storage_contract"),
+        ("marty-signing-keys", "issuer_profile_storage_contract"),
+        ("marty-credential-template", "postgres_integration"),
+        ("marty-credential-template", "migration_contract"),
+        ("marty-presentation-policy", "postgres_integration"),
+        ("marty-issuance-service", "issuance_transaction_postgres_contract"),
+        ("marty-issuance-service", "credential_postgres_contract"),
+        ("marty-issuance-service", "oid4vci_migration_postgres_contract"),
+        ("marty-issuance-service", "application_template_postgres_contract"),
+        ("marty-trust-profile", "migration_contract"),
+        ("marty-organization", "migration_contract"),
+        ("marty-organization", "application_postgres_integration"),
+        ("marty-organization", "postgres_integration"),
+        ("marty-flow", "postgres_integration"),
+        ("marty-verification-service", "credentials_compat_postgres"),
+        ("marty-gateway", "redis_runtime"),
+    ):
+        assert f"resolve_recorded_contract_executable {package} {target}" in script
+    runner = RUNNER.read_text(encoding="utf-8")
+    assert 'resolve_recorded_contract_executable "$package" "$target"' in runner
+
+
+@pytest.mark.skipif(
+    BASH is None or shutil.which("jq") is None,
+    reason="Bash and jq are required to exercise the Cargo artifact resolver",
+)
+def test_recorded_contract_resolver_rejects_ambiguous_and_foreign_artifacts(
+    tmp_path: Path,
+) -> None:
+    selected = tmp_path / "selected"
+    foreign = tmp_path / "foreign"
+    for executable in (selected, foreign):
+        executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        executable.chmod(0o755)
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    selected_record = {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///test#marty-organization@0.1.0",
+        "target": {"name": "migration_contract", "kind": ["test"]},
+        "executable": str(selected),
+    }
+    foreign_record = {
+        **selected_record,
+        "package_id": "path+file:///test#marty-trust-profile@0.1.0",
+        "executable": str(foreign),
+    }
+
+    def resolve(entries: list[dict]) -> subprocess.CompletedProcess[str]:
+        artifacts.write_text(
+            "".join(json.dumps(entry) + "\n" for entry in entries), encoding="utf-8"
+        )
+        return subprocess.run(
+            [
+                BASH,
+                "-c",
+                "set -euo pipefail; source scripts/ci/rust_contract_execution.sh; "
+                "resolve_recorded_contract_executable marty-organization migration_contract",
+            ],
+            cwd=ROOT,
+            env={**os.environ, "RUNNER_TEMP": str(tmp_path)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    valid = resolve([selected_record, foreign_record])
+    assert valid.returncode == 0, valid.stderr
+    assert valid.stdout.strip() == str(selected)
+    assert resolve([foreign_record]).returncode != 0
+    assert (
+        resolve(
+            [selected_record, dict(selected_record, executable=str(foreign))]
+        ).returncode
+        != 0
+    )
+    assert (
+        resolve(
+            [
+                dict(
+                    selected_record,
+                    target={"name": "migration_contract", "kind": ["bin"]},
+                )
+            ]
+        ).returncode
+        != 0
+    )
+    assert resolve([dict(selected_record, executable="/missing")]).returncode != 0
+
+
 @pytest.mark.skipif(
     BASH is None or shutil.which("jq") is None,
     reason="Bash and jq are required to exercise the Cargo artifact resolver",
