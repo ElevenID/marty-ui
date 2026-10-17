@@ -51,6 +51,9 @@ def stage(private_root: Path, operator_uid: int) -> int:
         raise ValueError("staged preview install is missing")
     _, port = preview_openbao_owner(root, state, install)
     ca = input_file(state / "tls" / "ca.crt")
+    public_ca = input_file(secrets / "openbao_tls_ca_cert")
+    if public_ca.read_bytes() != ca.read_bytes():
+        raise ValueError("OpenBao public CA does not match the server")
     token = input_file(state / "root.token")
     if (stat.S_IMODE(token.stat().st_mode) != 0o400
             or token.stat().st_uid != 0):

@@ -52,7 +52,7 @@ name is public metadata in `openbao.json`; do not print any token files:
 private_root=/absolute/path/to/operator-private/new-run
 openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
   "$private_root/openbao.json")
-sudo python3 "$private_root/install/selfhost-prepared/scripts/provision_selfhost_disposable_tls.py" \
+sudo env PYTHONDONTWRITEBYTECODE=1 python3 "$private_root/install/selfhost-prepared/scripts/provision_selfhost_disposable_tls.py" \
   --secret-root "$private_root/secrets" \
   --openbao-state-root "$private_root/openbao-state" \
   --openbao-project "$openbao_project"
@@ -254,7 +254,7 @@ openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])
   "$private/openbao.json")
 sudo python3 "$source_root/scripts/stage_selfhost_keycloak_inputs.py" \
   --private-root "$private"
-sudo python3 "$install_root/scripts/provision_selfhost_disposable_tls.py" \
+sudo env PYTHONDONTWRITEBYTECODE=1 python3 "$install_root/scripts/provision_selfhost_disposable_tls.py" \
   --secret-root "$secret_root" --openbao-state-root "$openbao_state_root" \
   --openbao-project "$openbao_project"
 project="marty-selfhost-qual-$(openssl rand -hex 8)"

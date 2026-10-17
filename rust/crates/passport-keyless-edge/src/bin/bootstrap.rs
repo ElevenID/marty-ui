@@ -95,6 +95,12 @@ const SELFHOST_ROLES: &[SelfhostRole] = &[
         token_file: "es_tls_kms_token",
     },
     SelfhostRole {
+        name: "notification-server",
+        key_name: "workload-tls-notification-server",
+        cert_file: "notification_workload_server_cert",
+        token_file: "notification_tls_kms_token",
+    },
+    SelfhostRole {
         name: "revocation-profile-server",
         key_name: "workload-tls-revocation-profile-server",
         cert_file: "rp_workload_server_cert",
@@ -230,6 +236,16 @@ const ROLES: &[Role] = &[
         client: false,
     },
     Role {
+        name: "notification-server",
+        file_prefix: "notification_workload_server",
+        common_name: "notification",
+        alt_names: "",
+        uri_sans: "",
+        ip_sans: "",
+        server: true,
+        client: false,
+    },
+    Role {
         name: "revocation-profile-server",
         file_prefix: "rp_workload_server",
         common_name: "revocation-profile",
@@ -307,7 +323,7 @@ fn selfhost_role(name: &str) -> Option<&'static SelfhostRole> {
 
 fn selected_roles(profile: Profile) -> impl Iterator<Item = &'static Role> {
     ROLES.iter().filter(move |role| match profile {
-        Profile::Passport => role.name != "verification-client",
+        Profile::Passport => !matches!(role.name, "verification-client" | "notification-server"),
         Profile::Selfhost => selfhost_role(role.name).is_some(),
     })
 }

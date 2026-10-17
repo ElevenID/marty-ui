@@ -38,6 +38,7 @@ SELFHOST_TLS_IDENTITIES = {
     "deployment_profile_tls_kms_token": ("deployment_profile_workload_client_cert", "URI:spiffe://marty.internal/service/deployment-profile", "TLS Web Client Authentication"),
     "org_tls_kms_token": ("org_workload_server_cert", "DNS:organization", "TLS Web Server Authentication"),
     "es_tls_kms_token": ("es_workload_server_cert", "DNS:event-stream", "TLS Web Server Authentication"),
+    "notification_tls_kms_token": ("notification_workload_server_cert", "DNS:notification", "TLS Web Server Authentication"),
     "rp_tls_kms_token": ("rp_workload_server_cert", "DNS:revocation-profile", "TLS Web Server Authentication"),
     "ct_tls_kms_token": ("ct_workload_server_cert", "DNS:credential-template", "TLS Web Server Authentication"),
     "issuance_tls_kms_token": ("issuance_workload_server_cert", "DNS:issuance-native", "TLS Web Server Authentication"),
