@@ -253,20 +253,14 @@ def start(private_root: Path, port: int) -> dict:
             output = secret_root / name
             if output.is_symlink() or not output.is_file() or not output.stat().st_size:
                 raise RuntimeError("OpenBao bootstrap did not create all scoped tokens")
-        ca = state / "tls" / "ca.crt"
-        if ca.is_symlink() or not ca.is_file() or not ca.stat().st_size:
-            raise RuntimeError("OpenBao bootstrap did not create its TLS CA")
-        root_token = state / "root.token"
-        if (root_token.is_symlink() or not root_token.is_file()
-                or not root_token.stat().st_size
-                or stat.S_IMODE(root_token.stat().st_mode) != 0o400):
-            raise RuntimeError("OpenBao bootstrap did not protect its root token")
+        # The locked TLS initializer chowns the state directory to OpenBao.
+        # This non-root operator cannot traverse it after bootstrap. The
+        # following root-only Keycloak bridge verifies the CA and root-token
+        # metadata before using either one.
         public_ca = secret_root / "openbao_tls_ca_cert"
         if (public_ca.is_symlink() or not public_ca.is_file()
-                or public_ca.stat().st_size > 64 * 1024
-                or ca.stat().st_size > 64 * 1024
-                or public_ca.read_bytes() != ca.read_bytes()):
-            raise RuntimeError("OpenBao public CA does not match the server")
+                or not 0 < public_ca.stat().st_size <= 64 * 1024):
+            raise RuntimeError("OpenBao bootstrap did not stage its public CA")
         result = {
             "schema": "marty.selfhost-disposable-openbao/v1",
             "qualification": "unqualified",

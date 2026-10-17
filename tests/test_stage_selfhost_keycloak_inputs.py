@@ -27,6 +27,7 @@ def staged(tmp_path: Path) -> Path:
     state.mkdir(mode=0o700)
     (state / "tls").mkdir(mode=0o700)
     (state / "tls" / "ca.crt").write_text("public ca", encoding="ascii")
+    (root / "secrets" / "openbao_tls_ca_cert").write_text("public ca", encoding="ascii")
     token = state / "root.token"
     token.write_text("root-only-token", encoding="ascii")
     token.chmod(0o400)
@@ -101,6 +102,20 @@ def test_incomplete_root_provisioning_leaves_no_operator_outputs(
         bridge.stage(root, OPERATOR)
     assert not any((root / "secrets" / name).exists() for name in bridge.OUTPUTS)
     assert not list(root.glob("keycloak-inputs-*"))
+
+
+def test_rejects_substituted_public_ca_before_root_token_use(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    require_root_linux()
+    root = staged(tmp_path)
+    monkeypatch.setattr(tls, "exact_images", lambda _bundle: ("services", IMAGE))
+    monkeypatch.setattr(tls, "openbao_network", lambda *_args, **_kwargs: "owned-network")
+    (root / "secrets" / "openbao_tls_ca_cert").write_text("foreign ca", encoding="ascii")
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *_args, **_kwargs:
+                        pytest.fail("root token used after CA substitution"))
+    with pytest.raises(ValueError, match="public CA does not match"):
+        bridge.stage(root, OPERATOR)
 
 
 def test_rejects_foreign_image_and_unsafe_root_token(

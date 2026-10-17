@@ -33,11 +33,12 @@ SELFHOST_TOKEN_FILES = frozenset({
     "compliance_profile_tls_kms_token", "deployment_profile_tls_kms_token",
     "org_tls_kms_token", "es_tls_kms_token", "rp_tls_kms_token",
     "ct_tls_kms_token", "issuance_tls_kms_token",
+    "notification_tls_kms_token",
     "flow_client_tls_kms_token", "flow_server_tls_kms_token",
     "pp_tls_kms_token", "verification_tls_kms_token",
 })
 SELFHOST_CERT_FILES = (PASSPORT_CERT_FILES - {"passport_edge_tls_cert"}) | {
-    "verification_workload_client_cert"
+    "verification_workload_client_cert", "notification_workload_server_cert"
 }
 SELFHOST_TLS_FILES = SELFHOST_CERT_FILES | SELFHOST_TOKEN_FILES
 

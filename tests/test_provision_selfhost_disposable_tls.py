@@ -42,8 +42,8 @@ def test_selfhost_tls_acceptor_matches_catalog_not_passport_files() -> None:
         or "_workload_" in name and name.endswith("_cert")
     )}
     assert SELFHOST_TLS_FILES == expected
-    assert len(SELFHOST_CERT_FILES) == 16
-    assert len(SELFHOST_TLS_FILES) == 31
+    assert len(SELFHOST_CERT_FILES) == 17
+    assert len(SELFHOST_TLS_FILES) == 33
     assert "passport_edge_tls_cert" not in SELFHOST_TLS_FILES
 
 
@@ -71,7 +71,7 @@ def test_disposable_producers_close_exact_local_secret_roster() -> None:
             "issuance_passport",
         )
     }
-    assert len(local_secrets) == 76
+    assert len(local_secrets) == 78
     assert len(optional) == 6
     assert local_secrets == GENERATED | KEYCLOAK_OUTPUTS | SELFHOST_TLS_FILES | openbao | optional
 

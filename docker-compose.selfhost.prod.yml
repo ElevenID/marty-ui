@@ -491,6 +491,7 @@ services:
       MARTY_API_CLIENT_ID: ${MARTY_API_CLIENT_ID:-marty-api}
       MARTY_API_CLIENT_SECRET_FILE: /run/secrets/marty_api_client_secret
       CREDENTIAL_LOGIN_POLICY_ID: ${CREDENTIAL_LOGIN_POLICY_ID:-}
+      CREDENTIAL_LOGIN_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
       CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER: ${CREDENTIAL_LOGIN_REQUIRE_EXISTING_KEYCLOAK_USER:-true}
       CREDENTIAL_LOGIN_CREATE_USERS: ${CREDENTIAL_LOGIN_CREATE_USERS:-false}
       AUTH_SERVICE_INTERNAL_URL: http://auth:8001
@@ -636,6 +637,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 120s
     restart: unless-stopped
 
   trust-profile:
@@ -928,6 +930,12 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       NOTIF_GRPC_PORT: "9007"
+      GRPC_TLS_CERT: /run/secrets/notification_workload_server_cert
+      GRPC_TLS_KMS_ADDR: ${NOTIFICATION_TLS_KMS_ADDR:?NOTIFICATION_TLS_KMS_ADDR must be set}
+      GRPC_TLS_KMS_CA_CERT: /run/secrets/openbao_tls_ca_cert
+      GRPC_TLS_KMS_TOKEN_FILE: /run/secrets/notification_tls_kms_token
+      GRPC_TLS_KMS_KEY_NAME: ${NOTIFICATION_TLS_KMS_KEY_NAME:?NOTIFICATION_TLS_KMS_KEY_NAME must be set}
+      GRPC_TLS_KMS_KEY_VERSION: ${NOTIFICATION_TLS_KMS_KEY_VERSION:?NOTIFICATION_TLS_KMS_KEY_VERSION must be set}
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-1025}
       SMTP_USERNAME: ${SMTP_USERNAME:-}
@@ -945,6 +953,8 @@ services:
       - notification_applicant_event_token
       - notification_openbao_token
       - openbao_tls_ca_cert
+      - notification_workload_server_cert
+      - notification_tls_kms_token
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -1041,6 +1051,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+      start_period: 120s
     restart: unless-stopped
 
   deployment-profile:
@@ -1168,6 +1179,7 @@ services:
       DATABASE_URL_TEMPLATE: *database-url-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
+      OID4VP_ISSUER_DID: did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:${MARTY_ORG_SLUG:-marty}
       ORG_GRPC_TARGET: https://organization:9002
       PP_GRPC_TARGET: https://presentation-policy:9009
       CT_GRPC_TARGET: https://credential-template:9003
@@ -1577,6 +1589,10 @@ secrets:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_workload_server_cert
   pp_tls_kms_token:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/pp_tls_kms_token
+  notification_workload_server_cert:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_workload_server_cert
+  notification_tls_kms_token:
+    file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/notification_tls_kms_token
   flow_workload_client_cert:
     file: ${SELFHOST_SECRET_DIR:?SELFHOST_SECRET_DIR must be set}/flow_workload_client_cert
   flow_client_tls_kms_token:

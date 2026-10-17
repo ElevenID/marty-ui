@@ -19,6 +19,9 @@ import subprocess
 import sys
 import tempfile
 
+# This helper runs from inside the extracted, receipt-verified ZIP. Importing
+# its sibling module must not add a __pycache__ entry to that immutable tree.
+sys.dont_write_bytecode = True
 from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES, accept_remote_tls
 
 

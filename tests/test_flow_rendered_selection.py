@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import runpy
 import shutil
+import uuid
 
 import pytest
 
@@ -45,6 +46,10 @@ def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_p
     result = GATE["render"](spec(tmp_path), ["docker", "compose"])
     assert result["schema"] == "marty.flow-rendered-selection/v1"
     assert set(result["profiles"]) == {"base", "base_native", "selfhost"}
+    for profile in result["profiles"].values():
+        assert uuid.UUID(profile["environment"]["MARTY_ORG_ID"]) == uuid.UUID(
+            "00000000-0000-0000-0000-000000000001"
+        )
     for name in ("base", "base_native"):
         assert (
             result["profiles"][name]["original_environment"]["ISSUANCE_GRPC_TARGET"]

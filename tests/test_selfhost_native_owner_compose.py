@@ -21,6 +21,17 @@ def test_selfhost_runtime_disallows_insecure_grpc_override():
             assert environment["GRPC_INSECURE_ALLOWED"] == "false", name
 
 
+def test_auth_login_uses_bootstrapped_organization_issuer_did():
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    expected = (
+        "did:web:${PUBLIC_DOMAIN:?PUBLIC_DOMAIN must be set}:orgs:"
+        "${MARTY_ORG_SLUG:-marty}"
+    )
+    assert services["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == expected
+    assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
+
+
 def test_selfhost_openbao_requires_transactional_raft_storage():
     config = (ROOT / "docker/openbao-selfhost.hcl").read_text(encoding="utf-8")
     bootstrap = (ROOT / "docker/openbao-selfhost-init.sh").read_text(encoding="utf-8")
@@ -63,7 +74,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "0ef89dccc35748b85f3dbb5d1c8d05cb0ef10612fdfdf316248d4bc0b5263699"
+        == "34904063005afb1cc617207822fea07cf04968d3b8a5d88a819d88435e87b32b"
     )
     import json
 

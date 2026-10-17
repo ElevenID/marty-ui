@@ -38,6 +38,8 @@
     "org_tls_kms_token",
     "es_workload_server_cert",
     "es_tls_kms_token",
+    "notification_workload_server_cert",
+    "notification_tls_kms_token",
     "rp_workload_server_cert",
     "rp_tls_kms_token",
     "ct_workload_server_cert",

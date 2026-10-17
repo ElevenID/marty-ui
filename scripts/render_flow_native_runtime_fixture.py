@@ -149,6 +149,8 @@ def render(spec, command):
             )
         inputs = dict.fromkeys(required, "synthetic-required-artifact")
         inputs.update(
+            MARTY_ORG_ID="00000000-0000-0000-0000-000000000001",
+            PUBLIC_DOMAIN="issuer.example",
             ISSUANCE_API_KEY=KEY,
             SIGNING_KEYS_INTERNAL_API_KEY=KEY,
             GRPC_SERVICE_TOKEN=TOKEN,
