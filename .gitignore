@@ -165,7 +165,6 @@ tests/wallet-debug.png
 .hermes/implementation_reuse_review.yaml
 
 # Local qualification receipts are generated output.
-/artifacts/
 
 # Generated implementation/review evidence: keep out of source control.
 # Retain only for active review; see ElevenID/.github local-evidence retention.
