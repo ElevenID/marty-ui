@@ -40,6 +40,30 @@ no-`RUNNER_TEMP` ad-hoc fallback remains non-exact evidence. This tightens
 which compiled case executes but does not change the required case roster or
 establish transitive runtime-input closure.
 
+The normal DB runner now discovers and records each selected libtest case and
+each observed outcome through `scripts/ci/rust_db_obligations.py`. It distinguishes
+the default ignored roster from bodies selected by `--ignored` or
+`--include-ignored`, preserves exact filters and serial execution, and compares
+case identities and summary counts. A missing/zero selection, missing runtime
+input, missing summary or selected/executed mismatch fails closed. Every test
+body still executes once; the additional invocations only list tests.
+
+The run-bound JSONL artifact is
+`rust-build-evidence/db-contract-obligations.jsonl`, retained by the existing
+two-day Rust build-evidence upload. Records contain the package/target, selection
+arguments, executable and compiler-artifact digests, GitHub run/attempt/job/SHA,
+and declared runtime input **names** with their consumer/provisioning owners.
+Readable executable copies are accepted only when byte-identical to the unique
+package/target executable from this run's Cargo artifact log. The no-`RUNNER_TEMP`
+local fallback is explicitly marked `local_unrecorded`.
+
+This batch covers the 29 dispatches of `run-rust-db-contracts.sh`; the generic
+guard, separate Flow invocation and published/process acceptance runners are
+unchanged. Evidence proves libtest body execution and declared caller-provided
+inputs, not assertion reachability, every internally provisioned child input,
+or complete transitive runtime/source closure. It authorizes no selective skip
+and claims no measured speedup.
+
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ## First extraction: managed passport KMS chain

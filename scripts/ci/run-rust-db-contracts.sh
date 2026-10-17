@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"
+# Inventory every normal dispatch, retaining the shared streaming/timing guard.
+# Other users of rust_contract_execution.sh keep their existing harness behavior.
+obligation_runner="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/rust_db_obligations.py"
+run_timed() {
+  local name="$1"
+  shift
+  run_timed_rust_test contract "$name" python3 "$obligation_runner" --name "$name" -- "$@"
+}
 resolve_contract_executable() {
   local target="$1"
   if [[ -z "${RUNNER_TEMP:-}" ]]; then
