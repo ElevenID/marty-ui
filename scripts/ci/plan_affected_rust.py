@@ -12,6 +12,20 @@ from pathlib import Path, PurePosixPath
 ROOT = Path(__file__).resolve().parents[2]
 RUST = ROOT / "rust"
 
+# The self-host acceptance target includes this Canvas test helper by source
+# path, not Cargo dependency. Keep the shadow package graph honest while the
+# actual PR/merge-group CI selection remains conservative.
+SELFHOST_CLEANUP_INPUT = PurePosixPath(
+    "rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs"
+)
+SELFHOST_CLEANUP_CONSUMER = PurePosixPath(
+    "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
+)
+SELFHOST_CLEANUP_IMPORT = (
+    '#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]'
+)
+SELFHOST_CLEANUP_RELATIVE = "../../canvas-acceptance/tests/support/owned_cleanup.rs"
+
 # One authenticated Gateway compatibility route serves several issuer-key
 # consumers. Keep its source witness shared while each consumer retains its
 # own configuration, call-site, and deployment evidence.
@@ -1421,6 +1435,26 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             # workspace-level inputs. The current graph cannot prove isolation.
             return full(f"unowned Rust input: {path}")
         direct.add(max(owners)[1])
+        if path == SELFHOST_CLEANUP_INPUT:
+            # The acceptance target imports this source outside its Cargo
+            # package. A removed/changed witness cannot grant a narrow plan.
+            consumer = root / SELFHOST_CLEANUP_CONSUMER
+            source = root / path
+            try:
+                witness = consumer.read_text(encoding="utf-8")
+            except (OSError, UnicodeError):
+                witness = ""
+            if (
+                "marty-selfhost-acceptance" not in names
+                or source.is_symlink()
+                or not source.is_file()
+                or consumer.is_symlink()
+                or SELFHOST_CLEANUP_IMPORT not in witness.splitlines()
+                or (consumer.parent / SELFHOST_CLEANUP_RELATIVE).resolve()
+                != source.resolve()
+            ):
+                return full(f"missing cross-package test input witness: {path}")
+            direct.add("marty-selfhost-acceptance")
 
     reverse: dict[str, set[str]] = defaultdict(set)
     for package in packages:

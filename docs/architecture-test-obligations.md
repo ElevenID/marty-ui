@@ -82,6 +82,40 @@ their separate Redis/OpenBao and PostgreSQL steps. The file and
 target ownership is exact, but this entry is not a complete transitive
 non-Cargo input graph or permission to skip protected merge-group coverage.
 
+## Self-host public-image acceptance: execution and source input
+
+`marty-selfhost-acceptance` owns the `selfhost_public_image_contract` target.
+The self-host lane builds the local public services image and bundle packager;
+`run-db-contract-groups.py selfhost-canvas` invokes
+`run-published-canvas-contracts.sh selfhost-only`. That runner is the authority
+for the exact 12-name roster: it rejects missing or extra cases, checks the
+image ID and packager/Compose executables, and requires all 12 tests to pass.
+The invoked test also checks the image's source-revision label against the
+selected SHA. The separate Canvas lane omits this delegated target. Protected
+merge groups retain the complete Rust matrix. A default workspace test or
+`--list` result alone does not prove the environment-gated parent/child loader
+executed.
+
+| Case group | Distinct obligation |
+| --- | --- |
+| One remote-secret fixture case | Verified loopback HTTPS and a public CA for the test oracle. |
+| Loader parent and child | Real Linux process isolation, local image and package extraction, owned PostgreSQL, synthetic secrets, guarded child environment, and recovery. |
+| Seven packaged-runtime support cases | Closed failure-stage diagnostics, database-auth failure, process control, timeout/abrupt-exit recovery, cleanup-failure evidence, pending-operation exclusion, and synthetic secret mounts. |
+| Two sidecar recovery cases | Exclusive pending-operation records and rejection of foreign parent, image, or mount identity. |
+
+The target imports Canvas acceptance's `owned_cleanup.rs` with Rust `#[path]`
+rather than a Cargo dependency. The A3 shadow planner includes both packages
+when that exact helper changes and broadens if the source/import witness
+disappears. Other non-Cargo inputs include the pinned PostgreSQL/probe images,
+the extracted bundle, a compile-time Signing Keys public root-CA fixture, and
+shared Issuance/Canvas/self-host test support. Unknown or mixed inputs retain
+broad CI; this observed edge does not authorize a new skip.
+
+This target tests an image/packager boundary, **not** a fresh installed
+customer journey of the complete self-host Stack. Preview staging, anonymous
+pulls, and Compose preflight do not substitute for installed
+login/issue/present/verify/revoke/deny or KMS custody evidence.
+
 ## Canvas operations-input split: exact case owners
 
 [#1302](https://github.com/ElevenID/marty-ui/pull/1302) kept the frozen
