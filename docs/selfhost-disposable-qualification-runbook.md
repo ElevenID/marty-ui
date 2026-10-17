@@ -24,17 +24,23 @@ journey and custody checks pass, the lower-memory operating envelope is
 reviewed, and this qualification target is updated. A Compose render or image
 pull alone does not establish a smaller supported minimum.
 
-## Next-preview installer work in progress
+## Experimental preview installer path
 
-The next preview's Linux-only staging helper verifies all downloaded checksums,
+The [v1.1.250 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+has a Linux-only staging helper that verifies all downloaded checksums,
 the exact source/receipt lineage and the extracted ZIP, then creates a new
 operator-private root with disposable scalar credentials. From a **clean,
 matching source checkout**, use an operator-owned `0700` parent and a fresh
 child path:
 
+If you already ran staging from the preview's tester guide, do **not** repeat
+that command against the same private root. Continue with the OpenBao,
+Keycloak, workload TLS, and installed-journey steps using those same verified
+assets, source checkout, and private root.
+
 ```bash
 python3 scripts/stage_selfhost_disposable_preview.py \
-  --assets-dir /absolute/path/to/next-preview-assets \
+  --assets-dir /absolute/path/to/downloaded-preview-assets \
   --source-checkout /absolute/path/to/matching-clean-source \
   --private-root /absolute/path/to/operator-private/new-run
 python3 scripts/start_selfhost_disposable_openbao.py \
@@ -71,7 +77,8 @@ loopback port before contacting it. The Linux host must expose the **same
 rootful Docker daemon** to the non-root starter and `sudo` bridge; rootless
 Docker contexts are not yet supported by this installer path.
 These helpers do **not** make the older `v1.1.247-selfhost-preview.2` image
-installable; obtain a newly prepared preview with matching source and images.
+installable. Use assets and a clean matching source checkout from the same
+newer preview; this remains an unqualified disposable test path.
 
 If startup fails, `openbao-pending.json` in the private root records the
 project name and port, never a token. Inspect that marker and remove only its
@@ -162,18 +169,19 @@ PY
 
 ## Stage exact inputs
 
-1. From the successful Stack release run, download the unique
-   `selfhost-lock-preparation-unqualified-<RUN_ID>` artifact. Keep its original
-   `prepared-selfhost-bundle.zip`, `prepared-selfhost-images.json`,
-   `prepared-selfhost-bundle.json`, and
-   `prepared-selfhost-product-descriptor.json` bytes. For the next preview,
-   also keep the published `selfhost-preparation-transaction.json`,
-   `SELFHOST-PREVIEW-README.md`, and `SHA256SUMS` beside them; the staging
-   helper checks this exact set. Retain the matching
-   `stack-release-qualified-<RUN_ID>` artifact separately for release evidence.
+1. For an external tester, anonymously download all seven assets from the
+   [v1.1.250 experimental prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+   into one directory: `prepared-selfhost-bundle.zip`,
+   `prepared-selfhost-images.json`, `prepared-selfhost-bundle.json`,
+   `prepared-selfhost-product-descriptor.json`,
+   `selfhost-preparation-transaction.json`, `SELFHOST-PREVIEW-README.md`, and
+   `SHA256SUMS`. Keep the original bytes and verify `sha256sum -c SHA256SUMS`
+   there. The staging helper checks the same exact set. Release operators may
+   separately retain the matching `stack-release-qualified-<RUN_ID>` Actions
+   artifact for internal evidence; testers do not need Actions artifact access.
    Its promoted `release-transaction.json` is **not** a substitute for the
    original preparation transaction bound to this ZIP and receipt.
-2. Check out the release tag in a clean `marty-ui` source tree and confirm that
+2. Check out the `v1.1.250` source tag in a clean `marty-ui` tree and confirm that
    `git rev-parse HEAD` equals the source commit in the preparation receipt.
    Check out `ElevenID/marty-integration-tests` separately at
    `9c63609250274dc1edcf747827a29728ddd15d4a`. The runner verifies that

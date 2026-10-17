@@ -17,6 +17,12 @@ passed image, security, integration, anonymous-pull and prepared-consumer gates.
 These are preparation checks, **not** installed acceptance; the preview remains
 unsupported and unqualified.
 
+The preview release notes now clarify the external tester's public seven-asset
+path: it supersedes the immutable v1.1.250 source-tag runbook's older Actions
+artifact acquisition step. Staging must not be repeated against the same
+private root. Main-line bundle/runbook guidance points to the current preview;
+neither clarification changes preview assets or installation qualification.
+
 The disposable staging, isolated locked-image OpenBao startup, Keycloak inputs,
 workload TLS and custody helpers are on protected main after reviewed
 [PR #1375](https://github.com/ElevenID/marty-ui/pull/1375) and its prerequisites.
