@@ -89,6 +89,19 @@ projects were stopped and production stayed HTTP 200. Both review threads
 were resolved after the correction. The new PR head requires another full
 protected check/merge run; no signed release claim exists for it yet.
 
+Protected recovery-fix gate (2026-10-17): final PR #1392 head
+`073b51abb78ab3957705ecff074c28ae9ce8aa82` passed its PR-head checks
+(28 successful jobs, one neutral CodeQL aggregate, one skipped job). It entered
+the merge queue on protected main `739239979ecfbf32ea7c9eb62ea32d6c62aebb1b`.
+The exact merge-group candidate is `0de3fa327832cd6ecc4ff36a4a145a6b2fd4432a`;
+[merge-group CI 39085010650](https://github.com/ElevenID/marty-ui/actions/runs/39085010650)
+is live. Its completed jobs are green, while the Canvas, self-host, and
+contracts Rust shards and the OpenBao DIDComm plugin test still run. The four
+independent infrastructure image digests for a possible v1.1.256 release are
+preflighted in a private mode-0600 map, but the tag and release are absent.
+Do not claim a merge, exact-main CI, release, or signed restored journey from
+the PR-head success or local candidate proof.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
