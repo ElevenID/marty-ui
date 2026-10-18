@@ -693,9 +693,9 @@ def test_verifier_release_lineage_uses_hardened_core_and_native_issuance() -> No
     lock = json.loads(_text("release/stack-lock.json"))
     components = {component["name"]: component for component in lock["components"]}
 
-    assert lock["release"] == "marty-ui@1.1.256"
+    assert lock["release"] == "marty-ui@1.1.257"
     assert lock["release_state"] == "eligible"
-    stack_tag_gate.require_release_eligible(ROOT, "v1.1.256")
+    stack_tag_gate.require_release_eligible(ROOT, "v1.1.257")
     release_tag = "v" + lock["release"].removeprefix("marty-ui@")
     cutover_guide = _text("docs/keycloak-kms-installed-cutover.md")
     assert release_tag in cutover_guide
