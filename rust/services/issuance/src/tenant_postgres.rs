@@ -103,7 +103,7 @@ fn project_rows(rows: Vec<TemplateRow>) -> Vec<TenantCredentialTemplate> {
             projection.formats.extend(
                 formats
                     .into_iter()
-                    .filter_map(|format| format.as_str().map(str::to_owned)),
+                    .filter_map(|format| format.as_str().map(discovery_format)),
             );
         }
         if projection.metadata.is_none() {
@@ -134,6 +134,16 @@ fn project_rows(rows: Vec<TemplateRow>) -> Vec<TenantCredentialTemplate> {
             metadata: projection.metadata.unwrap_or_default(),
         })
         .collect()
+}
+
+fn discovery_format(value: &str) -> String {
+    // Credential Template persists the platform enum VC_JWT. OID4VCI
+    // discovery accepts jwt_vc/json wire names, not that enum spelling.
+    if value.trim().eq_ignore_ascii_case("VC_JWT") {
+        "jwt_vc_json".to_owned()
+    } else {
+        value.to_owned()
+    }
 }
 
 fn row_error(cause: sqlx::Error) -> TenantDiscoveryError {
@@ -215,6 +225,42 @@ mod tests {
     use serde_json::json;
 
     use super::{claims, display_style, project_rows, TemplateRow};
+
+    #[test]
+    fn seeded_vc_jwt_badge_is_advertised_by_tenant_discovery() {
+        use marty_oid4vci::discovery::{
+            IssuerVariant, KeyAttestationRequirements, StaticDiscoveryDocuments,
+        };
+        let templates = project_rows(vec![TemplateRow {
+            credential_type: "open_badge".to_owned(),
+            name: Some("Marty Verified Member Badge".to_owned()),
+            description: None,
+            claims: None,
+            display_style: None,
+            vct: Some("https://issuer.example/credentials/member".to_owned()),
+            issuer_did: Some("did:web:issuer.example".to_owned()),
+            supported_formats: Some(json!(["VC_JWT", "unsupported_format"])),
+        }]);
+        let documents = StaticDiscoveryDocuments::new("https://issuer.example", "Issuer");
+        let plan =
+            documents.plan_organization_issuer_metadata("org-a", IssuerVariant::Default, templates);
+        let policies = plan
+            .proof_policy_requests()
+            .iter()
+            .cloned()
+            .map(|request| (request, KeyAttestationRequirements::default()))
+            .collect();
+        let metadata = serde_json::to_value(plan.build(&policies).unwrap()).unwrap();
+        let configurations = metadata["credential_configurations_supported"]
+            .as_object()
+            .unwrap();
+        assert_eq!(configurations.len(), 1);
+        assert_eq!(configurations["open_badge"]["format"], "jwt_vc_json");
+        assert_eq!(
+            metadata["credential_issuer"],
+            "https://issuer.example/org/org-a"
+        );
+    }
 
     #[test]
     fn template_json_projection_preserves_python_display_and_claim_semantics() {
