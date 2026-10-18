@@ -303,3 +303,87 @@ provider handler and registration, and deployment binding. This is diagnostic
 dependency evidence, not independent proof of gRPC runtime behavior or
 permission to narrow the protected Rust checks. Existing service tests retain
 their owners and execution requirements.
+
+## Canvas worker renewal: handler ports versus durable outcomes (draft)
+
+This is a mapping for review, not authorization to retire a case. The common
+oracle is `contracts/canvas-worker-renewal-job-outcomes.json`: failure stages
+`lease`, `target`, `process`; processor outcomes `success`, `retry`, `terminal`,
+`deadline`, `cancel`; durable fences `unchanged`, `owner`, `expiry`, `attempt`.
+The oracle's `cutover_authorized` remains `false`. The pending fast owner in
+`rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs` is included
+under `canvas_sync_worker::retry_handoff_tests::renewal_tests` and executes
+the actual `CanvasSyncWorker::process_job` with scripted repository,
+processor, and OAuth ports. It uses paused Tokio time and a controlled
+processor release, not PostgreSQL or an external process.
+
+| Failed renewal write | Five separately discoverable handler tests in the pending fast owner |
+| --- | --- |
+| `lease` | `lease_error_then_success`, `lease_error_then_retry`, `lease_error_then_terminal`, `lease_error_then_deadline`, `lease_error_then_cancel` |
+| `target` | `target_error_then_success`, `target_error_then_retry`, `target_error_then_terminal`, `target_error_then_deadline`, `target_error_then_cancel` |
+| `process` | `process_error_then_success`, `process_error_then_retry`, `process_error_then_terminal`, `process_error_then_deadline`, `process_error_then_cancel` |
+
+Each of those 15 cases asserts the exact leased job, worker, target and config
+version passed through the real handler ports; no renewal before 20 seconds;
+one attempted renewal at 20 seconds; and a still-active processor/handler
+after that failure. The controlled `success`, `retry`, `terminal` and
+`deadline` exits then assert original renewal-error precedence over completion
+or failure persistence, exact port order and one synchronous processor
+cleanup. For retry, terminal and deadline outcomes, the tests also assert
+the exact failure call's job ID, code, summary and force-dead-letter flag;
+success makes no failure call. `deadline` reaches 30 seconds;
+`cancel` instead drops the pending handler and asserts cleanup without a
+`fail_job` call. The leaf also registers three distinct secondary-write-error
+cases—`lease_error_survives_failed_completion`,
+`target_error_survives_failed_retry_persistence`, and
+`process_error_survives_failed_deadline_persistence`—and
+`actual_cycle_does_not_count_persisted_success_after_renewal_error`, which
+checks the real cycle's `(scheduled, leased, succeeded, retried, dead_lettered)`
+counts `(0, 1, 0, 0, 0)`. These four are additional port-level obligations,
+not substitutes for durable rows. The contracts-lane workspace unit-test
+execution owns all 19; the pending source includes an exact test-only Docker
+context exclusion and registration guard.
+
+The existing `canvas_sync_worker_postgres_contract` target owns the separate
+`scheduler_recovery_renewal_and_heartbeat_match_frozen_postgres_vectors` test.
+Its support module `tests/support/canvas_worker_renewal_job_outcomes.rs` runs
+all **60** combinations: three failed writes × five processor outcomes × four
+fences. It makes three separately named disposable `_test` databases (one per
+failure stage), creates the worker schema, and runs six actual cycles: for
+each stage, one 16-job completing cycle and one four-job externally cancelled
+cycle. Each nested SQL case uses the source-defined identity
+`{stage}/outcome-{outcome}-{fence}` (for example,
+`lease/outcome-success-unchanged`); these are 60 checked observations inside
+one compiled libtest case, not 60 separate `--list` entries. The contract
+runner provides `MARTY_ISSUANCE_POSTGRES_CONTRACT_URL`;
+the contracts lane discovers and executes the exact compiled PostgreSQL
+target. The three stage groups settle before an error propagates, and each
+owned pool closes before its generated database is dropped. These are real
+20-second renewal writes and 30-second deadlines, not paused-clock tests.
+
+| SQL fence per stage/outcome | Distinct retained database assertion |
+| --- | --- |
+| `unchanged` | Actual trigger-injected renewal-write failure leaves every processor active and each job `leased` until controlled release or external cancellation; after release, the real repository writes the oracle's `status`, `completed_at`, and `last_error_code`. A successful unfenced job also persists `result = {"facts_changed": 1}`. The external-cancel outcome leaves the full job and target rows unchanged. |
+| `owner` | SQL changes `lease_owner` to another worker before processor exit. Completion/failure must not mutate the full job or target row; status stays `leased`. |
+| `expiry` | SQL moves `lease_expires_at` behind the database clock. The stale handler must not mutate the full job or target row. |
+| `attempt` | SQL increments `attempt_count` before processor exit. The stale attempt must not mutate the full job or target row. |
+
+For every stage the SQL trigger counters also prove the expected attempted
+renewal writes (`lease`: lease only; `target`: lease and target; `process`: all
+three), and SQL reads prove the rows remain `leased` while processors are
+active. The contract asserts exact per-job original repository-error events,
+zero success/retry/dead-letter cycle accounting after escaped errors, no
+unacknowledged processor after completion/cancellation, all 20 cases per
+stage, and all 60 overall. The adjacent generation-change and write-boundary
+real-PostgreSQL tests remain independent obligations. No scripted repository,
+paused clock, or source inventory proves these transaction, database-clock,
+trigger, row-fence, isolation, or cleanup properties.
+
+Before any future case move, review a per-identifier mapping of every old SQL
+assertion, runtime input, clock behavior and lane to a new executing owner;
+retain explicit real-database exemplars for all four fence variants and
+both completion and cancellation. Prove discovery and successful execution
+in the protected lane, plus unchanged producer/oracle pins and disposable
+database cleanup. The 93.8-second Cargo timing observation is the entire
+Issuance `lib(test)` compile, not a worker-specific saving, and does not
+justify a new crate or a test reduction by itself.
