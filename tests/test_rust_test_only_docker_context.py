@@ -27,6 +27,7 @@ TEST_LEAVES = {
     "canvas_sync_provider_http_tests.rs": "canvas_sync_provider_http.rs",
     "canvas_sync_processor_tests.rs": "canvas_sync_processor.rs",
     "canvas_sync_worker_retry_tests.rs": "canvas_sync_worker.rs",
+    "canvas_sync_worker_renewal_tests.rs": "canvas_sync_worker_retry_tests.rs",
     "initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs": "initiation_didcomm.rs",
     "passport_http_reconciliation_tests.rs": "passport_http.rs",
     "python_format_tests.rs": "python_format.rs",
@@ -1158,6 +1159,40 @@ def test_snapshot_owner_proof_rejects_additional_and_non_test_consumers() -> Non
         _assert_test_only_owner(
             ROOT, name, owner, {path: valid.replace("#[cfg(test)]\n", "")}
         )
+
+
+def test_paused_handler_registration_matches_frozen_renewal_matrix() -> None:
+    import json
+
+    source = (ROOT / ISSUANCE_SRC / "canvas_sync_worker_renewal_tests.rs").read_text(
+        encoding="utf-8"
+    )
+    fixture = json.loads(
+        (ROOT / "contracts/canvas-worker-renewal-job-outcomes.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    registry = source.split("primary_cases! {", 1)[1].split("}", 1)[0]
+    registered = re.findall(r'\w+: "([^"]+)", "([^"]+)";', registry)
+    expected = {
+        (stage, outcome["name"])
+        for stage in fixture["renewal_failures"]
+        for outcome in fixture["processor_outcomes"]
+    }
+    assert len(registered) == len(set(registered)) == 15
+    assert set(registered) == expected
+    assert fixture["cutover_authorized"] is False
+    assert "#[ignore" not in source
+    assert "worker.process_job(job).await" in source
+    assert "worker.run_cycle().await" in source
+    assert "await_with_lease_renewal(" not in source
+    for name in (
+        "lease_error_survives_failed_completion",
+        "target_error_survives_failed_retry_persistence",
+        "process_error_survives_failed_deadline_persistence",
+        "actual_cycle_does_not_count_persisted_success_after_renewal_error",
+    ):
+        assert f"#[tokio::test(start_paused = true)]\nasync fn {name}()" in source
 
 
 def test_source_ownership_guard_rejects_inert_and_feature_gated_wiring() -> None:

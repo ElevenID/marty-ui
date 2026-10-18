@@ -226,6 +226,30 @@ MKT01-02 and QA01-02 criteria. Preserve these identifiers when reconciling work.
 
 ## Coverage and evidence safeguards
 
+### A4 renewal-handler port matrix (local draft)
+
+The focused `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
+`SpyRepository`, `NoOAuth` and retry job fixture. Its optional scripted boundary
+leaves existing short-test fail-fast behavior unchanged. Fifteen separately
+discoverable paused-clock cases execute the actual `process_job`: three renewal
+write failures crossed with the five canonical processor outcomes from
+`canvas-worker-renewal-job-outcomes.json`. Three secondary-persistence failures
+preserve the original renewal error; one real `run_cycle` case checks accounting.
+The tests assert exact port identities, ordering, cleanup acknowledgement and
+20-second renewal/30-second deadline behavior without waiting in real time.
+
+This is additive handler coverage, not SQL or durable-fence emulation. All 60
+real PostgreSQL cases, pinned references, process guarantees and required lanes
+remain unchanged; `cutover_authorized` remains false. Future removal requires
+reviewed old/new case/assertion/input/lane mapping and preserved adapter evidence.
+The new leaf is omitted from release Docker contexts through the existing
+exact-file, direct-`cfg(test)` ownership guard. All 34 targeted Python ownership
+and registration guards pass, along with Rust formatting and diff checks. Local
+Rust compilation/execution is pending a safe validation milestone because the
+backing disk is below the 8 GiB build guard; no speedup is claimed. This draft is
+based on reviewed PR #1390's head to reuse its dev-only Tokio `test-util` feature,
+and must be rebased onto protected main before submission.
+
 [The obligation inventory](architecture-test-obligations.md) retains assertion,
 input and execution owners. An assertion move is not a new independent oracle.
 Keep tests and source/dependency ownership aligned; an ignored, conditional,
