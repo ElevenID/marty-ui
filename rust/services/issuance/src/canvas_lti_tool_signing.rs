@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_key_material_policy::private_jwk_members;
 use marty_signing_grant::{minter::GrantMinting, SigningOrigin};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -16,7 +17,6 @@ use crate::{
 const CREDENTIAL_FORMAT: &str = "lti_tool_jwt";
 const KEY_PURPOSE: &str = "lti_tool_signing";
 const ALGORITHM: &str = "RS256";
-const PRIVATE_RSA_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CanvasLtiSigningKind {
@@ -175,7 +175,7 @@ impl IssuerDidCanvasLtiToolJwtSigner {
             .and_then(Value::as_object)
             .cloned()
             .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
-        if contains_private_material(&public_jwk) {
+        if private_jwk_members(&public_jwk).next().is_some() {
             return Err(CanvasLtiToolSigningError::PrivateKeyMaterial);
         }
         if !verification_method_id.starts_with(&format!("{issuer_did}#"))
@@ -312,14 +312,8 @@ fn normalize_method_id(issuer_did: &str, method_id: &str) -> Option<String> {
     }
 }
 
-fn contains_private_material(jwk: &Map<String, Value>) -> bool {
-    PRIVATE_RSA_MEMBERS
-        .iter()
-        .any(|name| jwk.contains_key(*name))
-}
-
 fn valid_public_rsa_jwk(jwk: &Map<String, Value>) -> bool {
-    !contains_private_material(jwk)
+    private_jwk_members(jwk).next().is_none()
         && jwk.get("kty").and_then(Value::as_str) == Some("RSA")
         && valid_rsa_algorithm(jwk.get("alg"))
         && valid_rsa_use(jwk.get("use"))

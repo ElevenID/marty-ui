@@ -9,6 +9,7 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
+use marty_key_material_policy::private_jwk_members;
 use marty_oid4vci::{
     jose::{verify_compact_jwt_with_public_jwk, verify_detached_signature_with_public_jwk},
     lti::canvas_lti_trust_profile,
@@ -36,7 +37,6 @@ use crate::{
 
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 const READINESS_AUDIENCE: &str = "marty:canvas-readiness";
-const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 #[error("Canvas readiness dependency is unavailable")]
@@ -292,7 +292,7 @@ impl LiveCanvasReadinessChallengeProvider {
         let [public_jwk] = matching.as_slice() else {
             return None;
         };
-        if contains_private_jwk_material(public_jwk)
+        if private_jwk_members(public_jwk).next().is_some()
             || public_jwk.get("kty").and_then(Value::as_str) != Some("RSA")
             || !optional_string_matches(public_jwk.get("alg"), "RS256")
             || !optional_string_matches(public_jwk.get("use"), "sig")
@@ -411,7 +411,7 @@ fn validate_issuer_resolution<'a>(
     }
     let public_jwk = resolution.get("public_jwk")?.as_object()?;
     if public_jwk.get("kid").and_then(Value::as_str) != Some(verification_method_id)
-        || contains_private_jwk_material(public_jwk)
+        || private_jwk_members(public_jwk).next().is_some()
     {
         return None;
     }
@@ -449,12 +449,6 @@ fn did_publishes_verification_method(
 
 fn optional_string_matches(value: Option<&Value>, expected: &str) -> bool {
     matches!(value, None | Some(Value::Null)) || value.and_then(Value::as_str) == Some(expected)
-}
-
-fn contains_private_jwk_material(jwk: &Map<String, Value>) -> bool {
-    PRIVATE_JWK_MEMBERS
-        .iter()
-        .any(|member| jwk.contains_key(*member))
 }
 
 #[derive(Clone)]
