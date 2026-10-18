@@ -19,10 +19,11 @@ failed the Canvas mixed-roster signer fixture, fixed in #1423. The subsequent
 [full CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
 passed at `35dc7400...` but was superseded by #1426. Fresh
 [full exact-main CI 39172145237](https://github.com/ElevenID/marty-ui/actions/runs/39172145237)
-is pending at the verified new main SHA. `v1.1.257` remains untagged
-and unpublished. Require this new run to pass with main unchanged, then a fresh
-no-write claim,
-promotion, verified local late-tag handoff, resumed signed publication,
+passed at the verified new main SHA. [No-write claim 39175253725](https://github.com/ElevenID/marty-ui/actions/runs/39175253725)
+also passed with an exact-source artifact and absent public coordinates.
+[Stack promotion 39175345017](https://github.com/ElevenID/marty-ui/actions/runs/39175345017)
+is queued. `v1.1.257` remains untagged and unpublished. Finish promotion,
+verified local late-tag handoff, resumed signed publication,
 and fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
@@ -123,6 +124,23 @@ head SHA `58e92ace...`. It is pending and does not yet qualify a release
 claim. The earlier successful CI 39167241560 is now obsolete for v1.1.257.
 No other open UI PR had auto-merge enabled at dispatch. Keep the tag and
 release absent until this full run passes and protected main is unchanged.
+
+Exact-main release claim (2026-10-18): [full manual CI 39172145237](https://github.com/ElevenID/marty-ui/actions/runs/39172145237)
+completed **success** at `58e92ace7bd159cc71a4e0eed159cee80887751b`,
+including Canvas, contracts, selfhost, OpenBao plugin image, service images,
+security and release contracts. Protected main still matched, and the
+`v1.1.257` tag and release were absent. [No-write claim 39175253725](https://github.com/ElevenID/marty-ui/actions/runs/39175253725)
+was dispatched on `main` with tag and exact source SHA; its metadata verifies
+`workflow_dispatch` and the same head. The claim passed. Its immutable
+`stack-release-claim-v1.1.257` artifact records transaction
+`d579917393233ceaefef76fb5101da3cf7b80c6f1c12f16c2c737c3fe699816d`,
+state `claimed`, exact source SHA, full CI and all five merge-group gates,
+and absent Git tag, GitHub release and five registry version tags. Main was
+rechecked at the exact SHA and the Git tag remained absent. Digest-first
+[Stack promotion 39175345017](https://github.com/ElevenID/marty-ui/actions/runs/39175345017)
+was dispatched from that main with claim run `39175253725`,
+`prepare_selfhost_lock=true` and the four preflighted external service
+digests. Verify its checkpoint before the local annotated-tag handoff.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
