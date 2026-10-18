@@ -17,7 +17,8 @@ under the approved unsupported-preview policy; do not wait for all A0-A7 work.
 two executed virtual-clock timeout matrices; it does not modify v1.1.255 assets.
 
 The independent renewal-write overlap [PR #1391](https://github.com/ElevenID/marty-ui/pull/1391)
-passed all PR checks and is queued for protected validation. Hosted contracts
+passed all PR checks and protected validation and merged on October 18 at
+00:48 UTC. Hosted contracts
 artifact `12119516080` records write boundaries at 10.803 seconds, versus
 30.292/30.254 seconds in two earlier observations. This roughly 19.5-second
 targeted reduction is not a controlled paired or overall-pipeline speedup.
@@ -34,6 +35,11 @@ guard. Component worker reviews cleared the changes. The Flow shell suite
 passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
 and combined focused Python checks passed 168 tests (five platform skips).
 The nineteen new Rust cases still require compilation and execution in CI.
+The first batch CI release-contract run passed 6,938 tests but found one stale
+verified-leaf count after the new guarded test leaf was added. The correction
+retains the strict count and adds explicit new-leaf membership; its local
+selection regression passed and independent review cleared it. The detailed
+19-handler/60-SQL obligation map is included without authorizing SQL removal.
 No unique real-DB case, historical corpus, production behavior, required gate
 or connection limit is removed or weakened. Current-input drift evidence does
 not establish original-capture provenance or authorize qualification reuse.
