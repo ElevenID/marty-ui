@@ -400,6 +400,17 @@ PostgreSQL owner and are ignored in the ordinary library run. The lane still
 executes and records the complete Issuance library; mixed or unproved diffs,
 merge groups and releases remain broad. No production source or case is removed.
 
+October 18 A3 functional follow-up candidate: source inspection found a
+direct-peer route/method mismatch, addressed by reusing the existing authenticated
+Signing Keys compatibility handlers at Issuance's configured GET/POST paths.
+The candidate also preserves the proof-policy client's `/internal` base path,
+records direct issuer resolution in the shadow graph, and keeps Gateway as an
+optional configuration. An existing guarded acceptance fixture now proves
+direct issuer resolution and issuer-context lookup against a populated managed
+key with disposable Redis/OpenBao; focused local tests and independent review
+passed. This is not a merged fix, installed-bundle qualification, or support
+claim until protected CI and release evidence establish those states.
+
 ## Product packaging and integration gates
 
 The coordinating workspace product plan
