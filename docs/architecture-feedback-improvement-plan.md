@@ -34,7 +34,11 @@ paused actual-handler port tests, and a 21-input mixed-roster producer drift
 guard. Component worker reviews cleared the changes. The Flow shell suite
 passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
 and combined focused Python checks passed 168 tests (five platform skips).
-The nineteen new Rust cases still require compilation and execution in CI.
+PR CI `39084339386` compiled and executed all nineteen new Rust cases and four
+existing retry cases successfully. Its Flow evidence records nine selected and
+executed cases with same-run compiler-artifact identity. Independent review
+verified the named outcomes. #1393 is ready and awaiting protected queue run
+`39085856892`; this is not yet a merged or full-main qualification claim.
 The first batch CI release-contract run passed 6,938 tests but found one stale
 verified-leaf count after the new guarded test leaf was added. The correction
 retains the strict count and adds explicit new-leaf membership; its local
@@ -43,6 +47,30 @@ selection regression passed and independent review cleared it. The detailed
 No unique real-DB case, historical corpus, production behavior, required gate
 or connection limit is removed or weakened. Current-input drift evidence does
 not establish original-capture provenance or authorize qualification reuse.
+
+## Next reviewed maintenance batch (local; hosted validation pending)
+
+- A0: both self-host acceptance callers reuse the owned obligation recorder.
+  The twelve outer case outcomes, configured image/revision and bounded
+  packager/Compose byte identities do not prove nested assertion reachability,
+  upstream image provenance or installed-product cleanup.
+- Compilation visibility: the existing eight recovery preparation commands
+  emit flushed, fixed-label timings. Preparation-only mode reuses that owner
+  without Docker/TLS provisioning. Optional sanitized cache evidence and its
+  seven-day upload cannot weaken or block the required recovery qualification.
+- Profile consistency: host Rust test/lint and trusted-main warming explicitly
+  use zero dev/test debug info. This reduces CI debug information, not checks;
+  local debugging and production profiles remain unchanged. Package feature
+  graphs remain separate, and cache write failures remain undiagnosed.
+- A6: an opt-in PR diagnostic compiles the Issuance library and requires all
+  23 retry/renewal cases without Docker fixtures. Existing PR and protected
+  suites remain required, including existing optional worker diagnostics.
+  The classifier is unchanged. Narrow-feature hosted qualification must precede
+  any separately reviewed selective admission or speedup claim. Put the label
+  on the PR before its next synchronize event; label changes do not start CI.
+
+Component review and focused local checks have passed. The assembled batch
+still requires integration review, current-main rebasing and hosted validation.
 
 ## Prior handoff checkpoint (superseded delivery state)
 
