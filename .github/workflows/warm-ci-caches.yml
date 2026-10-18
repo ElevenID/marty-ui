@@ -16,6 +16,7 @@ on:
       - services/Dockerfile.dockerignore
       - scripts/build-rust-service-binaries.sh
       - scripts/ci/run-public-rust-build.sh
+      - scripts/probe_integration_secret_coordinated_restore.py
       - services/auth/assets/**
   workflow_dispatch:
 
@@ -47,6 +48,9 @@ jobs:
         with:
           toolchain: 1.95.0
           components: clippy
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
       - name: Use mold linker
         uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
         with:
@@ -58,6 +62,11 @@ jobs:
       - name: Compile Rust service tests
         working-directory: rust
         run: cargo test --locked --workspace --no-run
+      # Workspace-wide feature unification does not warm the three narrow
+      # recovery graphs. Reuse the probe's build-only entrypoint on trusted
+      # main; PR and merge-group jobs remain cache read-only.
+      - name: Warm exact Rust recovery graphs
+        run: python3 scripts/probe_integration_secret_coordinated_restore.py --prepare-rust-only
       - name: Warm clippy cache
         working-directory: rust
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
