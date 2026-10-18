@@ -102,6 +102,18 @@ preflighted in a private mode-0600 map, but the tag and release are absent.
 Do not claim a merge, exact-main CI, release, or signed restored journey from
 the PR-head success or local candidate proof.
 
+Protected recovery-fix landing (2026-10-17): all five merge-group workflows
+passed at `0de3fa327832cd6ecc4ff36a4a145a6b2fd4432a`: CI
+`39085010650`, CodeQL Actions `39085010648`, CodeQL Rust `39085010830`,
+Organization Quality `39085010973`, and open-source policy `39085010658`.
+PR #1392 merged at 2026-10-18 01:26 UTC; its merge commit and the protected
+main ref both equal that candidate. Full
+[exact-main CI 39086502512](https://github.com/ElevenID/marty-ui/actions/runs/39086502512)
+was dispatched with `workflow_dispatch` and its head verified as the same SHA;
+it is queued. Wait for its full success and reconfirm main before a no-write
+v1.1.256 claim. No new release or signed-artifact restored journey is proven
+by merge-group CI.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
