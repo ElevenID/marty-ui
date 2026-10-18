@@ -765,6 +765,32 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
     original = renderer.read_text(encoding="utf-8")
     renderer.write_text(
         original.replace(
+            "ROOT = Path(__file__).resolve().parents[1]",
+            "ROOT = Path(__file__).resolve().parents[2]",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_source_drift"):
+        INVENTORY.flow_rendered_first_hop_inputs()
+    renderer.write_text(original, encoding="utf-8")
+
+    renderer.write_text(
+        original.replace(
+            'BASE = runpy.run_path',
+            'ROOT = Path.cwd()\nBASE = runpy.run_path',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY._flow_renderer_runpy_edges(
+            "scripts/render_flow_native_runtime_fixture.py"
+        )
+    renderer.write_text(original, encoding="utf-8")
+
+    renderer.write_text(
+        original.replace(
             'BASE["source"]("docker-compose.base.yml")',
             'BASE["source"]("docker-compose.other.yml")',
             1,

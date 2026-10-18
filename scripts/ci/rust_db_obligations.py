@@ -644,6 +644,7 @@ def _flow_renderer_runpy_edges(path: str) -> tuple[str, ...]:
     except SyntaxError as error:
         raise ValueError("flow_renderer_subgraph_drift") from error
     edges = []
+    uses_root = False
     calls = sorted(
         (
             node
@@ -677,6 +678,7 @@ def _flow_renderer_runpy_edges(path: str) -> tuple[str, ...]:
             and isinstance(value.right, ast.Constant)
             and isinstance(value.right.value, str)
         ):
+            uses_root = True
             edge = value.right.value
         elif (
             isinstance(value, ast.Call)
@@ -699,6 +701,38 @@ def _flow_renderer_runpy_edges(path: str) -> tuple[str, ...]:
         if edge not in FLOW_RENDERER_RUNPY_EDGES:
             raise ValueError("flow_renderer_subgraph_drift")
         edges.append(edge)
+    if uses_root:
+        canonical = ast.parse("ROOT = Path(__file__).resolve().parents[1]").body[0]
+        path_imports = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "pathlib"
+            and any(alias.name == "Path" and alias.asname is None for alias in node.names)
+        ]
+        stores = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Name)
+            and node.id == "ROOT"
+            and isinstance(node.ctx, ast.Store)
+        ]
+        assignments = [
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "ROOT"
+                for target in node.targets
+            )
+        ]
+        if (
+            len(path_imports) != 1
+            or len(stores) != 1
+            or len(assignments) != 1
+            or ast.dump(assignments[0]) != ast.dump(canonical)
+        ):
+            raise ValueError("flow_renderer_subgraph_drift")
     return tuple(edges)
 
 
