@@ -2,6 +2,24 @@
 
 Status: active requirements and queue, 2026-10-17.
 
+October 18 checkpoint: #1393 and #1394 are merged after protected CI. The
+unfiltered Issuance-library diagnostic in #1397 passed its PR run with 594
+passed cases, including all 23 required renewal cases, plus fourteen
+fixture-owned ignored cases; its protected queue run remains the merge
+authority. This
+improves obligation visibility, not selective admission or measured full-CI
+turnaround. The Canvas seed-to-migration runtime edge is captured by #1398 in
+shadow-only planning; its scoped PR checks passed, while protected merge and
+complete non-Cargo closure remain open. No existing real-database, process,
+historical-oracle, security or release gate is removed.
+
+Handoff work is separate from A0-A7 completion: the public v1.1.255 preview
+remains unsupported. #1399's exact sixteen-role, pinned-version diagnostic
+must pass the live contracts and protected queue. Its reviewed follow-on emits
+only KMS name/version environment assignments, not a runnable installation.
+Native-Linux Docker reachability, operator-supplied domain/identity/secrets,
+and an outside tester's clean install remain open.
+
 ## Current delivery and maintenance-batch checkpoint
 
 The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
