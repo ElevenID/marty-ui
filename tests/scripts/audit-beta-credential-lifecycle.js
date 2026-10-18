@@ -570,33 +570,90 @@ async function cleanupActiveLifecycleCredentials(page, templateId) {
   }, { organizationId: ORG_ID, templateId });
 }
 
-async function performLifecycleAction(page, row, action, reason) {
+const LIFECYCLE_DEMO_REASONS = Object.freeze({
+  renew: 'Synthetic scenario: extend the employee access period.',
+  suspend: 'Synthetic scenario: temporarily suspend access during a security investigation.',
+  reinstate: 'Synthetic scenario: investigation cleared; restore employee access.',
+  revoke: 'Synthetic scenario: employment ended; permanently revoke employee access.',
+});
+
+function createLifecycleRecording(page, {enabled = RECORD_VIDEO, now = () => performance.now(), onEvent = () => {}} = {}) {
+  const origin = now();
+  const evidence = {
+    clock: 'MONOTONIC_DRIVER_ELAPSED_FROM_PAGE_READY',
+    videoFrameAlignmentEstablished: false,
+    editorMustAlignToSourceFrames: true,
+    events: [],
+  };
+  return {
+    evidence,
+    enabled,
+    mark(action, phase, detail = {}) {
+      if (!enabled) return;
+      evidence.events.push({action, phase, elapsedSeconds: (now() - origin) / 1000,
+        observedAt: new Date().toISOString(), ...detail});
+      onEvent(evidence);
+    },
+    async hold(action, phase, locator, milliseconds = 2200) {
+      if (!enabled) return;
+      await locator.waitFor({state: 'visible', timeout: 30000});
+      await locator.scrollIntoViewIfNeeded();
+      this.mark(action, `${phase}-visible`);
+      await page.waitForTimeout(milliseconds);
+      this.mark(action, `${phase}-hold-end`);
+    },
+    async explain(action) {
+      if (!enabled) return;
+      this.mark(action, 'scenario-context', {reason: LIFECYCLE_DEMO_REASONS[action]});
+      await showStep(page, `Admin action: ${action}`, LIFECYCLE_DEMO_REASONS[action], {
+        enabled: true, eyebrow: 'Synthetic business scenario - ElevenID admin portal', durationMs: 3200,
+      });
+    },
+  };
+}
+
+async function performLifecycleAction(page, row, action, reason, recording = null) {
+  await recording?.explain(action);
+  const actionButton = row.getByRole('button', { name: new RegExp(`^${action} credential`, 'i') });
+  await recording?.hold(action, 'button', actionButton);
   const responsePromise = page.waitForResponse((response) => (
     response.url().includes(`/v1/issued-credentials/`)
     && response.url().endsWith(`/${action}`)
     && response.request().method() === 'POST'
   ), { timeout: 30_000 });
-  await row.getByRole('button', { name: new RegExp(`^${action} credential`, 'i') }).click();
+  recording?.mark(action, 'button-click');
+  await actionButton.click();
   const dialog = page.getByRole('dialog', { name: new RegExp(`${action} credential`, 'i') });
+  await recording?.hold(action, 'dialog', dialog, 1800);
   await dialog.getByRole('textbox', { name: /reason/i }).fill(reason);
+  await recording?.hold(action, 'reason', dialog, 3200);
+  recording?.mark(action, 'confirm-click', {reason});
   await dialog.getByRole('button', { name: new RegExp(`^${action}$`, 'i') }).click();
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
   if (response.ok()) {
     await dialog.waitFor({ state: 'hidden', timeout: 30_000 });
+    recording?.mark(action, 'response-success', {httpStatus: response.status()});
+    if (recording?.enabled) await requireDismissedLifecycleNotification(page);
+    const expected = {suspend: 'suspended', reinstate: 'active', revoke: 'revoked'}[action];
+    await recording?.hold(action, 'resulting-status', row.getByText(new RegExp(`^${expected}$`, 'i')), 3200);
   } else {
     await dialog.getByRole('button', { name: /cancel/i }).click().catch(() => {});
   }
   return { ok: response.ok(), status: response.status(), body };
 }
 
-async function renewCredential(page, row) {
+async function renewCredential(page, row, recording = null) {
+  await recording?.explain('renew');
+  const button = row.getByRole('button', { name: /^renew credential/i });
+  await recording?.hold('renew', 'button', button, 3200);
   const responsePromise = page.waitForResponse((response) => (
     response.url().includes('/v1/issued-credentials/')
     && response.url().endsWith('/renew')
     && response.request().method() === 'POST'
   ), { timeout: 30_000 });
-  await row.getByRole('button', { name: /^renew credential/i }).click();
+  recording?.mark('renew', 'button-click', {confirmationDialog: false, reasonField: false});
+  await button.click();
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
   return {
@@ -741,6 +798,11 @@ async function main() {
     });
     await installUiCandidateRoute(context, uiCandidate);
     const page = await context.newPage();
+    const recording = createLifecycleRecording(page, {onEvent: (evidence) => {
+      fs.writeFileSync(path.join(artifactDir, 'lifecycle-action-events.json'), JSON.stringify(evidence, null, 2));
+    }});
+    if (RECORD_VIDEO) report.recordingActionEvidence = recording.evidence;
+    recording.mark('setup', 'begin', {boundary: 'API_FIXTURE_SETUP_NOT_ADMIN_UI_DEMONSTRATION'});
     const walletPage = await context.newPage();
     const applicationVideo = page.video();
     const walletVideo = walletPage.video();
@@ -802,6 +864,7 @@ async function main() {
     delete report.issuance.offerUri;
     if (!report.walletReceipt.ok) throw new Error(`Wallet receipt failed: ${report.walletReceipt.error}`);
 
+    recording.mark('setup', 'complete', {boundary: 'ISSUANCE_AND_WALLET_RECEIPT_PREPARED_BEFORE_ADMIN_ACTIONS'});
     let credential = await findIssuedCredential(page, report.templateId);
     const sourceCredentialId = credential.id;
 
@@ -814,7 +877,7 @@ async function main() {
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
     if (RECORD_VIDEO) await page.waitForTimeout(5_100);
 
-    report.renewalOffer = await renewCredential(page, row);
+    report.renewalOffer = await renewCredential(page, row, recording);
     if (!report.renewalOffer.ok || !report.renewalOffer.offerUri) {
       throw new Error(`Renewal failed: ${JSON.stringify(report.renewalOffer.error)}`);
     }
@@ -846,6 +909,8 @@ async function main() {
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.', '2 of 5');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
+    await recording.hold('renew', 'replacement-active-status', row.getByText(/^active$/i), 3200);
+
     const statusListUris = (credential.status_list_entries || [])
       .map((entry) => entry.status_list_uri || entry.status_list_credential)
       .filter(Boolean);
@@ -861,9 +926,8 @@ async function main() {
       templateName: report.issuance.templateName,
     };
 
-    report.suspend = await performLifecycleAction(page, row, 'suspend', 'Automated lifecycle suspension audit');
+    report.suspend = await performLifecycleAction(page, row, 'suspend', RECORD_VIDEO ? LIFECYCLE_DEMO_REASONS.suspend : 'Automated lifecycle suspension audit', recording);
     report.suspend.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.suspend.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: suspended trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -877,9 +941,8 @@ async function main() {
     });
     await page.screenshot({ path: path.join(artifactDir, '02-suspended-credential.png'), fullPage: true });
 
-    report.reinstate = await performLifecycleAction(page, row, 'reinstate', 'Automated lifecycle reinstatement audit');
+    report.reinstate = await performLifecycleAction(page, row, 'reinstate', RECORD_VIDEO ? LIFECYCLE_DEMO_REASONS.reinstate : 'Automated lifecycle reinstatement audit', recording);
     report.reinstate.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.reinstate.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: reinstated trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -893,9 +956,8 @@ async function main() {
     });
     await page.screenshot({ path: path.join(artifactDir, '03-reinstated-credential.png'), fullPage: true });
 
-    report.revoke = await performLifecycleAction(page, row, 'revoke', 'Automated lifecycle revocation audit');
+    report.revoke = await performLifecycleAction(page, row, 'revoke', RECORD_VIDEO ? LIFECYCLE_DEMO_REASONS.revoke : 'Automated lifecycle revocation audit', recording);
     report.revoke.current = await getCredentialStatus(page, credential.id);
-    if (RECORD_VIDEO) await requireDismissedLifecycleNotification(page);
     report.revoke.verification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: revoked trial`, {
       issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
     });
@@ -960,6 +1022,9 @@ if (require.main === module) {
 }
 
 module.exports = {
+  createLifecycleRecording,
+  LIFECYCLE_DEMO_REASONS,
+  renewCredential,
   candidateUiFileForRequest,
   dismissLifecycleUpdatedNotification,
   requireDismissedLifecycleNotification,
