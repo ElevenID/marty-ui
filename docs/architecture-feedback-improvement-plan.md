@@ -379,7 +379,7 @@ This document coordinates the new architecture work. [The original build audit](
 | A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Cheap Core preflight separation is landed. Preserve the complete KMS, lint, compatibility, feature and security checks; do not extrapolate timings. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Nightly qualification remains open: one Linux happy-path tier with no YouTube activity. Official releases retain complete happy/error E2E and official-only YouTube. Unknown tier or missing evidence fails closed. |
 
-October 18 A0 follow-up (local draft): the run-bound Flow record observes the
+October 18 A0 follow-up: the run-bound Flow record observes the
 first non-Cargo renderer hop from the Rust acceptance case to the Python
 renderer and its two direct Compose-owner helpers, with exact source markers
 and hashes. Deeper Python imports, rendered Compose profiles, generated loader
