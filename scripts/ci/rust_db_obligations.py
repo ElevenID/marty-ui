@@ -591,50 +591,308 @@ def flow_rendered_first_hop_inputs() -> list[dict[str, str]]:
     caller = (
         ROOT / "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs"
     ).read_text(encoding="utf-8")
-    renderer = (ROOT / paths[0]).read_text(encoding="utf-8")
     if re.findall(r'\.arg\(root\(\)\.join\("([^"]+)"\)\)', caller) != [paths[0]]:
         raise ValueError("flow_renderer_source_drift")
-
     try:
-        renderer_tree = ast.parse(renderer)
-    except SyntaxError as error:
+        if _flow_renderer_runpy_edges(paths[0]) != paths[1:]:
+            raise ValueError("flow_renderer_source_drift")
+    except ValueError as error:
         raise ValueError("flow_renderer_source_drift") from error
+    return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+FLOW_RENDERER_RUNPY_EDGES = {
+    "scripts/render_flow_native_runtime_fixture.py": (
+        "scripts/test_base_native_issuance_compose.py",
+        "scripts/test_selfhost_native_owner_compose.py",
+    ),
+    "scripts/test_base_native_issuance_compose.py": (
+        "scripts/test_beta_application_image_compose.py",
+        "scripts/conformance_native.py",
+        "scripts/test_conformance_native_compose.py",
+    ),
+    "scripts/test_selfhost_native_owner_compose.py": (
+        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/test_beta_application_image_compose.py",
+        "scripts/test_base_native_issuance_compose.py",
+    ),
+    "scripts/test_beta_application_image_compose.py": (
+        "scripts/test_canvas_worker_compose_render.py",
+    )
+    * 4,
+    "scripts/conformance_native.py": (
+        "scripts/validate_beta_didcomm_configuration.py",
+        "scripts/prepare_official_beta_release.py",
+    ),
+    "scripts/test_conformance_native_compose.py": (
+        "scripts/conformance_stack.py",
+        "scripts/conformance_native.py",
+        "scripts/test_canvas_worker_compose_render.py",
+        "scripts/test_beta_application_image_compose.py",
+    ),
+    "scripts/test_canvas_worker_compose_render.py": ("scripts/conformance_stack.py",),
+    "scripts/conformance_stack.py": ("scripts/conformance_native.py",),
+    "scripts/validate_beta_didcomm_configuration.py": (),
+    "scripts/prepare_official_beta_release.py": ("scripts/kms_core_release.py",),
+    "scripts/kms_core_release.py": (),
+}
+
+
+def _flow_renderer_runpy_edges(path: str) -> tuple[str, ...]:
+    try:
+        tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    except SyntaxError as error:
+        raise ValueError("flow_renderer_subgraph_drift") from error
+    edges = []
     calls = sorted(
         (
             node
-            for node in ast.walk(renderer_tree)
-            if (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == "runpy"
-                and node.func.attr == "run_path"
-            )
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "runpy"
+            and node.func.attr == "run_path"
         ),
         key=lambda node: (node.lineno, node.col_offset),
     )
-    imports = []
-    for node in calls:
-        if node.keywords or len(node.args) != 1:
-            raise ValueError("flow_renderer_source_drift")
-        value = node.args[0]
+    for call in calls:
+        if call.keywords or len(call.args) != 1:
+            raise ValueError("flow_renderer_subgraph_drift")
+        argument = call.args[0]
         if not (
-            isinstance(value, ast.Call)
-            and isinstance(value.func, ast.Name)
-            and value.func.id == "str"
-            and len(value.args) == 1
-            and not value.keywords
-            and isinstance(value.args[0], ast.BinOp)
-            and isinstance(value.args[0].op, ast.Div)
-            and isinstance(value.args[0].left, ast.Name)
-            and value.args[0].left.id == "ROOT"
-            and isinstance(value.args[0].right, ast.Constant)
-            and isinstance(value.args[0].right.value, str)
+            isinstance(argument, ast.Call)
+            and isinstance(argument.func, ast.Name)
+            and argument.func.id == "str"
+            and len(argument.args) == 1
+            and not argument.keywords
         ):
-            raise ValueError("flow_renderer_source_drift")
-        imports.append(value.args[0].right.value)
-    if imports != list(paths[1:]):
-        raise ValueError("flow_renderer_source_drift")
+            raise ValueError("flow_renderer_subgraph_drift")
+        value = argument.args[0]
+        if (
+            isinstance(value, ast.BinOp)
+            and isinstance(value.op, ast.Div)
+            and isinstance(value.left, ast.Name)
+            and value.left.id == "ROOT"
+            and isinstance(value.right, ast.Constant)
+            and isinstance(value.right.value, str)
+        ):
+            edge = value.right.value
+        elif (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "with_name"
+            and isinstance(value.func.value, ast.Call)
+            and isinstance(value.func.value.func, ast.Name)
+            and value.func.value.func.id == "Path"
+            and len(value.func.value.args) == 1
+            and isinstance(value.func.value.args[0], ast.Name)
+            and value.func.value.args[0].id == "__file__"
+            and len(value.args) == 1
+            and isinstance(value.args[0], ast.Constant)
+            and isinstance(value.args[0].value, str)
+            and not value.keywords
+        ):
+            edge = f"scripts/{value.args[0].value}"
+        else:
+            raise ValueError("flow_renderer_subgraph_drift")
+        if edge not in FLOW_RENDERER_RUNPY_EDGES:
+            raise ValueError("flow_renderer_subgraph_drift")
+        edges.append(edge)
+    return tuple(edges)
+
+
+def _flow_compose_edges(path: str) -> dict[str, str]:
+    """Resolve Compose YAML (including anchors) without recording values."""
+    # The flow lane adds its pinned PyYAML venv to GITHUB_PATH before invoking
+    # this recorder. Keep the import local so other runner lanes stay stdlib-only.
+    try:
+        import yaml
+    except ImportError as error:
+        raise ValueError("flow_renderer_subgraph_drift") from error
+    try:
+        model = yaml.safe_load((ROOT / path).read_text(encoding="utf-8"))
+    except (yaml.YAMLError, ValueError, OSError) as error:
+        raise ValueError("flow_renderer_subgraph_drift") from error
+    if not isinstance(model, dict) or "include" in model:
+        raise ValueError("flow_renderer_subgraph_drift")
+    services = model.get("services")
+    if not isinstance(services, dict):
+        raise ValueError("flow_renderer_subgraph_drift")
+    edges = {}
+    for name, service in services.items():
+        if not isinstance(service, dict):
+            raise ValueError("flow_renderer_subgraph_drift")
+        if "include" in service:
+            raise ValueError("flow_renderer_subgraph_drift")
+        if "extends" in service:
+            extension = service["extends"]
+            if not (
+                isinstance(extension, dict)
+                and set(extension) == {"file", "service"}
+                and extension["service"] == "issuance-native"
+                and isinstance(extension["file"], str)
+            ):
+                raise ValueError("flow_renderer_subgraph_drift")
+            edges[name] = extension["file"]
+    return edges
+
+
+def _flow_literal_assignment(path: str, name: str) -> str:
+    tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+    assignments = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == name
+    ]
+    if (
+        len(assignments) != 1
+        or not isinstance(assignments[0].value, ast.Constant)
+        or not isinstance(assignments[0].value.value, str)
+    ):
+        raise ValueError("flow_renderer_subgraph_drift")
+    return assignments[0].value.value
+
+
+def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
+    """Observed static runpy graph and selected source files, not runtime closure."""
+    flow_rendered_first_hop_inputs()
+    for path, expected in FLOW_RENDERER_RUNPY_EDGES.items():
+        if _flow_renderer_runpy_edges(path) != expected:
+            raise ValueError("flow_renderer_subgraph_drift")
+    # These are the literal models selected by render(), plus extends files.
+    # Generated images.env, secrets, loader outputs and external tools are not
+    # source files and are deliberately not hashed into this evidence.
+    compose = (
+        "docker-compose.base.yml",
+        "docker-compose.profile.issuance-native.yml",
+        "docker-compose.service.issuance-native-runtime.yml",
+        "docker-compose.selfhost.prod.yml",
+        "selfhost-kms-only-model.keyless-tls.snapshot.yml",
+        "docker-compose.service.issuance-native.yml",
+    )
+    expected_compose_edges = {
+        compose[0]: {"issuance-native": compose[1]},
+        compose[1]: {"issuance-native": compose[2]},
+        compose[2]: {},
+        compose[3]: {"issuance-native": compose[2]},
+        compose[4]: {"issuance-native": compose[2]},
+        compose[5]: {"issuance-native": compose[2]},
+    }
+    for path, expected in expected_compose_edges.items():
+        if _flow_compose_edges(path) != expected:
+            raise ValueError("flow_renderer_subgraph_drift")
+    for path, name, expected in (
+        ("scripts/test_base_native_issuance_compose.py", "PROFILE", compose[1]),
+        ("scripts/test_conformance_native_compose.py", "RUNTIME", compose[2]),
+        ("scripts/test_conformance_native_compose.py", "COMMON", compose[5]),
+        ("scripts/test_selfhost_native_owner_compose.py", "APPROVED", compose[4]),
+        ("scripts/test_canvas_worker_compose_render.py", "BASE", compose[3]),
+    ):
+        if _flow_literal_assignment(path, name) != expected:
+            raise ValueError("flow_renderer_subgraph_drift")
+    # The renderer calls this helper with fixed flags. Match its complete AST
+    # so an added or conditional Compose input cannot silently escape the set.
+    helper_tree = ast.parse(
+        (ROOT / "scripts/test_base_native_issuance_compose.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    file_functions = [
+        node
+        for node in helper_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "files"
+    ]
+    expected_files_function = ast.parse(
+        """def files(*, native, local, authcrypt):
+    result = [ROOT / "docker-compose.base.yml"]
+    if not local:
+        result.append(ROOT / "docker-compose.profile.ghcr.yml")
+    if native:
+        result.append(ROOT / PROFILE)
+        if not local:
+            result.append(ROOT / IMAGES)
+        if authcrypt:
+            result.append(ROOT / POLICY_PROFILE)
+    return result
+"""
+    ).body[0]
+    if len(file_functions) != 1 or ast.dump(file_functions[0]) != ast.dump(
+        expected_files_function
+    ):
+        raise ValueError("flow_renderer_subgraph_drift")
+    renderer_tree = ast.parse(
+        (ROOT / "scripts/render_flow_native_runtime_fixture.py").read_text(
+            encoding="utf-8"
+        )
+    )
+    render_functions = [
+        node
+        for node in renderer_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "render"
+    ]
+    if len(render_functions) != 1:
+        raise ValueError("flow_renderer_subgraph_drift")
+    selected_calls = sorted(
+        ast.unparse(node)
+        for node in ast.walk(render_functions[0])
+        if isinstance(node, ast.Call)
+        and ast.unparse(node.func) in {"BASE['source']", "BASE['files']", "compose"}
+    )
+    expected_calls = sorted(
+        ast.unparse(ast.parse(expression, mode="eval").body)
+        for expression in (
+            'BASE["source"]("docker-compose.base.yml")',
+            'BASE["source"](BASE["PROFILE"])',
+            'BASE["source"](BASE["RUNTIME"])',
+            'compose(*BASE["files"](native=False, local=True, authcrypt=False))',
+            'compose(*BASE["files"](native=True, local=True, authcrypt=False))',
+            'BASE["files"](native=False, local=True, authcrypt=False)',
+            'BASE["files"](native=True, local=True, authcrypt=False)',
+            'compose(ROOT / SELFHOST["APPROVED"])',
+            'compose(ROOT / SELFHOST["GATE"]["BASE"])',
+        )
+    )
+    if selected_calls != expected_calls:
+        raise ValueError("flow_renderer_subgraph_drift")
+    sources = (
+        "scripts/load-secrets-env.sh",
+        "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem",
+        "rust/services/gateway/src/config.rs",
+        "rust/services/issuance/src/config.rs",
+        "rust/services/issuance/src/canvas_credentials_publication.rs",
+    )
+    literals = {
+        "scripts/render_flow_native_runtime_fixture.py": (
+            compose[0],
+            sources[1],
+        ),
+        "scripts/test_base_native_issuance_compose.py": (
+            compose[0],
+            compose[1],
+            sources[2],
+            sources[3],
+            sources[4],
+        ),
+        "scripts/test_selfhost_native_owner_compose.py": (
+            compose[4],
+            sources[2],
+            sources[3],
+        ),
+        "scripts/test_conformance_native_compose.py": (compose[5], compose[2]),
+        "scripts/test_canvas_worker_compose_render.py": (compose[0], compose[3]),
+        "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs": (
+            sources[0],
+        ),
+    }
+    for script, expected in literals.items():
+        content = (ROOT / script).read_text(encoding="utf-8")
+        if any(f'"{path}"' not in content for path in expected):
+            raise ValueError("flow_renderer_subgraph_drift")
+    paths = (*FLOW_RENDERER_RUNPY_EDGES, *compose, *sources)
     return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
 
 
@@ -971,6 +1229,9 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             evidence["direct_source_inputs"] = flow_source_inputs(owner)
             evidence["observed_first_hop_source_inputs"] = (
                 flow_rendered_first_hop_inputs()
+            )
+            evidence["observed_renderer_subgraph_source_inputs"] = (
+                flow_renderer_subgraph_inputs()
             )
             evidence["transitive_source_closure"] = "incomplete"
         if selfhost:

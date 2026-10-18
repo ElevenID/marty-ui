@@ -387,6 +387,17 @@ files, child assertion reachability and fixture provenance remain unclosed.
 This is input visibility only; mixed or unknown diffs and protected/release
 paths remain broad, with no claimed timing improvement.
 
+Next A0 candidate (local, not yet merged): extend that record with exact
+path/SHA evidence for the statically observed 11-script `runpy` graph, the six
+selected/extended Compose source models, the loader script, public CA fixture,
+and three config/source reads. Reject changed helper edges, renderer model
+selections, and Compose `extends.file` paths. This deliberately inventories
+conditional imports conservatively; it does not prove which branches ran or
+close generated secrets, external tools/packages, Cargo inputs, and child
+assertion reachability. Retain `transitive_source_closure=incomplete` and all
+existing broad/protected gates. Reconcile the candidate against merged main
+and reviewer findings before publishing it.
+
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
 the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
