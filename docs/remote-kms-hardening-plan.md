@@ -45,7 +45,8 @@ custody checks. Its private evidence is
 This is candidate-fix evidence, not a signed release or qualified off-host
 backup/cutover. Publish the fix in the next grouped UI PR, then repeat exact
 signed-artifact recovery before treating coordinated rollback as supported.
-The candidate branch (`9da6c3e36`, `2facbaed3`) now also has an opt-in
+Grouped [UI PR #1392](https://github.com/ElevenID/marty-ui/pull/1392)
+(`db6bae104`, `2fa66ebac`) now also has an opt-in
 `scripts/verify_selfhost_restored_journey.py` that checks the exact 28-role
 closure, isolated app/OpenBao mounts and loopback ports, each app KMS address,
 unsealed Raft, the public journey, Keycloak refresh and both database custody
@@ -57,6 +58,8 @@ again (after transient service-readiness retries); the new verifier passed
 against a further restored-state business journey, writing private report
 `/home/canvasrunner/kms-qualification/v1.1.255/private/recovery-39077407940-d/restored-journey-runner-report-4.json`.
 The owned projects were stopped again and production stayed HTTP 200.
+This PR was opened after local testing against the restored clone; its hosted
+checks, protected merge, exact-main claim and signed release are pending.
 
 ## Objective and working agreement
 
