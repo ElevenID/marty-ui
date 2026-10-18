@@ -7,14 +7,24 @@ component report. Run it only after a signed Stack release was dispatched with
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
-The Stack publisher requires a dedicated `STACK_RELEASE_TAG_TOKEN` repository
-secret with Contents and Workflows write access limited to `ElevenID/marty-ui`.
-It is used only to create the annotated release tag when the source includes
-workflow changes; the other release steps retain the job token. The release
-validation stage rejects a missing credential, and checks the `workflow`
-scope early when the credential is a classic PAT. Do not substitute a
-cross-repository access token. The protected tag push is the final permission
-check for a fine-grained credential.
+The Stack publisher needs no tag secret. The first release run qualifies and
+promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
+then stops at the late tag gate. From a clean checkout of the **same current
+main commit**, an operator with local `gh` authentication including workflow
+permission runs:
+
+```bash
+python3 scripts/push_promoted_release_tag.py \
+  --promotion-run-id <first-stack-release-run-id> \
+  --claim-run-id <prepare-stack-claim-run-id>
+```
+
+The helper validates the promoted transaction, current main, and all five
+registry digests before pushing the exact annotated tag. Resume Stack release
+from the same source with `claim_run_id`, `resume_run_id=<first run ID>`, and
+`resume_artifact=stack-release-promotion-complete-<first run ID>`. The resumed
+run verifies the tag and publishes the release. Never put a cross-repository
+access token into an Actions secret for this handoff.
 
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration

@@ -183,14 +183,15 @@ def test_workflow_rechecks_immediately_before_each_public_write() -> None:
                  "Publish the qualified GitHub release"):
         step = next(step for step in steps if step.get("name", "").startswith(name))
         run = step["run"]
-        expected_token = (
-            "${{ secrets.STACK_RELEASE_TAG_TOKEN }}" if name.startswith("Create")
-            else "${{ github.token }}"
-        )
-        assert step.get("env", {}).get("GH_TOKEN") == expected_token
+        if name.startswith("Create"):
+            assert "GH_TOKEN" not in step.get("env", {})
+            assert "scripts/check_stack_pre_promotion.py" in run
+            assert "git push origin" not in run
+            continue
+        assert step.get("env", {}).get("GH_TOKEN") == "${{ github.token }}"
         assert run.index("scripts/check_stack_pre_promotion.py") < run.index(
             "docker buildx imagetools create" if name.startswith("Promote") else
-            "git push origin" if name.startswith("Create") else "gh release create"
+            "gh release create"
         )
         if name.startswith("Promote"):
             role = "openbao_didcomm" if name.startswith("Promote the OpenBao") else name.split()[2].lower()
