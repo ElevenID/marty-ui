@@ -973,10 +973,12 @@ jobs:
 
   verifier-differential:
     needs: [resolve-transaction, validate-stack, build-services, record-digests]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      attestations: read
+      artifact-metadata: write
+      attestations: write
       contents: read
+      id-token: write
       packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -989,7 +991,18 @@ jobs:
       - name: Build the Rust public-key fixture converter
         working-directory: marty-ui/rust
         shell: bash
-        run: cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
+        env:
+          PREPARE_SELFHOST_LOCK: ${{ inputs.prepare_selfhost_lock }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then
+            test "$GITHUB_REF" = refs/heads/main
+            test "$GITHUB_SHA" = "$SOURCE_SHA"
+            test "$(git rev-parse 'HEAD^{commit}')" = "$SOURCE_SHA"
+            test "$(uname -m)" = x86_64
+          fi
+          cargo build --locked --release -p marty-release-evidence --bin public-kms-jwk
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: stack-release-integration-source-${{ github.run_id }}
@@ -1135,6 +1148,63 @@ jobs:
             and .release_clearance == "eligible"
             and (.blockers | length) == 0
           ' work/evidence/verifier-differential.json >/dev/null
+      - name: Record the exercised self-host public-key helper
+        if: inputs.prepare_selfhost_lock == true
+        env:
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -m 0755 marty-ui/rust/target/release/public-kms-jwk public-kms-jwk
+          cmp marty-ui/rust/target/release/public-kms-jwk public-kms-jwk
+          python marty-ui/scripts/record_selfhost_public_kms_helper.py \
+            --binary public-kms-jwk \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
+            --output selfhost-public-kms-jwk.json
+      - id: attest-public-kms-binary
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        if: inputs.prepare_selfhost_lock == true
+        with:
+          subject-path: public-kms-jwk
+      - id: attest-public-kms-receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+        if: inputs.prepare_selfhost_lock == true
+        with:
+          subject-path: selfhost-public-kms-jwk.json
+      - name: Preserve exact public-key helper SLSA bundles
+        if: inputs.prepare_selfhost_lock == true
+        env:
+          BINARY_BUNDLE: ${{ steps.attest-public-kms-binary.outputs.bundle-path }}
+          RECEIPT_BUNDLE: ${{ steps.attest-public-kms-receipt.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BINARY_BUNDLE"
+          test -s "$RECEIPT_BUNDLE"
+          cp -- "$BINARY_BUNDLE" public-kms-jwk.slsa-bundle.json
+          cp -- "$RECEIPT_BUNDLE" selfhost-public-kms-jwk.slsa-bundle.json
+      - name: Verify the just-attested helper source
+        if: inputs.prepare_selfhost_lock == true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python marty-ui/scripts/verify_selfhost_public_kms_helper.py \
+            --producer-attestations --directory . \
+            --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: inputs.prepare_selfhost_lock == true
+        with:
+          name: selfhost-public-kms-jwk-unqualified-${{ github.run_id }}
+          path: |
+            public-kms-jwk
+            selfhost-public-kms-jwk.json
+            public-kms-jwk.slsa-bundle.json
+            selfhost-public-kms-jwk.slsa-bundle.json
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: stack-release-verifier-gate-${{ github.run_id }}

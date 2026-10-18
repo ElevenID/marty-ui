@@ -838,6 +838,52 @@ def test_verifier_transaction_uses_attested_core_source_and_disposable_kms() -> 
     assert "compare-transaction-evidence" in verifier["run"]
 
 
+def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    verifier = jobs["verifier-differential"]
+    assert verifier["runs-on"] == "ubuntu-24.04"
+    assert verifier["permissions"]["attestations"] == "write"
+    assert verifier["permissions"]["id-token"] == "write"
+    steps = verifier["steps"]
+    named = {step.get("name"): i for i, step in enumerate(steps)}
+    build = named["Build the Rust public-key fixture converter"]
+    exercise = named["Verify and exercise the exact services digest against the immutable oracle"]
+    record = named["Record the exercised self-host public-key helper"]
+    verify = named["Verify the just-attested helper source"]
+    attest = [i for i, step in enumerate(steps)
+              if step.get("uses", "").startswith("actions/attest-build-provenance@")]
+    bundles = named["Preserve exact public-key helper SLSA bundles"]
+    upload = next(i for i, step in enumerate(steps)
+                  if step.get("with", {}).get("name", "").startswith("selfhost-public-kms-jwk-unqualified-"))
+    assert len(attest) == 2
+    assert build < exercise < record < attest[0] < attest[1] < bundles < verify < upload
+    assert steps[build]["env"]["PREPARE_SELFHOST_LOCK"] == "${{ inputs.prepare_selfhost_lock }}"
+    assert 'if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then' in steps[build]["run"]
+    assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in steps[build]["run"]
+    assert "--bin public-kms-jwk" in steps[build]["run"]
+    assert all(steps[i]["if"] == "inputs.prepare_selfhost_lock == true"
+               for i in (record, *attest, verify, upload))
+    assert [steps[i]["with"]["subject-path"] for i in attest] == [
+        "public-kms-jwk", "selfhost-public-kms-jwk.json"]
+    assert [steps[i]["id"] for i in attest] == [
+        "attest-public-kms-binary", "attest-public-kms-receipt"]
+    assert all("outputs.bundle-path" in value for value in steps[bundles]["env"].values())
+    assert "test -s \"$BINARY_BUNDLE\"" in steps[bundles]["run"]
+    assert "test -s \"$RECEIPT_BUNDLE\"" in steps[bundles]["run"]
+    assert "install -m 0755 marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
+    assert "cmp marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
+    assert "verify_selfhost_public_kms_helper.py" in steps[verify]["run"]
+    assert '--run-id "$GITHUB_RUN_ID"' in steps[verify]["run"]
+    assert "selfhost-public-kms-jwk.json" in steps[upload]["with"]["path"]
+    assert "public-kms-jwk" in steps[upload]["with"]["path"]
+    assert "public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
+    assert "selfhost-public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
+    assert steps[upload]["with"]["retention-days"] == 7
+    # Producer-only: no immutable release asset or tester-side bypass yet.
+    assert "selfhost-public-kms-jwk" not in str(jobs["publish-manifest"])
+    assert "build_public_kms_jwk_tool" in _text("scripts/run_selfhost_business_journey.py")
+
+
 def test_stack_release_actions_are_pinned_by_full_commit_sha() -> None:
     workflow = _text(".github/workflows/cd.yml")
     uses_lines = [line for line in workflow.splitlines() if "uses:" in line]

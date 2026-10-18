@@ -450,7 +450,24 @@ review. Do not publish a qualified descriptor or attach the ZIP to a public
 release based solely on this component report. Signature/provenance checks,
 public asset closure, independent consumer replay, and release publication
 remain separate gates.
-The runner builds `public-kms-jwk` from the clean, exact release checkout into
-a fresh temporary Cargo home and target before startup. The host needs access
-to the locked Rust dependencies; ambient Cargo/compiler overrides and existing
-converter binaries are not accepted as custody evidence.
+By default the runner builds `public-kms-jwk` from the clean, exact release
+checkout into a fresh temporary Cargo home and target before startup. The host
+needs access to the locked Rust dependencies; ambient Cargo/compiler overrides
+and existing converter binaries are not accepted as custody evidence.
+
+An opt-in Stack release producer can now retain the **already exercised**
+release-mode converter and an exact-byte receipt with their two exact SLSA
+bundles for seven days. This is a temporary producer bridge, not a qualified
+public asset or proof of reproducible compilation. A local admission verifier
+checks the protected producer run through the public GitHub API, both local
+verified certificate run identities, the receipt, and the Ubuntu 24.04 loader
+and dependencies plus a bounded smoke test. `--public-kms-helper-dir` is an
+experimental opt-in for an exact four-file public preview companion alongside
+the prepared assets. It copies only those four files into owned private scratch;
+an invalid supplied companion fails rather than falling back to source build.
+It does not turn the helper into a qualified release asset: the current public
+release closure does not publish this companion, so ordinary testers still use
+the default fresh build. Anonymous bundle verification needs network access;
+the admission is limited to Ubuntu 24.04 amd64 and does not claim portable or
+offline compatibility. Public preview publication must separately bind the
+companion to the prepared source/run; never use an ambient binary.
