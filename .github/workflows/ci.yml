@@ -1234,6 +1234,12 @@ jobs:
             [[ "$bookworm_builder" =~ ^rust:1\.95-bookworm@sha256:[a-f0-9]{64}$ ]]
             bookworm_builder="$(run_host_phase builder_pull bash \
               ../scripts/ci/pull-pinned-dockerhub-image.sh "$bookworm_builder")"
+            # setup-mold installs this pinned host tool, but docker run does
+            # not inherit it. Bind only the linker executable into Bookworm;
+            # keep its filesystem and compiler network isolated.
+            host_mold="$(command -v mold)"
+            [[ "$(realpath "$host_mold")" == /usr/local/bin/mold ]]
+            mold --version | grep -Eq '^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$'
             host_cargo_home="${CARGO_HOME:-$HOME/.cargo}"
             test -d "$host_cargo_home"
             mkdir -p target
@@ -1248,13 +1254,19 @@ jobs:
               --env CARGO_INCREMENTAL=0 \
               --env CARGO_PROFILE_TEST_DEBUG=0 \
               --env CARGO_PROFILE_DEV_DEBUG=0 \
+              --env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold' \
               --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+              --volume "$host_mold:/usr/local/bin/ld.mold:ro" \
               --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE:ro" \
               --volume "$host_cargo_home:$host_cargo_home" \
               --volume "$GITHUB_WORKSPACE/rust/target:$GITHUB_WORKSPACE/rust/target:rw" \
               --workdir "$GITHUB_WORKSPACE/rust" \
               "$bookworm_builder" \
               sh -ceu '
+                 ld.mold --version | grep -Eq "^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$"
+                 printf "int main(void){return 0;}\\n" | cc -x c - \
+                   -fuse-ld=mold -o /tmp/marty-mold-link-probe
+                 /tmp/marty-mold-link-probe
                  metrics="$CARGO_TARGET_DIR/bookworm-compile-phases.tsv"
                  printf "phase\telapsed_seconds\ttarget_bytes\texit_code\n" > "$metrics"
                  run_cargo_phase() {

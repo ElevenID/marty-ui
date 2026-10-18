@@ -5293,6 +5293,13 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     capture_step = steps["Capture host compiler cache counters after compile"]
     assert "--network none --read-only" in compile_step
     assert "--locked --offline" in compile_step
+    assert 'host_mold="$(command -v mold)"' in compile_step
+    assert '"$(realpath "$host_mold")" == /usr/local/bin/mold' in compile_step
+    assert "mold 2[.]41[.]0" in compile_step
+    assert "--env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold'" in compile_step
+    assert '--volume "$host_mold:/usr/local/bin/ld.mold:ro"' in compile_step
+    assert 'ld.mold --version | grep -Eq' in compile_step
+    assert '-fuse-ld=mold -o /tmp/marty-mold-link-probe' in compile_step
     assert "bookworm-host-phases.tsv" in compile_step
     for phase, command in (
         ("cargo_fetch", "cargo fetch --locked"),
