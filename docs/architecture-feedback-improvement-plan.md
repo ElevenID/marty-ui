@@ -387,7 +387,9 @@ files, child assertion reachability and fixture provenance remain unclosed.
 This is input visibility only; mixed or unknown diffs and protected/release
 paths remain broad, with no claimed timing improvement.
 
-October 18 A0 extension (#1424, awaiting protected qualification): record exact
+October 18 A0 extension ([#1424](https://github.com/ElevenID/marty-ui/pull/1424),
+merged as `35dc7400b3f9dccbe1a8b2d55101a545ca030beb` after successful PR
+run `39164079935` and protected merge-group run `39165724387`): record exact
 path/SHA evidence for the statically observed 11-script `runpy` graph, the six
 selected/extended Compose source models, the loader script, public CA fixture,
 and three config/source reads. Reject changed helper edges, renderer model
@@ -397,6 +399,15 @@ close generated secrets, external tools/packages, Cargo inputs, and child
 assertion reachability. Retain `transitive_source_closure=incomplete` and all
 existing broad/protected gates. The renderer checkout-root provenance check
 and negative tests address the review finding without asserting full closure.
+
+Next A0 maintenance candidate (local, not yet hosted): inventory each of the
+eleven renderer helpers' static Python import names in the run-bound record.
+Reject relative, direct dynamic-loader, non-stdlib/non-PyYAML and
+checkout-shadowed imports before accepting the observed source graph. This
+does not pin third-party package bytes or prove conditional execution,
+generated outputs, external tools or assertion reachability; retain
+`transitive_source_closure=incomplete`
+and the unchanged protected gates.
 
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
@@ -487,9 +498,9 @@ MKT01-02 and QA01-02 criteria. Preserve these identifiers when reconciling work.
 
 ## Coverage and evidence safeguards
 
-### A4 renewal-handler port matrix (local draft)
+### A4 renewal-handler port matrix
 
-The focused `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
+The merged `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
 `SpyRepository`, `NoOAuth` and retry job fixture. Its optional scripted boundary
 leaves existing short-test fail-fast behavior unchanged. Fifteen separately
 discoverable paused-clock cases execute the actual `process_job`: three renewal
@@ -504,12 +515,10 @@ real PostgreSQL cases, pinned references, process guarantees and required lanes
 remain unchanged; `cutover_authorized` remains false. Future removal requires
 reviewed old/new case/assertion/input/lane mapping and preserved adapter evidence.
 The new leaf is omitted from release Docker contexts through the existing
-exact-file, direct-`cfg(test)` ownership guard. All 34 targeted Python ownership
-and registration guards pass, along with Rust formatting and diff checks. Local
-Rust compilation/execution is pending a safe validation milestone because the
-backing disk is below the 8 GiB build guard; no speedup is claimed. The combined
-batch now starts from protected main `6daf4232cd110656652dec28fd57794693078fce`,
-which supplies #1390's merged dev-only Tokio `test-util` feature.
+exact-file, direct-`cfg(test)` ownership guard. PR #1393's hosted contracts
+job executed all 19 new cases and its protected merge-group run passed before
+merge as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567`. No SQL case was
+removed and no overall speedup is claimed.
 
 [The obligation inventory](architecture-test-obligations.md) retains assertion,
 input and execution owners. An assertion move is not a new independent oracle.
