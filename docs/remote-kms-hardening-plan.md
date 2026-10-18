@@ -78,6 +78,18 @@ Resolve this local runner issue and remeasure resources before the fresh
 signed-artifact install; do not count the earlier v1.1.255 disposable run for
 v1.1.257 acceptance.
 
+Exact-main race checkpoint (2026-10-18): full manual CI `39167241560`
+remains live at `35dc7400...`; its Canvas isolated database-contract step
+started at 21:39 UTC and is still reported in progress, so it is neither a
+pass nor a terminal failure. Unrelated [UI PR #1426](https://github.com/ElevenID/marty-ui/pull/1426)
+passed its PR-head checks and entered the protected merge queue. Its candidate
+is `58e92ace7bd159cc71a4e0eed159cee80887751b`, with merge-group CI
+[39170385605](https://github.com/ElevenID/marty-ui/actions/runs/39170385605)
+queued. If #1426 merges, the older full CI and any claim tied to `35dc7400`
+cannot qualify the resulting source. Keep the current CI handle until its
+authoritative terminal state or main actually changes; then run one full CI
+on settled protected main before the no-write v1.1.257 claim.
+
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
 `db-migrate` rejected a managed signing-key purpose binding solely because the
