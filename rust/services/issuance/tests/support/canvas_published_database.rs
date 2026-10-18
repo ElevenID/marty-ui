@@ -12,6 +12,7 @@ const LABEL: &str = "com.elevenid.test.canvas-published-schema";
 const DATABASE: &str = "canvas_published_schema_test";
 const BASE_REUSE_SWITCH: &str = "MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT";
 static PUBLISHED_BASE: tokio::sync::OnceCell<Vec<u8>> = tokio::sync::OnceCell::const_new();
+static PUBLISHED_BASE_INIT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn selected_postgres_image(fixture: &Value, supplied: Option<&str>) -> Result<String, String> {
     let canonical = fixture["observed_postgres_image"]
@@ -743,27 +744,37 @@ impl PublishedDatabase {
             // Only the exact default constructor can use this immutable base.
             // Scoped recovery and every oracle/recovery overlay retain the
             // original published process, resource identity, and cleanup path.
-            let base = PUBLISHED_BASE
-                .get_or_try_init(|| async {
-                    let owned = Self::start_probe_with_scope(
-                        None,
-                        None,
-                        false,
-                        Uuid::new_v4(),
-                        "published_probe",
-                    )
+            if let Some(base) = PUBLISHED_BASE.get() {
+                return Self::start_from_published_base(base).await;
+            }
+            // A process that needs only one database must not create a second
+            // container merely to cache its already-migrated first database.
+            // Serialize only initial capture; later restores remain concurrent.
+            let initialization = PUBLISHED_BASE_INIT.lock().await;
+            if let Some(base) = PUBLISHED_BASE.get() {
+                drop(initialization);
+                return Self::start_from_published_base(base).await;
+            }
+            let owned =
+                Self::start_probe_with_scope(None, None, false, Uuid::new_v4(), "published_probe")
                     .await?;
-                    let dump = dump_published_base(
-                        owned
-                            .postgres
-                            .as_deref()
-                            .ok_or("Missing pinned base database")?,
-                    );
+            let postgres = owned
+                .postgres
+                .as_deref()
+                .ok_or("Missing pinned base database")?;
+            let base = match dump_published_base(postgres) {
+                Ok(base) => base,
+                Err(error) => {
                     owned.close_verified()?;
-                    dump
-                })
-                .await?;
-            return Self::start_from_published_base(base).await;
+                    return Err(error);
+                }
+            };
+            if PUBLISHED_BASE.set(base).is_err() {
+                owned.close_verified()?;
+                return Err("Published base was initialized concurrently".into());
+            }
+            drop(initialization);
+            return Ok(owned);
         }
         Self::start_probe(None).await
     }
