@@ -192,13 +192,15 @@ def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
 
 def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
+    worker_recorder = 'python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- '
+    composition_recorder = 'python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- '
     preflight = (
-        '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
+        worker_recorder + '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
     )
-    serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
-    worker_full = '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4'
-    json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
-    composition_full = '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
+    serial = worker_recorder + '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
+    worker_full = worker_recorder + '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    json_serial = composition_recorder + '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
+    composition_full = composition_recorder + '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
     scoped_kms = (
         'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
         'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
@@ -218,13 +220,13 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         )
         == 1
     )
-    deadline_serial = '"$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1'
+    deadline_serial = worker_recorder + '"$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1'
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
     assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
     assert 'historical_serial_tests=("$mixed_roster_serial_test")' in script
     assert (
-        'timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
+        'timed canvas_serial mixed_roster_reference ' + worker_recorder + '"$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
         in script
     )
     assert (
@@ -467,7 +469,7 @@ if [[ "${{1:-}}" == */rust_db_obligations.py ]]; then
   # The recorder's real child and cancellation behavior have separate tests.
   shift
   [[ "$1" == --name && "$3" == --owner && "$5" == -- ]] || exit 90
-  if [[ "$2" == flow_acceptance ]]; then
+  if [[ "$2" == flow_acceptance || "$2" == canvas_worker_acceptance || "$2" == canvas_composition_acceptance ]]; then
     [[ "$4" == canvas ]] || exit 90
   elif [[ "$2" == selfhost_acceptance ]]; then
     [[ "$4" == canvas || "$4" == selfhost ]] || exit 90
