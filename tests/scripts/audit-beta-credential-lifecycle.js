@@ -643,6 +643,30 @@ async function performLifecycleAction(page, row, action, reason, recording = nul
   return { ok: response.ok(), status: response.status(), body };
 }
 
+function initialActiveVerificationPassed(verification) {
+  return verification?.session?.ok === true && verification?.wallet?.ok === true
+    && verification?.result?.httpStatus === 200
+    && verification?.result?.decision === 'allow';
+}
+
+async function showRenewalLineage(page, sourceCredentialId, successorId, recording) {
+  const search = page.getByPlaceholder('Search issued credentials...');
+  await search.fill('');
+  await page.getByRole('button', {name: /^refresh$/i}).click();
+  const predecessor = await findCredentialRow(page, sourceCredentialId);
+  const revoked = predecessor.getByText(/^revoked$/i);
+  await revoked.waitFor({state: 'visible', timeout: 30000});
+  await recording.hold('renew', 'predecessor-revoked-status', revoked, 3600);
+  const predecessorReference = await predecessor.locator('[data-credential-reference]').getAttribute('data-credential-reference');
+  await search.fill('');
+  const successor = await findCredentialRow(page, successorId);
+  const relationship = successor.getByText(`Renewed from ${predecessorReference}`, {exact: true});
+  await relationship.waitFor({state: 'visible', timeout: 30000});
+  await recording.hold('renew', 'successor-link', relationship, 3600);
+  return {row: successor, evidence: {predecessorRevokedVisible: true, successorLinkVisible: true,
+    sourceCredentialId, successorId, predecessorReference}};
+}
+
 async function renewCredential(page, row, recording = null) {
   await recording?.explain('renew');
   const button = row.getByRole('button', { name: /^renew credential/i });
@@ -877,6 +901,18 @@ async function main() {
     await page.screenshot({ path: path.join(artifactDir, '01-active-credential.png'), fullPage: true });
     if (RECORD_VIDEO) await page.waitForTimeout(5_100);
 
+    report.initialVerification = await verify(page, walletPage, `${PRESENTATION_TEST_ID}: initial active trial`, {
+      issuerDid: resolveVerificationIssuerDid(VERIFIER_DID, credential),
+    });
+    report.initialActiveAllowed = initialActiveVerificationPassed(report.initialVerification);
+    report.storyAssertions = {initial_active_access_allowed: report.initialActiveAllowed};
+    recording.mark('active', 'verification-result', {passed: report.initialActiveAllowed});
+    await showVerificationResult(page, report.initialVerification.result, {
+      enabled: RECORD_VIDEO, actor: 'Marty status-aware verifier', testId: PRESENTATION_TEST_ID,
+      evaluatedState: 'ACTIVE', comparison: 'Original active credential before renewal',
+    });
+    if (!report.initialActiveAllowed) throw new Error('Initial active credential did not receive an actual allowed verifier decision');
+
     report.renewalOffer = await renewCredential(page, row, recording);
     if (!report.renewalOffer.ok || !report.renewalOffer.offerUri) {
       throw new Error(`Renewal failed: ${JSON.stringify(report.renewalOffer.error)}`);
@@ -903,9 +939,9 @@ async function main() {
       await detailDialog.getByRole('button', { name: /^close$/i }).click();
       await detailDialog.waitFor({ state: 'hidden', timeout: 30_000 });
     }
-    await page.getByPlaceholder('Search issued credentials...').fill('');
-    await page.getByRole('button', { name: /^refresh$/i }).click();
-    row = await findCredentialRow(page, credential.id);
+    const lineage = await showRenewalLineage(page, sourceCredentialId, credential.id, recording);
+    report.renewalUiLineage = lineage.evidence;
+    row = lineage.row;
     await showLifecycleStep(page, 'Credential renewed', 'The replacement credential is active and linked to its superseded predecessor.', '2 of 5');
     await page.screenshot({ path: path.join(artifactDir, '02-renewed-credential.png'), fullPage: true });
 
@@ -989,6 +1025,9 @@ async function main() {
     report.engineeringReady = Boolean(
       report.permissions.status === 200
       && report.permissions.hasLifecyclePermission
+      && report.storyAssertions.initial_active_access_allowed
+      && report.renewalUiLineage.predecessorRevokedVisible
+      && report.renewalUiLineage.successorLinkVisible
       && report.draftCleanup.ok
       && report.credentialCleanup.ok
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
@@ -1023,6 +1062,8 @@ if (require.main === module) {
 
 module.exports = {
   createLifecycleRecording,
+  initialActiveVerificationPassed,
+  showRenewalLineage,
   LIFECYCLE_DEMO_REASONS,
   renewCredential,
   candidateUiFileForRequest,
