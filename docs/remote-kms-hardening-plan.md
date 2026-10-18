@@ -20,9 +20,13 @@ main is `0a91b88fbd4348b5709189f131c74d2848ffd2ee`, which includes
 Canvas compile-overhead [PR #1408](https://github.com/ElevenID/marty-ui/pull/1408).
 All five protected merge-group workflows passed at that SHA. Full exact-main
 [CI 39124289031](https://github.com/ElevenID/marty-ui/actions/runs/39124289031)
-is queued; the earlier successful v1.1.257 claim `39120259279` targeted the
+passed, but a later exact-main CI dispatch was cancelled before any jobs
+started. The fresh no-write claim `39126691452` correctly rejected that
+latest cancelled run; replacement full exact-main
+[CI 39126809391](https://github.com/ElevenID/marty-ui/actions/runs/39126809391)
+is queued. The earlier successful v1.1.257 claim `39120259279` targeted the
 superseded `b9291b56...` SHA and cannot authorize the changed source. After
-the new CI passes, make a fresh no-write claim. The dedicated
+the replacement CI passes, make a fresh no-write claim. The dedicated
 `STACK_RELEASE_TAG_TOKEN` repository secret is
 absent, so do not dispatch publication. Then qualify the signed fixed release
 with fresh installation, coordinated off-host backup/cold restore, custody and
@@ -546,6 +550,23 @@ preflight again. Wait for complete exact-main CI, recheck main, then issue a
 fresh no-write v1.1.257 claim. Do not dispatch `cd.yml` until the dedicated
 `STACK_RELEASE_TAG_TOKEN` secret is provisioned. The v1.1.257 tag remains
 absent; no signed fixed-release recovery is claimed.
+
+Latest-full-CI collision and claim retry (2026-10-18): exact-main
+[CI 39124289031](https://github.com/ElevenID/marty-ui/actions/runs/39124289031)
+passed every job at `0a91b88fbd4348b5709189f131c74d2848ffd2ee`.
+Another `workflow_dispatch` CI run `39124410279` was created later for the
+same SHA, then cancelled with zero jobs before it started. The no-write
+[claim 39126691452](https://github.com/ElevenID/marty-ui/actions/runs/39126691452)
+failed in `stack_tag_gate.py` because the policy requires the latest
+exact-main full qualification to succeed and selected the cancelled run.
+Its preflight passed; it did not write a tag or publish anything. Retain the
+latest-success policy rather than masking a later failed/cancelled run.
+Protected main and absent v1.1.257 tag were rechecked; replacement full
+[CI 39126809391](https://github.com/ElevenID/marty-ui/actions/runs/39126809391)
+was dispatched at the same exact SHA and is queued. Wait for its terminal
+success and unchanged main before one new no-write claim. The dedicated
+release-tag secret remains absent. Clean WSL source and integration checkouts
+are staged at `0a91b88f...` and `5b3ec6a8...` with empty Git status.
 
 ## Objective and working agreement
 
