@@ -14,6 +14,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,8 @@ from selfhost_handoff_contract import PINNED_INTEGRATION_SHA
 from selfhost_journey_diagnostics import RunDiagnostics
 from selfhost_managed_reference import managed_reference
 from selfhost_openbao_client import Bao, CUSTODY_SIGNER, custody_signer_public
+from verify_selfhost_public_kms_helper import FILES as PUBLIC_KMS_HELPER_FILES
+from verify_selfhost_public_kms_helper import verify_owned_helper
 
 
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
@@ -181,13 +184,17 @@ def verify_marty_database_custody(compose: list[str], install_root: Path,
             input_text=PRIVATE_KEY_CONTENT_QUERY)
 
 
+def require_clean_release_source(source_checkout: Path) -> None:
+    if command(["git", "status", "--porcelain", "--untracked-files=all"],
+               cwd=source_checkout).strip():
+        raise ValueError("release source checkout has local changes")
+
+
 def build_public_kms_jwk_tool(source_checkout: Path, target_root: Path) -> Path:
     if (target_root.is_symlink() or not target_root.is_dir()
             or any(target_root.iterdir())):
         raise ValueError("Rust public-key build target is not fresh")
-    if command(["git", "status", "--porcelain", "--untracked-files=all"],
-               cwd=source_checkout).strip():
-        raise ValueError("release source checkout has local changes")
+    require_clean_release_source(source_checkout)
     # The qualification binary must come from this source, not ambient Cargo
     # configuration, compiler wrappers, flags, or a shared build cache.
     inherited = {"PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR",
@@ -655,6 +662,51 @@ def validate_inputs(args: argparse.Namespace) -> None:
                                args.source_checkout / "config/keycloak/11id-realm.json")
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
+    companion = getattr(args, "public_kms_helper_dir", None)
+    if companion is not None and (
+        not companion.is_absolute() or companion.is_symlink() or not companion.is_dir()
+        or not companion.resolve().is_relative_to(args.archive.parent.resolve())
+    ):
+        raise ValueError("public-key helper companion is not within the prepared asset directory")
+
+
+def copied_public_kms_helper(companion: Path, owned_root: Path,
+                             source_sha: str, run_id: str) -> Path:
+    """Copy public companion bytes into a private exact set before admission."""
+    destination = owned_root / "public-kms-helper"
+    destination.mkdir(mode=0o700)
+    for name in sorted(PUBLIC_KMS_HELPER_FILES):
+        source = companion / name
+        limit = (64 * 1024 * 1024 if name == "public-kms-jwk" else
+                 4096 if name == "selfhost-public-kms-jwk.json" else 2 * 1024 * 1024)
+        target = destination / name
+        try:
+            descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(descriptor, "rb") as data, target.open("xb") as output:
+                metadata = os.fstat(data.fileno())
+                if not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= limit:
+                    raise ValueError("public-key helper companion is incomplete")
+                remaining = metadata.st_size
+                while remaining:
+                    chunk = data.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ValueError("public-key helper companion changed during copy")
+                    output.write(chunk)
+                    remaining -= len(chunk)
+                if data.read(1):
+                    raise ValueError("public-key helper companion grew during copy")
+        except OSError as error:
+            raise ValueError("public-key helper companion is incomplete") from error
+        target.chmod(0o700 if name == "public-kms-jwk" else 0o600)
+    return verify_owned_helper(destination, source_sha, run_id)
+
+
+def public_kms_jwk_tool(args: argparse.Namespace, build_root: Path) -> Path:
+    companion = getattr(args, "public_kms_helper_dir", None)
+    if companion is None:
+        return build_public_kms_jwk_tool(args.source_checkout, build_root)
+    require_clean_release_source(args.source_checkout)
+    return copied_public_kms_helper(companion, build_root, args.source_sha, args.run_id)
 
 
 def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> dict:
@@ -682,7 +734,7 @@ def run(args: argparse.Namespace, diagnostics: RunDiagnostics | None = None) -> 
     with (tempfile.TemporaryDirectory(prefix="marty-selfhost-jwk-build-") as build_root,
           tempfile.TemporaryDirectory(prefix="marty-selfhost-anonymous-docker-") as config):
         with measured(diagnostics, "public_key_tool_build"):
-            jwk_tool = build_public_kms_jwk_tool(args.source_checkout, Path(build_root))
+            jwk_tool = public_kms_jwk_tool(args, Path(build_root))
         environment["SELFHOST_KMS_JWK_TOOL"] = str(jwk_tool)
         environment["DOCKER_CONFIG"] = config
         states, custody_sha256 = installed_journey(
@@ -740,6 +792,8 @@ def main() -> int:
         parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--diagnostic-output", type=Path,
                         help="optional redacted timing and host-resource report")
+    parser.add_argument("--public-kms-helper-dir", type=Path,
+                        help="experimental exact four-file public companion; invalid input fails closed")
     args = parser.parse_args()
     try:
         target = diagnostic_target(args)

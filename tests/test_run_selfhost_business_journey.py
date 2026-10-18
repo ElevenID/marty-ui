@@ -4,9 +4,11 @@ import base64
 import hashlib
 from io import BytesIO
 import json
+import os
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -36,6 +38,102 @@ from run_selfhost_business_journey import (  # noqa: E402
 )
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 from selfhost_managed_reference import managed_reference  # noqa: E402
+
+
+def test_public_helper_companion_copies_only_exact_files_before_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if sys.platform != "linux":
+        pytest.skip("Linux no-follow companion copy contract")
+    companion = tmp_path / "companion"
+    companion.mkdir()
+    for name in runner.PUBLIC_KMS_HELPER_FILES:
+        (companion / name).write_bytes(name.encode("ascii"))
+    observed: list[tuple[Path, str, str]] = []
+    def verify(directory: Path, source: str, run: str) -> Path:
+        observed.append((directory, source, run))
+        assert {path.name for path in directory.iterdir()} == runner.PUBLIC_KMS_HELPER_FILES
+        assert all((directory / name).read_bytes() == name.encode("ascii")
+                   for name in runner.PUBLIC_KMS_HELPER_FILES)
+        return directory / "public-kms-jwk"
+    monkeypatch.setattr(runner, "verify_owned_helper", verify)
+    owned = tmp_path / "owned"
+    owned.mkdir()
+    assert runner.copied_public_kms_helper(companion, owned, "a" * 40, "123") == \
+        owned / "public-kms-helper" / "public-kms-jwk"
+    assert len(observed) == 1
+    (companion / "public-kms-jwk").unlink()
+    (tmp_path / "second").mkdir()
+    with pytest.raises(ValueError, match="incomplete"):
+        runner.copied_public_kms_helper(companion, tmp_path / "second", "a" * 40, "123")
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux named-pipe no-block contract")
+def test_public_helper_fifo_is_rejected_before_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    companion = tmp_path / "companion"
+    companion.mkdir()
+    for name in runner.PUBLIC_KMS_HELPER_FILES:
+        (companion / name).write_bytes(b"placeholder")
+    (companion / "public-kms-jwk").unlink()
+    fifo = companion / "public-kms-jwk"
+    os.mkfifo(fifo)
+    (tmp_path / "owned").mkdir()
+    monkeypatch.setattr(runner, "verify_owned_helper", lambda *_args: pytest.fail("FIFO reached verifier"))
+    original_open = os.open
+    def bounded_open(path, flags, *args, **kwargs):
+        if Path(path) == fifo:
+            assert flags & os.O_NONBLOCK, "FIFO open must not block"
+            assert flags & os.O_NOFOLLOW, "FIFO open must not follow a replacement link"
+        return original_open(path, flags, *args, **kwargs)
+    monkeypatch.setattr(runner.os, "open", bounded_open)
+    start = time.monotonic()
+    with pytest.raises(ValueError, match="incomplete"):
+        runner.copied_public_kms_helper(companion, tmp_path / "owned", "a" * 40, "123")
+    assert time.monotonic() - start < 2
+
+
+def test_supplied_public_helper_never_falls_back_to_source_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = SimpleNamespace(
+        public_kms_helper_dir=tmp_path / "companion", source_checkout=tmp_path / "source",
+        source_sha="a" * 40, run_id="123",
+    )
+    def source_build(*_args):
+        pytest.fail("invalid supplied companion reached fresh source build")
+    monkeypatch.setattr(runner, "build_public_kms_jwk_tool", source_build)
+    def invalid_companion(*_args):
+        raise ValueError("companion is invalid")
+    monkeypatch.setattr(runner, "copied_public_kms_helper", invalid_companion)
+    monkeypatch.setattr(runner, "require_clean_release_source", lambda _source: None)
+    with pytest.raises(ValueError, match="companion is invalid"):
+        runner.public_kms_jwk_tool(args, tmp_path)
+    args.public_kms_helper_dir = None
+    monkeypatch.setattr(runner, "build_public_kms_jwk_tool", lambda *_args: tmp_path / "built")
+    assert runner.public_kms_jwk_tool(args, tmp_path) == tmp_path / "built"
+
+
+def test_supplied_public_helper_rejects_dirty_release_source_before_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    args = SimpleNamespace(
+        public_kms_helper_dir=tmp_path / "companion", source_checkout=tmp_path / "source",
+        source_sha="a" * 40, run_id="123",
+    )
+    observed: list[list[str]] = []
+    def dirty(argv: list[str], **_kwargs: object) -> str:
+        observed.append(argv)
+        return "?? untracked-file"
+    monkeypatch.setattr(runner, "command", dirty)
+    monkeypatch.setattr(
+        runner, "copied_public_kms_helper",
+        lambda *_args: pytest.fail("dirty source reached companion admission"),
+    )
+    with pytest.raises(ValueError, match="local changes"):
+        runner.public_kms_jwk_tool(args, tmp_path)
+    assert observed == [["git", "status", "--porcelain", "--untracked-files=all"]]
 
 
 def test_invalid_operator_password_aborts_before_compose_build_or_startup(

@@ -66,13 +66,13 @@ def _run() -> dict:
 
 
 def test_verified_run_requires_successful_exact_workflow() -> None:
-    def runner(args: list[str]) -> str:
-        if args[-1].endswith("/actions/runs/123"):
+    def read(url: str) -> str:
+        if url.endswith("/actions/runs/123"):
             return json.dumps(_run())
-        assert args[-1].endswith("/actions/workflows/456")
+        assert url.endswith("/actions/workflows/456")
         return json.dumps({"path": ".github/workflows/cd.yml", "state": "active"})
 
-    verifier.verified_run(RUN, SOURCE, runner)
+    verifier.verified_run(RUN, SOURCE, read)
     for field, value in (
         ("conclusion", "failure"),
         ("run_attempt", 2),
@@ -82,7 +82,27 @@ def test_verified_run_requires_successful_exact_workflow() -> None:
         changed = _run()
         changed[field] = value
         with pytest.raises(ValueError, match="not qualified"):
-            verifier.verified_run(RUN, SOURCE, lambda _args: json.dumps(changed))
+            verifier.verified_run(RUN, SOURCE, lambda _url: json.dumps(changed))
+
+
+def test_bundle_verifier_uses_anonymous_isolated_gh_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GH_TOKEN", "must-not-forward")
+    monkeypatch.setenv("GITHUB_TOKEN", "must-not-forward")
+    captured: list[dict] = []
+
+    def fake_run(*args, **kwargs):
+        captured.append(kwargs)
+        return subprocess.CompletedProcess(args[0], 0, "[]", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", fake_run)
+    assert verifier.command(["gh", "attestation", "verify", "subject"]) == "[]"
+    [call] = captured
+    assert "GH_TOKEN" not in call["env"]
+    assert "GITHUB_TOKEN" not in call["env"]
+    assert call["env"]["GH_CONFIG_DIR"]
+    assert call["timeout"] == 120
 
 
 def test_both_attested_subjects_are_required_with_same_run(tmp_path) -> None:
@@ -92,6 +112,10 @@ def test_both_attested_subjects_are_required_with_same_run(tmp_path) -> None:
         assert args[:3] == ["gh", "attestation", "verify"]
         assert args[args.index("--signer-workflow") + 1] == verifier.SIGNER
         assert args[args.index("--source-digest") + 1] == SOURCE
+        assert (
+            args[args.index("--predicate-type") + 1] == "https://slsa.dev/provenance/v1"
+        )
+        assert args[args.index("--bundle") + 1].endswith(".slsa-bundle.json")
         seen.append(args[3])
         return _certificate()
 
@@ -131,12 +155,6 @@ def test_owned_extraction_admission_and_abi_smoke(
     )
 
     def runner(args: list[str]) -> str:
-        if args[:2] == ["gh", "api"]:
-            return (
-                json.dumps(_run())
-                if "actions/runs" in args[-1]
-                else json.dumps({"path": verifier.WORKFLOW, "state": "active"})
-            )
         if args[:3] == ["gh", "attestation", "verify"]:
             return _certificate()
         assert args == ["ldd", str(binary)]
@@ -149,7 +167,17 @@ def test_owned_extraction_admission_and_abi_smoke(
             _args[0], 1, b"", b"public key is not a supported SPKI PEM\n"
         ),
     )
-    assert verifier.verify_owned_helper(directory, SOURCE, RUN, runner) == binary
+    for name in (verifier.BINARY_BUNDLE, verifier.RECEIPT_BUNDLE):
+        (directory / name).write_text("{}", encoding="ascii")
+
+    def read(url: str) -> str:
+        return (
+            json.dumps(_run())
+            if "actions/runs" in url
+            else json.dumps({"path": verifier.WORKFLOW, "state": "active"})
+        )
+
+    assert verifier.verify_owned_helper(directory, SOURCE, RUN, runner, read) == binary
     directory.chmod(0o755)
     with pytest.raises(ValueError, match="private and exact"):
-        verifier.verify_owned_helper(directory, SOURCE, RUN, runner)
+        verifier.verify_owned_helper(directory, SOURCE, RUN, runner, read)

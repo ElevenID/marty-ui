@@ -852,10 +852,11 @@ def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() ->
     verify = named["Verify the just-attested helper source"]
     attest = [i for i, step in enumerate(steps)
               if step.get("uses", "").startswith("actions/attest-build-provenance@")]
+    bundles = named["Preserve exact public-key helper SLSA bundles"]
     upload = next(i for i, step in enumerate(steps)
                   if step.get("with", {}).get("name", "").startswith("selfhost-public-kms-jwk-unqualified-"))
     assert len(attest) == 2
-    assert build < exercise < record < attest[0] < attest[1] < verify < upload
+    assert build < exercise < record < attest[0] < attest[1] < bundles < verify < upload
     assert steps[build]["env"]["PREPARE_SELFHOST_LOCK"] == "${{ inputs.prepare_selfhost_lock }}"
     assert 'if [[ "$PREPARE_SELFHOST_LOCK" = true ]]; then' in steps[build]["run"]
     assert 'test "$GITHUB_SHA" = "$SOURCE_SHA"' in steps[build]["run"]
@@ -864,12 +865,19 @@ def test_exercised_public_kms_helper_is_attested_only_for_prepared_selfhost() ->
                for i in (record, *attest, verify, upload))
     assert [steps[i]["with"]["subject-path"] for i in attest] == [
         "public-kms-jwk", "selfhost-public-kms-jwk.json"]
+    assert [steps[i]["id"] for i in attest] == [
+        "attest-public-kms-binary", "attest-public-kms-receipt"]
+    assert all("outputs.bundle-path" in value for value in steps[bundles]["env"].values())
+    assert "test -s \"$BINARY_BUNDLE\"" in steps[bundles]["run"]
+    assert "test -s \"$RECEIPT_BUNDLE\"" in steps[bundles]["run"]
     assert "install -m 0755 marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
     assert "cmp marty-ui/rust/target/release/public-kms-jwk public-kms-jwk" in steps[record]["run"]
     assert "verify_selfhost_public_kms_helper.py" in steps[verify]["run"]
     assert '--run-id "$GITHUB_RUN_ID"' in steps[verify]["run"]
     assert "selfhost-public-kms-jwk.json" in steps[upload]["with"]["path"]
     assert "public-kms-jwk" in steps[upload]["with"]["path"]
+    assert "public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
+    assert "selfhost-public-kms-jwk.slsa-bundle.json" in steps[upload]["with"]["path"]
     assert steps[upload]["with"]["retention-days"] == 7
     # Producer-only: no immutable release asset or tester-side bypass yet.
     assert "selfhost-public-kms-jwk" not in str(jobs["publish-manifest"])

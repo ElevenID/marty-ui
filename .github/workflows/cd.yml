@@ -1161,14 +1161,28 @@ jobs:
             --binary public-kms-jwk \
             --source-sha "$SOURCE_SHA" --run-id "$GITHUB_RUN_ID" \
             --output selfhost-public-kms-jwk.json
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - id: attest-public-kms-binary
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         if: inputs.prepare_selfhost_lock == true
         with:
           subject-path: public-kms-jwk
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
+      - id: attest-public-kms-receipt
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         if: inputs.prepare_selfhost_lock == true
         with:
           subject-path: selfhost-public-kms-jwk.json
+      - name: Preserve exact public-key helper SLSA bundles
+        if: inputs.prepare_selfhost_lock == true
+        env:
+          BINARY_BUNDLE: ${{ steps.attest-public-kms-binary.outputs.bundle-path }}
+          RECEIPT_BUNDLE: ${{ steps.attest-public-kms-receipt.outputs.bundle-path }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s "$BINARY_BUNDLE"
+          test -s "$RECEIPT_BUNDLE"
+          cp -- "$BINARY_BUNDLE" public-kms-jwk.slsa-bundle.json
+          cp -- "$RECEIPT_BUNDLE" selfhost-public-kms-jwk.slsa-bundle.json
       - name: Verify the just-attested helper source
         if: inputs.prepare_selfhost_lock == true
         env:
@@ -1187,6 +1201,8 @@ jobs:
           path: |
             public-kms-jwk
             selfhost-public-kms-jwk.json
+            public-kms-jwk.slsa-bundle.json
+            selfhost-public-kms-jwk.slsa-bundle.json
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
