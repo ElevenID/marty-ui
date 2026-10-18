@@ -114,11 +114,12 @@ key. Dump contents stay in the test process; only fixed mismatch messages are
 emitted. The pilot applies only to
 `PublishedDatabase::start()` with the fixed `published_probe`
 setup. The first call still runs the exact pinned producer and validates its
-source digest and
-migration revisions, then captures a bounded SQL dump in this test process and
-removes its owned containers. Later calls restore that immutable dump into a
-new case-owned tmpfs PostgreSQL container. Scoped recovery, oracle-specific
-fixtures, recovery overlays, and their cleanup remain on the original path.
+source digest and migration revisions, then captures a bounded SQL dump in
+this test process before returning that same case-owned database. Its caller
+retains verified cleanup responsibility. Later calls restore the immutable
+dump into new, separately owned tmpfs PostgreSQL containers. Scoped recovery,
+oracle-specific fixtures, recovery overlays, and their cleanup remain on the
+original path.
 PostgreSQL readiness now requires TCP `127.0.0.1`; the entrypoint's temporary
 Unix-socket initialization server can otherwise appear ready before the final
 server accepts the restore.

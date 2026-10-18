@@ -220,10 +220,21 @@ mod diagnostic_tests {
     #[ignore = "opt-in pinned Docker image pilot; compare independent fresh and round-tripped schema/data dumps"]
     async fn fresh_probe_and_cached_restore_keep_roundtrip_schema_and_data() {
         assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
-        let restored = PublishedDatabase::start().await.unwrap();
+        assert!(PUBLISHED_BASE.get().is_none());
+        let first = PublishedDatabase::start().await.unwrap();
         let captured_base = PUBLISHED_BASE
             .get()
             .expect("missing verified published base");
+        let first_dump =
+            dump_published_base_with_restrict_key(first.postgres.as_deref().unwrap(), true)
+                .unwrap();
+        first.close_verified().unwrap();
+        assert!(
+            comparable_dump(captured_base) == comparable_dump(&first_dump),
+            "first owned database differs from its captured immutable base"
+        );
+
+        let restored = PublishedDatabase::start().await.unwrap();
         let restored_dump =
             dump_published_base_with_restrict_key(restored.postgres.as_deref().unwrap(), true)
                 .unwrap();
