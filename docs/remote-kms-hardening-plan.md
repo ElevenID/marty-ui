@@ -124,6 +124,14 @@ claim. The earlier successful CI 39167241560 is now obsolete for v1.1.257.
 No other open UI PR had auto-merge enabled at dispatch. Keep the tag and
 release absent until this full run passes and protected main is unchanged.
 
+CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
+had been dispatched at superseded main `35dc7400...` and remained in its
+Canvas shard. Because `CI-main` concurrency held fresh run 39172145237
+pending, cancellation was requested only after confirming the old run's head
+was not protected main. GitHub now reports the old run terminal `cancelled`;
+its evidence is preserved. The new exact-main run began scheduling jobs at
+`58e92ace...`. Do not count the cancelled duplicate as release qualification.
+
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
 `db-migrate` rejected a managed signing-key purpose binding solely because the
