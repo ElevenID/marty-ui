@@ -1131,7 +1131,8 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "Create or verify the late annotated source tag" in workflow
     helper = _text("scripts/push_promoted_release_tag.py")
     assert 'command("git", "tag", "-a", tag, source' in helper
-    assert 'command("git", "push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")' in helper
+    assert 'command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main"' in helper
+    assert 'f"refs/tags/{tag}:refs/tags/{tag}"' in helper
     assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
     assert (
         'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow

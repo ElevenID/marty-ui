@@ -64,6 +64,12 @@ def main() -> None:
     require(not output("git", "status", "--porcelain"), "Checkout must be clean")
     require(output("git", "branch", "--show-current") == "main",
             "Use a clean main checkout")
+    official_urls = {"https://github.com/ElevenID/marty-ui.git",
+                     "https://github.com/ElevenID/marty-ui",
+                     "git@github.com:ElevenID/marty-ui.git"}
+    require(output("git", "remote", "get-url", "origin") in official_urls and
+            output("git", "remote", "get-url", "--push", "origin") in official_urls,
+            "origin fetch and push URLs must target the official release repository")
     source = output("git", "rev-parse", "HEAD^{commit}")
     remote_main = output("git", "ls-remote", "origin", "refs/heads/main").split()[0]
     require(source == remote_main, "Checkout must equal current protected main")
@@ -136,7 +142,13 @@ def main() -> None:
         message_file.unlink(missing_ok=True)
     try:
         command("gh", "auth", "setup-git")
-        command("git", "push", "origin", f"refs/tags/{tag}:refs/tags/{tag}")
+        require(output("git", "ls-remote", "origin", "refs/heads/main").split()[0]
+                == source, "Protected main advanced before the tag push")
+        # Include an unchanged main ref in the atomic push. If main advances
+        # during this final check, the non-fast-forward main update rejects
+        # the entire transaction, including the new tag.
+        command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main",
+                f"refs/tags/{tag}:refs/tags/{tag}")
     except subprocess.CalledProcessError:
         command("git", "tag", "-d", tag, check=False)
         raise
