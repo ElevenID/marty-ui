@@ -17,6 +17,14 @@ allowlisted cache counters for seven days, including failed runs. Cache counters
 are sampled after the complete recovery probe, not attributed to an individual
 Cargo command. This adds visibility, not warming, artifact reuse or a speed claim.
 
+Host Rust test, lint and trusted-main warming jobs explicitly use zero dev/test
+debug info with incremental compilation disabled, matching the recovery probe.
+This removes a known CI profile mismatch without unifying package feature graphs.
+Local line-table/debugging profiles, production optimization, required checks,
+read-only PR cache access and the warmer's existing thirty-minute budget remain
+unchanged. Cache write failures and actual resulting reuse still need evidence;
+profile alignment alone does not establish a turnaround improvement.
+
 | Group / current entry point | Obligations and inputs | Execution / relocation constraints |
 | --- | --- | --- |
 | Workspace behavior: contracts lane, `cargo test --locked --workspace` | Service/domain behavior, embedded contract corpora, explicit test targets and grouped behavior modules | Some tests return early without configured environments; a successful default workspace run is not evidence of live acceptance. Preserve explicit later invocations. |

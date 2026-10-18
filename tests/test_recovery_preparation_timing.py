@@ -17,13 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 def probe(monkeypatch, tmp_path):
     monkeypatch.syspath_prepend(str(ROOT / "scripts"))
     spec = importlib.util.spec_from_file_location(
-        "recovery_preparation_probe", ROOT / "scripts/probe_integration_secret_coordinated_restore.py"
+        "recovery_preparation_probe",
+        ROOT / "scripts/probe_integration_secret_coordinated_restore.py",
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     monkeypatch.setattr(module, "ROOT", tmp_path)
-    binary = tmp_path / "rust/target/debug" / (
-        "marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys"
+    binary = (
+        tmp_path
+        / "rust/target/debug"
+        / ("marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys")
     )
     binary.parent.mkdir(parents=True)
     binary.write_bytes(b"not an executable; must never run")
@@ -35,13 +38,20 @@ def probe(monkeypatch, tmp_path):
 def expected_commands():
     prefix = ["cargo", "+1.95.0"]
     return [
-        prefix + [mode, "--locked", "-p", package] + selection
-        + (["--no-run"] if mode == "test" else []) + ["-j", "1"]
+        prefix
+        + [mode, "--locked", "-p", package]
+        + selection
+        + (["--no-run"] if mode == "test" else [])
+        + ["-j", "1"]
         for mode, package, selection in [
             ("build", "marty-signing-keys", ["--bin", "marty-signing-keys"]),
             ("test", "marty-signing-keys", ["--test", "vc_api_holder_proof_live_kms"]),
             ("test", "marty-issuance-service", ["--lib"]),
-            ("test", "marty-issuance-service", ["--test", "canvas_oauth_postgres_contract"]),
+            (
+                "test",
+                "marty-issuance-service",
+                ["--test", "canvas_oauth_postgres_contract"],
+            ),
             ("test", "marty-issuance-service", ["--test", "didcomm_remote_kms_live"]),
             ("test", "marty-flow", ["--test", "haip_live_signing"]),
             ("test", "marty-flow", ["--test", "haip_remote_http"]),
@@ -50,7 +60,9 @@ def expected_commands():
     ]
 
 
-def test_prepare_only_uses_all_eight_unchanged_commands_and_no_services(probe, monkeypatch):
+def test_prepare_only_uses_all_eight_unchanged_commands_and_no_services(
+    probe, monkeypatch
+):
     module, evidence, binary = probe
     calls, progress = [], []
 
@@ -77,11 +89,17 @@ def test_prepare_only_uses_all_eight_unchanged_commands_and_no_services(probe, m
     rows = [json.loads(line) for line in evidence.read_text().splitlines()]
     assert [row["phase"] for row in rows] == list(module.RUST_PREPARATION_PHASES)
     assert all(row["status"] == "ok" and row["duration_ms"] >= 0 for row in rows)
-    assert all(set(row) == {"schema_version", "phase", "status", "duration_ms"} for row in rows)
+    assert all(
+        set(row) == {"schema_version", "phase", "status", "duration_ms"} for row in rows
+    )
 
 
-@pytest.mark.parametrize("fault, status", [("failed", "failed"), ("timeout", "timeout"), ("spawn", "error")])
-def test_failed_preparation_flushes_final_record_and_stops(probe, monkeypatch, capsys, fault, status):
+@pytest.mark.parametrize(
+    "fault, status", [("failed", "failed"), ("timeout", "timeout"), ("spawn", "error")]
+)
+def test_failed_preparation_flushes_final_record_and_stops(
+    probe, monkeypatch, capsys, fault, status
+):
     module, evidence, _ = probe
     calls = []
 
@@ -101,22 +119,35 @@ def test_failed_preparation_flushes_final_record_and_stops(probe, monkeypatch, c
     assert calls == expected_commands()[:2]
     rows = [json.loads(line) for line in evidence.read_text().splitlines()]
     assert [row["status"] for row in rows] == ["ok", status]
-    assert "private-payload" not in capsys.readouterr().out + str(error.value) + evidence.read_text()
+    assert (
+        "private-payload"
+        not in capsys.readouterr().out + str(error.value) + evidence.read_text()
+    )
 
 
 def test_default_cli_retains_full_qualification(probe, monkeypatch):
     module, _, _ = probe
     calls = []
     monkeypatch.setattr(module, "run", lambda: calls.append("full"))
-    monkeypatch.setattr(module, "build_rust", lambda: pytest.fail("default must call the full owner"))
+    monkeypatch.setattr(
+        module, "build_rust", lambda: pytest.fail("default must call the full owner")
+    )
     module.main([])
     assert calls == ["full"]
 
 
-def test_optional_evidence_failure_never_replaces_build_result(probe, monkeypatch, capsys):
+def test_optional_evidence_failure_never_replaces_build_result(
+    probe, monkeypatch, capsys
+):
     module, evidence, binary = probe
-    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_TIMING_FILE", str(evidence / "missing-parent"))
-    monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    monkeypatch.setenv(
+        "MARTY_RECOVERY_PREPARATION_TIMING_FILE", str(evidence / "missing-parent")
+    )
+    monkeypatch.setattr(
+        module.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
     assert module.build_rust() == binary
     assert "optional timing artifact unavailable" in capsys.readouterr().out
 
@@ -126,27 +157,73 @@ def test_unknown_labels_cannot_enter_public_timing(probe):
     with pytest.raises(ValueError, match="Unknown recovery"):
         module.record_preparation_timing("private-payload", "ok", 0)
     with pytest.raises(ValueError, match="Unknown recovery"):
-        module.record_preparation_timing(module.RUST_PREPARATION_PHASES[0], "private-payload", 0)
+        module.record_preparation_timing(
+            module.RUST_PREPARATION_PHASES[0], "private-payload", 0
+        )
 
 
 def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
-    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["test-openbao-didcomm-plugin"]
+    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"][
+        "test-openbao-didcomm-plugin"
+    ]
     steps = {step.get("name"): step for step in job["steps"]}
-    recovery = steps["Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore"]
-    assert recovery["run"] == "python3 scripts/probe_integration_secret_coordinated_restore.py"
-    assert not recovery.get("continue-on-error") and "--prepare-rust-only" not in recovery["run"]
-    assert recovery["env"]["CARGO_PROFILE_DEV_DEBUG"] == recovery["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
+    recovery = steps[
+        "Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore"
+    ]
+    assert (
+        recovery["run"]
+        == "python3 scripts/probe_integration_secret_coordinated_restore.py"
+    )
+    assert (
+        not recovery.get("continue-on-error")
+        and "--prepare-rust-only" not in recovery["run"]
+    )
+    assert (
+        recovery["env"]["CARGO_PROFILE_DEV_DEBUG"]
+        == recovery["env"]["CARGO_PROFILE_TEST_DEBUG"]
+        == 0
+    )
     assert recovery["env"]["CARGO_INCREMENTAL"] == 0
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     cache = steps["Record optional recovery compiler cache outcomes"]
-    assert cache["if"] == "always()" and "timeout 10s sccache --show-stats 2>/dev/null" in cache["run"]
-    assert "awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk" in cache["run"]
+    assert (
+        cache["if"] == "always()"
+        and "timeout 10s sccache --show-stats 2>/dev/null" in cache["run"]
+    )
+    assert (
+        "awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk"
+        in cache["run"]
+    )
     retained = steps["Retain recovery preparation evidence"]
     assert retained["if"] == "always()"
     assert retained["continue-on-error"] is True
-    assert retained["uses"] == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    assert (
+        retained["uses"]
+        == "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a"
+    )
     assert retained["with"]["retention-days"] == 7
     assert retained["with"]["path"].splitlines() == [
         "${{ runner.temp }}/rust-recovery-preparation.jsonl",
         "${{ runner.temp }}/rust-recovery-cache-counters.jsonl",
     ]
+
+
+def test_host_rust_ci_and_warmer_share_fast_debug_settings():
+    jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
+    warmer = yaml.safe_load(
+        (ROOT / ".github/workflows/warm-ci-caches.yml").read_text()
+    )["jobs"]["rust"]
+    lint = next(
+        job for job in jobs.values() if job.get("name") == "Rust Lint and Packaging"
+    )
+    for job in (jobs["test-rust-services"], lint, warmer):
+        assert job["env"]["CARGO_PROFILE_DEV_DEBUG"] == 0
+        assert job["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
+        assert job["env"]["CARGO_INCREMENTAL"] == 0
+    assert warmer["timeout-minutes"] == 30
+    assert warmer["env"]["SCCACHE_GHA_RW_MODE"] == "READ_WRITE"
+    assert (
+        jobs["test-rust-services"]["env"]["SCCACHE_GHA_RW_MODE"]
+        == lint["env"]["SCCACHE_GHA_RW_MODE"]
+        == "READ_ONLY"
+    )
