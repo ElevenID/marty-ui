@@ -348,6 +348,24 @@ passed. Auto-merge is enabled; require protected PR and merge-group checks,
 then new exact-main CI and a fresh v1.1.257 claim. The dedicated publisher
 secret is still unprovisioned, so do not dispatch another Stack release yet.
 
+Protected v1.1.257 PR gate (2026-10-18): #1404 head
+`89a54d636dad3c7f395f93832734a366d1048a5f` passed full PR CI
+[`39107694765`](https://github.com/ElevenID/marty-ui/actions/runs/39107694765),
+including OpenBao coordinated PostgreSQL/Raft recovery, Canvas and contracts
+database suites, self-host Rust tests, release contracts and the terminal gate.
+Actions/Rust CodeQL, organization quality and open-source policy passed; both
+automated code and security reviews completed without findings, with no open
+review threads. Concurrent #1403 merged as
+`07a46e380be6c1fbe3d85dd267cbcdb5fde7bc66`, so #1404 entered the
+protected merge queue on that newer main at position 1 with candidate
+`c75bcc4e7444d63fa88843aaf09cc999e7c5f6a9`.
+[Merge-group CI 39109088634](https://github.com/ElevenID/marty-ui/actions/runs/39109088634)
+and its security/quality gates are live. Require their success and actual merge,
+then full exact-main CI and a fresh v1.1.257 claim. The absent dedicated
+publisher secret still prevents a release dispatch; a local pre-created tag
+cannot substitute because pre-promotion explicitly rejects an existing tag
+before image promotion.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
