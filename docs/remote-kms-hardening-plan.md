@@ -312,6 +312,16 @@ tag remains absent and `STACK_RELEASE_TAG_TOKEN` is not provisioned. The
 publisher repair is landed, but no new claim, release or installed acceptance
 follows from this merge alone.
 
+Successor main qualification (2026-10-18): #1401's five merge-group workflows
+passed at `218451f4c79f8ca1f997053253deba5daba0aef9`; it merged at
+06:40 UTC and protected main matched that candidate. No other recent feature
+PR remained queued. Full [exact-main CI 39104929628](https://github.com/ElevenID/marty-ui/actions/runs/39104929628)
+was dispatched with `workflow_dispatch` and its head verified as that SHA;
+it is queued. Require complete success and unchanged main before a fresh
+v1.1.256 no-write claim. Do not dispatch another Stack release without the
+dedicated release-tag secret and a successful fresh claim. The previous
+qualified but failed run and its source-bound claim remain immutable evidence.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
