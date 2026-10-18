@@ -68,7 +68,10 @@ run the verifier from the exact release source for signed-image qualification.
 
 The verifier requires the exact 28-service closure, unsealed Raft, the public
 issue/present/verify/revoke journey, Keycloak issuance and refresh, and both
-database custody scans. Its mode-0600 JSON report remains `unqualified`:
+database custody scans. It also compares the running containers' image IDs,
+Compose hashes and mounts with the rendered models, and requires mounted
+operator secret files to come from the isolated recovery root. Its mode-0600
+JSON report remains `unqualified`:
 the tool cannot establish backup provenance, a consistent source recovery
 point, off-host retention, signed image identity, or cutover/rollback by
 itself. Establish those independently before claiming supported recovery.
