@@ -288,6 +288,18 @@ final merged protected-main source with full exact-main CI and a fresh
 v1.1.256 claim before another release dispatch; #1400 and any later main
 change invalidate the older claim's source binding.
 
+Protected publisher PR gate (2026-10-18): #1402 final head
+`5eeaf8e44510195a704659357e85cac4e40f474d` passed its complete PR-head
+CI `39101861306`, including Canvas, DIDComm plugin recovery, self-host,
+contracts, release contracts and terminal CI Gate; Actions/Rust CodeQL,
+organization quality and open-source policy also passed. Its one review
+thread is resolved. Auto-merge placed it at merge-queue position 1 with
+candidate `d186533642de5713211163c7a5d1c68f78cb26f1`. Merge-group CI
+`39103286336` and CodeQL are live; policy and organization quality have
+passed. Do not count PR-head checks as protected-main qualification. The
+dedicated repository release-tag secret remains unprovisioned, so no new
+release dispatch is authorized yet.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
