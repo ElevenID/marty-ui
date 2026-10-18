@@ -62,10 +62,13 @@ impl ProofPolicyResolver for HttpProofPolicyResolver {
         } else {
             "issuer-context"
         };
-        let mut endpoint = self.base_url.join(operation).map_err(|cause| {
-            error!(%cause, "proof policy endpoint construction failed");
-            TenantDiscoveryError::ProofPolicyUnavailable
-        })?;
+        let mut endpoint = self.base_url.clone();
+        endpoint.set_path(&format!(
+            "{}/{operation}",
+            self.base_url.path().trim_end_matches('/')
+        ));
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
         {
             let mut query = endpoint.query_pairs_mut();
             query.append_pair("organization_id", &request.organization_id);
@@ -239,6 +242,22 @@ mod tests {
         let requirements = resolver.resolve(&request()).await.expect("policy");
         assert_eq!(requirements.key_storage, ["iso_18045_high"]);
         assert_eq!(requirements.user_authentication, ["biometric"]);
+        task.abort();
+    }
+
+    #[tokio::test]
+    async fn preserves_direct_peer_base_path_without_trailing_slash() {
+        let (base_url, task) =
+            spawn(Router::new().route("/internal/resolve-issuer-did", get(resolved))).await;
+        let direct_url = base_url.join("/internal").expect("direct peer URL");
+        let resolver = HttpProofPolicyResolver::new(
+            direct_url,
+            Some("service-secret"),
+            Duration::from_secs(1),
+        )
+        .expect("resolver");
+        let requirements = resolver.resolve(&request()).await.expect("policy");
+        assert_eq!(requirements.key_storage, ["iso_18045_high"]);
         task.abort();
     }
 

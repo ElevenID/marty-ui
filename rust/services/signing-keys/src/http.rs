@@ -431,10 +431,18 @@ pub fn router_with_all_keys_and_grants(
             "/internal/integration-secrets/decrypt",
             post(decrypt_integration_secret),
         )
+        // Issuance is configured to use this direct peer while Gateway waits
+        // for Issuance readiness. Reuse the same compatibility handlers and
+        // their key/grant checks without introducing a startup cycle.
         .route("/internal/compat/issuer-context", post(issuer_context))
+        .route("/internal/issuer-context", get(issuer_context_query))
         .route(
             "/internal/compat/resolve-issuer-did",
             post(resolve_issuer_did),
+        )
+        .route(
+            "/internal/resolve-issuer-did",
+            get(resolve_issuer_did_query),
         )
         .route(
             "/internal/compat/issuer-profiles/{profile_id}/identity",
@@ -445,6 +453,7 @@ pub fn router_with_all_keys_and_grants(
             post(profile_public_identity),
         )
         .route("/internal/compat/issuer-dids/sign", post(issuer_did_sign))
+        .route("/internal/issuer-dids/sign", post(issuer_did_sign))
         .route(
             "/internal/compat/issuer-profiles",
             post(create_compatibility_profile),
@@ -500,6 +509,10 @@ pub fn router_with_all_keys_and_grants(
         .route(
             "/internal/documents/{organization_id}/csca-trust-anchors",
             get(active_csca_trust_anchors),
+        )
+        .route(
+            "/internal/csca-trust-anchors",
+            get(csca_trust_anchors_query),
         )
         .route(
             "/internal/documents/{organization_id}/passport-artifacts/encrypt",
@@ -6798,6 +6811,14 @@ async fn issuer_context(
     service.issuer_context(&request).await.map(Json)
 }
 
+async fn issuer_context_query(
+    state: State<AppState>,
+    headers: HeaderMap,
+    Query(request): Query<IssuerContextRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    issuer_context(state, headers, Json(request)).await
+}
+
 async fn resolve_issuer_did(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -6809,6 +6830,14 @@ async fn resolve_issuer_did(
         .as_ref()
         .ok_or(CompatibilityError::Unavailable)?;
     service.resolve_issuer_did(&request).await.map(Json)
+}
+
+async fn resolve_issuer_did_query(
+    state: State<AppState>,
+    headers: HeaderMap,
+    Query(request): Query<ResolveIssuerDidRequest>,
+) -> Result<Json<serde_json::Value>, CompatibilityError> {
+    resolve_issuer_did(state, headers, Json(request)).await
 }
 
 async fn profile_identity(
@@ -7343,6 +7372,14 @@ async fn active_csca_trust_anchors(
         .active_certificate_data(now)
         .map(Json)
         .map_err(csca_lifecycle_error)
+}
+
+async fn csca_trust_anchors_query(
+    state: State<AppState>,
+    Query(scope): Query<OrganizationScope>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<CscaCertificateDataResponse>>, DocumentHttpError> {
+    active_csca_trust_anchors(state, Path(scope.organization_id), headers).await
 }
 
 async fn import_csca_certificate(
@@ -8321,6 +8358,61 @@ mod public_contract_tests {
                 .unwrap();
             assert_eq!(response.status(), expected);
         }
+    }
+
+    #[tokio::test]
+    async fn issuance_direct_peer_aliases_preserve_auth_and_grant_gates() {
+        let app = router_with_all_keys(
+            "shared-internal-signing-key-32-chars".into(),
+            None,
+            Some("dedicated-issuer-sign-key-32-chars".into()),
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        for path in [
+            "/internal/issuer-context?organization_id=org-a",
+            "/internal/resolve-issuer-did?organization_id=org-a&issuer_did=did:web:issuer.example",
+            "/internal/csca-trust-anchors?organization_id=org-a",
+        ] {
+            let denied = app
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(denied.status(), StatusCode::UNAUTHORIZED, "{path}");
+            let accepted = app
+                .clone()
+                .oneshot(
+                    Request::get(path)
+                        .header("x-api-key", "shared-internal-signing-key-32-chars")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(accepted.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        }
+        let denied = app
+            .oneshot(
+                Request::post("/internal/issuer-dids/sign")
+                    .header("x-api-key", "dedicated-issuer-sign-key-32-chars")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"organization_id":"org-a","issuer_did":"did:web:issuer.example","key_purpose":"vc_jwt_issuer","credential_format":"jwt_vc_json","algorithm":"EdDSA","key_reference":"transit/keys/issuer-a","payload_b64":"cGF5bG9hZA"}).to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
