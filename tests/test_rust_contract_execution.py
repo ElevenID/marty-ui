@@ -1108,6 +1108,7 @@ def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selecti
             INVENTORY.selection(invalid, allow_skip=True)
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
     monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
