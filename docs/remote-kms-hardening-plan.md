@@ -396,6 +396,20 @@ do not dispatch a v1.1.257 claim or count #1404's merge-group CI as the
 required full exact-main qualification. Wait for #1405's protected landing
 and then run full CI once on the final main SHA.
 
+Protected full-main test repair landing (2026-10-18): #1405's exact-head
+[CI 39110142200](https://github.com/ElevenID/marty-ui/actions/runs/39110142200)
+passed the full PR gate; both automated reviews found no issues and the other
+PR security/quality workflows passed. Its merge-group
+[CI 39111611501](https://github.com/ElevenID/marty-ui/actions/runs/39111611501)
+and Actions/Rust CodeQL, organization quality and open-source policy all
+passed at candidate `f572cbbc25cb5112bacbf079e3e06441a46d108c`. #1405
+merged at 08:52 UTC; protected main matched that candidate. A single
+[full exact-main CI 39113146906](https://github.com/ElevenID/marty-ui/actions/runs/39113146906)
+was already dispatched with head equal to that SHA and is queued. Do not
+duplicate it or claim release readiness until it succeeds and main remains
+unchanged. The v1.1.257 Git tag/release and publisher credential are still
+unproven/absent; an installed fixed-release recovery has not yet run.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
