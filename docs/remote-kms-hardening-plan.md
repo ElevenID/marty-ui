@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-17 (America/Denver).
+Status: active. Updated: 2026-10-18 (America/Denver).
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,27 +8,30 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current handoff gate (2026-10-17): Core #355, Credentials #313, grouped native
-UI hardening #1192, and the subsequent custody and packaging work are merged.
-[PR #1388](https://github.com/ElevenID/marty-ui/pull/1388) merged at
-`76a7fb4ef6e2ad594dc431da511686a1664979ab`; protected merge-group and
-[exact-main CI 39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
-passed. [No-write claim 39077341707](https://github.com/ElevenID/marty-ui/actions/runs/39077341707)
-and [stack release 39077407940](https://github.com/ElevenID/marty-ui/actions/runs/39077407940)
-passed at that SHA. Signed [v1.1.255](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255)
-is published. Public checksums and attestations, the private Actions artifact
-producer binding, preparation receipt and archive-only consumer check passed.
-The first fresh Raft-backed install failed at synthetic fixture setup after
-startup; preserve its diagnostic. A second independent install from the exact
-signed source passed all 28 service states, public journey, live custody,
-Keycloak refresh, both database custody checks and owned teardown. Resource
-samples recorded no observed OOM, but do not establish a supported 16 GiB
-envelope. Production stayed HTTP 200. Qualify supported fresh cutover and
-rollback next; the two old installations may be replaced without migration.
-Real AWS/Azure/GCP credentials and a physical wallet remain unprovisioned, so
-provider/device acceptance and the overall KMS goal remain open. The milestone
-table below includes historical status text; use the dated evidence log and
-live run/PR states for the latest gate.
+Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
+UI hardening #1192, and subsequent custody, restore, and publisher-source
+repairs are merged. Signed [v1.1.255](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255)
+passed a fresh 28-service Raft-backed installed journey, but its cold restore
+exposed the native purpose-ordering defect fixed later in #1392. Local restored
+clones passed with the candidate fix; an exact signed fixed-release restore
+has not. The attempted v1.1.256 release promoted images but failed at tag
+creation, so it is not a signed release. At the latest live check, protected
+main is `0a91b88fbd4348b5709189f131c74d2848ffd2ee`, which includes
+Canvas compile-overhead [PR #1408](https://github.com/ElevenID/marty-ui/pull/1408).
+All five protected merge-group workflows passed at that SHA. Full exact-main
+[CI 39124289031](https://github.com/ElevenID/marty-ui/actions/runs/39124289031)
+is queued; the earlier successful v1.1.257 claim `39120259279` targeted the
+superseded `b9291b56...` SHA and cannot authorize the changed source. After
+the new CI passes, make a fresh no-write claim. The dedicated
+`STACK_RELEASE_TAG_TOKEN` repository secret is
+absent, so do not dispatch publication. Then qualify the signed fixed release
+with fresh installation, coordinated off-host backup/cold restore, custody and
+business journey, and measured 16 GiB coexistence; replace the two old
+installations fresh and prove cutover/rollback without migration. Real
+AWS/Azure/GCP credentials and a physical wallet remain unprovisioned; assign
+access and complete those acceptance checks before closing the KMS goal. The
+milestone table below contains historical status; use the dated evidence log
+and live run/PR states for the latest gate.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
@@ -526,6 +529,23 @@ porcelain status. No candidate images were pulled or new application project
 started. Require the signed v1.1.257 release and verified prepared bundle
 before using these checkouts for fresh installed acceptance; restage if the
 claim becomes stale.
+
+Canvas efficiency landing and exact-main qualification (2026-10-18): all five
+protected merge-group workflows passed at
+`0a91b88fbd4348b5709189f131c74d2848ffd2ee`, including [full merge CI
+39122668526](https://github.com/ElevenID/marty-ui/actions/runs/39122668526),
+Rust and Actions CodeQL, organization quality, and open-source policy.
+[PR #1408](https://github.com/ElevenID/marty-ui/pull/1408) merged at that SHA,
+and protected main matched it. [Full exact-main CI
+39124289031](https://github.com/ElevenID/marty-ui/actions/runs/39124289031)
+was dispatched once with `workflow_dispatch`; its head was verified as the
+merged SHA and it is queued. The old `b9291b56...` no-write claim is stale for
+publication. The clean detached Windows release checkout was advanced to the
+new exact source and the four-role external-image map passed the source
+preflight again. Wait for complete exact-main CI, recheck main, then issue a
+fresh no-write v1.1.257 claim. Do not dispatch `cd.yml` until the dedicated
+`STACK_RELEASE_TAG_TOKEN` secret is provisioned. The v1.1.257 tag remains
+absent; no signed fixed-release recovery is claimed.
 
 ## Objective and working agreement
 
