@@ -251,8 +251,8 @@ def validate_model(
             if key == "SIGNING_KEYS_INTERNAL_URL":
                 require(
                     env.get(key) == "http://gateway:8000/internal/signing-keys"
-                    and previous.get(key) == "http://signing-keys:8017/internal",
-                    "Native managed signing route is not bound to Gateway",
+                    and previous.get(key) == "http://gateway:8000/internal/signing-keys",
+                    "Issuance managed signing route is not bound to Gateway",
                 )
                 continue
             require(

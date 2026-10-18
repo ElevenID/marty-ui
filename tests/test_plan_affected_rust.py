@@ -241,11 +241,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 ]
                 self.assertEqual(
                     environment["SIGNING_KEYS_INTERNAL_URL"],
-                    (
-                        "http://signing-keys:8017/internal"
-                        if edge["deployment_service"] == "issuance"
-                        else "http://gateway:8000/internal/signing-keys"
-                    ),
+                    "http://gateway:8000/internal/signing-keys",
                 )
                 self.assertIn(
                     edge["deployment_marker"],
@@ -1427,7 +1423,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     )
                 if marker == "provider_serving_marker":
                     content = method_body(
-                        content, "let router = Server::builder()", "    runtime.activate()?"
+                        content,
+                        "let router = Server::builder()",
+                        "    runtime.activate()?",
                     )
                 if marker == "deployment_marker":
                     content = method_body(content, "\n  auth:\n", "\n  organization:\n")
@@ -3326,6 +3324,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     if edge["producer"] == "marty-signing-keys"
                     and edge["package"] == consumer
                     and "gateway_route_marker" in edge
+                    and edge.get("provider_handler_marker")
+                    == "async fn resolve_issuer_did("
                 ]
                 self.assertEqual(len(edges), 1)
                 edge = edges[0]
@@ -3363,6 +3363,74 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertNotIn(
                     "marty-signing-keys",
                     {dep["name"] for dep in packages[consumer]["dependencies"]},
+                )
+
+    def test_credential_issuer_signing_edge_is_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        members = set(metadata["workspace_members"])
+        packages = {p["name"]: p for p in metadata["packages"] if p["id"] in members}
+        result = planner.plan(
+            ["rust/services/signing-keys/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertEqual(result["packages"], sorted(packages))
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        [edge] = [
+            item
+            for item in result["observed_non_cargo_consumers"]
+            if item["producer"] == "marty-signing-keys"
+            and item["package"] == "marty-issuance-service"
+            and item.get("operation")
+            == "grant-authorized credential issuer-DID signing"
+        ]
+        for marker, source in (
+            ("binding", "evidence"),
+            ("sign_key_binding", "evidence"),
+            ("runtime_marker", "runtime_evidence"),
+            ("grant_origin_marker", "runtime_evidence"),
+            ("request_marker", "request_evidence"),
+            ("grant_route_marker", "request_evidence"),
+            ("request_key_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("send_marker", "request_evidence"),
+            ("gateway_route_marker", "gateway_evidence"),
+            ("gateway_auth_marker", "gateway_evidence"),
+            ("gateway_dispatch_marker", "gateway_evidence"),
+            ("gateway_forward_marker", "gateway_evidence"),
+            ("gateway_classification_marker", "gateway_classification_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_key_marker", "provider_evidence"),
+            ("provider_grant_marker", "provider_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                )
+        self.assertNotIn(
+            "marty-signing-keys",
+            {dep["name"] for dep in packages["marty-issuance-service"]["dependencies"]},
+        )
+        for deployment in (
+            "docker-compose.base.yml",
+            "docker-compose.selfhost.prod.yml",
+        ):
+            with self.subTest(deployment=deployment):
+                compose = yaml.safe_load(
+                    (ROOT / deployment).read_text(encoding="utf-8")
+                )
+                environment = compose["services"][edge["deployment_service"]][
+                    "environment"
+                ]
+                self.assertEqual(
+                    environment["SIGNING_KEYS_INTERNAL_URL"],
+                    "http://gateway:8000/internal/signing-keys",
+                )
+                self.assertIn(
+                    "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    if deployment == "docker-compose.base.yml"
+                    else "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
+                    environment,
                 )
 
     def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:

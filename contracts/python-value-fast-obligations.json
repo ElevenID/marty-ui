@@ -1,6 +1,6 @@
 {
   "schema": "marty.python-value-fast-obligations/v1",
-  "scope": "Four extracted pure unit cases and their 12 signing-detail and seven real-HTTP retained consumers; not a complete response-compat or issuance test inventory.",
+  "scope": "Four extracted pure unit cases and their 12 signing-detail and eight real-HTTP retained consumers; not a complete response-compat or issuance test inventory.",
   "owner": {
     "package": "marty-response-compat",
     "target": "lib",
@@ -78,11 +78,12 @@
     "module_owner": "rust/services/issuance/src/signing_http_response.rs",
     "fixture": "contracts/signing-response-python-reference.json",
     "oracle_role": "Frozen Python response observations plus loopback HTTP and production Rust adapter assertions; not a deployed signing-service proof.",
-    "role": "Loopback HTTP and production adapter, decoding, request identity, redirect and privacy sentinels; not replaceable by pure JSON units.",
+    "role": "Loopback HTTP and production adapter, deployed signing-route shape, decoding, request identity, redirect and privacy sentinels; not replaceable by pure JSON units.",
     "tests": [
       "signing_http_response::tests::six_frozen_operations_cross_real_http_before_shared_classification",
       "signing_http_response::tests::fifteen_portable_frozen_lossless_diagnostics_cross_real_http",
       "signing_http_response::tests::three_production_owners_keep_operation_identity_requests_and_privacy",
+      "signing_http_response::tests::deployed_issuance_signing_url_uses_gateway_resolve_and_sign_routes",
       "signing_http_response::tests::redirects_continue_existing_success_validators_and_404_defaults",
       "signing_http_response::tests::each_existing_text_error_retains_its_python_exception_category",
       "signing_http_response::tests::explicit_repository_reason_preserves_scalar_prefix_and_text_boundary",

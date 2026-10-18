@@ -13,17 +13,29 @@ and per-command preparation timing without changing its eight Cargo invocations.
 calls that same preparation owner without starting Docker or TLS fixtures; it is
 not recovery qualification. The default command retains every live PostgreSQL,
 Raft, signing, DIDComm and HAIP phase. CI keeps the tiny timing JSONL and optional
-allowlisted cache counters for seven days, including failed runs. Cache counters
-are sampled after the complete recovery probe, not attributed to an individual
-Cargo command. This adds visibility, not warming, artifact reuse or a speed claim.
+allowlisted cache counters for seven days, including failed runs. The recovery
+probe records one baseline and a cumulative snapshot after each of the eight
+Cargo commands, so phase deltas identify cache hits and misses without exposing
+credentials or payloads. Missing optional telemetry remains missing, not zero.
 
 Host Rust test, lint and trusted-main warming jobs explicitly use zero dev/test
 debug info with incremental compilation disabled, matching the recovery probe.
 This removes a known CI profile mismatch without unifying package feature graphs.
 Local line-table/debugging profiles, production optimization, required checks,
 read-only PR cache access and the warmer's existing thirty-minute budget remain
-unchanged. Cache write failures and actual resulting reuse still need evidence;
-profile alignment alone does not establish a turnaround improvement.
+unchanged. The trusted-main warmer now reuses the recovery probe's Rust-only
+entrypoint to populate these exact package/feature graphs after the workspace
+build, without another cache backend or any PR write permission. Its first
+[main run](https://github.com/ElevenID/marty-ui/actions/runs/39148458877)
+passed in 19m42s with 352 Rust misses and zero cache-write errors. The later
+read-only [#1416 PR run](https://github.com/ElevenID/marty-ui/actions/runs/39150263162)
+recorded six Rust misses versus 355 in pre-warmer #1414; unchanged Flow live
+signing fell from 104 misses to zero. Its Rust preparation took 531.799s versus
+898.577s pre-warmer, but Signing Keys/Issuance source and hosted conditions
+also changed, so the full time difference is not solely attributable to the
+warmer. Cache storage was close to the 10 GiB included limit, and later
+retention/eviction still needs observation. This does not change live recovery
+qualification or authorize selective skips.
 
 | Group / current entry point | Obligations and inputs | Execution / relocation constraints |
 | --- | --- | --- |

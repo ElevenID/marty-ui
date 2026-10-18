@@ -789,7 +789,7 @@ fn pair_settings(legacy: &mut Value, native: &mut Value, values: &Environment) -
     require(
         explicit.get("SIGNING_KEYS_INTERNAL_URL")
             == Some(
-                &json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://signing-keys:8017/internal"}),
+                &json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"http://gateway:8000/internal/signing-keys"}),
             )
             && environment(native)?.get("SIGNING_KEYS_INTERNAL_URL")
                 == Some(
