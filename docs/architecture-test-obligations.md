@@ -99,6 +99,25 @@ cases and their routine/full gate selection remain unchanged. This additive
 batch establishes faster failure localization; it claims no measured CI saving
 and authorizes no acceptance-case removal.
 
+### Mixed-roster current-input review boundary
+
+`canvas-worker-mixed-roster-current-inputs.json` binds 21 current repository
+inputs through the existing capture import/process/JSON graph. The release
+pytest owner `test_canvas_worker_oracle_script_closure.py` checks every digest
+and rejects newly reachable inputs. This closes a missing drift guard for the
+mixed-roster producer, HTTPS fixture and transitive roster oracle; it does not
+attest the original capture or establish complete runtime/mount closure.
+
+The live consumer remains `worker_mixed_roster_reference_matches_published_process`
+in `marty-canvas-worker-acceptance`: `PublishedDatabase::start_with_worker_mixed_roster`
+mounts the preparer, which dispatches `run_canvas_worker_mixed_roster_oracle.py`
+against the digest-pinned issuance/PostgreSQL images from
+`canvas-worker-consumer-range-oracle.json`. It checks published migration/source
+evidence, compares the actual report with `canvas-worker-mixed-roster-oracle.json`,
+and closes owned resources. The separate native seven-stage replay is unchanged.
+Both real-process cases and exact-main stable qualification remain required;
+the new review record authorizes no skip or qualification reuse.
+
 ## First extraction: managed passport KMS chain
 
 - Old owner: `marty-issuance-service`, `tests/passport_managed_kms_chain.rs`.

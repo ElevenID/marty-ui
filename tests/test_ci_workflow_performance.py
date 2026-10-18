@@ -1987,6 +1987,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
+        "canvas-worker-mixed-roster-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
         "canvas-json-depth-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
@@ -2126,6 +2131,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-timeout-current-inputs.json",
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
+        "contracts/canvas-worker-mixed-roster-current-inputs.json",
         "contracts/canvas-operations-input-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",

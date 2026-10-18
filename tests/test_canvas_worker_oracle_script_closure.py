@@ -27,6 +27,7 @@ IMPORTS = ROOT / "contracts/canvas-worker-oracle-script-imports.json"
 HARNESS = ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
 PROVIDER_INPUTS = ROOT / "contracts/canvas-worker-provider-recovery-current-inputs.json"
 REST_INPUTS = ROOT / "contracts/canvas-worker-rest-current-inputs.json"
+MIXED_ROSTER_INPUTS = ROOT / "contracts/canvas-worker-mixed-roster-current-inputs.json"
 MOUNTED_INPUTS = frozenset(
     {
         "scripts/prepare_canvas_published_schema.py",
@@ -1106,3 +1107,100 @@ def test_provider_new_transitive_scenario_needs_input_review(tmp_path: Path) -> 
     )
     with pytest.raises(AssertionError, match="need input review"):
         check_provider_current_inputs(evidence, rest, producers, graph, tmp_path)
+
+
+def mixed_roster_input_records() -> tuple[dict, dict]:
+    return (
+        json.loads(MIXED_ROSTER_INPUTS.read_text(encoding="utf-8")),
+        json.loads(IMPORTS.read_text(encoding="utf-8")),
+    )
+
+
+def check_mixed_roster_current_inputs(evidence: dict, graph: dict, root: Path) -> None:
+    # Reuse the reviewed import/process/JSON graph, including the seed and
+    # the separate roster oracle read by the historical worker producer.
+    assert_current_inputs(
+        evidence, graph, root,
+        entrypoint="run_canvas_worker_mixed_roster_oracle.py",
+        schema="marty.canvas-worker-mixed-roster-current-inputs/v1",
+        label="Mixed roster",
+        disclaimer="do not attest historical corpora",
+        additional_inputs=MOUNTED_INPUTS | {
+            "contracts/canvas-worker-mixed-roster-oracle.json",
+            "contracts/canvas-worker-consumer-range-oracle.json",
+        },
+    )
+
+
+def copy_mixed_roster_inputs(root: Path, evidence: dict) -> None:
+    for name in evidence["sha256"]:
+        destination = root / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes((ROOT / name).read_bytes())
+
+
+def test_current_mixed_roster_inputs_cover_transitive_producer_and_oracles() -> None:
+    evidence, graph = mixed_roster_input_records()
+    check_mixed_roster_current_inputs(evidence, graph, ROOT)
+    assert len(evidence["sha256"]) == 21
+    assert {
+        "scripts/run_canvas_worker_mixed_roster_oracle.py",
+        "scripts/canvas_worker_mixed_roster_https_fixture.py",
+        "contracts/canvas-mixed-roster-oracle.json",
+    } <= set(evidence["sha256"])
+
+
+@pytest.mark.parametrize(
+    "name", json.loads(MIXED_ROSTER_INPUTS.read_text(encoding="utf-8"))["sha256"]
+)
+def test_each_mixed_roster_input_change_invalidates_evidence(
+    tmp_path: Path, name: str
+) -> None:
+    evidence, graph = mixed_roster_input_records()
+    copy_mixed_roster_inputs(tmp_path, evidence)
+    destination = tmp_path / name
+    destination.write_bytes(destination.read_bytes() + b"\n# changed\n")
+    with pytest.raises(AssertionError, match="Mixed roster input drift"):
+        check_mixed_roster_current_inputs(evidence, graph, tmp_path)
+
+
+def test_new_mixed_roster_helper_requires_input_review() -> None:
+    evidence, graph = mixed_roster_input_records()
+    graph["direct_imports"]["run_canvas_worker_mixed_roster_oracle.py"].append(
+        "new_local_helper.py"
+    )
+    graph["direct_imports"]["new_local_helper.py"] = []
+    with pytest.raises(AssertionError, match="need input review"):
+        check_mixed_roster_current_inputs(evidence, graph, ROOT)
+
+
+def test_new_mixed_roster_json_reference_requires_input_review(tmp_path: Path) -> None:
+    evidence, graph = mixed_roster_input_records()
+    copy_mixed_roster_inputs(tmp_path, evidence)
+    scenario = tmp_path / "contracts/canvas-worker-mixed-roster-scenarios.json"
+    contents = json.loads(scenario.read_text(encoding="utf-8"))
+    contents["additional_reference"] = "unreviewed-roster.json"
+    scenario.write_text(json.dumps(contents), encoding="utf-8")
+    (tmp_path / "contracts/unreviewed-roster.json").write_text("{}", encoding="utf-8")
+    # Updating the direct digest alone must not hide a newly reachable input.
+    evidence["sha256"]["contracts/canvas-worker-mixed-roster-scenarios.json"] = (
+        normalized_sha256(scenario)
+    )
+    with pytest.raises(AssertionError, match="need input review"):
+        check_mixed_roster_current_inputs(evidence, graph, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "scripts/prepare_canvas_published_schema.py",
+        "contracts/fixtures/canvas_worker_test_trust.py",
+        "contracts/canvas-worker-mixed-roster-oracle.json",
+        "contracts/canvas-worker-consumer-range-oracle.json",
+    ],
+)
+def test_required_mixed_roster_extra_input_cannot_disappear(name: str) -> None:
+    evidence, graph = mixed_roster_input_records()
+    evidence["sha256"].pop(name)
+    with pytest.raises(AssertionError, match="need input review"):
+        check_mixed_roster_current_inputs(evidence, graph, ROOT)
