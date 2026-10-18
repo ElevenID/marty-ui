@@ -30,12 +30,15 @@ test-user accounts as part of installed acceptance.
    Compose pinned the production default network. Published `v1.1.250`
    and `v1.1.251` failed installed startup after their signed releases.
    Published `v1.1.254` failed its installed gate after the public journey
-   because the diagnostic phase list omitted three custody checks. Use the
-   Signed `v1.1.255` passed an independent fresh 28-service installed journey,
+   because the diagnostic phase list omitted three custody checks. Signed
+   `v1.1.255` passed an independent fresh 28-service installed journey,
    but a coordinated cold restore exposed a restart failure in its native
    migration bootstrap: normalized signing-key purpose order was treated as a
-   conflicting binding. Do not use `v1.1.255` for the final cutover. Require
-   the next signed fix and its own installed and restored-stack gates.
+   conflicting binding. Do not use `v1.1.255` for the final cutover. Consider
+   signed `v1.1.256` only after its exact-main release and independent fresh
+   installed and restored-stack gates pass. Its source contains the restart
+   fix and a runtime-bound recovery verifier; neither its merge nor local
+   candidate replay establishes a qualified release or cutover.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full
