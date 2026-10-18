@@ -102,7 +102,13 @@ Routine PR, merge-group, and scheduled CI keep it off. Only an explicit
 `workflow_dispatch` boolean enables it in the Canvas database step, with
 exact ignored parity, isolation, and failed-restore checks afterward. Manual
 runs still retain full qualification. It is not a release selector. The pilot
-applies only to `PublishedDatabase::start()` with the fixed `published_probe`
+diagnostics run the eight-case pinned-probe baseline with reuse explicitly off,
+then compare canonical schema/data dumps from a restored database and an
+independently fresh pinned probe. The diagnostic uses a fixed `pg_dump`
+restriction key only to exclude per-invocation randomness; the cached restore
+input retains `pg_dump`'s normal random key. Dump contents stay in the test process;
+only fixed mismatch messages are emitted. The pilot applies only to
+`PublishedDatabase::start()` with the fixed `published_probe`
 setup. The first call still runs the exact pinned producer and validates its
 source digest and
 migration revisions, then captures a bounded SQL dump in this test process and

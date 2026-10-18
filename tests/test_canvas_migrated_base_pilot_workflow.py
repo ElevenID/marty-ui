@@ -87,8 +87,18 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
         "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST": "1",
     }
     source = DIAGNOSTICS.read_text(encoding="utf-8")
+    baseline = "canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads"
+    lines = [line.strip() for line in diagnostic["run"].splitlines()]
+    baseline_index = lines.index(f"{SWITCH}=0 python3 \\")
+    assert lines[baseline_index + 1] == (
+        '../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" \\'
+    )
+    assert lines[baseline_index + 2] == baseline
+    assert diagnostic["run"].count(baseline) == 1
+    assert diagnostic["run"].index(baseline) < diagnostic["run"].index("for test_name in")
     for test_name in (
         "eight_fixed_published_databases_keep_migration_heads",
+        "fresh_probe_and_cached_restore_have_identical_schema_and_data",
         "immutable_published_base_keeps_revision_parity_and_case_isolation",
         "concurrent_published_base_keeps_eight_cases_isolated",
         "failed_published_base_restore_removes_only_its_owned_container",
