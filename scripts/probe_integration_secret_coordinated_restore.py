@@ -60,6 +60,23 @@ RUST_PREPARATION_PHASES = (
     "flow_haip_remote_http",
     "flow_haip_expired_http",
 )
+CACHE_SNAPSHOT_PHASES = ("preparation_baseline",) + RUST_PREPARATION_PHASES
+PUBLIC_CACHE_COUNTERS = frozenset(
+    {
+        "compile_requests",
+        "compile_requests_executed",
+        "cache_hits",
+        "cache_hits_rust",
+        "cache_misses",
+        "cache_misses_rust",
+        "cache_timeouts",
+        "cache_read_errors",
+        "cache_write_errors",
+        "non_cacheable_compilations",
+        "non_cacheable_calls",
+        "unsupported_compiler_calls",
+    }
+)
 
 
 def record_preparation_timing(phase: str, status: str, started: float) -> None:
@@ -81,6 +98,62 @@ def record_preparation_timing(phase: str, status: str, started: float) -> None:
                 evidence.write(line + "\n")
         except OSError:
             print("[kms-recovery-prepare] optional timing artifact unavailable", flush=True)
+
+
+def record_preparation_cache(phase: str) -> bool:
+    """Retain allowlisted counters; stop sampling after an unavailable snapshot."""
+    if phase not in CACHE_SNAPSHOT_PHASES:
+        raise ValueError("Unknown recovery preparation cache label")
+    output = os.environ.get("MARTY_RECOVERY_PREPARATION_CACHE_FILE")
+    if not output:
+        return False
+    try:
+        stats = subprocess.run(
+            ["sccache", "--show-stats"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if stats.returncode:
+            return False
+        sanitized = subprocess.run(
+            [
+                "awk",
+                "-v",
+                "phase=recovery_probe",
+                "-f",
+                str(ROOT / "scripts/ci/public-sccache-stats.awk"),
+            ],
+            input=stats.stdout,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        if sanitized.returncode:
+            return False
+        prefix = "MARTY_PUBLIC_SCCACHE_V1 "
+        if not isinstance(sanitized.stdout, str) or not sanitized.stdout.startswith(prefix):
+            return False
+        parsed = json.loads(sanitized.stdout[len(prefix) :])
+        if not isinstance(parsed, dict):
+            return False
+        counters = parsed.get("counters")
+        if parsed.get("phase") != "recovery_probe" or not isinstance(counters, dict):
+            return False
+        if not counters or not set(counters) <= PUBLIC_CACHE_COUNTERS:
+            return False
+        if any(type(value) is not int or value < 0 for value in counters.values()):
+            return False
+        record = {"schema_version": 1, "phase": phase, "counters": counters}
+        with Path(output).open("a", encoding="utf-8", newline="\n") as evidence:
+            evidence.write(json.dumps(record, sort_keys=True) + "\n")
+        return True
+    except (OSError, subprocess.TimeoutExpired, ValueError, TypeError):
+        # This optional diagnostic must not replace the live restore result.
+        print("[kms-recovery-prepare] optional cache artifact unavailable", flush=True)
+        return False
 
 
 def port_of(name: str, internal: str) -> int:
@@ -176,6 +249,7 @@ def build_rust() -> Path:
             for target in ("haip_live_signing", "haip_remote_http", "haip_expired_http")
         ),
     )
+    cache_available = record_preparation_cache("preparation_baseline")
     for phase, command in zip(RUST_PREPARATION_PHASES, commands, strict=True):
         print(f"[kms-recovery-prepare] starting {phase}", flush=True)
         started = time.monotonic()
@@ -193,6 +267,8 @@ def build_rust() -> Path:
             raise RuntimeError("Candidate Rust recovery preparation could not start") from None
         finally:
             record_preparation_timing(phase, status, started)
+            if cache_available:
+                cache_available = record_preparation_cache(phase)
     binary = (
         rust
         / "target/debug"

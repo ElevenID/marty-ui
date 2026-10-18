@@ -943,6 +943,7 @@ jobs:
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
           MARTY_RECOVERY_PREPARATION_TIMING_FILE: ${{ runner.temp }}/rust-recovery-preparation.jsonl
+          MARTY_RECOVERY_PREPARATION_CACHE_FILE: ${{ runner.temp }}/rust-recovery-preparation-cache.jsonl
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0
           CARGO_PROFILE_TEST_DEBUG: 0
@@ -963,6 +964,7 @@ jobs:
           name: rust-recovery-preparation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/rust-recovery-preparation.jsonl
+            ${{ runner.temp }}/rust-recovery-preparation-cache.jsonl
             ${{ runner.temp }}/rust-recovery-cache-counters.jsonl
           if-no-files-found: warn
           retention-days: 7
