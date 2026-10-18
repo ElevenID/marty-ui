@@ -588,6 +588,16 @@ outside the repository. `STACK_RELEASE_TAG_TOKEN` remains absent from Actions
 secret metadata, so do not dispatch signed `cd.yml` yet. No signed fixed-release
 restore or production cutover is claimed.
 
+Publisher-input staging (2026-10-18): the exact four-role independent
+infrastructure digest map passed source preflight at `0a91b88f...`. A
+structured, round-tripped `cd.yml` workflow-dispatch payload is staged at
+`%TEMP%/kms-v1.1.257-release-dispatch.json`; it selects `main`, successful
+claim run `39129687763`, `prepare_selfhost_lock=true`, and the four-role JSON
+string. The Linux source and integration checkouts remain clean at the pinned
+SHAs. This file is input preparation only: no Stack release has been dispatched,
+and its use still requires a newly observed dedicated tag-push secret and
+unchanged protected main.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
