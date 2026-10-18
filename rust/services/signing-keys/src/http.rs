@@ -2529,6 +2529,8 @@ async fn generate_public_issuer_csr(
         algorithm: algorithm.clone(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+        verification_method_id: None,
+        expected_public_jwk: None,
         payload_hex: None,
     };
     let Some(header) = headers
@@ -2806,6 +2808,8 @@ async fn issue_managed_csca_self_signed(
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(payload)),
+        verification_method_id: None,
+        expected_public_jwk: None,
         payload_hex: None,
     };
     let csr_request = sign(csr.signing_bytes());
@@ -3373,6 +3377,8 @@ async fn issue_claimed_dsc_certificate(
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(csr.signing_bytes())),
+        verification_method_id: None,
+        expected_public_jwk: None,
         payload_hex: None,
     };
     let csr_authorization =
@@ -3492,6 +3498,8 @@ async fn issue_signed_dsc_certificate(
         algorithm: "ES256".into(),
         key_reference: None,
         payload_b64: Some(URL_SAFE_NO_PAD.encode(prepared.signing_bytes())),
+        verification_method_id: None,
+        expected_public_jwk: None,
         payload_hex: None,
     };
     let certificate_authorization =

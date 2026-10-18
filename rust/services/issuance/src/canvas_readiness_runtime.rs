@@ -150,6 +150,7 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
             payload: challenge.to_vec(),
             algorithm: configuration.algorithm.clone(),
             verification_method_id: verification_method_id.to_owned(),
+            expected_public_jwk: None,
             signing_key_reference: signing_key_reference.to_owned(),
         })
         .await

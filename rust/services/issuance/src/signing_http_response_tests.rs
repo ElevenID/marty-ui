@@ -369,6 +369,7 @@ fn sign_request() -> SignRequest {
         payload: b"controlled-public-payload".to_vec(),
         algorithm: "EdDSA".into(),
         verification_method_id: "did:web:issuer.example#key-1".into(),
+        expected_public_jwk: None,
         signing_key_reference: "transit/keys/issuer-1".into(),
     }
 }
@@ -467,7 +468,7 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
         assert!(records[2].uri.starts_with("/internal/issuer-dids/sign?"));
         assert_eq!(
             serde_json::from_slice::<Value>(&records[2].body).unwrap(),
-            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "key_reference":"transit/keys/issuer-1", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA"})
+            json!({"issuer_did":"did:web:issuer.example", "credential_format":"jwt_vc_json", "key_purpose":"vc_jwt_issuer", "key_reference":"transit/keys/issuer-1", "payload_b64":"Y29udHJvbGxlZC1wdWJsaWMtcGF5bG9hZA", "algorithm":"EdDSA", "verification_method_id":"did:web:issuer.example#key-1"})
         );
         assert!(records[3].uri.starts_with("/internal/issuer-context?"));
         assert!(records[4].uri.starts_with("/internal/resolve-issuer-did?"));

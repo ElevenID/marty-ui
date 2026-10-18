@@ -17,6 +17,7 @@ use axum::{
     Json, Router,
 };
 use marty_signing_keys::{
+    compat::{IssuerDidSignRequest, SignAuthorization, SigningCompatibilityService},
     documents::{DocumentStore, LoadDidRequest},
     http::router_with_all_keys,
     profiles::ProfileStore,
@@ -749,6 +750,167 @@ async fn existing_managed_key_profiles_with_read_access_and_no_create_permission
             .len(),
         1
     );
+    server.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable MARTY_TEST_REDIS_URL and BAO_TOKEN=test-only; the provider is mocked"]
+async fn prepared_issuer_binding_rejects_changed_public_key_before_provider_sign() {
+    assert_eq!(std::env::var("BAO_TOKEN").as_deref(), Ok("test-only"));
+    let redis_url = disposable_redis_url().await;
+    let keys: Keys = Arc::new(Mutex::new(BTreeMap::new()));
+    let sign_attempts = Arc::new(AtomicUsize::new(0));
+    let kms = Router::new()
+        .route("/v1/transit/keys", get(list_keys))
+        .route(
+            "/v1/transit/keys/{reference}",
+            get(read_key).post(create_key),
+        )
+        .route(
+            "/v1/transit/sign/{reference}",
+            axum::routing::post({
+                let sign_attempts = Arc::clone(&sign_attempts);
+                move |Path(reference): Path<String>,
+                      State(keys): State<Keys>,
+                      headers: HeaderMap| {
+                    let sign_attempts = Arc::clone(&sign_attempts);
+                    async move {
+                        sign_attempts.fetch_add(1, Ordering::SeqCst);
+                        sign_key(Path(reference), State(keys), headers).await
+                    }
+                }
+            }),
+        )
+        .with_state(Arc::clone(&keys));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, kms).await.unwrap() });
+    let _bao_addr = mock_bao_addr(&endpoint).await;
+
+    let organization_id = format!("prepared-issuer-{}", Uuid::new_v4().simple());
+    let did = format!("did:web:issuer.example:orgs:{organization_id}");
+    let registry = RegistryStore::connect(&redis_url)
+        .await
+        .unwrap()
+        .with_managed_openbao(Some(endpoint));
+    let profiles = ProfileStore::from_connection(registry.connection());
+    let documents = DocumentStore::from_connection(registry.connection());
+    let compatibility = SigningCompatibilityService::new(
+        registry.clone(),
+        documents.clone(),
+        profiles.clone(),
+        Some("issuer.example".into()),
+    );
+    let app = router_with_all_keys(
+        "test-internal-key".into(),
+        Some("test-service-sign-gateway-key-000000".into()),
+        Some("test-issuer-sign-key-000000000000000".into()),
+        None,
+        None,
+        None,
+        false,
+        Some(registry.clone()),
+        Some(documents),
+        None,
+        Some(profiles.clone()),
+        None,
+        Some("issuer.example".into()),
+    );
+    let (status, created) = json_route(
+        &app,
+        "POST",
+        &format!("/v1/signing-keys/issuer-identities?organization_id={organization_id}"),
+        json!({
+            "organization_id": organization_id,
+            "issuer_did": did,
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "EdDSA"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let profile = profiles.list(&organization_id).await.unwrap()["profiles"][0].clone();
+    let resolved = compatibility
+        .resolve_issuer_did(&marty_signing_keys::compat::ResolveIssuerDidRequest {
+            organization_id: organization_id.clone(),
+            issuer_did: did.clone(),
+            verification_method_id: None,
+            credential_format: Some("SD_JWT_VC".into()),
+            key_purpose: Some("vc_jwt_issuer".into()),
+            algorithm: Some("EdDSA".into()),
+        })
+        .await
+        .unwrap();
+    let request = IssuerDidSignRequest {
+        organization_id: organization_id.clone(),
+        issuer_did: did,
+        credential_format: "SD_JWT_VC".into(),
+        key_purpose: "vc_jwt_issuer".into(),
+        algorithm: "EdDSA".into(),
+        key_reference: profile["signing_key_reference"].as_str().map(str::to_owned),
+        verification_method_id: resolved["verification_method_id"]
+            .as_str()
+            .map(str::to_owned),
+        expected_public_jwk: Some(resolved["public_jwk"].clone()),
+        payload_b64: Some("cGF5bG9hZA".into()),
+        payload_hex: None,
+    };
+    let mut changed_key = request.clone();
+    changed_key.expected_public_jwk.as_mut().unwrap()["x"] =
+        json!("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI");
+    let authorization = SignAuthorization::certificate(&changed_key, &profile).unwrap();
+    let rejected = compatibility
+        .sign_with_issuer_did(&changed_key, authorization)
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(marty_signing_keys::compat::CompatibilityError::Conflict(_))
+    ));
+    assert_eq!(sign_attempts.load(Ordering::SeqCst), 0);
+
+    let mut changed_method = request.clone();
+    changed_method.verification_method_id =
+        Some(format!("{}#not-the-prepared-method", request.issuer_did));
+    let authorization = SignAuthorization::certificate(&changed_method, &profile).unwrap();
+    assert!(compatibility
+        .sign_with_issuer_did(&changed_method, authorization)
+        .await
+        .is_err());
+    assert_eq!(sign_attempts.load(Ordering::SeqCst), 0);
+
+    let authorization = SignAuthorization::certificate(&request, &profile).unwrap();
+    let signed = compatibility
+        .sign_with_issuer_did(&request, authorization)
+        .await
+        .unwrap();
+    assert_eq!(signed["ok"], true);
+    assert_eq!(sign_attempts.load(Ordering::SeqCst), 1);
+
+    let mut redis = registry.connection();
+    let _: () = redis.del(storage_key(&organization_id)).await.unwrap();
+    let _: () = redis
+        .del(marty_signing_keys::profiles::storage_key(&organization_id))
+        .await
+        .unwrap();
+    let _: usize = redis::cmd("DEL")
+        .arg(marty_signing_keys::documents::jwks_storage_key(
+            &organization_id,
+        ))
+        .arg(marty_signing_keys::documents::did_storage_key(
+            &organization_id,
+            None,
+        ))
+        .arg(marty_signing_keys::documents::did_storage_key(
+            &organization_id,
+            Some(&request.issuer_did),
+        ))
+        .arg(marty_signing_keys::documents::slug_storage_key(
+            request.issuer_did.rsplit(':').next().unwrap(),
+        ))
+        .query_async(&mut redis)
+        .await
+        .unwrap();
     server.abort();
 }
 

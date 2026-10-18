@@ -281,6 +281,7 @@ impl ManagedProfileSigner {
                 payload: prepared.signing_input().to_vec(),
                 algorithm: context.algorithm.as_str().into(),
                 verification_method_id: context.method_id,
+                expected_public_jwk: None,
                 signing_key_reference: context.signing_key_reference,
             })
             .await
