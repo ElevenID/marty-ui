@@ -11,7 +11,15 @@ const {
   employeeTrustProfilePayload,
   requireConfigurationBinding,
   approveAndIssue,
+  EMPLOYEE_PRESENTATION_TEST_IDS,
 } = require('./audit-beta-employee-access');
+
+test('employee verifier displays accept both actual presentation identifiers', () => {
+  const {buildVerificationDisplay} = require('./demo-recording');
+  for (const testId of Object.values(EMPLOYEE_PRESENTATION_TEST_IDS)) {
+    assert.equal(buildVerificationDisplay({decision: 'allow'}, {actor: 'Test verifier', testId}).testId, testId);
+  }
+});
 
 test('employee approval and issuance wait for native actions and reject applicant self-claim', async () => {
   for (const wrongEndpoint of [false, true]) {

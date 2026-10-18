@@ -59,6 +59,7 @@ const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
+const EMPLOYEE_PRESENTATION_TEST_IDS = Object.freeze({active: 'D04-EMPLOYEE-ACCESS-ACTIVE', suspended: 'D04-EMPLOYEE-ACCESS-SUSPENDED'});
 const RESOURCE_NAMES = Object.freeze({
   trust: 'D-04 Employee Issuer Trust',
   credential: 'D-04 Employee Access Credential',
@@ -563,18 +564,20 @@ async function main() {
     await showEmployeeStep(page, 'Employee credential received', 'The holder accepted the real OpenID4VCI offer for the D-04 employee credential.');
 
     const activeStatus = await getCredentialStatus(page, credentialId);
-    const activeVerification = await verify(page, walletPage, 'D-04 active employee access', {
+    const activeVerification = await verify(page, walletPage, EMPLOYEE_PRESENTATION_TEST_IDS.active, {
       organizationId: ORG_ID,
       presentationPolicyId: configuration.policy.id,
       issuerDid: VERIFIER_DID,
     });
     report.activeAccess = {
+      session: activeVerification.session,
+      wallet: activeVerification.wallet,
       credentialStatus: activeStatus.lifecycleStatus,
       result: activeVerification.result,
     };
     await showEmployeeStep(page, 'Active employee access allowed', 'The status-aware access policy returned an explicit allow decision for the active credential.');
     await showVerificationResult(page, activeVerification.result, {
-      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: 'D-04 active employee access',
+      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: EMPLOYEE_PRESENTATION_TEST_IDS.active,
       evaluatedState: activeStatus.lifecycleStatus, comparison: 'Jamie’s active credential',
     });
 
@@ -591,19 +594,21 @@ async function main() {
       recording,
     );
     const suspendedStatus = await getCredentialStatus(page, credentialId);
-    const suspendedVerification = await verify(page, walletPage, 'D-04 suspended employee access', {
+    const suspendedVerification = await verify(page, walletPage, EMPLOYEE_PRESENTATION_TEST_IDS.suspended, {
       organizationId: ORG_ID,
       presentationPolicyId: configuration.policy.id,
       issuerDid: VERIFIER_DID,
     });
     report.suspension = {
+      session: suspendedVerification.session,
+      wallet: suspendedVerification.wallet,
       actionOk: suspended.ok,
       credentialStatus: suspendedStatus.lifecycleStatus,
       result: suspendedVerification.result,
     };
     await showEmployeeStep(page, 'Suspended employee access denied', 'The same credential now receives an explicit deny decision because its lifecycle status is suspended.');
     await showVerificationResult(page, suspendedVerification.result, {
-      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: 'D-04 suspended employee access',
+      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: EMPLOYEE_PRESENTATION_TEST_IDS.suspended,
       evaluatedState: suspendedStatus.lifecycleStatus, comparison: 'Same credential after admin suspension',
     });
 
@@ -664,6 +669,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  EMPLOYEE_PRESENTATION_TEST_IDS,
   approveAndIssue,
   employeeApplicationTemplatePayload,
   employeeCredentialPayload,
