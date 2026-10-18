@@ -409,6 +409,16 @@ Issuance through Gateway's supported GET resolve and POST sign endpoints,
 with scoped API keys and the one-use KMS grant. This is source and local HTTP
 test evidence; an installed recovery remains required for the external handoff.
 
+The follow-on shadow inventory also records conditional managed-passport
+issuer-DID signing with its separate passport-origin one-use grant, plus CSCA
+trust-anchor lookup. Both reuse existing Rust signing clients: Issuance calls
+Gateway, which forwards authenticated signing and organization-scoped trust GET
+requests to Signing Keys. Both standard Compose profiles point the relevant
+Issuance role at Gateway; production keeps managed passport signing off unless
+explicitly enabled. The source-backed planner tests check the routes, grant
+origin and production key bindings. This changes no live selector, and A3
+non-Cargo closure remains open.
+
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
 full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
