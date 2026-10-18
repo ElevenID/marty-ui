@@ -45,11 +45,12 @@ custody checks. Its private evidence is
 This is candidate-fix evidence, not a signed release or qualified off-host
 backup/cutover. Publish the fix in the next grouped UI PR, then repeat exact
 signed-artifact recovery before treating coordinated rollback as supported.
-The candidate branch now also has an opt-in
+The candidate branch (`9da6c3e36`, `2facbaed3`) now also has an opt-in
 `scripts/verify_selfhost_restored_journey.py` that checks the exact 28-role
 closure, isolated app/OpenBao mounts and loopback ports, each app KMS address,
 unsealed Raft, the public journey, Keycloak refresh and both database custody
-scans without fixture reset or automatic teardown. It marks reports
+scans without fixture reset or automatic teardown. It binds the verifier to
+the claimed release source when no candidate override is used. It marks reports
 `unqualified` and records any candidate Compose override. On the same restored
 clone, a second cold restart passed OpenBao bootstrap and native migration
 again (after transient service-readiness retries); the new verifier passed
