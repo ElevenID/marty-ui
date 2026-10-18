@@ -382,14 +382,14 @@ This is a mapping for review, not authorization to retire a case. The common
 oracle is `contracts/canvas-worker-renewal-job-outcomes.json`: failure stages
 `lease`, `target`, `process`; processor outcomes `success`, `retry`, `terminal`,
 `deadline`, `cancel`; durable fences `unchanged`, `owner`, `expiry`, `attempt`.
-The oracle's `cutover_authorized` remains `false`. The pending fast owner in
+The oracle's `cutover_authorized` remains `false`. The merged fast owner in
 `rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs` is included
 under `canvas_sync_worker::retry_handoff_tests::renewal_tests` and executes
 the actual `CanvasSyncWorker::process_job` with scripted repository,
 processor, and OAuth ports. It uses paused Tokio time and a controlled
 processor release, not PostgreSQL or an external process.
 
-| Failed renewal write | Five separately discoverable handler tests in the pending fast owner |
+| Failed renewal write | Five separately discoverable handler tests in the fast owner |
 | --- | --- |
 | `lease` | `lease_error_then_success`, `lease_error_then_retry`, `lease_error_then_terminal`, `lease_error_then_deadline`, `lease_error_then_cancel` |
 | `target` | `target_error_then_success`, `target_error_then_retry`, `target_error_then_terminal`, `target_error_then_deadline`, `target_error_then_cancel` |
@@ -413,7 +413,7 @@ cases—`lease_error_survives_failed_completion`,
 checks the real cycle's `(scheduled, leased, succeeded, retried, dead_lettered)`
 counts `(0, 1, 0, 0, 0)`. These four are additional port-level obligations,
 not substitutes for durable rows. The contracts-lane workspace unit-test
-execution owns all 19; the pending source includes an exact test-only Docker
+execution owns all 19; the merged source includes an exact test-only Docker
 context exclusion and registration guard.
 
 The existing `canvas_sync_worker_postgres_contract` target owns the separate
