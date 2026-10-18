@@ -515,7 +515,7 @@ pub struct FieldDefinition {
     pub field_type: Option<String>,
     #[serde(default)]
     pub required: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "nullable_field_options")]
     pub options: Vec<Value>,
     #[serde(default)]
     pub validation_pattern: Option<String>,
@@ -523,6 +523,13 @@ pub struct FieldDefinition {
     pub minimum: Option<f64>,
     #[serde(default)]
     pub maximum: Option<f64>,
+}
+
+fn nullable_field_options<'de, D>(deserializer: D) -> Result<Vec<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
