@@ -153,6 +153,17 @@ was dispatched via `workflow_dispatch` and verified to target the same SHA;
 it is queued. Require full success and recheck main before the no-write
 v1.1.256 claim; merge-group success alone is insufficient.
 
+Concurrent-main release gate (2026-10-17): [exact-main CI 39090296100](https://github.com/ElevenID/marty-ui/actions/runs/39090296100)
+was still live with OpenBao and Canvas jobs when unrelated PR #1394 advanced
+protected main to `9b40640121e55df8d24de612c7abc18ec19c3cea` at 2026-10-18
+02:47 UTC. The v1.1.256 lock remains selected in that main source. The
+superseded run was cancelled to save its remaining jobs. Full
+[replacement exact-main CI 39091449176](https://github.com/ElevenID/marty-ui/actions/runs/39091449176)
+was dispatched with `workflow_dispatch` and verified to target the new exact
+main SHA. Require its full success and an unchanged main before a no-write
+claim. Neither the prior PR-head, merge-group, nor cancelled full CI qualifies
+the new source for release.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
