@@ -709,7 +709,9 @@ wait "$composition_pid" || composition_status=$?
 # Preserve every Flow case even if composition failed; only their loopback
 # startup windows, not their test obligations, are serialized.
 flow_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
+python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
+  --name flow_acceptance --owner canvas -- \
+  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &
 flow_pid=$!
 relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &
 flow_relay_pid=$!

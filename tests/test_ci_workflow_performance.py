@@ -4045,8 +4045,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$flow_pid" || flow_status=$?' in published
+    assert '  --name flow_acceptance --owner canvas -- \\' in published
     assert published.index('wait "$composition_pid" || composition_status=$?') < published.index(
-        '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+        '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
     )
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (

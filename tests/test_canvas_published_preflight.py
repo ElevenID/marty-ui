@@ -271,8 +271,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
-    flow_full = '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    flow_full = '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
     assert script.splitlines().count(flow_full) == 1
+    assert (
+        script.splitlines()[script.splitlines().index(flow_full) - 1]
+        == "  --name flow_acceptance --owner canvas -- \\"
+    )
     assert script.index('wait "$composition_pid" || composition_status=$?') < script.index(
         flow_full
     )

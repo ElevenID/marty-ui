@@ -238,6 +238,18 @@ startup scripts remain execution inputs. This is an execution-owner inventory,
 not a complete transitive dependency closure or permission to narrow mixed,
 unknown, protected, or release inputs.
 
+Both Flow entry points now use the same libtest obligation recorder as the
+serial database runner, in addition to the shared exact nine-name roster.
+The run-bound record associates the selected and completed cases with the
+Cargo test executable, caller owner, required environment input names and
+the hashes of the caller's direct image-pin and roster sources. The existing
+four-thread target execution, early-return gate, full Canvas selection and
+PR-only Flow selection are unchanged. Captured nested child summaries do not
+stand in for parent completion; a separate libtest result stream identifies
+the parent cases. This still does not prove assertion reachability, the
+internally provisioned PostgreSQL/Redis state, or complete rendered/child
+input closure, and grants no new selection authority.
+
 ## Issuance-to-Revocation Profile runtime input
 
 Issuance has two independent non-Cargo transports to Revocation Profile. The
