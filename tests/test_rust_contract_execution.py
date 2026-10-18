@@ -568,6 +568,34 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
     assert all(
         entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in sources
     )
+    first_hop = INVENTORY.flow_rendered_first_hop_inputs()
+    assert {entry["path"] for entry in first_hop} == {
+        "scripts/render_flow_native_runtime_fixture.py",
+        "scripts/test_base_native_issuance_compose.py",
+        "scripts/test_selfhost_native_owner_compose.py",
+    }
+    assert all(
+        entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in first_hop
+    )
+    subgraph = INVENTORY.flow_renderer_subgraph_inputs()
+    assert len(subgraph) == 22
+    assert {entry["path"] for entry in subgraph} == {
+        *INVENTORY.FLOW_RENDERER_RUNPY_EDGES,
+        "docker-compose.base.yml",
+        "docker-compose.profile.issuance-native.yml",
+        "docker-compose.service.issuance-native-runtime.yml",
+        "docker-compose.selfhost.prod.yml",
+        "selfhost-kms-only-model.keyless-tls.snapshot.yml",
+        "docker-compose.service.issuance-native.yml",
+        "scripts/load-secrets-env.sh",
+        "rust/services/signing-keys/tests/fixtures/public_certificates/root-ca.pem",
+        "rust/services/gateway/src/config.rs",
+        "rust/services/issuance/src/config.rs",
+        "rust/services/issuance/src/canvas_credentials_publication.rs",
+    }
+    assert all(
+        entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in subgraph
+    )
 
     def fake_roster(command, **_kwargs):
         assert command == [
@@ -585,6 +613,192 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
         INVENTORY.verify_flow_roster("owned-harness", {"other"}, set())
     with pytest.raises(ValueError, match="flow_roster_drift"):
         INVENTORY.verify_flow_roster("owned-harness", {"happy"}, {"ignored"})
+
+
+def test_flow_renderer_first_hop_fails_closed_on_source_drift(
+    tmp_path, monkeypatch
+) -> None:
+    caller = (
+        tmp_path
+        / "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs"
+    )
+    caller.parent.mkdir(parents=True)
+    caller.write_text("no renderer call", encoding="utf-8")
+    renderer = tmp_path / "scripts/render_flow_native_runtime_fixture.py"
+    renderer.parent.mkdir(parents=True)
+    renderer.write_text("no helper imports", encoding="utf-8")
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="flow_renderer_source_drift"):
+        INVENTORY.flow_rendered_first_hop_inputs()
+    caller.write_text(
+        '.arg(root().join("scripts/render_flow_native_runtime_fixture.py"))',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_source_drift"):
+        INVENTORY.flow_rendered_first_hop_inputs()
+    renderer.write_text(
+        "\n".join(
+            f'runpy.run_path(str(ROOT / "{path}"))'
+            for path in (
+                "scripts/test_base_native_issuance_compose.py",
+                "scripts/test_selfhost_native_owner_compose.py",
+                "scripts/extra_helper.py",
+            )
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_source_drift"):
+        INVENTORY.flow_rendered_first_hop_inputs()
+
+
+def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
+    tmp_path, monkeypatch
+) -> None:
+    paths = {
+        *(entry["path"] for entry in INVENTORY.flow_renderer_subgraph_inputs()),
+        "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs",
+    }
+    for path in paths:
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / path, target)
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    assert len(INVENTORY.flow_renderer_subgraph_inputs()) == 22
+
+    helper = tmp_path / "scripts/test_beta_application_image_compose.py"
+    original = helper.read_text(encoding="utf-8")
+    helper.write_text(
+        original + '\nrunpy.run_path(str(ROOT / "scripts/new_helper.py"))\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    helper.write_text(original, encoding="utf-8")
+
+    owner = tmp_path / "scripts/test_base_native_issuance_compose.py"
+    original = owner.read_text(encoding="utf-8")
+    owner.write_text(
+        original.replace(
+            "    return result\n",
+            '    result.append(ROOT / "docker-compose.extra.yml")\n    return result\n',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    owner.write_text(original, encoding="utf-8")
+
+    owner.write_text(
+        original.replace(
+            'PROFILE = "docker-compose.profile.issuance-native.yml"',
+            'PROFILE = "docker-compose.other.yml"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    owner.write_text(original, encoding="utf-8")
+
+    model = tmp_path / "docker-compose.profile.issuance-native.yml"
+    original = model.read_text(encoding="utf-8")
+    model.write_text(
+        original.replace(
+            "file: docker-compose.service.issuance-native-runtime.yml",
+            "file: docker-compose.other.yml",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    model.write_text(original, encoding="utf-8")
+
+    model.write_text(
+        original.replace(
+            "  issuance-native:\n",
+            "  unexpected:\n"
+            "    extends:\n"
+            "      file: docker-compose.other.yml\n"
+            "      service: issuance-native\n"
+            "  issuance-native:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    model.write_text(original, encoding="utf-8")
+
+    model.write_text(
+        original.replace(
+            "  issuance-native:\n",
+            "  unexpected:\n"
+            "    extends :\n"
+            "      file: docker-compose.other.yml\n"
+            "      service: issuance-native\n"
+            "  issuance-native:\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    model.write_text(original, encoding="utf-8")
+
+    model.write_text(
+        original + "\ninclude:\n  - docker-compose.other.yml\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
+    model.write_text(original, encoding="utf-8")
+
+    model.write_text("services: [private-marker\n", encoding="utf-8")
+    with pytest.raises(ValueError) as malformed:
+        INVENTORY.flow_renderer_subgraph_inputs()
+    assert str(malformed.value) == "flow_renderer_subgraph_drift"
+    assert "private-marker" not in str(malformed.value)
+    model.write_text(original, encoding="utf-8")
+
+    renderer = tmp_path / "scripts/render_flow_native_runtime_fixture.py"
+    original = renderer.read_text(encoding="utf-8")
+    renderer.write_text(
+        original.replace(
+            "ROOT = Path(__file__).resolve().parents[1]",
+            "ROOT = Path(__file__).resolve().parents[2]",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_source_drift"):
+        INVENTORY.flow_rendered_first_hop_inputs()
+    renderer.write_text(original, encoding="utf-8")
+
+    renderer.write_text(
+        original.replace(
+            'BASE = runpy.run_path',
+            'ROOT = Path.cwd()\nBASE = runpy.run_path',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY._flow_renderer_runpy_edges(
+            "scripts/render_flow_native_runtime_fixture.py"
+        )
+    renderer.write_text(original, encoding="utf-8")
+
+    renderer.write_text(
+        original.replace(
+            'BASE["source"]("docker-compose.base.yml")',
+            'BASE["source"]("docker-compose.other.yml")',
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="flow_renderer_subgraph_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
 
 
 def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
@@ -611,6 +825,13 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     assert record["owner"] == INVENTORY.FLOW_OWNERS["flow-pr"]
     assert record["selected"] == record["executed"] == ["happy"]
     assert record["observed_cases"] == [{"name": "happy", "outcome": "ok"}]
+    assert record["observed_first_hop_source_inputs"] == (
+        INVENTORY.flow_rendered_first_hop_inputs()
+    )
+    assert record["observed_renderer_subgraph_source_inputs"] == (
+        INVENTORY.flow_renderer_subgraph_inputs()
+    )
+    assert record["transitive_source_closure"] == "incomplete"
     assert "child-inherited-stdout" in output
     assert "private-runtime-value" not in json.dumps(record)
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
