@@ -581,10 +581,10 @@ mod tests {
     // Invoked only by the owned TLS fixture; the mandatory CI invocation verifies
     // its single observation for every frozen published socket case.
     #[tokio::test]
+    #[ignore = "requires the owned loopback TLS and historical socket fixture"]
     async fn native_socket_case() {
-        let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE") else {
-            return;
-        };
+        let raw = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")
+            .expect("owned native Canvas socket case");
         let case: Value = serde_json::from_str(&raw).unwrap();
         let origin = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN").unwrap();
         assert!(origin.starts_with("https://127.0.0.1:"));

@@ -145,6 +145,61 @@ def test_database_runner_uses_positive_execution_guard() -> None:
     assert 'rust_db_obligations.py"' in source
 
 
+PASSPORT_RECONCILIATION_CASES = (
+    "beta_reconciliation_replays_only_exact_material_and_binds_first_receipt",
+    "beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub",
+    "beta_batch_http_completes_receipts_when_wire_kms_fails",
+    "beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping",
+    "beta_batch_http_never_creates_a_missing_batch_row_through_single_submit",
+)
+
+
+def _assert_explicit_passport_reconciliation_fixture(source: str, script: str) -> None:
+    for name in PASSPORT_RECONCILIATION_CASES:
+        assert re.search(
+            r'#\[tokio::test\]\s*#\[ignore = "requires the owned passport '
+            r'reconciliation PostgreSQL fixture"\]\s*async fn '
+            + re.escape(name)
+            + r"\(",
+            source,
+        ), name
+        assert re.search(r"^\s+" + re.escape(name) + r"(?:\s*\\|; do)$", script, re.MULTILINE)
+    assert source.count('std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")') == 2
+    assert 'let Ok(database_url) = std::env::var(' not in source
+    assert source.count('.expect("owned passport reconciliation PostgreSQL URL")') == 2
+    assert "--lib passport_http::reconciliation_tests:: -- --ignored --list" in script
+    assert '"passport_http::reconciliation_tests::$name: test"' in script
+    assert "[[ ${#cases[@]} == 5 ]]" in script
+    assert "--lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1" in script
+
+
+def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster() -> None:
+    source = (ROOT / "rust/services/issuance/src/passport_http_reconciliation_tests.rs").read_text(
+        encoding="utf-8"
+    )
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    [step] = [
+        item for item in workflow["jobs"]["test-rust-services"]["steps"]
+        if item.get("name") == "Test beta passport reconciliation and native batch on PostgreSQL"
+    ]
+    script = step["run"]
+    _assert_explicit_passport_reconciliation_fixture(source, script)
+    with pytest.raises(AssertionError):
+        _assert_explicit_passport_reconciliation_fixture(
+            source.replace('#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]', "", 1),
+            script,
+        )
+    with pytest.raises(AssertionError):
+        _assert_explicit_passport_reconciliation_fixture(
+            source.replace('.expect("owned passport reconciliation PostgreSQL URL")', '.unwrap_or_default()', 1),
+            script,
+        )
+    with pytest.raises(AssertionError):
+        _assert_explicit_passport_reconciliation_fixture(
+            source, script.replace("--ignored --test-threads=1", "--test-threads=1")
+        )
+
+
 def test_db_inventory_covers_every_current_dispatch_and_owned_runtime_input() -> None:
     source = RUNNER.read_text(encoding="utf-8")
     names = re.findall(r"^\s*run_timed ([a-z0-9_]+) ", source, re.MULTILINE)

@@ -206,6 +206,11 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
     seen: list[str] = []
 
     def child(*_args, env, **_kwargs):
+        assert _args[0][1:4] == [
+            "canvas_operation_http::tests::native_socket_case",
+            "--exact",
+            "--ignored",
+        ]
         name = json.loads(env["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"])["name"]
         seen.append(name)
         return SimpleNamespace(
@@ -4118,6 +4123,19 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert '--qualification "$MARTY_CANVAS_FULL_QUALIFICATION"' in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+    source = (ROOT / "rust/services/issuance/src/canvas_operation_http.rs").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        '#[tokio::test]\n    #[ignore = "requires the owned loopback TLS '
+        'and historical socket fixture"]\n    async fn native_socket_case()'
+    ) in source
+    assert 'let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")' not in source
+    assert '.expect("owned native Canvas socket case")' in source
+    runner = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"canvas_operation_http::tests::native_socket_case",\n                    "--exact",\n                    "--ignored",' in runner
 
 
 GATEWAY_REGISTRATIONS = [
