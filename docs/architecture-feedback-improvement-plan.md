@@ -282,9 +282,9 @@ The new leaf is omitted from release Docker contexts through the existing
 exact-file, direct-`cfg(test)` ownership guard. All 34 targeted Python ownership
 and registration guards pass, along with Rust formatting and diff checks. Local
 Rust compilation/execution is pending a safe validation milestone because the
-backing disk is below the 8 GiB build guard; no speedup is claimed. This draft is
-based on reviewed PR #1390's head to reuse its dev-only Tokio `test-util` feature,
-and must be rebased onto protected main before submission.
+backing disk is below the 8 GiB build guard; no speedup is claimed. The combined
+batch now starts from protected main `6daf4232cd110656652dec28fd57794693078fce`,
+which supplies #1390's merged dev-only Tokio `test-util` feature.
 
 [The obligation inventory](architecture-test-obligations.md) retains assertion,
 input and execution owners. An assertion move is not a new independent oracle.
