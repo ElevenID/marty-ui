@@ -15,6 +15,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 import provision_selfhost_disposable_tls as stage  # noqa: E402
+from with_disposable_event_stream_kms import (  # noqa: E402
+    validate_selfhost_tls_output_inventory,
+)
 from generate_selfhost_disposable_credentials import GENERATED  # noqa: E402
 from passport_remote_tls import (  # noqa: E402
     PUBLIC_TLS_FILES, SELFHOST_CERT_FILES, SELFHOST_TLS_FILES, accept_remote_tls,
@@ -31,6 +34,28 @@ OPENBAO = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:" + "b" * 64
 ])
 def test_root_token_metadata_contract(uid: int, mode: int, allowed: bool) -> None:
     assert stage.protected_root_token_metadata(uid, mode) is allowed
+
+
+def test_live_tls_contract_admits_only_verified_manifest_beside_secrets(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "workload_identity_ca_cert").write_text("public", encoding="ascii")
+    metadata = tmp_path / stage.KEY_METADATA_FILE
+    metadata.write_text(json.dumps({
+        "schema": "marty.selfhost-disposable-tls-keys/v1",
+        "roles": [
+            {"role": role, "key_name": name, "version": 1}
+            for role, name in stage.KEY_NAMES.items()
+        ],
+    }), encoding="ascii")
+    validate_selfhost_tls_output_inventory(tmp_path, {"workload_identity_ca_cert"})
+    (tmp_path / "unlisted-secret").write_text("unexpected", encoding="ascii")
+    with pytest.raises(RuntimeError, match="differs from the secret catalog"):
+        validate_selfhost_tls_output_inventory(tmp_path, {"workload_identity_ca_cert"})
+    (tmp_path / "unlisted-secret").unlink()
+    metadata.write_text('{"schema":"wrong","roles":[]}', encoding="ascii")
+    with pytest.raises(ValueError, match="disposable TLS key metadata"):
+        validate_selfhost_tls_output_inventory(tmp_path, {"workload_identity_ca_cert"})
 
 
 def test_selfhost_tls_acceptor_matches_catalog_not_passport_files() -> None:

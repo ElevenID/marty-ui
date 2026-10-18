@@ -20,6 +20,7 @@ import tempfile
 import time
 from urllib.error import HTTPError, URLError
 from selfhost_openbao_client import Bao, public_key_der
+from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
 
 
 IMAGE = re.compile(r"quay\.io/openbao/openbao@sha256:[0-9a-f]{64}\Z")
@@ -148,6 +149,13 @@ def require_pinned_image(image: str) -> None:
         run(["docker", "pull", image], timeout=180)
 
 
+def validate_selfhost_tls_output_inventory(output: Path, secrets: set[str]) -> None:
+    """Keep the secret inventory exact while admitting one verified diagnostic."""
+    if {path.name for path in output.iterdir()} != secrets | {KEY_METADATA_FILE}:
+        raise RuntimeError("disposable self-host TLS output differs from the secret catalog")
+    verified_key_metadata(output)
+
+
 def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> None:
     """Check the real output contract and every signer's positive/negative scope."""
     repo = Path(__file__).resolve().parent.parent
@@ -161,8 +169,7 @@ def validate_selfhost_tls_bootstrap(bao: Bao, output: Path, root_token: str) -> 
             or certs != {identity[0] for identity in SELFHOST_TLS_IDENTITIES.values()}):
         raise RuntimeError("self-host TLS identity oracle differs from the secret catalog")
     expected = certs | tokens | {"workload_identity_ca_cert"}
-    if {path.name for path in output.iterdir()} != expected:
-        raise RuntimeError("disposable self-host TLS output differs from the secret catalog")
+    validate_selfhost_tls_output_inventory(output, expected)
     ca = output / "workload_identity_ca_cert"
     if "PRIVATE KEY" in ca.read_text(encoding="ascii"):
         raise RuntimeError("disposable workload CA exported a private key")
