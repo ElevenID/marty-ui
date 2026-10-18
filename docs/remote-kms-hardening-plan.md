@@ -270,7 +270,7 @@ checks pass locally. The secret's actual workflow permission cannot be read
 from GitHub secret metadata; the protected release gate must prove the push.
 Do not manually tag the failed source or reuse its first-attempt artifact.
 The repair is now [UI PR #1402](https://github.com/ElevenID/marty-ui/pull/1402)
-at corrected head `94ccea76a`, with auto-merge enabled under protected
+at corrected head `5eeaf8e44510195a704659357e85cac4e40f474d`, with auto-merge enabled under protected
 checks. Local self-review found and removed a preflight assertion that assumed
 pretty-printed `gh api` JSON; the replacement check uses the API exit status
 and observable classic-PAT scope header. The first PR head then failed the
@@ -279,7 +279,11 @@ The revised source requires a dedicated `STACK_RELEASE_TAG_TOKEN` secret with
 Contents and Workflows write access limited to `ElevenID/marty-ui`; it is not
 yet provisioned. All 74 focused tests, Ruff, diff checks, and the pinned
 ElevenID open-source policy audit passed locally on the revised head. Its new
-PR-head checks are running. Requalify the
+PR-head checks are running. Codex Review identified a valid resume regression:
+an already-present exact tag must not require the publisher credential. The
+final head checks for that tag before credential preflight and only requires
+the credential in the absent-tag push branch; the review thread is resolved.
+The superseded PR CI runs were canceled by pull-request concurrency. Requalify the
 final merged protected-main source with full exact-main CI and a fresh
 v1.1.256 claim before another release dispatch; #1400 and any later main
 change invalidate the older claim's source binding.
