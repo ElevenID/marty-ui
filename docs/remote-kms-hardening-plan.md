@@ -11,14 +11,16 @@ the service or release boundary.
 Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
 UI hardening #1192, and subsequent custody, restore, signing-route and
 secretless publisher-source repairs and Canvas fixture correction #1423 are
-merged. Protected UI main is
-`35dc7400b3f9dccbe1a8b2d55101a545ca030beb`, after #1422, #1423 and
-#1424 passed protected merge. The earlier
+merged. Protected UI main is now
+`58e92ace7bd159cc71a4e0eed159cee80887751b`, after #1422, #1423,
+#1424 and #1426 passed protected merge. The earlier
 [exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
-failed the Canvas mixed-roster signer fixture, fixed in #1423. Replacement
-[full exact-main CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
-is in progress at the verified current main SHA. `v1.1.257` remains untagged
-and unpublished. Require that run to pass with main unchanged, then a fresh
+failed the Canvas mixed-roster signer fixture, fixed in #1423. The subsequent
+[full CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
+passed at `35dc7400...` but was superseded by #1426. Fresh
+[full exact-main CI 39172145237](https://github.com/ElevenID/marty-ui/actions/runs/39172145237)
+is pending at the verified new main SHA. `v1.1.257` remains untagged
+and unpublished. Require this new run to pass with main unchanged, then a fresh
 no-write claim,
 promotion, verified local late-tag handoff, resumed signed publication,
 and fresh disposable Raft-backed install plus coordinated cold restore and
@@ -106,6 +108,21 @@ while #1426's protected merge-group CI 39170385605 is live: the queued source
 change would invalidate a claim or late tag if it merges first. Reuse this
 passing full run only if protected main remains `35dc7400...` after #1426's
 terminal outcome; otherwise dispatch a new full run at the merged SHA.
+
+Protected source update (2026-10-18): all five #1426 merge-group workflows
+passed on candidate `58e92ace7bd159cc71a4e0eed159cee80887751b`, including
+[CI 39170385605](https://github.com/ElevenID/marty-ui/actions/runs/39170385605),
+CodeQL Rust/Actions, policy and organization quality. #1426 merged at 22:24
+UTC and protected main equals the candidate. The clean Windows release
+checkout fast-forwarded to that SHA; the unchanged four digest-pinned
+infrastructure roles passed the actual `docker compose config` and
+`check_selfhost_external_images.py` source preflight again. A fresh full
+[manual CI 39172145237](https://github.com/ElevenID/marty-ui/actions/runs/39172145237)
+was dispatched on `main`, with verified `workflow_dispatch` event and exact
+head SHA `58e92ace...`. It is pending and does not yet qualify a release
+claim. The earlier successful CI 39167241560 is now obsolete for v1.1.257.
+No other open UI PR had auto-merge enabled at dispatch. Keep the tag and
+release absent until this full run passes and protected main is unchanged.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
