@@ -10,17 +10,17 @@ the service or release boundary.
 
 Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
 UI hardening #1192, and subsequent custody, restore, signing-route and
-secretless publisher-source repairs are merged. Protected UI main advanced
-from #1419's `c6008f34062e0ec7ad310a85534cf30626e01c7d` to
-`c81afd8b8abc9aabd4ddabe4f944b4707046b882` with #1422. Full
+secretless publisher-source repairs and Canvas fixture correction #1423 are
+merged. Protected UI main is
+`71c4bf4231d5daeda7052651cb9964f5b35d4655`, after #1422 and #1423. Full
 [exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
 failed the Canvas mixed-roster signer fixture (and consequently CI Gate); all
 other completed jobs passed or were skipped. Rust sends the pinned
 `verification_method_id`, but the synthetic grant-bound signer omitted it from
-its allowlist. Locally verified [PR #1423](https://github.com/ElevenID/marty-ui/pull/1423)
-corrects that contract and is open under protected checks; it is not yet on
-main. `v1.1.257` remains untagged and unpublished. Once #1423 merges, require
-a new passing full CI on the resulting exact main, fresh no-write claim,
+its allowlist. [PR #1423](https://github.com/ElevenID/marty-ui/pull/1423)
+corrects that contract and has passed protected merge. `v1.1.257` remains
+untagged and unpublished. Require a new passing full CI on a settled exact
+main, fresh no-write claim,
 promotion, verified local late-tag handoff, resumed signed publication,
 and fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
@@ -24191,3 +24191,5 @@ Corrected PR gate (2026-10-18): The branch ref moved to `c70702ccc`, but GitHub 
 Release-input preparation (2026-10-18): On the clean `c6008f34` Windows release checkout, the four independent infrastructure digest refs (edge, tunnel-nginx-proxy, PostgreSQL, Redis) from the preserved prior release input passed the actual `docker compose config --format json` render and `scripts/check_selfhost_external_images.py` source-shape preflight for `1.1.257`. No container was started or production stack changed. Re-run this preflight on the **eventual merged exact-main source** before release dispatch; the earlier check validates input shape, not final-source qualification.
 
 Protected Canvas PR gate (2026-10-18): Final-head [PR CI 39162237037](https://github.com/ElevenID/marty-ui/actions/runs/39162237037) completed **success** on `c70702cccae447bc335934398c36db14fe2f8302`; the Canvas, contracts, selfhost, OpenBao plugin/recovery, Rust images/lint, release contract, security, browser and aggregate CI Gate all passed. CodeQL Actions/Rust, policy and organization quality also passed. GitHub added [#1423](https://github.com/ElevenID/marty-ui/pull/1423) to the protected merge queue at `2026-10-18T20:32:20Z`. Combined candidate `71c4bf4231d5daeda7052651cb9964f5b35d4655` has merge-group CI [39163785263](https://github.com/ElevenID/marty-ui/actions/runs/39163785263) queued; the other protected merge-group workflows have started, with policy passed. Do not treat PR-head success or this candidate as exact-main release qualification. Wait for actual merge and verify protected main before dispatching full CI.
+
+Canvas correction merged (2026-10-18): All five protected merge-group workflows passed on `71c4bf4231d5daeda7052651cb9964f5b35d4655`, including [CI 39163785263](https://github.com/ElevenID/marty-ui/actions/runs/39163785263), CodeQL Rust/Actions, policy and organization quality. [#1423](https://github.com/ElevenID/marty-ui/pull/1423) merged at `2026-10-18T20:52:27Z`, and the observed protected main ref matched that exact SHA. A clean Windows release checkout fast-forwarded to this commit with empty porcelain status; its four independent infrastructure digests passed the actual Compose-render/source preflight again. [#1424](https://github.com/ElevenID/marty-ui/pull/1424), an unrelated Flow source-input PR, still has auto-merge enabled and may advance main. Avoid another prematurely superseded full exact-main run; inspect #1424's terminal protected outcome, then dispatch one full manual CI at settled main and verify the run head SHA before any claim or release.
