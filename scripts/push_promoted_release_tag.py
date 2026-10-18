@@ -17,7 +17,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from release_transaction import IMAGE_URIS, validate_resume
+if __package__:
+    from .release_transaction import IMAGE_URIS, validate_resume
+else:
+    from release_transaction import IMAGE_URIS, validate_resume
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "ElevenID/marty-ui"
@@ -34,6 +37,19 @@ def output(*args: str) -> str:
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
+
+
+def promotion_artifact(run_id: str, name: str) -> tuple[int, str]:
+    listing = json.loads(output(
+        "gh", "api", f"repos/{REPOSITORY}/actions/runs/{run_id}/artifacts?per_page=100",
+    ))
+    matches = [artifact for artifact in listing["artifacts"]
+               if artifact["name"] == name and not artifact["expired"]]
+    require(len(matches) == 1, "Expected exactly one unexpired promotion checkpoint")
+    artifact = matches[0]
+    require(re.fullmatch(r"sha256:[0-9a-f]{64}", artifact.get("digest", "")) is not None,
+            "Promotion checkpoint has no valid immutable digest")
+    return artifact["id"], artifact["digest"]
 
 
 def main() -> None:
@@ -57,7 +73,21 @@ def main() -> None:
     require(run.get("event") == "workflow_dispatch" and run.get("head_branch") == "main",
             "Checkpoint run was not dispatched from main")
     require(run.get("head_sha") == source, "Checkpoint run differs from current main")
+    require(run.get("run_attempt") == 1 and run.get("status") == "completed"
+            and run.get("conclusion") == "failure",
+            "Expected the completed first-attempt handoff run")
+    jobs = json.loads(output("gh", "api", f"repos/{REPOSITORY}/actions/runs/"
+                        f"{args.promotion_run_id}/jobs?per_page=100"))["jobs"]
+    publishers = [job for job in jobs if job["name"] == "publish-manifest"]
+    require(len(publishers) == 1 and publishers[0]["run_attempt"] == 1,
+            "Expected one first-attempt publication job")
+    steps = publishers[0]["steps"]
+    handoff = [step for step in steps
+               if step["name"] == "Create or verify the late annotated source tag"]
+    require(len(handoff) == 1 and handoff[0]["conclusion"] == "failure",
+            "Publication did not stop at the local tag handoff")
     artifact = f"stack-release-promotion-complete-{args.promotion_run_id}"
+    artifact_identity = promotion_artifact(args.promotion_run_id, artifact)
     with tempfile.TemporaryDirectory(prefix="marty-promoted-tag-") as directory:
         command("gh", "run", "download", args.promotion_run_id,
                 "--repo", REPOSITORY, "--name", artifact, "--dir", directory)
@@ -70,6 +100,8 @@ def main() -> None:
             source_sha=source, stack_lock=ROOT / "release/stack-lock.json",
             claim_run_id=args.claim_run_id, required_state="promoted",
         )
+    require(promotion_artifact(args.promotion_run_id, artifact) == artifact_identity,
+            "Promotion checkpoint changed while downloading")
     tag = transaction["tag"]
     require(not output("git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}",
                        f"refs/tags/{tag}^{{}}"), "Release tag already exists")
