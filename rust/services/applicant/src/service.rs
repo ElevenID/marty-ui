@@ -109,7 +109,11 @@ pub struct ReviewRequestContext<'a> {
 
 #[async_trait]
 pub trait TemplateProvider: Send + Sync {
-    async fn get(&self, id: &str) -> Result<ApplicationTemplate, ProviderError>;
+    async fn get(
+        &self,
+        organization_id: &str,
+        id: &str,
+    ) -> Result<ApplicationTemplate, ProviderError>;
 }
 
 #[async_trait]
@@ -571,7 +575,10 @@ impl ApplicantService {
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
         identity.validate()?;
-        let template = self.templates.get(application_template_id).await?;
+        let template = self
+            .templates
+            .get(issuer_organization_id, application_template_id)
+            .await?;
         if template.organization_id != issuer_organization_id {
             return Err(ServiceError::TemplateTenant);
         }
@@ -652,15 +659,17 @@ impl ApplicantService {
         application_id: &str,
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
-        let template_id = {
+        let (template_id, organization_id) = {
             let store = self.store.read().await;
-            store
+            let application = store
                 .application(application_id)
-                .ok_or(ServiceError::ApplicationNotFound)?
-                .application_template_id
-                .clone()
+                .ok_or(ServiceError::ApplicationNotFound)?;
+            (
+                application.application_template_id.clone(),
+                application.organization_id.clone(),
+            )
         };
-        let template = self.templates.get(&template_id).await?;
+        let template = self.templates.get(&organization_id, &template_id).await?;
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
@@ -1198,7 +1207,10 @@ impl ApplicantService {
         };
         let template = self
             .templates
-            .get(&application_snapshot.application_template_id)
+            .get(
+                &application_snapshot.organization_id,
+                &application_snapshot.application_template_id,
+            )
             .await?;
         let claims = build_claims(&application_snapshot, &applicant_snapshot, &template, now);
 
