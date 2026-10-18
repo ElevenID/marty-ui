@@ -423,24 +423,39 @@ database cleanup. The 93.8-second Cargo timing observation is the entire
 Issuance `lib(test)` compile, not a worker-specific saving, and does not
 justify a new crate or a test reduction by itself.
 
-### Additive renewal-unit CI diagnostic (not selective admission)
+### Additive ordinary-library CI diagnostic (not selective admission)
 
 The local A6 pilot adds a `renewal-unit` Rust matrix lane only when a
 maintainer places `ci-renewal-unit-diagnostic` on a Rust-runtime PR before its
 next synchronize run. Label changes alone do not dispatch CI. The existing
 Canvas, contracts, and self-host lanes remain mandatory on that PR and on
 every protected merge group; the ordinary test-only-leaf PR still selects
-contracts. The focused lane compiles only the Issuance library test harness
-with its package's normal features and requires the same-run Cargo artifact,
-all four retry cases and all nineteen renewal cases to be discovered and
-executed without ignored or failed cases. It starts no Docker fixture.
+contracts. The compatibility lane/label now reuses its single Issuance library
+compile for an **unfiltered** ordinary-library run, not just the 23 retry/renewal
+cases. Those 23 remain a required subset; additional ordinary tests are discovered
+and executed automatically. The recorder binds the same-run Cargo artifact and
+accounts for every discovered nonignored outcome. It separately requires exactly
+the fourteen known ignored IDs and records their owners: seven OpenBao cases,
+five PostgreSQL cases, one historical socket/TLS case and one tracing child
+invoked by its ordinary parent. Unknown, missing or substituted ignored ownership
+fails the diagnostic before execution. No source-fingerprint rule restricts new
+ordinary test bodies or registrations.
+
+The existing feature-observer compile/exact test additionally runs on this lane,
+using its unchanged feature, command and positive-execution guard. The old
+`renewal_unit` recorder dispatch remains compatible; the whole-library dispatch
+is `issuance_library_unit` with `marty.rust-library-obligation/v1` evidence in
+the existing unit-obligation artifact, not DB or product-qualification evidence.
+The diagnostic starts no Docker fixture, but ordinary tests may own local
+loopback servers and child processes. Case completion does not prove every
+assertion was reached. Hosted qualification of this broader local pilot is pending.
 
 This is a hosted qualification experiment, not a measured speedup or permission
 to omit any SQL or process acceptance. Admission to a future selective PR plan
 requires an exact-head hosted success, feature/profile and artifact review,
 and a separate reviewed change to the classifier and CI Gate. Missing source
-ownership, an unknown/mixed diff, or changed test roster must retain the broad
-plan or fail the diagnostic; the 60 PostgreSQL renewal cases remain required.
+ownership or an unknown/mixed diff must retain the broad plan; the 60 PostgreSQL
+renewal cases remain required. No classifier or CI Gate admission is added.
 
 ### Ordinary library execution versus explicitly owned fixture cases
 
@@ -480,8 +495,8 @@ than returning success. Historical Python source pins and oracle bytes remain
 unchanged; this is not a shortened HTTP timeout or removed parity check.
 
 The separately owned seven ignored OpenBao cases and tracing child protocol
-are not changed. A future whole-library PR diagnostic must report genuine
-ordinary cases and fixture-owned exclusions separately, retain the independent
-feature-observer check, and qualify its own execution before changing selection.
+are not changed. The additive whole-library PR diagnostic reports genuine
+ordinary cases and fixture-owned exclusions separately, retains the independent
+feature-observer check, and must qualify its own execution before changing selection.
 This ledger alone does not authorize a fixture-free claim for the whole crate
 or a narrower protected merge/release gate.

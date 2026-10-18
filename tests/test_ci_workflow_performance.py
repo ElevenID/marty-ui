@@ -1810,7 +1810,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas operation timeout TLS parity",
     }
     contracts = {
-        "Verify feature-regression observer isolation",
         "Prepare database contract executables",
         "Create isolated Rust contract databases",
         "Run safe Rust contract groups concurrently",
@@ -1897,10 +1896,15 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert next(
         step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-buildx-action@")
     )["if"] == "matrix.lane != 'renewal-unit'"
-    focused = steps["Execute exact renewal handler library obligations"]
+    observer = steps["Verify feature-regression observer isolation"]
+    assert observer["if"] == "matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'"
+    assert "--features feature-regression-observer" in observer["run"]
+    assert not observer.get("continue-on-error", False)
+    focused = steps["Execute ordinary Issuance library obligations"]
     assert focused["if"] == "matrix.lane == 'renewal-unit'"
-    assert "--name renewal_unit --owner renewal-unit" in focused["run"]
-    assert "canvas_sync_worker::retry_handoff_tests:: --test-threads=4" in focused["run"]
+    assert "--name issuance_library_unit --owner renewal-unit" in focused["run"]
+    assert '"${executables[0]}" --test-threads=4' in focused["run"]
+    assert "canvas_sync_worker::retry_handoff_tests::" not in focused["run"]
     compile_step = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
     assert "--renewal-unit-only \"$artifacts\" target" in compile_step

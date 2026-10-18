@@ -163,35 +163,59 @@ def _assert_explicit_passport_reconciliation_fixture(source: str, script: str) -
             + r"\(",
             source,
         ), name
-        assert re.search(r"^\s+" + re.escape(name) + r"(?:\s*\\|; do)$", script, re.MULTILINE)
+        assert re.search(
+            r"^\s+" + re.escape(name) + r"(?:\s*\\|; do)$", script, re.MULTILINE
+        )
     assert source.count('std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")') == 2
-    assert 'let Ok(database_url) = std::env::var(' not in source
-    assert source.count('.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))') == 2
+    assert "let Ok(database_url) = std::env::var(" not in source
+    assert (
+        source.count(
+            '.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))'
+        )
+        == 2
+    )
     assert "--lib passport_http::reconciliation_tests:: -- --ignored --list" in script
     assert '"passport_http::reconciliation_tests::$name: test"' in script
     assert "[[ ${#cases[@]} == 5 ]]" in script
-    assert "--lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1" in script
-
-
-def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster() -> None:
-    source = (ROOT / "rust/services/issuance/src/passport_http_reconciliation_tests.rs").read_text(
-        encoding="utf-8"
+    assert (
+        "--lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1"
+        in script
     )
-    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+
+
+def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster() -> (
+    None
+):
+    source = (
+        ROOT / "rust/services/issuance/src/passport_http_reconciliation_tests.rs"
+    ).read_text(encoding="utf-8")
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    )
     [step] = [
-        item for item in workflow["jobs"]["test-rust-services"]["steps"]
-        if item.get("name") == "Test beta passport reconciliation and native batch on PostgreSQL"
+        item
+        for item in workflow["jobs"]["test-rust-services"]["steps"]
+        if item.get("name")
+        == "Test beta passport reconciliation and native batch on PostgreSQL"
     ]
     script = step["run"]
     _assert_explicit_passport_reconciliation_fixture(source, script)
     with pytest.raises(AssertionError):
         _assert_explicit_passport_reconciliation_fixture(
-            source.replace('#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]', "", 1),
+            source.replace(
+                '#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]',
+                "",
+                1,
+            ),
             script,
         )
     with pytest.raises(AssertionError):
         _assert_explicit_passport_reconciliation_fixture(
-            source.replace('.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))', '.unwrap_or_default()', 1),
+            source.replace(
+                '.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))',
+                ".unwrap_or_default()",
+                1,
+            ),
             script,
         )
     with pytest.raises(AssertionError):
@@ -261,7 +285,7 @@ def test_db_inventory_never_probes_custom_or_unregistered_harnesses(
         INVENTORY.libtest_harness("marty-signing-keys", "custom")
 
 
-def test_renewal_unit_roster_is_exactly_the_two_owned_sources() -> None:
+def test_renewal_unit_required_roster_remains_in_the_two_owned_sources() -> None:
     source = ROOT / "rust/services/issuance/src"
     retry = (source / "canvas_sync_worker_retry_tests.rs").read_text(encoding="utf-8")
     renewal = (source / "canvas_sync_worker_renewal_tests.rs").read_text(
@@ -276,19 +300,15 @@ def test_renewal_unit_roster_is_exactly_the_two_owned_sources() -> None:
     primary = renewal.split("primary_cases! {", 1)[1].split("\n}", 1)[0]
     generated = set(re.findall(r"^\s*(\w+):\s*\"", primary, re.MULTILINE))
     secondary = set(
-        re.findall(
-            r"#\[tokio::test\([^]]*\)\]\s*async fn\s+(\w+)", renewal
-        )
+        re.findall(r"#\[tokio::test\([^]]*\)\]\s*async fn\s+(\w+)", renewal)
     )
-    assert len(direct) == 4 and len(generated) == 15 and len(secondary) == 4
-    expected = {
-        INVENTORY.RENEWAL_UNIT_PREFIX + name for name in direct
-    } | {
+    assert len(direct) >= 4 and len(generated) == 15 and len(secondary) >= 4
+    expected = {INVENTORY.RENEWAL_UNIT_PREFIX + name for name in direct} | {
         INVENTORY.RENEWAL_UNIT_PREFIX + "renewal_tests::" + name
         for name in generated | secondary
     }
-    assert expected == INVENTORY.RENEWAL_UNIT_CASES
-    assert len(expected) == 23
+    assert INVENTORY.RENEWAL_UNIT_CASES <= expected
+    assert len(INVENTORY.RENEWAL_UNIT_CASES) == 23
     package, target, inputs = INVENTORY.obligation("renewal_unit")
     assert (package, target, inputs) == (
         "marty-issuance-service",
@@ -298,7 +318,9 @@ def test_renewal_unit_roster_is_exactly_the_two_owned_sources() -> None:
     assert INVENTORY.libtest_harness(package, target)["harness"] == "libtest"
 
 
-def test_renewal_unit_selection_rejects_missing_substituted_ignored_or_extra_cases() -> None:
+def test_renewal_unit_selection_rejects_missing_substituted_ignored_or_extra_cases() -> (
+    None
+):
     args = [INVENTORY.RENEWAL_UNIT_PREFIX, "--test-threads=4"]
     selected = set(INVENTORY.RENEWAL_UNIT_CASES)
     INVENTORY.verify_renewal_unit_roster(args, selected, set())
@@ -314,6 +336,145 @@ def test_renewal_unit_selection_rejects_missing_substituted_ignored_or_extra_cas
         INVENTORY.verify_renewal_unit_roster(args, selected, {cases[0]})
     with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
         INVENTORY.verify_renewal_unit_roster(["--test-threads=4"], selected, set())
+
+
+def test_library_unit_selection_allows_new_ordinary_cases_but_not_unowned_ignored() -> (
+    None
+):
+    expected = set(INVENTORY.RENEWAL_UNIT_CASES) | {"new_module::new_ordinary_case"}
+    ignored = set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
+    INVENTORY.verify_library_unit_roster(["--test-threads=4"], expected, ignored)
+    assert len(ignored) == 14
+    assert INVENTORY.obligation("issuance_library_unit") == INVENTORY.obligation(
+        "renewal_unit"
+    )
+    for arguments, selected, excluded in (
+        ([INVENTORY.RENEWAL_UNIT_PREFIX, "--test-threads=4"], expected, ignored),
+        (["--ignored", "--test-threads=4"], expected, ignored),
+        (
+            ["--test-threads=4"],
+            expected - {next(iter(INVENTORY.RENEWAL_UNIT_CASES))},
+            ignored,
+        ),
+        (["--test-threads=4"], expected, ignored - {next(iter(ignored))}),
+        (["--test-threads=4"], expected, ignored | {"foreign::unowned_fixture"}),
+        (
+            ["--test-threads=4"],
+            expected,
+            (ignored - {next(iter(ignored))}) | {"foreign::substitute"},
+        ),
+        (["--test-threads=4"], expected | ignored, ignored),
+    ):
+        with pytest.raises(ValueError, match="library_unit_roster_drift"):
+            INVENTORY.verify_library_unit_roster(arguments, selected, excluded)
+
+
+def test_library_unit_ignored_inventory_matches_actual_fixture_and_child_sources() -> (
+    None
+):
+    roots = ROOT / "rust/services/issuance/src"
+    ignored = set()
+    for filename, prefix in (
+        ("credential_builder.rs", "credential_builder::tests::"),
+        ("canvas_readiness_runtime.rs", "canvas_readiness_runtime::tests::"),
+        (
+            "internal_application_diagnostics.rs",
+            "internal_application_diagnostics::tests::",
+        ),
+        (
+            "passport_http_reconciliation_tests.rs",
+            "passport_http::reconciliation_tests::",
+        ),
+        ("canvas_operation_http.rs", "canvas_operation_http::tests::"),
+    ):
+        source = (roots / filename).read_text(encoding="utf-8")
+        ignored.update(
+            prefix + name
+            for name in re.findall(
+                r'#\[ignore\s*=\s*"[^"\n]+"\]\s*(?:async\s+)?fn\s+(\w+)',
+                source,
+            )
+        )
+    assert ignored == set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
+    assert all(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS.values())
+
+
+@pytest.mark.parametrize("child_status", [0, 7])
+def test_whole_library_recorder_accounts_all_discovered_outcomes(
+    tmp_path,
+    monkeypatch,
+    capsys,
+    child_status,
+) -> None:
+    selected = set(INVENTORY.RENEWAL_UNIT_CASES) | {"new_module::new_ordinary_case"}
+    ignored = set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        INVENTORY, "expected_cases", lambda *args, **kwargs: (selected, ignored)
+    )
+    calls = []
+
+    def run(command, log, evidence):
+        calls.append(command)
+        evidence["command_status"] = child_status
+        failed = {"new_module::new_ordinary_case"} if child_status else set()
+        log.write_text(
+            "".join(
+                ("failed " if name in failed else "ok ") + name + "\n"
+                for name in sorted(selected)
+            )
+            + "".join("ignored " + name + "\n" for name in sorted(ignored))
+        )
+        return child_status, (
+            f"test result: {'FAILED' if failed else 'ok'}. {len(selected) - len(failed)} passed; "
+            f"{len(failed)} failed; {len(ignored)} ignored; 0 measured; 0 filtered out; finished in 0.00s\n"
+        )
+
+    monkeypatch.setattr(INVENTORY, "run_owned_harness", run)
+    command = ["harness", "--test-threads=4"]
+    assert (
+        INVENTORY.run_contract("issuance_library_unit", command, "renewal-unit")
+        == child_status
+    )
+    assert calls == [command]
+    evidence = json.loads(
+        (tmp_path / "rust-build-evidence" / INVENTORY.UNIT_EVIDENCE_NAME).read_text()
+    )
+    assert evidence["schema"] == "marty.rust-library-obligation/v1"
+    assert set(evidence["executed"]) == selected
+    assert set(evidence["ignored"]) == ignored
+    assert evidence["ignored_case_owners"] == INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS
+    assert evidence["status"] == ("failed" if child_status else "ok")
+    assert not (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).exists()
+    assert INVENTORY.UNIT_PREFIX in capsys.readouterr().out
+
+
+def test_whole_library_rejects_unknown_ignored_owner_before_execution(
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        INVENTORY,
+        "expected_cases",
+        lambda *args, **kwargs: (
+            set(INVENTORY.RENEWAL_UNIT_CASES),
+            set(INVENTORY.LIBRARY_UNIT_IGNORED_OWNERS) | {"unowned::ignored_case"},
+        ),
+    )
+    monkeypatch.setattr(
+        INVENTORY,
+        "run_owned_harness",
+        lambda *args: pytest.fail("unowned case executed"),
+    )
+    assert (
+        INVENTORY.run_contract(
+            "issuance_library_unit", ["harness", "--test-threads=4"], "renewal-unit"
+        )
+        == 1
+    )
 
 
 def test_renewal_unit_artifact_requires_same_run_library_test_profile(
@@ -341,14 +502,21 @@ def test_renewal_unit_artifact_requires_same_run_library_test_profile(
         artifacts.write_text("".join(json.dumps(row) + "\n" for row in invalid))
         with pytest.raises(ValueError):
             INVENTORY.artifact_identity(
-                executable, "marty-issuance-service", "marty_issuance_service",
+                executable,
+                "marty-issuance-service",
+                "marty_issuance_service",
                 library_test=True,
             )
     artifacts.write_text(json.dumps(record) + "\n")
-    assert INVENTORY.artifact_identity(
-        executable, "marty-issuance-service", "marty_issuance_service",
-        library_test=True,
-    )["binding"] == "same_path"
+    assert (
+        INVENTORY.artifact_identity(
+            executable,
+            "marty-issuance-service",
+            "marty_issuance_service",
+            library_test=True,
+        )["binding"]
+        == "same_path"
+    )
 
 
 def test_renewal_unit_evidence_is_separate_from_database_claims(

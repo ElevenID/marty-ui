@@ -71,6 +71,42 @@ RENEWAL_UNIT_CASES = frozenset(
         "actual_cycle_does_not_count_persisted_success_after_renewal_error",
     )
 )
+LIBRARY_UNIT_IGNORED_OWNERS = {
+    **{
+        "credential_builder::tests::"
+        + name: "scripts/probe_integration_secret_coordinated_restore.py"
+        for name in (
+            "sd_jwt_signs_exact_native_input_with_public_holder_key",
+            "jwt_vc_preserves_open_badge_profile_and_reserved_id",
+            "mdoc_ignores_request_controlled_certificate_chain",
+            "data_integrity_uses_native_canonicalization_and_verifies_completion",
+        )
+    },
+    **{
+        "canvas_readiness_runtime::tests::"
+        + name: "scripts/probe_integration_secret_coordinated_restore.py"
+        for name in (
+            "live_challenges_prove_the_published_lti_and_kms_keys",
+            "live_challenges_reject_ambiguous_or_private_key_material_before_kms_use",
+            "kms_challenge_requires_the_active_method_in_both_did_relationships",
+        )
+    },
+    **{
+        "passport_http::reconciliation_tests::"
+        + name: ".github/workflows/ci.yml:passport_reconciliation"
+        for name in (
+            "beta_reconciliation_replays_only_exact_material_and_binds_first_receipt",
+            "beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub",
+            "beta_batch_http_completes_receipts_when_wire_kms_fails",
+            "beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping",
+            "beta_batch_http_never_creates_a_missing_batch_row_through_single_submit",
+        )
+    },
+    "canvas_operation_http::tests::native_socket_case": "scripts/run_canvas_timeout_consumer_oracle.py",
+    "internal_application_diagnostics::tests::actual_tracing_event_child": (
+        "internal_application_diagnostics::tests::actual_tracing_event_fields_are_stable_in_isolated_process"
+    ),
+}
 CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
 # Stable libtest's separate result log is unaffected by stdout inherited by a
 # tested process. --logfile is deprecated but supported by pinned Rust 1.95;
@@ -221,6 +257,7 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         "marty_issuance_service",
         (),
     )
+    entries["issuance_library_unit"] = entries["renewal_unit"]
     if name not in entries:
         raise ValueError("unknown_dispatch")
     package, target, variables = entries[name]
@@ -442,6 +479,18 @@ def verify_renewal_unit_roster(
         raise ValueError("renewal_unit_roster_drift")
 
 
+def verify_library_unit_roster(
+    arguments: list[str], expected: set[str], ignored: set[str]
+) -> None:
+    if (
+        arguments != ["--test-threads=4"]
+        or not RENEWAL_UNIT_CASES <= expected
+        or ignored != set(LIBRARY_UNIT_IGNORED_OWNERS)
+        or expected & ignored
+    ):
+        raise ValueError("library_unit_roster_drift")
+
+
 def flow_source_inputs(owner: str) -> list[dict[str, str]]:
     # These are the runner's direct non-Cargo inputs, not a claim that every
     # internally spawned process or rendered configuration is inventoried.
@@ -577,7 +626,10 @@ def verify_execution(
 
 def emit(evidence: dict) -> None:
     encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
-    unit = evidence["schema"] == "marty.rust-unit-obligation/v1"
+    unit = evidence["schema"] in {
+        "marty.rust-unit-obligation/v1",
+        "marty.rust-library-obligation/v1",
+    }
     runner_temp = os.environ.get("RUNNER_TEMP")
     if runner_temp:
         name = UNIT_EVIDENCE_NAME if unit else EVIDENCE_NAME
@@ -704,6 +756,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
     flow = name == "flow_acceptance"
     selfhost = name == "selfhost_acceptance"
     renewal_unit = name == "renewal_unit"
+    library_unit = name == "issuance_library_unit"
+    unit = renewal_unit or library_unit
     if flow:
         gate = f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
         runner = FLOW_OWNERS.get(owner)
@@ -712,17 +766,23 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         gate = f"test-rust-services/{'selfhost' if owner == 'selfhost' else 'canvas'}"
         runner = SELFHOST_OWNER
         fixture = SELFHOST_FIXTURE_OWNER
-    elif renewal_unit:
+    elif unit:
         gate = "test-rust-services/renewal-unit"
         runner = "scripts/ci/rust_db_obligations.py"
-        fixture = "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs"
+        fixture = (
+            "rust/services/issuance/src/lib.rs"
+            if library_unit
+            else "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs"
+        )
     else:
         gate = "test-rust-services/contracts"
         runner = RUNNER_OWNER
         fixture = FIXTURE_OWNER
     evidence = {
         "schema": (
-            "marty.rust-unit-obligation/v1"
+            "marty.rust-library-obligation/v1"
+            if library_unit
+            else "marty.rust-unit-obligation/v1"
             if renewal_unit
             else "marty.rust-db-obligation/v1"
         ),
@@ -738,8 +798,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         if (
             (flow and owner not in FLOW_OWNERS)
             or (selfhost and owner not in {"selfhost", "canvas"})
-            or (renewal_unit and owner != "renewal-unit")
-            or (not flow and not selfhost and not renewal_unit and owner != "contracts")
+            or (unit and owner != "renewal-unit")
+            or (not flow and not selfhost and not unit and owner != "contracts")
         ):
             raise ValueError("invalid_dispatch_owner")
         package, target, inputs = obligation(name)
@@ -761,7 +821,7 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         executable = Path(command[0])
         evidence.update(
             artifact_identity(executable, package, target, library_test=True)
-            if renewal_unit
+            if unit
             else artifact_identity(executable, package, target)
         )
         # Never probe --list on custom harnesses, which may ignore the flag and
@@ -776,6 +836,9 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         )
         if renewal_unit:
             verify_renewal_unit_roster(command[1:], expected, ignored)
+        if library_unit:
+            verify_library_unit_roster(command[1:], expected, ignored)
+            evidence["ignored_case_owners"] = LIBRARY_UNIT_IGNORED_OWNERS
         if flow:
             if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")

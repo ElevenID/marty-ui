@@ -1115,7 +1115,7 @@ jobs:
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
           if [[ "${{ matrix.lane }}" == renewal-unit ]]; then
-            # Diagnostic only. The initial PR still runs the complete matrix;
+            # Additive ordinary-library diagnostic; normal PR lanes remain required.
             # this package-scoped compile has no database, image or service fixture.
             cargo test --locked -p marty-issuance-service --lib --no-run \
               --timings --message-format=json > "$artifacts"
@@ -1305,7 +1305,7 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
-      - name: Execute exact renewal handler library obligations
+      - name: Execute ordinary Issuance library obligations
         if: matrix.lane == 'renewal-unit'
         working-directory: rust
         shell: bash
@@ -1321,9 +1321,8 @@ jobs:
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
           python3 ../scripts/ci/rust_db_obligations.py \
-            --name renewal_unit --owner renewal-unit -- \
-            "${executables[0]}" \
-            canvas_sync_worker::retry_handoff_tests:: --test-threads=4
+            --name issuance_library_unit --owner renewal-unit -- \
+            "${executables[0]}" --test-threads=4
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
         shell: bash
@@ -1350,7 +1349,7 @@ jobs:
           printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"
           python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
