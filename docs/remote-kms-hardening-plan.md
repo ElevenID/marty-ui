@@ -197,6 +197,20 @@ is queued. Wait for its full success and reconfirm main before a new no-write
 claim. The prior successful claim `39094334496` remains source-bound to the
 older SHA and must not be used for this release dispatch.
 
+Concurrent self-host landing (2026-10-17): exact-main CI `39094702401` at
+`acb9263a842c0d3eec82f945b79f7e00fead6400` passed its OpenBao,
+self-host, contracts and other completed jobs, but Canvas remained live when
+unrelated self-host TLS role PR #1399 merged as
+`f53037264e801ae7e91e6cc9be974821d578a64a`. The superseded CI was
+cancelled rather than used for a stale claim. The clean Windows release checkout
+at the prior SHA ran 106 focused self-host/release tests successfully, with
+three Linux-only skips; that is local contract evidence, not full exact-main
+qualification. Test-only PR #1398 is now in the protected merge queue at
+candidate `31c3c49fe112cb0f08e4f5c63549706f29a32b9a`, with CI
+`39095803323` live. Wait for its actual merge and then dispatch one full CI on
+the resulting protected main before another no-write v1.1.256 claim. No
+v1.1.256 tag or release exists yet.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
