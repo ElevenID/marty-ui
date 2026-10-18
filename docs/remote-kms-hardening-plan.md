@@ -233,6 +233,22 @@ passed. Protected main still equals its head and v1.1.256 remains untagged.
 This local validation does not replace the full hosted gate or signed-artifact
 fresh-install and restored-journey acceptance.
 
+Exact-main release advance (2026-10-17): [full CI 39097234971](https://github.com/ElevenID/marty-ui/actions/runs/39097234971)
+completed successfully at protected main
+`31c3c49fe112cb0f08e4f5c63549706f29a32b9a`, including Canvas and the
+terminal CI Gate. Main still matched and the v1.1.256 tag was absent. Fresh
+[no-write claim 39099677681](https://github.com/ElevenID/marty-ui/actions/runs/39099677681)
+completed successfully at that SHA. Its downloaded transaction records state
+`claimed`, exact source and claim run ID, and absent tag, release and all five
+versioned image tags. [Stack release 39099758515](https://github.com/ElevenID/marty-ui/actions/runs/39099758515)
+was dispatched at the same SHA with that fresh claim, preparation enabled and
+the four preflighted external image digests. The first API dispatch attempt
+returned HTTP 422 and created no run because PowerShell serialized extra
+`Get-Content` file-provider properties into the JSON input; the corrected
+579-byte structured payload was accepted. The release is queued. Do not claim
+signed publication, artifact qualification or exact installed recovery until
+their respective gates complete.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
