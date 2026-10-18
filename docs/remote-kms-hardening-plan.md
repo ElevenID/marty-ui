@@ -514,6 +514,19 @@ production self-host containers remained healthy and loopback HTTP returned
 isolated install, but does not substitute for measured 16 GiB runtime
 qualification or the missing release credential.
 
+Linux acceptance staging (2026-10-18): after Docker/WSL recovery, the
+`Ubuntu-24.04` command entry and `DOCKER_CONTEXT=default` engine connection
+both worked. The previous private v1.1.255 acceptance evidence remains on
+the WSL ext4 filesystem. Clean detached worktrees were staged at
+`/home/canvasrunner/kms-qualification/v1.1.257/source-clean` for exact
+claimed UI source `b9291b56122de9378594b7a3ae1ff108eacb0406` and
+`.../integration-clean` for pinned integration source
+`5b3ec6a802a5e13201be8883741889405a86d146`; both have empty Git
+porcelain status. No candidate images were pulled or new application project
+started. Require the signed v1.1.257 release and verified prepared bundle
+before using these checkouts for fresh installed acceptance; restage if the
+claim becomes stale.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
