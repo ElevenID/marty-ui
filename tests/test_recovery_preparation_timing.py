@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -162,6 +163,128 @@ def test_unknown_labels_cannot_enter_public_timing(probe):
         )
 
 
+def test_optional_cache_evidence_uses_shared_sanitizer_and_fixed_labels(
+    probe, monkeypatch
+):
+    module, _, _ = probe
+    cache_file = module.ROOT / "cache.jsonl"
+    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
+    calls = []
+
+    def execute(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[0] == "sccache":
+            return subprocess.CompletedProcess(
+                command, 0, stdout="Cache hits (Rust)  7\nprivate-path secret"
+            )
+        assert command[:4] == ["awk", "-v", "phase=recovery_probe", "-f"]
+        assert command[4] == str(module.ROOT / "scripts/ci/public-sccache-stats.awk")
+        assert kwargs["input"] == "Cache hits (Rust)  7\nprivate-path secret"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='MARTY_PUBLIC_SCCACHE_V1 {"phase":"recovery_probe","counters":{"cache_hits_rust":7}}\n',
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    module.record_preparation_cache("signing_keys_binary")
+    assert [command[0] for command, _ in calls] == ["sccache", "awk"]
+    assert all(kwargs["timeout"] == 10 and kwargs["check"] is False for _, kwargs in calls)
+    assert json.loads(cache_file.read_text()) == {
+        "schema_version": 1,
+        "phase": "signing_keys_binary",
+        "counters": {"cache_hits_rust": 7},
+    }
+    assert "private-path" not in cache_file.read_text()
+
+
+def test_optional_cache_counter_allowlist_matches_shared_sanitizer(probe):
+    module, _, _ = probe
+    sanitizer = (ROOT / "scripts/ci/public-sccache-stats.awk").read_text()
+    labels = set(re.findall(r'labels\[[^]]+\] = "([^"]+)"', sanitizer))
+    assert labels == module.PUBLIC_CACHE_COUNTERS
+
+
+def test_optional_cache_records_baseline_and_each_unchanged_phase(probe, monkeypatch):
+    module, _, binary = probe
+    cache_file = module.ROOT / "cache.jsonl"
+    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
+    cargo_calls = []
+
+    def execute(command, **kwargs):
+        if command[0] == "cargo":
+            cargo_calls.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        if command[0] == "sccache":
+            return subprocess.CompletedProcess(command, 0, stdout="Cache hits (Rust)  1\n")
+        assert command[0] == "awk"
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=(
+                'MARTY_PUBLIC_SCCACHE_V1 {"phase":"recovery_probe",'
+                f'"counters":{{"cache_hits_rust":{len(cargo_calls)}}}}}\n'
+            ),
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    assert module.build_rust() == binary
+    assert cargo_calls == expected_commands()
+    rows = [json.loads(line) for line in cache_file.read_text().splitlines()]
+    assert [row["phase"] for row in rows] == list(module.CACHE_SNAPSHOT_PHASES)
+    assert [row["counters"]["cache_hits_rust"] for row in rows] == list(range(9))
+
+
+@pytest.mark.parametrize(
+    "sanitized",
+    [
+        "",
+        'MARTY_PUBLIC_SCCACHE_V1 []',
+        'MARTY_PUBLIC_SCCACHE_V1 {"phase":"wrong","counters":{"cache_hits_rust":7}}',
+        'MARTY_PUBLIC_SCCACHE_V1 {"phase":"recovery_probe","counters":{"secret":"payload"}}',
+        'MARTY_PUBLIC_SCCACHE_V1 {"phase":"recovery_probe","counters":{"cache_hits_rust":"7"}}',
+    ],
+)
+def test_optional_cache_evidence_rejects_missing_or_unsafe_counters(
+    probe, monkeypatch, sanitized
+):
+    module, _, _ = probe
+    cache_file = module.ROOT / "cache.jsonl"
+    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
+
+    def execute(command, **kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="raw private-path" if command[0] == "sccache" else sanitized,
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    module.record_preparation_cache("issuance_library")
+    assert not cache_file.exists()
+
+
+def test_optional_cache_failure_cannot_replace_build_result(probe, monkeypatch, capsys):
+    module, _, binary = probe
+    cache_file = module.ROOT / "cache.jsonl"
+    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
+    cargo_calls = []
+
+    def execute(command, **kwargs):
+        if command[0] == "sccache":
+            raise subprocess.TimeoutExpired(command, 10, output="private-payload")
+        cargo_calls.append(command)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    assert module.build_rust() == binary
+    assert cargo_calls == expected_commands()
+    assert not cache_file.exists()
+    assert "private-payload" not in capsys.readouterr().out
+    with pytest.raises(ValueError, match="Unknown recovery"):
+        module.record_preparation_cache("private-payload")
+
+
 def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"][
         "test-openbao-didcomm-plugin"
@@ -184,6 +307,9 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
         == 0
     )
     assert recovery["env"]["CARGO_INCREMENTAL"] == 0
+    assert recovery["env"]["MARTY_RECOVERY_PREPARATION_CACHE_FILE"] == (
+        "${{ runner.temp }}/rust-recovery-preparation-cache.jsonl"
+    )
     assert job["env"]["SCCACHE_GHA_RW_MODE"] == "READ_ONLY"
     cache = steps["Record optional recovery compiler cache outcomes"]
     assert (
@@ -204,6 +330,7 @@ def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
     assert retained["with"]["retention-days"] == 7
     assert retained["with"]["path"].splitlines() == [
         "${{ runner.temp }}/rust-recovery-preparation.jsonl",
+        "${{ runner.temp }}/rust-recovery-preparation-cache.jsonl",
         "${{ runner.temp }}/rust-recovery-cache-counters.jsonl",
     ]
 
