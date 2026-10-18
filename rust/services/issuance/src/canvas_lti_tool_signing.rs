@@ -465,6 +465,7 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
                 payload: payload.to_vec(),
                 algorithm: ALGORITHM.to_owned(),
                 verification_method_id: verification_method_id.to_owned(),
+                expected_public_jwk: None,
                 signing_key_reference: signing_key_reference.to_owned(),
             })
             .await

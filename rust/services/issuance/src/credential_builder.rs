@@ -105,6 +105,10 @@ impl HttpCredentialBuilder {
                 payload: payload.to_vec(),
                 algorithm: algorithm.to_owned(),
                 verification_method_id: verification_method(request)?.to_owned(),
+                expected_public_jwk: Some(public_issuer_jwk(
+                    request.issuer.public_jwk.clone(),
+                    verification_method(request)?,
+                )?),
                 signing_key_reference: request
                     .issuer
                     .signing_key_reference()
@@ -373,6 +377,7 @@ pub(crate) struct SignRequest {
     pub(crate) payload: Vec<u8>,
     pub(crate) algorithm: String,
     pub(crate) verification_method_id: String,
+    pub(crate) expected_public_jwk: Option<Value>,
     pub(crate) signing_key_reference: String,
 }
 
@@ -480,6 +485,9 @@ struct SignBody<'a> {
     key_reference: &'a str,
     payload_b64: String,
     algorithm: &'a str,
+    verification_method_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expected_public_jwk: Option<&'a Value>,
 }
 
 #[derive(Deserialize)]
@@ -497,6 +505,11 @@ struct SignResponseBody {
 #[async_trait]
 impl DidSigner for HttpDidSigner {
     async fn sign(&self, request: SignRequest) -> Result<SignResponse, CredentialIssuanceError> {
+        let expected_public_jwk = request
+            .expected_public_jwk
+            .clone()
+            .map(|jwk| public_issuer_jwk(Some(jwk), &request.verification_method_id))
+            .transpose()?;
         if request.operation_id.trim().is_empty() || request.operation_id.len() > 128 {
             return Err(signing_error("DID signer requires a bounded operation ID"));
         }
@@ -529,6 +542,8 @@ impl DidSigner for HttpDidSigner {
             .query(&[("organization_id", request.organization_id.as_str())])
             .header(HEADER_NAME, grant)
             .json(&SignBody {
+                verification_method_id: &request.verification_method_id,
+                expected_public_jwk: expected_public_jwk.as_ref(),
                 issuer_did: &request.issuer_did,
                 credential_format: &request.credential_format,
                 key_purpose: &request.key_purpose,
@@ -1189,6 +1204,7 @@ mod tests {
             payload: payload_secret.as_bytes().to_vec(),
             algorithm: "RS256".to_owned(),
             verification_method_id: "did:web:issuer.example#safe-key".to_owned(),
+            expected_public_jwk: None,
             signing_key_reference: "transit/keys/safe-key".to_owned(),
         };
         let response = SignResponse {
@@ -1475,6 +1491,12 @@ mod tests {
         )
         .expect("HTTP signer");
 
+        let public_jwk = json!({
+            "kty": "EC", "crv": "P-256",
+            "x": "UadYCDOJjqGxg8vXNQpAmQeMbvHB4Y6XDNdoMDXyXn0",
+            "y": "ARBSJxKwtafP8IFoVIaYSpTmgx7axG5zYPqdg0p6gaE",
+            "kid": "did:web:issuer.example#key-1"
+        });
         let request = SignRequest {
             organization_id: "org-a".to_owned(),
             operation_id: "synthetic-operation".to_owned(),
@@ -1484,6 +1506,7 @@ mod tests {
             payload: b"exact-signing-input".to_vec(),
             algorithm: "ES256".to_owned(),
             verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+            expected_public_jwk: Some(public_jwk.clone()),
             signing_key_reference: "transit/keys/issuer-1".to_owned(),
         };
         let error = signer
@@ -1496,6 +1519,16 @@ mod tests {
             SigningOrigin::IssuanceCredential,
             crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
         );
+
+        let mut private_request = request.clone();
+        private_request.expected_public_jwk.as_mut().unwrap()["d"] =
+            json!("prohibited-private-key");
+        let error = signer
+            .sign(private_request)
+            .await
+            .expect_err("private material must deny before HTTP");
+        assert!(error.to_string().contains("prohibited private JWK members"));
+        assert!(capture.0.lock().expect("capture lock").is_none());
 
         let response = signer.sign(request).await.expect("sign response");
 
@@ -1530,6 +1563,11 @@ mod tests {
             URL_SAFE_NO_PAD.encode(b"exact-signing-input")
         );
         assert_eq!(body["key_reference"], "transit/keys/issuer-1");
+        assert_eq!(
+            body["verification_method_id"],
+            "did:web:issuer.example#key-1"
+        );
+        assert_eq!(body["expected_public_jwk"], public_jwk);
         assert!(body.get("issuer_profile_id").is_none());
         assert!(body.get("service_id").is_none());
         let missing_key = signer
@@ -1542,6 +1580,7 @@ mod tests {
                 payload: b"exact-signing-input".to_vec(),
                 algorithm: "ES256".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                expected_public_jwk: None,
                 signing_key_reference: String::new(),
             })
             .await
@@ -1580,6 +1619,7 @@ mod tests {
                 payload: b"exact-signing-input".to_vec(),
                 algorithm: "ES256".to_owned(),
                 verification_method_id: "did:web:issuer.example#key-1".to_owned(),
+                expected_public_jwk: None,
                 signing_key_reference: "transit/keys/issuer-1".to_owned(),
             })
             .await

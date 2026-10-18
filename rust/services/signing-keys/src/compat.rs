@@ -222,6 +222,10 @@ pub struct IssuerDidSignRequest {
     #[serde(default)]
     pub key_reference: Option<String>,
     #[serde(default)]
+    pub verification_method_id: Option<String>,
+    #[serde(default)]
+    pub expected_public_jwk: Option<Value>,
+    #[serde(default)]
     pub payload_b64: Option<String>,
     #[serde(default)]
     pub payload_hex: Option<String>,
@@ -640,7 +644,7 @@ impl SigningCompatibilityService {
             .resolve_issuer_did(&ResolveIssuerDidRequest {
                 organization_id: request.organization_id.clone(),
                 issuer_did: request.issuer_did.clone(),
-                verification_method_id: None,
+                verification_method_id: request.verification_method_id.clone(),
                 credential_format: Some(request.credential_format.clone()),
                 key_purpose: Some(request.key_purpose.clone()),
                 algorithm: Some(request.algorithm.clone()),
@@ -667,6 +671,7 @@ impl SigningCompatibilityService {
                 "Issuer signing key changed after identity resolution.".into(),
             ));
         }
+        validate_prepared_issuer_binding(request, &identity)?;
         let profile_purpose = required(&Value::Object(profile.clone()), "key_purpose")?.to_owned();
         let profile_algorithm = profile
             .get("algorithm")
@@ -2241,6 +2246,48 @@ fn escape_pointer(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
 
+fn validate_prepared_issuer_binding(
+    request: &IssuerDidSignRequest,
+    identity: &Value,
+) -> Result<(), CompatibilityError> {
+    if request
+        .verification_method_id
+        .as_deref()
+        .is_some_and(|expected| {
+            identity
+                .get("verification_method_id")
+                .and_then(Value::as_str)
+                != Some(expected)
+        })
+    {
+        return Err(CompatibilityError::Conflict(
+            "Issuer verification method changed after credential preparation.".into(),
+        ));
+    }
+    if let Some(expected) = &request.expected_public_jwk {
+        if request
+            .verification_method_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            return Err(CompatibilityError::Invalid(
+                "An expected issuer public key requires its verification method.".into(),
+            ));
+        }
+        let expected = documents::public_jwk_projection(expected).map_err(|_| {
+            CompatibilityError::Invalid(
+                "Expected issuer key must be valid public key material.".into(),
+            )
+        })?;
+        if !documents::same_public_jwk(&expected, &identity["public_jwk"]) {
+            return Err(CompatibilityError::Conflict(
+                "Issuer public key changed after credential preparation.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn required<'a>(value: &'a Value, name: &str) -> Result<&'a str, CompatibilityError> {
     value
         .get(name)
@@ -2295,6 +2342,55 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepared_issuer_binding_rejects_rotation_or_method_change() {
+        let key = json!({"kty":"OKP", "crv":"Ed25519", "x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"});
+        let request = IssuerDidSignRequest {
+            organization_id: "tenant-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            credential_format: "dc+sd-jwt".into(),
+            key_purpose: "vc_jwt_issuer".into(),
+            algorithm: "EdDSA".into(),
+            key_reference: Some("same-managed-reference".into()),
+            verification_method_id: Some("did:web:issuer.example#key-1".into()),
+            expected_public_jwk: Some(key.clone()),
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(b"prepared signing input")),
+            payload_hex: None,
+        };
+        let identity = json!({
+            "verification_method_id":"did:web:issuer.example#key-1",
+            "public_jwk":key
+        });
+        assert!(validate_prepared_issuer_binding(&request, &identity).is_ok());
+        let mut rotated = identity.clone();
+        rotated["public_jwk"]["x"] = json!("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&request, &rotated),
+            Err(CompatibilityError::Conflict(_))
+        ));
+        let mut changed_method = identity.clone();
+        changed_method["verification_method_id"] = json!("did:web:issuer.example#other");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&request, &changed_method),
+            Err(CompatibilityError::Conflict(_))
+        ));
+        let unbound = IssuerDidSignRequest {
+            verification_method_id: None,
+            ..request.clone()
+        };
+        assert!(matches!(
+            validate_prepared_issuer_binding(&unbound, &identity),
+            Err(CompatibilityError::Invalid(_))
+        ));
+        let mut private = request;
+        private.expected_public_jwk.as_mut().unwrap()["d"] =
+            json!("must-not-accept-private-material");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&private, &identity),
+            Err(CompatibilityError::Invalid(_))
+        ));
+    }
+
+    #[test]
     fn certificate_authorization_rejects_resolved_key_or_payload_change() {
         let request = IssuerDidSignRequest {
             organization_id: "tenant-1".into(),
@@ -2304,6 +2400,8 @@ mod tests {
             algorithm: "ES256".into(),
             key_reference: None,
             payload_b64: Some(URL_SAFE_NO_PAD.encode(b"certificate bytes")),
+            verification_method_id: None,
+            expected_public_jwk: None,
             payload_hex: None,
         };
         let profile = json!({
