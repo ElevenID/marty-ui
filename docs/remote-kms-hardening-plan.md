@@ -321,6 +321,11 @@ it is queued. Require complete success and unchanged main before a fresh
 v1.1.256 no-write claim. Do not dispatch another Stack release without the
 dedicated release-tag secret and a successful fresh claim. The previous
 qualified but failed run and its source-bound claim remain immutable evidence.
+The clean detached Windows checkout at `218451f4` passed 180 focused release,
+self-host public KMS helper, installed-journey, disposable TLS and affected-Rust
+planning tests (548 subtests); 13 Linux-only cases were skipped. This is local
+contract evidence, not a replacement for full exact-main CI or installed
+artifact acceptance.
 
 ## Objective and working agreement
 
