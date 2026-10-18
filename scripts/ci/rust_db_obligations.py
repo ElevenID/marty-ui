@@ -12,9 +12,11 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -434,7 +436,119 @@ def emit(evidence: dict) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(encoded + "\n")
-    print(PREFIX + encoded, flush=True)
+    # Libtest can leave an unterminated progress row before cancellation.
+    print("\n" + PREFIX + encoded, flush=True)
+
+
+class HarnessInterrupted(Exception):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+def settle_owned_child(
+    child: subprocess.Popen, initial_signal: int = signal.SIGTERM
+) -> None:
+    """Stop only this harness's process group, then reap its direct child."""
+    if os.name != "posix":
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        child.wait(timeout=5)
+        return
+
+    try:
+        os.killpg(child.pid, initial_signal)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait(timeout=5)
+
+
+def run_owned_harness(
+    command: list[str], result_log: Path, evidence: dict
+) -> tuple[int, str]:
+    """Keep signals attached to the exact libtest and its owned descendants."""
+    child = None
+    previous = {}
+    interrupted = False
+    interruption_signal = signal.SIGTERM
+    spawning = True
+    pending_signal = None
+
+    def interrupt(signum: int, _frame: object) -> None:
+        nonlocal pending_signal
+        if spawning:
+            pending_signal = signum
+            return
+        raise HarnessInterrupted(signum)
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.signal(signum, interrupt)
+        child = subprocess.Popen(
+            [
+                *command,
+                "--format",
+                "pretty",
+                "--color",
+                "never",
+                "--logfile",
+                str(result_log),
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+        spawning = False
+        if pending_signal is not None:
+            raise HarnessInterrupted(pending_signal)
+        output = []
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := child.stdout.read1(65536):
+            decoded = decoder.decode(chunk)
+            print(decoded, end="", flush=True)
+            output.append(decoded)
+        remaining = decoder.decode(b"", final=True)
+        print(remaining, end="", flush=True)
+        output.append(remaining)
+        status = child.wait()
+        evidence["command_status"] = status
+        return status, "".join(output)
+    except HarnessInterrupted as error:
+        interrupted = True
+        interruption_signal = error.signum
+        evidence["command_status"] = 128 + error.signum
+        raise
+    finally:
+        for signum in previous:
+            signal.signal(signum, signal.SIG_IGN)
+        try:
+            if child is not None:
+                if interrupted or child.poll() is None:
+                    settle_owned_child(child, interruption_signal)
+                if child.stdout is not None:
+                    child.stdout.close()
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
 
 
 def run_contract(name: str, command: list[str], owner: str = "contracts") -> int:
@@ -489,39 +603,16 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         for item in inputs:
             if item["requirement"] == "required" and not os.environ.get(item["name"]):
                 raise ValueError("missing_required_runtime_input")
-        output = []
         # Preserve every selection/serialism argument and all live raw output.
         # A separate libtest result stream identifies case completion even when
         # inherited child stdout splits the human `test name ... ok` framing.
         with tempfile.TemporaryDirectory(prefix="marty-libtest-results-") as directory:
             result_log = Path(directory) / "results.log"
-            with subprocess.Popen(
-                [
-                    *command,
-                    "--format",
-                    "pretty",
-                    "--color",
-                    "never",
-                    "--logfile",
-                    str(result_log),
-                ],
-                stdout=subprocess.PIPE,
-            ) as child:
-                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-                # Forward partial progress immediately, like the outer tee.
-                while chunk := child.stdout.read1(65536):
-                    decoded = decoder.decode(chunk)
-                    print(decoded, end="", flush=True)
-                    output.append(decoded)
-                remaining = decoder.decode(b"", final=True)
-                print(remaining, end="", flush=True)
-                output.append(remaining)
-                status = child.wait()
-            evidence["command_status"] = status
+            status, output = run_owned_harness(command, result_log, evidence)
             if not result_log.is_file():
                 raise ValueError("missing_libtest_result_log")
             result_lines = result_log.read_text(encoding="utf-8").splitlines()
-        lines = "".join(output).splitlines()
+        lines = output.splitlines()
         evidence["observed_cases"] = [
             {"name": name, "outcome": outcome}
             for name, outcome in case_results(result_lines).items()
@@ -530,6 +621,9 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         if status != 0 or evidence["failed"] or evidence["summary_status"] != "ok":
             raise ValueError("libtest_execution_failed")
         evidence["status"] = "ok"
+    except HarnessInterrupted as error:
+        status = 128 + error.signum
+        evidence["reason"] = "interrupted"
     except (OSError, ValueError, KeyError, IndexError) as error:
         # Exception text can contain filesystem/environment values. Only our
         # fixed reason codes are evidence; the unchanged child stream has logs.

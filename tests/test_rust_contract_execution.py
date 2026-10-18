@@ -4,8 +4,11 @@ import json
 import importlib.util
 import os
 import re
+import signal
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -350,6 +353,130 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
     assert "owned child diagnostic" not in output
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are the CI owner")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_obligation_wrapper_reaps_owned_harness_and_descendant(
+    tmp_path, signum
+) -> None:
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc unavailable for the signal-ownership probe")
+    binary = tmp_path / "signal-harness"
+    build = subprocess.run(
+        [
+            rustc,
+            "--test",
+            str(ROOT / "tests/fixtures/rust_obligation_signal_harness.rs"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    temporary = tmp_path / "owned-temporary"
+    temporary.mkdir()
+    environment = os.environ.copy()
+    environment.pop("RUNNER_TEMP", None)
+    environment.pop("GITHUB_ACTIONS", None)
+    environment.update(
+        TMPDIR=str(temporary),
+        MARTY_TEST_REDIS_URL="redis://owned-test-only",
+        MARTY_SIGNAL_PID_DIR=str(tmp_path),
+        MARTY_SIGNAL_PYTHON=sys.executable,
+    )
+    wrapper = subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "scripts/ci/rust_db_obligations.py"),
+            "--name",
+            "issuer_profile",
+            "--",
+            str(binary),
+            "holding",
+            "--exact",
+            "--test-threads=1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "descendant.pid").is_file():
+            assert wrapper.poll() is None, (
+                "wrapper exited before owned descendant started"
+            )
+            assert time.monotonic() < deadline, "owned descendant did not start"
+            time.sleep(0.05)
+        pids = [
+            int((tmp_path / name).read_text())
+            for name in ("harness.pid", "descendant.pid")
+        ]
+        os.kill(wrapper.pid, signum)
+        stdout, _stderr = wrapper.communicate(timeout=15)
+        assert wrapper.returncode == 128 + signum
+        records = [
+            json.loads(line.removeprefix(INVENTORY.PREFIX))
+            for line in stdout.splitlines()
+            if line.startswith(INVENTORY.PREFIX)
+        ]
+        assert len(records) == 1
+        assert records[0]["status"] == "failed"
+        assert records[0]["reason"] == "interrupted"
+        assert records[0]["command_status"] == 128 + signum
+        observed_signal = tmp_path / "received-signal"
+        assert observed_signal.is_file()
+        assert observed_signal.read_text() == str(signum)
+        for pid in pids:
+            state = Path(f"/proc/{pid}/stat")
+            deadline = time.monotonic() + 3
+            while state.exists() and state.read_text().split()[2] != "Z":
+                assert time.monotonic() < deadline, (
+                    f"owned process {pid} survived cancellation"
+                )
+                time.sleep(0.05)
+        assert not list(temporary.glob("marty-libtest-results-*"))
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.communicate(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signal ownership is the CI owner")
+def test_obligation_signal_during_spawn_still_settles_assigned_child(
+    tmp_path, monkeypatch
+) -> None:
+    import io
+
+    settled = []
+
+    class Child:
+        def __init__(self, *_args, **_kwargs):
+            self.stdout = io.BytesIO()
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", Child)
+    monkeypatch.setattr(
+        INVENTORY,
+        "settle_owned_child",
+        lambda child, initial_signal: settled.append((child, initial_signal)),
+    )
+    evidence = {}
+    with pytest.raises(INVENTORY.HarnessInterrupted):
+        INVENTORY.run_owned_harness(["fake"], tmp_path / "log", evidence)
+    assert len(settled) == 1
+    assert settled[0][1] == signal.SIGTERM
+    assert evidence["command_status"] == 143
+
+
 @pytest.mark.parametrize("child_status", [0, 7])
 def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
     tmp_path, monkeypatch, capsys, child_status
@@ -366,6 +493,9 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
             pass
 
         def wait(self):
+            return child_status
+
+        def poll(self):
             return child_status
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
@@ -531,6 +661,9 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
             pass
 
         def wait(self):
+            return 0
+
+        def poll(self):
             return 0
 
     result_paths = []
