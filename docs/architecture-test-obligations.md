@@ -455,7 +455,12 @@ to omit any SQL or process acceptance. Admission to a future selective PR plan
 requires an exact-head hosted success, feature/profile and artifact review,
 and a separate reviewed change to the classifier and CI Gate. Missing source
 ownership or an unknown/mixed diff must retain the broad plan; the 60 PostgreSQL
-renewal cases remain required. No classifier or CI Gate admission is added.
+renewal cases remain required. The subsequent A6 candidate admits only PR
+diffs confined to the two exact retry/renewal test-only leaves after the
+checked-out owner/Docker proof succeeds. Its full-library lane records every
+selected case and requires all 23 retry/renewal cases plus the exact ignored
+fixture-owned roster. Mixed or unproved inputs keep the prior broad PR plan;
+protected merge groups remain fully qualified. This does not retire a case.
 
 ### Ordinary library execution versus explicitly owned fixture cases
 
