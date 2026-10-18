@@ -285,11 +285,14 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
         },
         {
-            # Issuance's configured resolver calls Gateway's authenticated
-            # issuer-DID compatibility route in the standard Compose stack.
+            # Issuance can call Gateway's authenticated compatibility route
+            # through its config default. Standard Compose overrides that
+            # URL to the direct Signing Keys peer to avoid a startup cycle.
             "package": "marty-issuance-service",
+            "conditional": "Gateway issuer resolution config default only",
             "evidence": "rust/services/issuance/src/config.rs",
             "binding": 'values.get("SIGNING_KEYS_INTERNAL_URL")',
+            "default_marker": '"signing_keys_internal_url": "http://gateway:8000/internal/signing-keys"',
             "auth_binding": 'secret_value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")?',
             "runtime_evidence": "rust/services/issuance/src/main.rs",
             "runtime_marker": "Arc::new(HttpIssuerContextResolver::new(",
@@ -302,7 +305,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             **GATEWAY_ISSUER_RESOLUTION_ROUTE,
             "deployment_evidence": "docker-compose.base.yml",
             "deployment_service": "issuance",
-            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal",
             "deployment_auth_key": "SIGNING_KEYS_INTERNAL_API_KEY",
         },
         {

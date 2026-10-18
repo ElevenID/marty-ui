@@ -247,15 +247,42 @@ class AffectedRustPlannerTests(unittest.TestCase):
                         else "http://gateway:8000/internal/signing-keys"
                     ),
                 )
+                if package == "marty-issuance-service":
+                    self.assertEqual(
+                        edge["conditional"],
+                        "Gateway issuer resolution config default only",
+                    )
+                    self.assertIn(
+                        edge["default_marker"],
+                        (ROOT / edge["evidence"]).read_text(encoding="utf-8"),
+                    )
+                    production = yaml.safe_load(
+                        (ROOT / "docker-compose.selfhost.prod.yml").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                    direct = production["services"]["issuance"]["environment"]
+                    self.assertEqual(
+                        direct["SIGNING_KEYS_INTERNAL_URL"],
+                        "http://signing-keys:8017/internal",
+                    )
+                    self.assertEqual(
+                        direct["SIGNING_KEYS_INTERNAL_API_KEY_FILE"],
+                        production["services"]["signing-keys"]["environment"][
+                            "SIGNING_KEYS_INTERNAL_API_KEY_FILE"
+                        ],
+                    )
                 self.assertIn(
                     edge["deployment_marker"],
                     (ROOT / edge["deployment_evidence"]).read_text(encoding="utf-8"),
                 )
                 self.assertEqual(
                     environment[edge["deployment_auth_key"]],
-                    compose["services"]["gateway"]["environment"][
-                        edge["deployment_auth_key"]
-                    ],
+                    compose["services"][
+                        "signing-keys"
+                        if package == "marty-issuance-service"
+                        else "gateway"
+                    ]["environment"][edge["deployment_auth_key"]],
                 )
         issuance = edges["marty-issuance-service"]
         issuance_main = (ROOT / issuance["runtime_evidence"]).read_text(
@@ -1427,7 +1454,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     )
                 if marker == "provider_serving_marker":
                     content = method_body(
-                        content, "let router = Server::builder()", "    runtime.activate()?"
+                        content,
+                        "let router = Server::builder()",
+                        "    runtime.activate()?",
                     )
                 if marker == "deployment_marker":
                     content = method_body(content, "\n  auth:\n", "\n  organization:\n")
