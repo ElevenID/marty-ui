@@ -164,6 +164,17 @@ main SHA. Require its full success and an unchanged main before a no-write
 claim. Neither the prior PR-head, merge-group, nor cancelled full CI qualifies
 the new source for release.
 
+Exact-main qualification update (2026-10-17): replacement
+[CI 39091449176](https://github.com/ElevenID/marty-ui/actions/runs/39091449176)
+completed successfully at `9b40640121e55df8d24de612c7abc18ec19c3cea`,
+including the Canvas database contract shard and terminal CI Gate. Protected
+main still matched that exact SHA, and the v1.1.256 tag and release were absent.
+No-write [claim 39094334496](https://github.com/ElevenID/marty-ui/actions/runs/39094334496)
+was dispatched with that SHA and is queued. Wait for its successful claim
+artifact and reconfirm the source before a Stack release transaction. The
+local WSL command entry still times out while Docker Desktop and the production
+loopback stay responsive; do not restart the live host to force installed tests.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
