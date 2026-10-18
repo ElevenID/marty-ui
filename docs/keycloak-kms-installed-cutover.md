@@ -31,7 +31,11 @@ test-user accounts as part of installed acceptance.
    and `v1.1.251` failed installed startup after their signed releases.
    Published `v1.1.254` failed its installed gate after the public journey
    because the diagnostic phase list omitted three custody checks. Use the
-   `v1.1.255` candidate only after its own release and installed gates pass.
+   Signed `v1.1.255` passed an independent fresh 28-service installed journey,
+   but a coordinated cold restore exposed a restart failure in its native
+   migration bootstrap: normalized signing-key purpose order was treated as a
+   conflicting binding. Do not use `v1.1.255` for the final cutover. Require
+   the next signed fix and its own installed and restored-stack gates.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full
@@ -67,6 +71,8 @@ custody or supported publication.
   non-exportable versioned keys, scoped token policies, HTTPS trust, and
   recoverable Raft snapshot/restore. Rehearse recovery against a disposable
   isolated target, including the corresponding database and service state.
+  Run `scripts/verify_selfhost_restored_journey.py` on that restored target;
+  its report supports the gate but does not prove backup provenance.
 - Run `scripts/sql/keycloak-kms-only-verify.sql` against the new Keycloak
   database after both realms have issued and refreshed tokens. Require zero
   private-key fields, PEM markers, private JWK values even under generic
