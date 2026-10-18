@@ -73,8 +73,10 @@ not establish original-capture provenance or authorize qualification reuse.
 Independent integration review confirmed component identity and preserved gates.
 The combined local run passed 263 tests with five platform skips and exposed
 an obsolete container-only profile assertion. Its reviewed update preserves all
-container/compile-scope guards; 53 focused checks then passed. Current-main
-rebasing and hosted validation remain required before merge.
+container/compile-scope guards; 53 focused checks then passed. The batch is
+rebuilt on merged main `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` and
+independent review confirmed the reviewed code and main changes are preserved.
+Hosted validation remains required before merge.
 
 ## Prior handoff checkpoint (superseded delivery state)
 
