@@ -300,6 +300,18 @@ passed. Do not count PR-head checks as protected-main qualification. The
 dedicated repository release-tag secret remains unprovisioned, so no new
 release dispatch is authorized yet.
 
+Protected publisher landing (2026-10-18): #1402's five merge-group workflows
+all passed at `d186533642de5713211163c7a5d1c68f78cb26f1`: CI
+`39103286336`, Actions CodeQL `39103286354`, Rust CodeQL `39103286316`,
+organization quality `39103286707`, and open-source policy `39103286315`.
+#1402 merged at 06:36 UTC and protected main matched that candidate. A separate
+queued PR #1401 immediately began qualifying successor candidate
+`218451f4c79f8ca1f997053253deba5daba0aef9`; defer full exact-main CI
+until that protected queue settles to avoid a superseded run. The v1.1.256
+tag remains absent and `STACK_RELEASE_TAG_TOKEN` is not provisioned. The
+publisher repair is landed, but no new claim, release or installed acceptance
+follows from this merge alone.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
