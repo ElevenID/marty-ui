@@ -539,7 +539,9 @@ export default function ApplicationReviewPage() {
   const isTerminal = ['credentialed', 'issued', 'rejected'].includes(application?.status);
   const canReview = reviewableStatuses.includes(application?.status);
   const canAct = canReview && !actionLoading;
-  const isLocked = lock && !lock.locked && lock.reviewer_id !== reviewerId;
+  const lockActive = lock?.status === 'ACTIVE';
+  const ownsLock = lockActive && lock.holder_user_id === reviewerId;
+  const isLocked = lockActive && !ownsLock;
 
   const signals = deriveSignals(application, checks);
   const policyDecision = evidenceSummary?.policy_decision;
@@ -672,13 +674,13 @@ export default function ApplicationReviewPage() {
           {isLocked ? (
             <Chip
               icon={<LockIcon fontSize="small" />}
-              label={`Being reviewed by ${lock.reviewer_name}`}
+              label="Being reviewed by another reviewer"
               size="small"
               color="warning"
               variant="outlined"
             />
           ) : (
-            lock?.locked && (
+            ownsLock && (
               <Chip
                 icon={<LockOpenIcon fontSize="small" />}
                 label="You have this open"

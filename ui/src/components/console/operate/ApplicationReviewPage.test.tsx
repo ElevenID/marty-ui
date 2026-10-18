@@ -103,7 +103,7 @@ describe('ApplicationReviewPage evidence policy controls', () => {
     mockRunEvidenceCheck.mockResolvedValue({
       policy_decision: { allowed: true },
     });
-    mockAcquireReviewerLock.mockResolvedValue({ locked: true, reviewer_id: 'reviewer-1' });
+    mockAcquireReviewerLock.mockResolvedValue({ status: 'ACTIVE', holder_user_id: 'reviewer-1' });
     mockReleaseReviewerLock.mockResolvedValue({});
     mockListCredentialTemplates.mockResolvedValue([]);
   });
@@ -122,6 +122,21 @@ describe('ApplicationReviewPage evidence policy controls', () => {
     });
     expect(mockGetOrganizationApplication).not.toHaveBeenCalledWith('org-auth-default', 'app-1');
     expect(await screen.findByText(/policy permitted approval/i)).toBeInTheDocument();
+  });
+
+  it('recognizes the actual Rust lock owner and permits their review', async () => {
+    renderPage();
+    expect(await screen.findByText('You have this open')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Approve', exact: true})).toBeEnabled();
+    expect(screen.queryByText('Being reviewed by another reviewer')).not.toBeInTheDocument();
+  });
+
+  it('disables approval when the Rust lock belongs to another reviewer', async () => {
+    mockAcquireReviewerLock.mockResolvedValue({ status: 'ACTIVE', holder_user_id: 'reviewer-2' });
+    renderPage();
+    expect(await screen.findByText('Being reviewed by another reviewer')).toBeInTheDocument();
+    expect(screen.getByRole('button', {name: 'Approve', exact: true})).toBeDisabled();
+    expect(screen.queryByText('You have this open')).not.toBeInTheDocument();
   });
 
   it('renders Rust applicant form_data through credential-template claim labels', async () => {
