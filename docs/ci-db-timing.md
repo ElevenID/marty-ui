@@ -103,11 +103,15 @@ Routine PR, merge-group, and scheduled CI keep it off. Only an explicit
 exact ignored parity, isolation, and failed-restore checks afterward. Manual
 runs still retain full qualification. It is not a release selector. The pilot
 diagnostics run the eight-case pinned-probe baseline with reuse explicitly off,
-then compare canonical schema/data dumps from a restored database and an
-independently fresh pinned probe. The diagnostic uses a fixed `pg_dump`
-restriction key only to exclude per-invocation randomness; the cached restore
-input retains `pg_dump`'s normal random key. Dump contents stay in the test process;
-only fixed mismatch messages are emitted. The pilot applies only to
+then compare complete pre-restore schema/data dumps from the captured base
+and an independently fresh pinned probe, excluding only their validated
+per-invocation `pg_dump` restriction keys. PostgreSQL reparses twelve pinned
+CHECK/index expressions when restoring SQL. The diagnostic requires every
+other schema and data line to match byte-for-byte, and verifies both forms of
+those twelve lines against fixed digests; unexpected differences fail closed.
+The cached restore input retains `pg_dump`'s normal random
+key. Dump contents stay in the test process; only fixed mismatch messages are
+emitted. The pilot applies only to
 `PublishedDatabase::start()` with the fixed `published_probe`
 setup. The first call still runs the exact pinned producer and validates its
 source digest and
