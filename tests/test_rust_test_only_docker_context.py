@@ -285,7 +285,14 @@ def _assert_test_only_owner(
     sources: dict[str, str] | None = None,
 ) -> None:
     name = Path(leaf).name
-    assert (root / ISSUANCE_SRC / leaf).is_file()
+    path = ISSUANCE_SRC + leaf
+    source = root / path
+    assert source.is_file() and not source.is_symlink(), (
+        f"Issuance test leaf must be a regular checkout file: {path}"
+    )
+    assert _tracked_regular_mode(root, path), (
+        f"Issuance test leaf must have a regular Git index mode: {path}"
+    )
     references = []
     if sources is None:
         sources = _ownership_sources(root, (name,))
@@ -1159,6 +1166,36 @@ def test_snapshot_owner_proof_rejects_additional_and_non_test_consumers() -> Non
         _assert_test_only_owner(
             ROOT, name, owner, {path: valid.replace("#[cfg(test)]\n", "")}
         )
+
+
+def test_issuance_leaf_owner_rejects_symlink_or_gitlink(monkeypatch) -> None:
+    import pytest
+
+    original_is_symlink = Path.is_symlink
+    original_mode = _tracked_regular_mode
+    for leaf in (
+        "canvas_sync_worker_retry_tests.rs",
+        "canvas_sync_worker_renewal_tests.rs",
+    ):
+        path = ISSUANCE_SRC + leaf
+
+        def synthetic_symlink(source: Path) -> bool:
+            return source == ROOT / path or original_is_symlink(source)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "is_symlink", synthetic_symlink)
+            with pytest.raises(AssertionError, match="regular checkout file"):
+                _assert_test_only_owner(ROOT, leaf, TEST_LEAVES[leaf])
+
+        def synthetic_gitlink(root: Path, candidate: str) -> bool:
+            return candidate != path and original_mode(root, candidate)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                sys.modules[__name__], "_tracked_regular_mode", synthetic_gitlink
+            )
+            with pytest.raises(AssertionError, match="regular Git index mode"):
+                _assert_test_only_owner(ROOT, leaf, TEST_LEAVES[leaf])
 
 
 def test_paused_handler_registration_matches_frozen_renewal_matrix() -> None:
