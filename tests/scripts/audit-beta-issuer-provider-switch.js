@@ -428,7 +428,7 @@ async function reverifyIssuedCredential(issued) {
   };
 }
 
-async function rebindThroughConsole(page, issuerDid) {
+async function rebindThroughConsole(page, issuerDid, {recording = RECORD_VIDEO} = {}) {
   await page.goto(`${BETA_ORIGIN}/console/org/deploy/issuer-identity`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
@@ -439,15 +439,30 @@ async function rebindThroughConsole(page, issuerDid) {
     new URL(response.url()).pathname === '/v1/signing-keys/issuer-identities'
     && response.request().method() === 'PATCH'
   ), { timeout: 60_000 });
-  await row.getByRole('button', { name: 'Move identity to default signing service' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Move identity' }).click();
+  const move = row.getByRole('button', { name: 'Move identity to default signing service' });
+  await move.waitFor({state:'visible'});
+  if (recording) { await move.hover(); await page.waitForTimeout(2200); }
+  await move.click();
+  const dialog = page.getByRole('dialog');
+  const confirm = dialog.getByRole('button', { name: 'Move identity' });
+  await dialog.waitFor({state:'visible'});
+  await confirm.waitFor({state:'visible'});
+  if (recording) { await page.waitForTimeout(2600); await confirm.hover(); await page.waitForTimeout(1400); }
+  await confirm.click();
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
+  if (response.ok()) {
+    await dialog.waitFor({state:'hidden'});
+    await row.waitFor({state:'visible'});
+    if (recording) await page.waitForTimeout(2200);
+  }
   return {
     ok: response.ok(),
     status: response.status(),
     changed: body?.changed === true,
     identity: body?.identity || null,
+    interactionEvidence: {adminUiUsed:true, moveControlVisible:true, nativeConfirmationVisible:true,
+      confirmationButtonVisible:true, recordedDwellApplied:recording},
   };
 }
 
@@ -780,6 +795,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  rebindThroughConsole,
   providerVerificationDisplay,
   cleanup,
   credentialEvidence,

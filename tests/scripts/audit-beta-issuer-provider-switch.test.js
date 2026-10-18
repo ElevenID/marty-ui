@@ -12,7 +12,30 @@ const {
   externalTransitPrerequisites,
   restoredConfigurationEvidence,
   writableConfig,
+  rebindThroughConsole,
 } = require('./audit-beta-issuer-provider-switch');
+
+test('recorded custody switch shows actual move control and confirmation before changing identity',async()=>{
+ const calls=[];
+ const control=name=>({waitFor:async({state})=>calls.push(name+':'+state),
+  hover:async()=>calls.push(name+':hover'),click:async()=>calls.push(name+':click')});
+ const move=control('move'),confirm=control('confirm');
+ const row={...control('row'),getByRole:()=>move};
+ const dialog={...control('dialog'),getByRole:()=>confirm};
+ const response={ok:()=>true,status:()=>200,json:async()=>({changed:true,identity:{status:'active'}})};
+ const page={goto:async()=>{},locator:()=>({filter:()=>({first:()=>row})}),
+  waitForResponse:()=>{calls.push('response-listener');return Promise.resolve(response);},
+  getByRole:()=>dialog,waitForTimeout:async ms=>calls.push('hold:'+ms)};
+ const result=await rebindThroughConsole(page,'did:web:beta.example:issuer',{recording:true});
+ assert(calls.indexOf('response-listener')<calls.indexOf('move:click'));
+ assert(calls.indexOf('move:visible')<calls.indexOf('hold:2200'));
+ assert(calls.indexOf('move:click')<calls.indexOf('dialog:visible'));
+ assert(calls.indexOf('confirm:visible')<calls.indexOf('hold:2600'));
+ assert(calls.indexOf('hold:2600')<calls.indexOf('confirm:click'));
+ assert(calls.indexOf('confirm:click')<calls.indexOf('dialog:hidden'));
+ assert.equal(result.interactionEvidence.recordedDwellApplied,true);
+ assert.equal(result.changed,true);
+});
 const {
   validateElevenIdLoginTheme,
 } = require('./audit-beta-credential-lifecycle');
