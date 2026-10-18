@@ -70,8 +70,11 @@ not establish original-capture provenance or authorize qualification reuse.
   any separately reviewed selective admission or speedup claim. Put the label
   on the PR before its next synchronize event; label changes do not start CI.
 
-Component review and focused local checks have passed. The assembled batch
-still requires integration review, current-main rebasing and hosted validation.
+Independent integration review confirmed component identity and preserved gates.
+The combined local run passed 263 tests with five platform skips and exposed
+an obsolete container-only profile assertion. Its reviewed update preserves all
+container/compile-scope guards; 53 focused checks then passed. Current-main
+rebasing and hosted validation remain required before merge.
 
 ## Prior handoff checkpoint (superseded delivery state)
 

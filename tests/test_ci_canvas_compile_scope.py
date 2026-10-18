@@ -15,12 +15,13 @@ TEST_TARGETS = VERIFY["TEST_TARGETS"]
 BIN_TARGETS = VERIFY["BIN_TARGETS"]
 
 
-def test_canvas_dev_profile_pilot_is_confined_to_bookworm_compile() -> None:
+def test_canvas_dev_profile_matches_explicit_host_feedback_settings() -> None:
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
     job = workflow["jobs"]["test-rust-services"]
-    assert "CARGO_PROFILE_DEV_DEBUG" not in job["env"]
+    assert job["env"]["CARGO_PROFILE_DEV_DEBUG"] == 0
+    assert job["env"]["CARGO_PROFILE_TEST_DEBUG"] == 0
     compile_run = next(
         step["run"] for step in job["steps"]
         if step.get("name") == "Compile reusable Rust test executables"
