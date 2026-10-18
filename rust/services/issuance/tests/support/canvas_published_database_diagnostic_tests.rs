@@ -2,6 +2,7 @@
 mod diagnostic_tests {
     use super::*;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use std::collections::BTreeSet;
 
     #[test]
@@ -74,6 +75,122 @@ mod diagnostic_tests {
         .unwrap()
     }
 
+    // Compare only the two psql guard keys after validating their pair. Never
+    // normalize SQL, table rows, or a COPY payload, and never print the dump.
+    fn comparable_dump(dump: &[u8]) -> Vec<u8> {
+        let mut result = Vec::with_capacity(dump.len());
+        let mut restrict_key: Option<&[u8]> = None;
+        let mut unrestrict_key: Option<&[u8]> = None;
+        let mut in_copy = false;
+        for line in dump.split_inclusive(|byte| *byte == b'\n') {
+            let body = line.strip_suffix(b"\n").unwrap_or(line);
+            if !in_copy {
+                if let Some(key) = body.strip_prefix(b"\\restrict ") {
+                    assert!(
+                        restrict_key.replace(key).is_none() && unrestrict_key.is_none(),
+                        "misordered or duplicate dump guard"
+                    );
+                    result.extend_from_slice(b"\\restrict [key]");
+                } else if let Some(key) = body.strip_prefix(b"\\unrestrict ") {
+                    assert!(
+                        restrict_key.is_some() && unrestrict_key.replace(key).is_none(),
+                        "misordered or duplicate dump guard"
+                    );
+                    result.extend_from_slice(b"\\unrestrict [key]");
+                } else {
+                    result.extend_from_slice(body);
+                }
+            } else {
+                result.extend_from_slice(body);
+            }
+            if line.ends_with(b"\n") {
+                result.push(b'\n');
+            }
+            if body.starts_with(b"COPY ") && body.ends_with(b"FROM stdin;") {
+                in_copy = true;
+            } else if in_copy && body == b"\\." {
+                in_copy = false;
+            }
+        }
+        let key = restrict_key.expect("missing opening dump guard");
+        assert!(!key.is_empty() && key.len() <= 128 && key.iter().all(u8::is_ascii_alphanumeric));
+        assert_eq!(unrestrict_key, Some(key), "dump guard pair differs");
+        result
+    }
+
+    // PostgreSQL deparses twelve pinned CHECK/index expressions differently
+    // after restore (varchar-array literals become explicit text casts). All
+    // other lines, including COPY rows, must match byte-for-byte. Pin both
+    // sides of the twelve exceptional lines so a shared restore loss cannot
+    // masquerade as parity. Never log dump contents or differing SQL.
+    fn known_roundtrip_dump_parity(fresh: &[u8], restored: &[u8]) -> bool {
+        const REPARSED_EXPRESSIONS: [&str; 12] = [
+            "    CONSTRAINT ck_canvas_award_candidates_state CHECK ",
+            "    CONSTRAINT ck_canvas_sync_jobs_status CHECK ",
+            "    CONSTRAINT ck_canvas_sync_targets_type CHECK ",
+            "    CONSTRAINT ck_canvas_learner_identities_status CHECK ",
+            "    CONSTRAINT ck_canvas_oauth_connections_status CHECK ",
+            "    CONSTRAINT ck_canvas_platforms_lti_trust_profile CHECK ",
+            "    CONSTRAINT ck_canvas_platforms_registration_status CHECK ",
+            "    CONSTRAINT ck_evidence_policy_reviews_resolution_claim CHECK ",
+            "    CONSTRAINT ck_evidence_policy_reviews_status CHECK ",
+            "    CONSTRAINT ck_issuance_transactions_issuer_algorithm CHECK ",
+            "    CONSTRAINT ck_oid4vci_ephemeral_capabilities_purpose CHECK ",
+            "CREATE UNIQUE INDEX ux_canvas_sync_jobs_one_active_target ON ",
+        ];
+        let fresh = comparable_dump(fresh);
+        let restored = comparable_dump(restored);
+        let fresh_lines = fresh.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        let restored_lines = restored.split(|byte| *byte == b'\n').collect::<Vec<_>>();
+        if fresh_lines.len() != restored_lines.len() {
+            return false;
+        }
+        let mut fresh_hash = Sha256::new();
+        let mut restored_hash = Sha256::new();
+        let mut changed = 0;
+        for (left, right) in fresh_lines.iter().zip(restored_lines.iter()) {
+            if left != right {
+                let Some(label) = REPARSED_EXPRESSIONS.get(changed) else {
+                    return false;
+                };
+                if !left.starts_with(label.as_bytes()) || !right.starts_with(label.as_bytes()) {
+                    return false;
+                }
+                changed += 1;
+                fresh_hash.update(left);
+                fresh_hash.update([0]);
+                restored_hash.update(right);
+                restored_hash.update([0]);
+            }
+        }
+        changed == REPARSED_EXPRESSIONS.len()
+            && format!("{:x}", fresh_hash.finalize())
+                == "332d498157de505749e9e9d219d5856d64bd533ba014d5236f69100903f3425f"
+            && format!("{:x}", restored_hash.finalize())
+                == "c2d3800dbab229009231418818835431c67d554c80921b4d68c31d12d364c204"
+    }
+
+    #[test]
+    fn comparable_dump_normalizes_only_matched_outer_guards() {
+        let first = b"\\restrict RandomKey123\nCOPY demo FROM stdin;\n\\restrict row\n\\.\n\\unrestrict RandomKey123\n";
+        let second = b"\\restrict OtherKey456\nCOPY demo FROM stdin;\n\\restrict row\n\\.\n\\unrestrict OtherKey456\n";
+        assert_eq!(comparable_dump(first), comparable_dump(second));
+        let changed_row = b"\\restrict OtherKey456\nCOPY demo FROM stdin;\n\\restrict different\n\\.\n\\unrestrict OtherKey456\n";
+        assert_ne!(comparable_dump(first), comparable_dump(changed_row));
+        assert!(
+            std::panic::catch_unwind(|| comparable_dump(b"\\restrict A\n\\unrestrict B\n"))
+                .is_err()
+        );
+        assert!(
+            std::panic::catch_unwind(|| comparable_dump(b"\\unrestrict A\n\\restrict A\n"))
+                .is_err()
+        );
+        assert!(std::panic::catch_unwind(|| comparable_dump(
+            b"COPY demo FROM stdin;\n\\restrict row\n\\.\n"
+        ))
+        .is_err());
+    }
+
     #[tokio::test]
     #[ignore = "pinned Docker images required; run exact test in separate baseline and opt-in processes"]
     async fn eight_fixed_published_databases_keep_migration_heads() {
@@ -100,31 +217,36 @@ mod diagnostic_tests {
     }
 
     #[tokio::test]
-    #[ignore = "opt-in pinned Docker image pilot; compare the exact fresh and restored schema/data dumps"]
-    async fn fresh_probe_and_cached_restore_have_identical_schema_and_data() {
+    #[ignore = "opt-in pinned Docker image pilot; compare independent fresh and round-tripped schema/data dumps"]
+    async fn fresh_probe_and_cached_restore_keep_roundtrip_schema_and_data() {
         assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
         let restored = PublishedDatabase::start().await.unwrap();
-        assert!(
-            PUBLISHED_BASE.get().is_some(),
-            "missing verified published base"
-        );
+        let captured_base = PUBLISHED_BASE
+            .get()
+            .expect("missing verified published base");
         let restored_dump =
             dump_published_base_with_restrict_key(restored.postgres.as_deref().unwrap(), true)
                 .unwrap();
         restored.close_verified().unwrap();
 
-        // Use a new pinned producer, not the cached constructor, as the
-        // independent baseline. Never print database contents on mismatch.
+        // A second pinned producer must have the same pre-restore SQL as the
+        // captured base. Compare the complete bytes except the validated
+        // per-invocation psql guard key; never print schema or table contents.
         let fresh = PublishedDatabase::start_probe(None).await.unwrap();
         let fresh_dump =
             dump_published_base_with_restrict_key(fresh.postgres.as_deref().unwrap(), true)
                 .unwrap();
-        let same_schema_and_data = fresh_dump == restored_dump;
         fresh.close_verified().unwrap();
-
         assert!(
-            same_schema_and_data,
-            "fresh published probe and restored base have different schema/data"
+            comparable_dump(captured_base) == comparable_dump(&fresh_dump),
+            "independent published migrations produced different schema/data"
+        );
+
+        // The only permitted fresh/restore differences are the pinned
+        // PostgreSQL deparse forms. Every other byte must be unchanged.
+        assert!(
+            known_roundtrip_dump_parity(&fresh_dump, &restored_dump),
+            "restored published base differs from pinned fresh schema/data"
         );
     }
 

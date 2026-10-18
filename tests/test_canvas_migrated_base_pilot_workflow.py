@@ -98,7 +98,7 @@ def test_manual_pilot_runs_exact_ignored_parity_isolation_and_failure_checks() -
     assert diagnostic["run"].index(baseline) < diagnostic["run"].index("for test_name in")
     for test_name in (
         "eight_fixed_published_databases_keep_migration_heads",
-        "fresh_probe_and_cached_restore_have_identical_schema_and_data",
+        "fresh_probe_and_cached_restore_keep_roundtrip_schema_and_data",
         "immutable_published_base_keeps_revision_parity_and_case_isolation",
         "concurrent_published_base_keeps_eight_cases_isolated",
         "failed_published_base_restore_removes_only_its_owned_container",
