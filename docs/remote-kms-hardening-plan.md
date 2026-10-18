@@ -141,6 +141,18 @@ organization quality and Actions CodeQL passed; Rust CodeQL and
 remain live. The PR is not yet merged and no exact-main claim exists for
 v1.1.256. Wait for the actual merge and a fresh full exact-main CI.
 
+Successor release-lock landing (2026-10-17): all five protected merge-group
+workflows at `83c0d8b2d12be75a09328e25a4e80ddd3cb0532e` passed: CI
+`39088843556`, CodeQL Rust `39088843564`, CodeQL Actions `39088843631`,
+Organization Quality `39088843716`, and open-source policy `39088843536`.
+PR #1395 merged at 2026-10-18 02:29 UTC. Its merge commit and the observed
+protected main ref both equal that SHA. The v1.1.256 tag and GitHub release
+were absent. Full
+[exact-main CI 39090296100](https://github.com/ElevenID/marty-ui/actions/runs/39090296100)
+was dispatched via `workflow_dispatch` and verified to target the same SHA;
+it is queued. Require full success and recheck main before the no-write
+v1.1.256 claim; merge-group success alone is insufficient.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
