@@ -249,6 +249,26 @@ returned HTTP 422 and created no run because PowerShell serialized extra
 signed publication, artifact qualification or exact installed recovery until
 their respective gates complete.
 
+Release-tag credential failure and local repair (2026-10-17): release
+`39099758515` passed all five runtime qualification gates, the operator
+catalogs, signed build stages, release qualification and prepared self-host
+consumer preflight, but the `publish-manifest` tag-push step failed with
+GitHub's explicit rejection: its `GITHUB_TOKEN` GitHub App lacked Workflows
+permission to create a tag that carries workflow-file changes. No v1.1.256
+tag or GitHub release was created. Concurrent PR #1400 advanced protected
+main to `55209f002dad992c24a1c00a89435d6c520b8f15`; the older claim and
+failed release cannot qualify that new source. Local branch
+`fix/kms-release-workflow-tag-token-20261018` changes only the annotated-tag
+push to the existing `REPO_ACCESS_TOKEN` repository secret, with an early
+presence/authentication check and classic-PAT workflow-scope check before
+image builds. Checkout already disables persisted job-token credentials, so
+`gh auth setup-git` can use the scoped publisher credential for the tag push.
+The other release operations retain the short-lived job token. The 74 focused
+release, pre-promotion and self-host preparation tests plus Ruff and diff
+checks pass locally. The secret's actual workflow permission cannot be read
+from GitHub secret metadata; the protected release gate must prove the push.
+Do not manually tag the failed source or reuse its first-attempt artifact.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
