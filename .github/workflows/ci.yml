@@ -2019,7 +2019,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Test native Canvas operation timeout TLS parity
-        if: matrix.lane == 'canvas'
+        # Contracts already compiles this exact Issuance library harness.
+        # Keep the owned TLS/socket parity gate mandatory without rebuilding
+        # the otherwise unexecuted harness in the Canvas acceptance lane.
+        if: matrix.lane == 'contracts'
         working-directory: rust
         run: |
           python3 -m venv "$RUNNER_TEMP/canvas-operation-tls"

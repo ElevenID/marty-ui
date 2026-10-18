@@ -506,7 +506,7 @@ formatting the environment value. No PostgreSQL limit or timing is changed.
 
 The sixth unchanged ID is
 `canvas_operation_http::tests::native_socket_case`, still in
-`canvas_operation_http.rs`. The Canvas lane's existing owned TLS fixture calls
+`canvas_operation_http.rs`. The contracts lane's owned TLS fixture calls
 it through `run_canvas_timeout_consumer_oracle.py`, now explicitly selecting
 `--ignored --exact`. The native-case and origin environment inputs, client TLS
 configuration, exactly-one observation requirement and two-routine/104-full
