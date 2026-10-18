@@ -79,6 +79,9 @@ daemon, and a `\\wsl.localhost\Ubuntu-24.04\home\...` source reaches the
 disabled distro-services socket and is refused. The tiny probe file and
 directory were removed; no production container was changed.
 Do not disrupt the running production Docker engine to repair WSL integration.
+The [Docker Desktop release notes](https://docs.docker.com/desktop/release-notes/)
+state that changing WSL integration settings restarts Desktop, so enabling
+Ubuntu is a controlled downtime/cutover action, not a live preflight tweak.
 Resolve this local runner issue and remeasure resources before the fresh
 signed-artifact install; do not count the earlier v1.1.255 disposable run for
 v1.1.257 acceptance.
