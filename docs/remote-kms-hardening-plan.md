@@ -485,6 +485,22 @@ the OS temp directory outside the repository. This is input validation, not
 signed v1.1.257 artifact or installed acceptance. The dedicated tag-push
 secret is still needed before publication.
 
+Workstation availability recovery (2026-10-18): a read-only host check found
+Docker Desktop stopped, all WSL distributions stopped, and the existing
+production loopback site unreachable. The Windows C: drive had about 8.7 GB
+free. A normal Docker Desktop restart restored the existing containers from
+their persisted state; no volume, image, or WSL data was deleted. The old
+self-host OpenBao (`storage_type=file`) had restarted sealed and the existing
+operator unseal key file was used through its loopback API without printing
+key material. OpenBao, gateway, edge and issuance then became healthy. Three
+Python services had failed their initial database connections before
+PostgreSQL was ready; restarting only Notification, Device Registration and
+Revocation Profile made the full self-host project healthy. The production
+loopback returned HTTP 200. This restores the **old** installation's
+availability; it is not KMS-only cutover or signed v1.1.257 acceptance. Keep
+local installed testing paused until the signed artifact exists and disk
+capacity is reviewed; do not globally prune Docker state.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
