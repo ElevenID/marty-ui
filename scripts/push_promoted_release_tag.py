@@ -81,6 +81,9 @@ def main() -> None:
     publishers = [job for job in jobs if job["name"] == "publish-manifest"]
     require(len(publishers) == 1 and publishers[0]["run_attempt"] == 1,
             "Expected one first-attempt publication job")
+    require(all(job["conclusion"] in {"success", "skipped"}
+                for job in jobs if job["name"] != "publish-manifest"),
+            "Another release job failed or did not finish")
     steps = publishers[0]["steps"]
     handoff = [step for step in steps
                if step["name"] == "Create or verify the late annotated source tag"]
