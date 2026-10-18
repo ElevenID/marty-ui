@@ -2050,7 +2050,7 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "fi\n"
     )
     assert steps[image]["if"] == "matrix.lane == 'selfhost'"
-    assert "if" not in steps[full]
+    assert steps[full]["if"] == "matrix.lane != 'renewal-unit'"
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]

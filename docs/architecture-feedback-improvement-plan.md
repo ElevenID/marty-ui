@@ -96,6 +96,18 @@ without the flag keep their separate helper; no v1.1.255 asset is changed.
 Independent review and 12 host tests passed; 15 POSIX cases still require
 Linux CI. This is setup assistance, not turnkey or installed qualification.
 
+The hosted fixture-free diagnostic executed all 23 exact cases successfully in
+run `39087827050`, job `117558108996`, artifact `12121287706`. Independent
+review verified the separate unit inventory, same-run compiler identity and
+that Docker, image and database steps were skipped only on this diagnostic.
+This does not authorize selective admission or prove overall feedback savings.
+The broader local six-module run recorded 496 passed, six platform skips and
+one stale assertion expecting the database step to be unconditional even on
+the new unit-only lane. Its reviewed one-line correction now requires exactly
+`matrix.lane != 'renewal-unit'`; all five focused ownership checks passed while
+retaining full shell/order/gate assertions. Complete hosted validation of the
+corrected head remains required; the previous release lane failed this guard.
+
 ## Prior handoff checkpoint (superseded delivery state)
 
 The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
