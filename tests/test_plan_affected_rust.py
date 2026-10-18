@@ -3383,6 +3383,9 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     ("conditional_marker", "runtime_evidence"),
                     ("response_marker", "request_evidence"),
                     ("fallback_marker", "request_evidence"),
+                    ("direct_provider_marker", "provider_evidence"),
+                    ("direct_handler_marker", "provider_evidence"),
+                    ("deployment_marker", "deployment_evidence"),
                 ):
                     if marker in edge:
                         self.assertIn(

@@ -1121,8 +1121,9 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_deployment_marker": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE: /run/secrets/signing_keys_workload_server_cert",
         },
         {
-            # Issuance resolves its issuer identity through the configured
-            # signing-keys URL, normally Gateway's authenticated compat route.
+            # Issuance resolves issuer identity through the configured peer.
+            # Standard Compose uses Signing Keys directly; Gateway is an
+            # alternate configuration and forwards to the compat handler.
             "package": "marty-issuance-service",
             "evidence": "rust/services/issuance/src/config.rs",
             "binding": '"SIGNING_KEYS_INTERNAL_URL"',
@@ -1141,6 +1142,11 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_evidence": "rust/services/signing-keys/src/http.rs",
             "provider_marker": '"/internal/compat/resolve-issuer-did",',
             "provider_handler_marker": "async fn resolve_issuer_did(",
+            "direct_provider_marker": '"/internal/resolve-issuer-did",',
+            "direct_handler_marker": "async fn resolve_issuer_did_query(",
+            "deployment_evidence": "docker-compose.base.yml",
+            "deployment_service": "issuance",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal",
         },
         {
             "package": "marty-credential-template",
