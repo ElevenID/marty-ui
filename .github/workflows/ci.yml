@@ -228,18 +228,15 @@ jobs:
                 done
               fi
             fi
-            # Both leaves are cfg(test)-only modules in the Issuance library.
-            # The verified-leaf proof above guards their sole owner and Docker
-            # exclusion; the full-library unit lane records every discovered
-            # case and requires the complete retry/renewal roster. Mixed or
-            # unproved inputs retain their existing broader PR plan.
+            # Exact cfg(test) Issuance leaves with no separately owned DB cases.
+            # Passport's ignored PostgreSQL cases stay on the broader route.
             renewal_unit_test_only=false
             if [[ "$leaf_only" == true &&
                   "${{ github.event_name }}" == pull_request ]]; then
               renewal_unit_test_only=true
               for path in "${changed_files[@]}"; do
-                case "$path" in
-                  rust/services/issuance/src/canvas_sync_worker_retry_tests.rs|rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs) ;;
+                case "${path#rust/services/issuance/src/}" in
+                  canvas_operation_http_prepared_tests.rs|canvas_sync_provider_http_tests.rs|canvas_sync_processor_tests.rs|canvas_sync_worker_retry_tests.rs|canvas_sync_worker_renewal_tests.rs|initiation_didcomm/tests/initiation_didcomm_renewal_tests.rs|python_format_tests.rs|signing_http_projection_tests.rs|signing_http_response_tests.rs|token_rate_limit_http_tests.rs) ;;
                   *) renewal_unit_test_only=false; break ;;
                 esac
               done

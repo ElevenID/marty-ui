@@ -390,6 +390,16 @@ groups, main, and official releases retain their full required qualification;
 the 60 real-PostgreSQL renewal cases are not removed. Treat this as a selective
 feedback candidate, not a measured speedup until comparable hosted runs exist.
 
+The next A6 extension adds the other eight verified, non-ignored Issuance
+library test leaves to that same PR-only route. These cover Canvas operation,
+provider and processor, DIDComm renewal, Python formatting, signing HTTP
+projection/response and token-rate middleware. Each is a direct `cfg(test)`
+module with one proved library owner and no separately owned database fixture.
+The passport reconciliation leaf is excluded because five cases require its
+PostgreSQL owner and are ignored in the ordinary library run. The lane still
+executes and records the complete Issuance library; mixed or unproved diffs,
+merge groups and releases remain broad. No production source or case is removed.
+
 ## Product packaging and integration gates
 
 The coordinating workspace product plan
