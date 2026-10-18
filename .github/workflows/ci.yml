@@ -2836,6 +2836,36 @@ jobs:
       - name: Run repository release checks
         if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
         run: python -m pytest tests -n 2 -v --tb=short --durations=20
+      - name: Exercise root-owned disposable TLS staging contracts
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python)"
+          report="$RUNNER_TEMP/selfhost-root-tls-contracts.xml"
+          sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1 "$python_bin" -m pytest -q \
+            tests/test_provision_selfhost_disposable_tls.py::test_stages_only_public_tls_outputs_into_existing_private_root \
+            tests/test_provision_selfhost_disposable_tls.py::test_ownership_failure_removes_all_staged_tls_inputs \
+            tests/test_provision_selfhost_disposable_tls.py::test_metadata_cleanup_failure_still_rolls_back_all_secrets \
+            tests/test_provision_selfhost_disposable_tls.py::test_timeout_cleanup_retains_id_only_if_removal_fails \
+            -p no:cacheprovider --junitxml="$report"
+          python - "$report" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          suite = ET.parse(sys.argv[1]).getroot()
+          if suite.tag == "testsuites":
+              suite = suite.find("testsuite")
+          if suite is None or suite.tag != "testsuite":
+              raise SystemExit("root-owned TLS test report is missing")
+          cases = list(suite.iter("testcase"))
+          if (len(cases) != 5 or any(
+              int(suite.attrib.get(name, "-1")) != expected
+              for name, expected in (("tests", 5), ("skipped", 0),
+                                     ("failures", 0), ("errors", 0))
+          )):
+              raise SystemExit("root-owned TLS cases did not all execute and pass")
+          PY
       - name: Report affected Rust packages in shadow mode
         if: github.event_name == 'pull_request'
         env:

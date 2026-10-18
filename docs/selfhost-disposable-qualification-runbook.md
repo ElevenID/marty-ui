@@ -64,6 +64,11 @@ sudo env PYTHONDONTWRITEBYTECODE=1 python3 "$private_root/install/selfhost-prepa
   --openbao-project "$openbao_project"
 ```
 
+The helper also records verified, non-secret TLS key names and pinned version
+1 for its 16 workload roles in `$private_root/selfhost-tls-kms-roles.json`. This
+diagnostic record is separate from the 33 certificate/token secrets. It is not
+a complete Compose environment file or evidence that the stack is ready.
+
 The OpenBao helper renders and checks the three-service Compose model before
 starting a fresh project. It uses only the locked plugin image, an isolated
 state directory and a selected loopback port. The Keycloak bridge runs the

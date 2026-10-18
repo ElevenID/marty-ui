@@ -32,6 +32,27 @@ OPENBAO_IMAGE = re.compile(
     r"ghcr\.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:[0-9a-f]{64}\Z"
 )
 PROJECT = re.compile(r"[a-z][a-z0-9-]{0,62}\Z")
+KEY_METADATA_FILE = "selfhost-tls-kms-roles.json"
+# An independent acceptance contract for the fixed disposable bootstrap role
+# names. This is metadata, not a source of key material or a complete env file.
+KEY_NAMES = {
+    "signing-keys-server": "workload-tls-signing-keys-server",
+    "gateway-client": "workload-tls-gateway-auth-client",
+    "auth-client": "workload-tls-auth-client",
+    "auth-server": "workload-tls-auth-server",
+    "compliance-profile-client": "workload-tls-compliance-profile-client",
+    "deployment-profile-client": "workload-tls-deployment-profile-client",
+    "organization-server": "workload-tls-organization-server",
+    "event-stream-server": "workload-tls-event-stream-server",
+    "notification-server": "workload-tls-notification-server",
+    "revocation-profile-server": "workload-tls-revocation-profile-server",
+    "credential-template-server": "workload-tls-credential-template-server",
+    "issuance-server": "workload-tls-issuance-server",
+    "flow-client": "workload-tls-flow-client",
+    "flow-server": "workload-tls-flow-server",
+    "pp-server": "workload-tls-presentation-policy-server",
+    "verification-client": "workload-tls-verification-client",
+}
 
 
 class BootstrapCleanupError(RuntimeError):
@@ -49,6 +70,63 @@ def regular_input(path: Path) -> Path:
     if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
         raise ValueError("OpenBao bootstrap input is missing or invalid")
     return path
+
+
+def verified_key_metadata(output: Path) -> dict[str, object]:
+    path = output / KEY_METADATA_FILE
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    elif path.is_symlink():
+        raise ValueError("OpenBao bootstrap input is missing or invalid")
+    try:
+        fd = os.open(path, flags)
+    except OSError as error:
+        raise ValueError("OpenBao bootstrap input is missing or invalid") from error
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("OpenBao bootstrap input is missing or invalid")
+        if metadata.st_size > 8192:
+            raise ValueError("disposable TLS key metadata is oversized")
+        chunks: list[bytes] = []
+        remaining = 8193
+        while remaining:
+            chunk = os.read(fd, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        contents = b"".join(chunks)
+        if len(contents) > 8192:
+            raise ValueError("disposable TLS key metadata is oversized")
+    finally:
+        os.close(fd)
+
+    def unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        fields = dict(pairs)
+        if len(fields) != len(pairs):
+            raise ValueError("disposable TLS key metadata has duplicate fields")
+        return fields
+
+    document = json.loads(contents.decode("ascii"), object_pairs_hook=unique_fields)
+    if (not isinstance(document, dict)
+            or set(document) != {"schema", "roles"}
+            or document["schema"] != "marty.selfhost-disposable-tls-keys/v1"
+            or not isinstance(document["roles"], list)
+            or len(document["roles"]) != len(KEY_NAMES)):
+        raise ValueError("disposable TLS key metadata has invalid shape")
+    roles = document["roles"]
+    if any(not isinstance(entry, dict)
+           or set(entry) != {"role", "key_name", "version"}
+           or not isinstance(entry["role"], str)
+           or KEY_NAMES.get(entry["role"]) != entry["key_name"]
+           or type(entry["version"]) is not int or entry["version"] != 1
+           for entry in roles):
+        raise ValueError("disposable TLS key metadata differs from fixed roles")
+    if {entry["role"] for entry in roles} != set(KEY_NAMES):
+        raise ValueError("disposable TLS key metadata omits or duplicates a role")
+    return document
 
 
 def protected_root_token_metadata(uid: int, mode: int) -> bool:
@@ -178,6 +256,12 @@ def provision(bundle: Path, secret_root: Path, state_root: Path, project: str) -
     if os.name != "posix" or os.geteuid() != 0:
         raise ValueError("disposable TLS staging requires sudo on Linux")
     secret_root = private_root(secret_root)
+    metadata_parent = private_root(secret_root.parent)
+    if metadata_parent.stat().st_uid != secret_root.stat().st_uid:
+        raise ValueError("disposable TLS key metadata parent has a different owner")
+    metadata_destination = metadata_parent / KEY_METADATA_FILE
+    if metadata_destination.exists() or metadata_destination.is_symlink():
+        raise ValueError("disposable TLS key metadata already exists")
     if not state_root.is_absolute() or state_root.is_symlink() or not state_root.is_dir():
         raise ValueError("OpenBao state root is invalid")
     state_root = state_root.resolve()
@@ -247,16 +331,34 @@ def provision(bundle: Path, secret_root: Path, state_root: Path, project: str) -
                 cidfile.unlink(missing_ok=True)
         if result.returncode:
             raise RuntimeError("keyless workload TLS bootstrap failed; no inputs were staged")
+        key_metadata = verified_key_metadata(output)
+        (output / KEY_METADATA_FILE).unlink()
         accept_remote_tls(
             output, secret_root, root_file.read_text(encoding="ascii").strip(),
             expected_files=SELFHOST_TLS_FILES, certificate_files=SELFHOST_CERT_FILES,
         )
         owner = secret_root.stat()
+        created_metadata = False
         try:
             for name in SELFHOST_TLS_FILES:
                 os.chown(secret_root / name, owner.st_uid, owner.st_gid)
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+            if hasattr(os, "O_NOFOLLOW"):
+                flags |= os.O_NOFOLLOW
+            fd = os.open(metadata_destination, flags, 0o600)
+            created_metadata = True
+            with os.fdopen(fd, "w", encoding="ascii") as stream:
+                os.fchown(stream.fileno(), owner.st_uid, owner.st_gid)
+                json.dump(key_metadata, stream, sort_keys=True, separators=(",", ":"))
+                stream.flush()
+                os.fsync(stream.fileno())
         except OSError as error:
             rollback_failed = False
+            if created_metadata:
+                try:
+                    metadata_destination.unlink(missing_ok=True)
+                except OSError:
+                    rollback_failed = True
             for name in SELFHOST_TLS_FILES:
                 try:
                     (secret_root / name).rename(output / name)

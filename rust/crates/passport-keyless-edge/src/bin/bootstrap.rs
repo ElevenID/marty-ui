@@ -144,6 +144,32 @@ const SELFHOST_ROLES: &[SelfhostRole] = &[
     },
 ];
 
+const SELFHOST_KEY_METADATA_FILE: &str = "selfhost-tls-kms-roles.json";
+
+fn checked_transit_key_metadata(metadata: &Value, profile: Profile) -> Result<(), Box<dyn Error>> {
+    if value(metadata, "type")? != "ecdsa-p256"
+        || data(metadata, "exportable")? != false
+        || data(metadata, "allow_plaintext_backup")? != false
+    {
+        return Err("disposable Transit key is exportable or wrong type".into());
+    }
+    if profile == Profile::Selfhost && data(metadata, "latest_version")?.as_u64() != Some(1) {
+        return Err("disposable Transit key is not version 1".into());
+    }
+    Ok(())
+}
+
+fn selfhost_key_metadata() -> Value {
+    json!({
+        "schema": "marty.selfhost-disposable-tls-keys/v1",
+        "roles": SELFHOST_ROLES.iter().map(|role| json!({
+            "role": role.name,
+            "key_name": role.key_name,
+            "version": 1,
+        })).collect::<Vec<_>>(),
+    })
+}
+
 const ROLES: &[Role] = &[
     Role {
         name: "passport-edge",
@@ -493,12 +519,7 @@ async fn provision(
         let metadata = bao
             .checked(Method::GET, &format!("transit/keys/{key}"), None, None)
             .await?;
-        if value(&metadata, "type")? != "ecdsa-p256"
-            || data(&metadata, "exportable")? != false
-            || data(&metadata, "allow_plaintext_backup")? != false
-        {
-            return Err("disposable Transit key is exportable or wrong type".into());
-        }
+        checked_transit_key_metadata(&metadata, profile)?;
         bao.checked(
             Method::POST,
             &format!("{pki_mount}/roles/{}", role.name),
@@ -617,6 +638,12 @@ async fn provision(
         .await?;
     if status != StatusCode::FORBIDDEN {
         return Err("disposable TLS signer token crossed key scope".into());
+    }
+    if profile == Profile::Selfhost {
+        write_new(
+            &output.join(SELFHOST_KEY_METADATA_FILE),
+            &selfhost_key_metadata().to_string(),
+        )?;
     }
     Ok(())
 }
@@ -745,5 +772,25 @@ mod tests {
         let mapped: BTreeSet<_> = SELFHOST_ROLES.iter().map(|role| role.name).collect();
         assert_eq!(selected, mapped);
         assert_eq!(selected_roles(Profile::Passport).count(), 15);
+    }
+
+    #[test]
+    fn selfhost_key_metadata_requires_version_one_and_has_no_secret_values() {
+        let valid = json!({"data": {
+            "type": "ecdsa-p256", "exportable": false,
+            "allow_plaintext_backup": false, "latest_version": 1,
+        }});
+        assert!(checked_transit_key_metadata(&valid, Profile::Selfhost).is_ok());
+        for version in [json!(0), json!(2), json!("1"), json!(true)] {
+            let mut invalid = valid.clone();
+            invalid["data"]["latest_version"] = version;
+            assert!(checked_transit_key_metadata(&invalid, Profile::Selfhost).is_err());
+            assert!(checked_transit_key_metadata(&invalid, Profile::Passport).is_ok());
+        }
+        let manifest = selfhost_key_metadata();
+        assert_eq!(manifest["schema"], "marty.selfhost-disposable-tls-keys/v1");
+        assert_eq!(manifest["roles"].as_array().unwrap().len(), 16);
+        assert!(!manifest.to_string().contains("token"));
+        assert!(!manifest.to_string().contains("PRIVATE KEY"));
     }
 }

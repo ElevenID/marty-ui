@@ -18,6 +18,31 @@ import yaml
 ROOT = Path(__file__).parents[1]
 CI_PATH = ROOT / ".github" / "workflows" / "ci.yml"
 RELEASE_TEST_COMMAND = "python -m pytest tests -n 2 -v --tb=short --durations=20"
+
+
+def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
+    _, workflow = _workflow(CI_PATH)
+    steps = workflow["jobs"]["test-release-contracts"]["steps"]
+    named = {step.get("name"): step for step in steps}
+    general = named["Run repository release checks"]
+    root = named["Exercise root-owned disposable TLS staging contracts"]
+    assert root["if"] == general["if"]
+    assert steps.index(root) == steps.index(general) + 1
+    assert root["shell"] == "bash"
+    command = root["run"]
+    assert 'python_bin="$(command -v python)"' in command
+    assert "sudo env PYTHONPATH=packages PYTHONDONTWRITEBYTECODE=1" in command
+    assert "-p no:cacheprovider --junitxml=" in command
+    for name in (
+        "test_stages_only_public_tls_outputs_into_existing_private_root",
+        "test_ownership_failure_removes_all_staged_tls_inputs",
+        "test_metadata_cleanup_failure_still_rolls_back_all_secrets",
+        "test_timeout_cleanup_retains_id_only_if_removal_fails",
+    ):
+        assert command.count(f"test_provision_selfhost_disposable_tls.py::{name}") == 1
+    assert "len(cases) != 5" in command
+    for required in ('("tests", 5)', '("skipped", 0)', '("failures", 0)', '("errors", 0)'):
+        assert required in command
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '

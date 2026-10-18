@@ -87,6 +87,79 @@ def bundle(tmp_path: Path) -> Path:
     return bundle_root
 
 
+def key_metadata() -> dict[str, object]:
+    return {
+        "schema": "marty.selfhost-disposable-tls-keys/v1",
+        "roles": [
+            {"role": role, "key_name": name, "version": 1}
+            for role, name in stage.KEY_NAMES.items()
+        ],
+    }
+
+
+def test_disposable_key_metadata_is_exact_and_nonsecret(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = tmp_path / stage.KEY_METADATA_FILE
+    valid = key_metadata()
+    metadata.write_text(json.dumps(valid), encoding="ascii")
+    assert stage.verified_key_metadata(tmp_path) == valid
+    original_read = stage.os.read
+    with monkeypatch.context() as patch:
+        patch.setattr(stage.os, "read", lambda fd, size: original_read(fd, min(size, 13)))
+        assert stage.verified_key_metadata(tmp_path) == valid
+    assert len(stage.KEY_NAMES) == 16
+    example = (ROOT / ".env.selfhost.production.example").read_text(encoding="ascii")
+    expected = {value for line in example.splitlines()
+                if "_TLS_KMS_KEY_NAME=" in line
+                for value in [line.split("=", 1)[1]]}
+    assert set(stage.KEY_NAMES.values()) == expected
+    for mutation in (
+        lambda doc: doc["roles"][0].update(version=2),
+        lambda doc: doc["roles"][0].update(version=True),
+        lambda doc: doc["roles"][0].update(key_name="workload-tls-other"),
+        lambda doc: doc["roles"][0].update(role=doc["roles"][1]["role"]),
+        lambda doc: doc.update(secret="not-allowed"),
+    ):
+        changed = key_metadata()
+        mutation(changed)
+        metadata.write_text(json.dumps(changed), encoding="ascii")
+        with pytest.raises(ValueError, match="disposable TLS key metadata"):
+            stage.verified_key_metadata(tmp_path)
+    metadata.write_text('{"schema":"x","schema":"y"}', encoding="ascii")
+    with pytest.raises(ValueError, match="duplicate fields"):
+        stage.verified_key_metadata(tmp_path)
+    metadata.unlink()
+    with pytest.raises(ValueError, match="bootstrap input"):
+        stage.verified_key_metadata(tmp_path)
+    if os.name == "posix":
+        metadata.symlink_to(ROOT / ".env.selfhost.production.example")
+        with pytest.raises(ValueError, match="bootstrap input"):
+            stage.verified_key_metadata(tmp_path)
+        metadata.unlink()
+    metadata.write_text("x" * 8193, encoding="ascii")
+    with pytest.raises(ValueError, match="oversized"):
+        stage.verified_key_metadata(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX FIFO open semantics")
+def test_key_metadata_rejects_fifo_without_blocking(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fifo = tmp_path / stage.KEY_METADATA_FILE
+    os.mkfifo(fifo)
+    original_open = stage.os.open
+
+    def bounded_open(path: Path, flags: int, *args: object) -> int:
+        assert flags & os.O_NONBLOCK
+        assert flags & os.O_NOFOLLOW
+        return original_open(path, flags, *args)
+
+    monkeypatch.setattr(stage.os, "open", bounded_open)
+    with pytest.raises(ValueError, match="bootstrap input"):
+        stage.verified_key_metadata(tmp_path)
+
+
 def test_locked_images_and_bundle_assets(tmp_path: Path) -> None:
     root = bundle(tmp_path)
     assert stage.exact_images(root) == (SERVICES, OPENBAO)
@@ -185,15 +258,31 @@ def test_stages_only_public_tls_outputs_into_existing_private_root(
         for name in SELFHOST_TLS_FILES:
             value = certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct"
             (output / name).write_text(value, encoding="ascii")
+        (output / stage.KEY_METADATA_FILE).write_text(
+            json.dumps(key_metadata()), encoding="ascii",
+        )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(stage.subprocess, "run", fake_run)
+    original_fchown = stage.os.fchown
+    ownership: list[tuple[int, int]] = []
+
+    def record_fchown(fd: int, uid: int, gid: int) -> None:
+        ownership.append((uid, gid))
+        original_fchown(fd, uid, gid)
+
+    monkeypatch.setattr(stage.os, "fchown", record_fchown)
     stage.provision(root, secret_root, state, "marty-selfhost-openbao")
     assert {path.name for path in secret_root.iterdir()} == SELFHOST_TLS_FILES | {existing.name}
     assert existing.read_text(encoding="ascii") == "leave-alone"
     assert not (secret_root / "root.token").exists()
     assert all(stat.S_IMODE((secret_root / name).stat().st_mode) == 0o644
                for name in SELFHOST_TLS_FILES)
+    manifest = tmp_path / stage.KEY_METADATA_FILE
+    assert json.loads(manifest.read_text(encoding="ascii")) == key_metadata()
+    assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
+    assert ownership == [(secret_root.stat().st_uid, secret_root.stat().st_gid)]
+    assert manifest.stat().st_uid == secret_root.stat().st_uid
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX file-mode rollback")
@@ -253,6 +342,9 @@ def test_ownership_failure_removes_all_staged_tls_inputs(
                 certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct",
                 encoding="ascii",
             )
+        (output / stage.KEY_METADATA_FILE).write_text(
+            json.dumps(key_metadata()), encoding="ascii",
+        )
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(stage.subprocess, "run", fake_run)
@@ -268,6 +360,58 @@ def test_ownership_failure_removes_all_staged_tls_inputs(
     with pytest.raises(OSError, match="injected chown failure"):
         stage.provision(root, secret_root, state, "marty-selfhost-openbao")
     assert list(secret_root.iterdir()) == []
+    assert not (tmp_path / stage.KEY_METADATA_FILE).exists()
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
+                    reason="Linux root-only disposable staging")
+def test_metadata_cleanup_failure_still_rolls_back_all_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret_root = tmp_path / "secrets"
+    secret_root.mkdir(mode=0o700)
+    state = tmp_path / "state"
+    (state / "tls").mkdir(parents=True)
+    (state / "tls" / "ca.crt").write_text("public-ca", encoding="ascii")
+    (state / "root.token").write_text("root-token-only-in-state-123456", encoding="ascii")
+    root = bundle(tmp_path)
+    monkeypatch.setattr(stage, "openbao_network", lambda *_: "private")
+    certificate = (ROOT / "rust/services/signing-keys/tests/fixtures"
+                   / "public_certificates/root-ca.pem").read_text(encoding="ascii")
+
+    def fake_run(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess:
+        mount = next(part for part in command if part.startswith("type=bind,")
+                     and part.endswith(",dst=/output"))
+        output = Path(mount.split(",src=", 1)[1].split(",dst=", 1)[0])
+        for name in SELFHOST_TLS_FILES:
+            (output / name).write_text(
+                certificate if name.endswith("_cert") else f"hvs.synthetic-{name}-distinct",
+                encoding="ascii",
+            )
+        (output / stage.KEY_METADATA_FILE).write_text(
+            json.dumps(key_metadata()), encoding="ascii",
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(stage.subprocess, "run", fake_run)
+
+    def fail_fchown(_fd: int, _uid: int, _gid: int) -> None:
+        raise OSError("injected owner failure")
+
+    monkeypatch.setattr(stage.os, "fchown", fail_fchown)
+    original_unlink = Path.unlink
+    manifest = tmp_path / stage.KEY_METADATA_FILE
+
+    def fail_manifest_unlink(path: Path, *args: object, **kwargs: object) -> None:
+        if path == manifest:
+            raise OSError("injected metadata cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_manifest_unlink)
+    with pytest.raises(RuntimeError, match="ownership rollback is incomplete"):
+        stage.provision(root, secret_root, state, "marty-selfhost-openbao")
+    assert list(secret_root.iterdir()) == []
+    assert manifest.exists()
 
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
