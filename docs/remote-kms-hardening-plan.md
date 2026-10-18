@@ -442,6 +442,20 @@ full-main work, then qualify the new exact main with one full CI and a fresh
 no-write claim. Do not use the earlier successful manual CI or failed claim
 for the changed source. The dedicated `STACK_RELEASE_TAG_TOKEN` remains absent.
 
+Canvas queue landing and release-source reset (2026-10-18): #1407's five
+protected merge-group workflows all passed at
+`b9291b56122de9378594b7a3ae1ff108eacb0406` (CI `39116406456`,
+Actions CodeQL `39116406620`, Rust CodeQL `39116406450`, organization quality
+`39116406775`, and open-source policy `39116406510`). The PR merged at 10:05
+UTC and protected main matched that candidate. The still-running scheduled
+full CI `39113210924` targeted the old `f572cbbc...` source, so its cancellation
+was requested after the merge to save the remaining Canvas work. A single
+[full exact-main CI 39117936721](https://github.com/ElevenID/marty-ui/actions/runs/39117936721)
+was dispatched and verified to target `b9291b56...`; it is pending. Require
+its full success and unchanged main before a new v1.1.257 no-write claim. No
+v1.1.257 tag or release has been created, and the dedicated tag-push secret
+remains unprovisioned.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
