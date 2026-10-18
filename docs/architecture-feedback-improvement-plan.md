@@ -78,6 +78,24 @@ rebuilt on merged main `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` and
 independent review confirmed the reviewed code and main changes are preserved.
 Hosted validation remains required before merge.
 
+The first hosted batch exposed an exact protocol-owner guard that still
+recognized only the old diagnostic matrix. Its correction pins the new additive
+branches while retaining full-workspace and protected-matrix requirements;
+27 gateway tests passed, including new negative controls, and the complete
+public contract CLI passed against pinned protocol source
+`76c37dc229b328afe002b911a26624543f814a64`. Independent review cleared it.
+An additional reviewed ownership guard rejects symlink/non-regular Git-index
+Issuance test leaves before emitting verified ownership; all 35 ownership tests
+passed. Neither correction enables selective skipping.
+
+The same batch includes an opt-in staging flag that reuses the existing secure
+operator-password generator before provisioning. It validates the selected
+source checkout's realm, keeps the value out of reports/arguments/errors, and
+retains default staging and owned-root rollback. Existing released previews
+without the flag keep their separate helper; no v1.1.255 asset is changed.
+Independent review and 12 host tests passed; 15 POSIX cases still require
+Linux CI. This is setup assistance, not turnkey or installed qualification.
+
 ## Prior handoff checkpoint (superseded delivery state)
 
 The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
