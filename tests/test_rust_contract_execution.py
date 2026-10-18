@@ -4,8 +4,11 @@ import json
 import importlib.util
 import os
 import re
+import signal
 import shutil
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -194,6 +197,286 @@ def test_db_inventory_never_probes_custom_or_unregistered_harnesses(
         INVENTORY.libtest_harness("marty-signing-keys", "custom")
 
 
+def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None:
+    package, target, inputs = INVENTORY.obligation("flow_acceptance")
+    assert (package, target) == (
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+    )
+    assert INVENTORY.libtest_harness(package, target)["manifest"] == (
+        "rust/crates/flow-acceptance/Cargo.toml"
+    )
+    assert {item["name"] for item in inputs} == {
+        "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+        "MARTY_ISSUANCE_TEST_BINARY",
+        "MARTY_BASE_COMPOSE_BINARY",
+        "MARTY_DIDCOMM_TEST_PYTHON",
+        "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+    }
+    assert INVENTORY.selection(
+        ["--nocapture", "--test-threads=4"], allow_nocapture=True
+    ) == (
+        ["--nocapture", "--test-threads=4"],
+        "default",
+    )
+    with pytest.raises(ValueError, match="unsupported_selection_argument"):
+        INVENTORY.selection(["--nocapture", "--test-threads=4"])
+    sources = INVENTORY.flow_source_inputs("flow-pr")
+    assert {entry["path"] for entry in sources} == {
+        "contracts/canvas-worker-consumer-range-oracle.json",
+        "scripts/ci/pull-pinned-dockerhub-image.sh",
+        "scripts/ci/list-flow-acceptance-cases.sh",
+        "scripts/ci/run-flow-acceptance-contracts.sh",
+    }
+    assert all(
+        entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in sources
+    )
+
+    def fake_roster(command, **_kwargs):
+        assert command == [
+            "bash",
+            str(ROOT / "scripts/ci/list-flow-acceptance-cases.sh"),
+            "owned-harness",
+        ]
+        return subprocess.CompletedProcess(
+            command, 0, "happy: test\n1 test, 0 benchmarks\n", ""
+        )
+
+    monkeypatch.setattr(INVENTORY.subprocess, "run", fake_roster)
+    INVENTORY.verify_flow_roster("owned-harness", {"happy"}, set())
+    with pytest.raises(ValueError, match="flow_roster_drift"):
+        INVENTORY.verify_flow_roster("owned-harness", {"other"}, set())
+    with pytest.raises(ValueError, match="flow_roster_drift"):
+        INVENTORY.verify_flow_roster("owned-harness", {"happy"}, {"ignored"})
+
+
+def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
+    tmp_path, monkeypatch, real_obligation_harness, capsys
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    original_artifact_identity = INVENTORY.artifact_identity
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
+    for item in INVENTORY.obligation("flow_acceptance")[2]:
+        monkeypatch.setenv(item["name"], "private-runtime-value")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    binary = str(real_obligation_harness)
+    command = [binary, "happy", "--exact", "--nocapture", "--test-threads=4"]
+    assert INVENTORY.run_contract("flow_acceptance", command, "flow-pr") == 0
+    output = capsys.readouterr().out
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.PREFIX))
+        for line in output.splitlines()
+        if line.startswith(INVENTORY.PREFIX)
+    )
+    assert record["gate"] == "test-rust-services/flow"
+    assert record["owner"] == INVENTORY.FLOW_OWNERS["flow-pr"]
+    assert record["selected"] == record["executed"] == ["happy"]
+    assert record["observed_cases"] == [{"name": "happy", "outcome": "ok"}]
+    assert "child-inherited-stdout" in output
+    assert "private-runtime-value" not in json.dumps(record)
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
+    assert INVENTORY.run_contract("flow_acceptance", command, "canvas") != 0
+    assert "missing_published_schema_gate" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    assert INVENTORY.run_contract("flow_acceptance", command, "contracts") != 0
+    assert "invalid_dispatch_owner" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_LIBTEST_FORCE_FAILURE", "1")
+    failing = [
+        binary,
+        "fixture_case_extra",
+        "--exact",
+        "--ignored",
+        "--nocapture",
+        "--test-threads=4",
+    ]
+    assert INVENTORY.run_contract("flow_acceptance", failing, "canvas") != 0
+    assert '"failed":1' in capsys.readouterr().out
+    monkeypatch.delenv("MARTY_LIBTEST_FORCE_FAILURE")
+    monkeypatch.setattr(INVENTORY, "artifact_identity", original_artifact_identity)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    assert INVENTORY.run_contract("flow_acceptance", command, "canvas") != 0
+    assert "inventory_io_or_metadata_error" in capsys.readouterr().out
+
+
+def test_flow_inventory_nested_libtest_summary_stays_owned(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc unavailable for the nested libtest protocol check")
+    binary = tmp_path / ("nested.exe" if os.name == "nt" else "nested")
+    build = subprocess.run(
+        [
+            rustc,
+            "--test",
+            str(ROOT / "tests/fixtures/rust_flow_nested_obligation_harness.rs"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
+    for item in INVENTORY.obligation("flow_acceptance")[2]:
+        monkeypatch.setenv(item["name"], "owned-fixture")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    assert (
+        INVENTORY.run_contract(
+            "flow_acceptance",
+            [
+                str(binary),
+                "nested_parent",
+                "--exact",
+                "--nocapture",
+                "--test-threads=4",
+            ],
+            "canvas",
+        )
+        == 0
+    )
+    output = capsys.readouterr().out
+    assert output.count("test result: ok.") == 1
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.PREFIX))
+        for line in output.splitlines()
+        if line.startswith(INVENTORY.PREFIX)
+    )
+    assert record["selected"] == record["executed"] == ["nested_parent"]
+    assert "captured nested libtest child" in output
+    assert "owned child diagnostic" not in output
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are the CI owner")
+@pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
+def test_obligation_wrapper_reaps_owned_harness_and_descendant(
+    tmp_path, signum
+) -> None:
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc unavailable for the signal-ownership probe")
+    binary = tmp_path / "signal-harness"
+    build = subprocess.run(
+        [
+            rustc,
+            "--test",
+            str(ROOT / "tests/fixtures/rust_obligation_signal_harness.rs"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    temporary = tmp_path / "owned-temporary"
+    temporary.mkdir()
+    environment = os.environ.copy()
+    environment.pop("RUNNER_TEMP", None)
+    environment.pop("GITHUB_ACTIONS", None)
+    environment.update(
+        TMPDIR=str(temporary),
+        MARTY_TEST_REDIS_URL="redis://owned-test-only",
+        MARTY_SIGNAL_PID_DIR=str(tmp_path),
+        MARTY_SIGNAL_PYTHON=sys.executable,
+    )
+    wrapper = subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "scripts/ci/rust_db_obligations.py"),
+            "--name",
+            "issuer_profile",
+            "--",
+            str(binary),
+            "holding",
+            "--exact",
+            "--test-threads=1",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=environment,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "descendant.pid").is_file():
+            assert wrapper.poll() is None, (
+                "wrapper exited before owned descendant started"
+            )
+            assert time.monotonic() < deadline, "owned descendant did not start"
+            time.sleep(0.05)
+        pids = [
+            int((tmp_path / name).read_text())
+            for name in ("harness.pid", "descendant.pid")
+        ]
+        os.kill(wrapper.pid, signum)
+        stdout, _stderr = wrapper.communicate(timeout=15)
+        assert wrapper.returncode == 128 + signum
+        records = [
+            json.loads(line.removeprefix(INVENTORY.PREFIX))
+            for line in stdout.splitlines()
+            if line.startswith(INVENTORY.PREFIX)
+        ]
+        assert len(records) == 1
+        assert records[0]["status"] == "failed"
+        assert records[0]["reason"] == "interrupted"
+        assert records[0]["command_status"] == 128 + signum
+        observed_signal = tmp_path / "received-signal"
+        assert observed_signal.is_file()
+        assert observed_signal.read_text() == str(signum)
+        for pid in pids:
+            state = Path(f"/proc/{pid}/stat")
+            deadline = time.monotonic() + 3
+            while state.exists() and state.read_text().split()[2] != "Z":
+                assert time.monotonic() < deadline, (
+                    f"owned process {pid} survived cancellation"
+                )
+                time.sleep(0.05)
+        assert not list(temporary.glob("marty-libtest-results-*"))
+    finally:
+        if wrapper.poll() is None:
+            wrapper.kill()
+            wrapper.communicate(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX signal ownership is the CI owner")
+def test_obligation_signal_during_spawn_still_settles_assigned_child(
+    tmp_path, monkeypatch
+) -> None:
+    import io
+
+    settled = []
+
+    class Child:
+        def __init__(self, *_args, **_kwargs):
+            self.stdout = io.BytesIO()
+            handler = signal.getsignal(signal.SIGTERM)
+            assert callable(handler)
+            handler(signal.SIGTERM, None)
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(INVENTORY.subprocess, "Popen", Child)
+    monkeypatch.setattr(
+        INVENTORY,
+        "settle_owned_child",
+        lambda child, initial_signal: settled.append((child, initial_signal)),
+    )
+    evidence = {}
+    with pytest.raises(INVENTORY.HarnessInterrupted):
+        INVENTORY.run_owned_harness(["fake"], tmp_path / "log", evidence)
+    assert len(settled) == 1
+    assert settled[0][1] == signal.SIGTERM
+    assert evidence["command_status"] == 143
+
+
 @pytest.mark.parametrize("child_status", [0, 7])
 def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
     tmp_path, monkeypatch, capsys, child_status
@@ -212,10 +495,15 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
         def wait(self):
             return child_status
 
+        def poll(self):
+            return child_status
+
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
-    monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
+    monkeypatch.setattr(
+        INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
+    )
     result_paths = []
 
     def fake_child(command, **kwargs):
@@ -375,6 +663,9 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
         def wait(self):
             return 0
 
+        def poll(self):
+            return 0
+
     result_paths = []
 
     def fake_child(command, **kwargs):
@@ -384,7 +675,9 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
-    monkeypatch.setattr(INVENTORY, "expected_cases", lambda *args: ({"happy"}, set()))
+    monkeypatch.setattr(
+        INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
+    )
     monkeypatch.setattr(INVENTORY.subprocess, "Popen", fake_child)
     assert INVENTORY.run_contract("issuer_profile", ["harness"]) == 1
     evidence = json.loads(

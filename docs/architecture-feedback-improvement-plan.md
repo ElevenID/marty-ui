@@ -2,7 +2,49 @@
 
 Status: active requirements and queue, 2026-10-17.
 
-## Current delivery priority
+## Current delivery and maintenance-batch checkpoint
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously verified assets. Its unchanged bundle passed
+all fifteen local installed-journey phases in 169.812 seconds. The descriptor
+remains unqualified: no supported installer, hardware minimum or independent
+native Linux consumer installation is established. Outside testing can proceed
+under the approved unsupported-preview policy; do not wait for all A0-A7 work.
+
+[PR #1390](https://github.com/ElevenID/marty-ui/pull/1390) merged as
+`6daf4232cd110656652dec28fd57794693078fce` after successful protected run
+`39081635419`. It supplies early operator-password validation/generation and
+two executed virtual-clock timeout matrices; it does not modify v1.1.255 assets.
+
+The independent renewal-write overlap [PR #1391](https://github.com/ElevenID/marty-ui/pull/1391)
+passed all PR checks and protected validation and merged on October 18 at
+00:48 UTC. Hosted contracts
+artifact `12119516080` records write boundaries at 10.803 seconds, versus
+30.292/30.254 seconds in two earlier observations. This roughly 19.5-second
+targeted reduction is not a controlled paired or overall-pipeline speedup.
+The worker inventory records eleven passed tests and three unchanged ignored
+diagnostics, not sixty individual nested outcome lines. A separately reviewed
+local tmpfs probe directly observed all sixty outcomes and owned cleanup;
+its reused worker had unproven producer provenance, so it is not installed
+qualification, physical-durability evidence or a hardware support claim.
+
+This maintenance batch starts from the verified #1390 main and does not depend
+on #1391. It combines Flow case/input evidence and owned cancellation, nineteen
+paused actual-handler port tests, and a 21-input mixed-roster producer drift
+guard. Component worker reviews cleared the changes. The Flow shell suite
+passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
+and combined focused Python checks passed 168 tests (five platform skips).
+The nineteen new Rust cases still require compilation and execution in CI.
+The first batch CI release-contract run passed 6,938 tests but found one stale
+verified-leaf count after the new guarded test leaf was added. The correction
+retains the strict count and adds explicit new-leaf membership; its local
+selection regression passed and independent review cleared it. The detailed
+19-handler/60-SQL obligation map is included without authorizing SQL removal.
+No unique real-DB case, historical corpus, production behavior, required gate
+or connection limit is removed or weakened. Current-input drift evidence does
+not establish original-capture provenance or authorize qualification reuse.
+
+## Prior handoff checkpoint (superseded delivery state)
 
 The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
 is public with seven anonymously downloadable files. Use this preview rather
@@ -277,6 +319,30 @@ MKT01-02 and QA01-02 criteria. Preserve these identifiers when reconciling work.
   availability and public claims. Engineering does not invent those claims.
 
 ## Coverage and evidence safeguards
+
+### A4 renewal-handler port matrix (local draft)
+
+The focused `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
+`SpyRepository`, `NoOAuth` and retry job fixture. Its optional scripted boundary
+leaves existing short-test fail-fast behavior unchanged. Fifteen separately
+discoverable paused-clock cases execute the actual `process_job`: three renewal
+write failures crossed with the five canonical processor outcomes from
+`canvas-worker-renewal-job-outcomes.json`. Three secondary-persistence failures
+preserve the original renewal error; one real `run_cycle` case checks accounting.
+The tests assert exact port identities, ordering, cleanup acknowledgement and
+20-second renewal/30-second deadline behavior without waiting in real time.
+
+This is additive handler coverage, not SQL or durable-fence emulation. All 60
+real PostgreSQL cases, pinned references, process guarantees and required lanes
+remain unchanged; `cutover_authorized` remains false. Future removal requires
+reviewed old/new case/assertion/input/lane mapping and preserved adapter evidence.
+The new leaf is omitted from release Docker contexts through the existing
+exact-file, direct-`cfg(test)` ownership guard. All 34 targeted Python ownership
+and registration guards pass, along with Rust formatting and diff checks. Local
+Rust compilation/execution is pending a safe validation milestone because the
+backing disk is below the 8 GiB build guard; no speedup is claimed. The combined
+batch now starts from protected main `6daf4232cd110656652dec28fd57794693078fce`,
+which supplies #1390's merged dev-only Tokio `test-util` feature.
 
 [The obligation inventory](architecture-test-obligations.md) retains assertion,
 input and execution owners. An assertion move is not a new independent oracle.
