@@ -3433,6 +3433,150 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     environment,
                 )
 
+    def test_managed_passport_signing_edge_is_observed_without_narrowing(self) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/services/signing-keys/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        [edge] = [
+            item
+            for item in result["observed_non_cargo_consumers"]
+            if item["producer"] == "marty-signing-keys"
+            and item["package"] == "marty-issuance-service"
+            and item.get("operation")
+            == "grant-authorized managed passport issuer-DID signing"
+        ]
+        self.assertEqual(edge["conditional"], "managed passport issuer signing enabled")
+        for marker, source in (
+            ("conditional_marker", "evidence"),
+            ("runtime_marker", "evidence"),
+            ("binding_marker", "evidence"),
+            ("key_binding_marker", "evidence"),
+            ("grant_minter_marker", "evidence"),
+            ("shared_signer_marker", "signer_evidence"),
+            ("origin_marker", "signer_evidence"),
+            ("call_marker", "signer_evidence"),
+            ("request_marker", "request_evidence"),
+            ("grant_route_marker", "request_evidence"),
+            ("request_key_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("gateway_route_marker", "gateway_evidence"),
+            ("gateway_auth_marker", "gateway_evidence"),
+            ("gateway_dispatch_marker", "gateway_evidence"),
+            ("gateway_forward_marker", "gateway_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("provider_key_marker", "provider_evidence"),
+            ("provider_grant_marker", "provider_evidence"),
+            ("deployment_marker", "deployment_evidence"),
+            ("deployment_conditional_marker", "deployment_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                )
+        provider = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        handler = provider.split(edge["provider_handler_marker"], 1)[1].split(
+            "async fn consume_bound_signing_grant(", 1
+        )[0]
+        self.assertIn(edge["provider_key_marker"], handler)
+        self.assertIn(edge["provider_grant_marker"], handler)
+        for deployment, service in (
+            ("docker-compose.base.yml", "issuance"),
+            ("docker-compose.selfhost.prod.yml", "issuance-native"),
+        ):
+            with self.subTest(deployment=deployment):
+                compose = yaml.safe_load(
+                    (ROOT / deployment).read_text(encoding="utf-8")
+                )
+                environment = compose["services"][service]["environment"]
+                self.assertEqual(
+                    environment["SIGNING_KEYS_INTERNAL_URL"],
+                    "http://gateway:8000/internal/signing-keys",
+                )
+                if deployment == "docker-compose.selfhost.prod.yml":
+                    self.assertEqual(
+                        environment["PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"],
+                        "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
+                    )
+                    for peer in ("issuance-native", "gateway", "signing-keys"):
+                        self.assertEqual(
+                            compose["services"][peer]["environment"][
+                                "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE"
+                            ],
+                            "/run/secrets/signing_keys_issuer_sign_key",
+                        )
+
+    def test_managed_passport_trust_anchor_edge_is_observed_without_narrowing(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        result = planner.plan(
+            ["rust/services/signing-keys/src/http.rs"], metadata, ROOT
+        )
+        self.assertTrue(result["all"])
+        self.assertIn("unmapped non-Cargo runtime consumers", result["reason"])
+        [edge] = [
+            item
+            for item in result["observed_non_cargo_consumers"]
+            if item["producer"] == "marty-signing-keys"
+            and item["package"] == "marty-issuance-service"
+            and item.get("operation") == "managed passport CSCA trust-anchor lookup"
+        ]
+        self.assertEqual(edge["conditional"], "managed passport issuer signing enabled")
+        for marker, source in (
+            ("conditional_marker", "evidence"),
+            ("runtime_marker", "evidence"),
+            ("binding_marker", "evidence"),
+            ("request_marker", "request_evidence"),
+            ("request_method_marker", "request_evidence"),
+            ("request_auth_marker", "request_evidence"),
+            ("response_marker", "request_evidence"),
+            ("gateway_dispatch_marker", "gateway_evidence"),
+            ("gateway_forward_marker", "gateway_evidence"),
+            ("gateway_classification_marker", "gateway_classification_evidence"),
+            ("provider_marker", "provider_evidence"),
+            ("provider_handler_marker", "provider_evidence"),
+            ("deployment_marker", "deployment_evidence"),
+            ("deployment_conditional_marker", "deployment_evidence"),
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(
+                    edge[marker], (ROOT / edge[source]).read_text(encoding="utf-8")
+                )
+        provider = (ROOT / edge["provider_evidence"]).read_text(encoding="utf-8")
+        handler = provider.split(edge["provider_handler_marker"], 1)[1].split(
+            "async fn import_csca_certificate(", 1
+        )[0]
+        self.assertIn(edge["provider_auth_marker"], handler)
+        for deployment, service in (
+            ("docker-compose.base.yml", "issuance"),
+            ("docker-compose.selfhost.prod.yml", "issuance-native"),
+        ):
+            with self.subTest(deployment=deployment):
+                compose = yaml.safe_load(
+                    (ROOT / deployment).read_text(encoding="utf-8")
+                )
+                environment = compose["services"][service]["environment"]
+                self.assertEqual(
+                    environment["SIGNING_KEYS_INTERNAL_URL"],
+                    "http://gateway:8000/internal/signing-keys",
+                )
+                if deployment == "docker-compose.selfhost.prod.yml":
+                    self.assertEqual(
+                        environment["PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED"],
+                        "${PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED:-false}",
+                    )
+                    for peer in ("issuance-native", "gateway", "signing-keys"):
+                        self.assertEqual(
+                            compose["services"][peer]["environment"][
+                                "SIGNING_KEYS_INTERNAL_API_KEY_FILE"
+                            ],
+                            "/run/secrets/issuance_api_key",
+                        )
+
     def test_auth_outbound_runtime_edges_are_observed_without_narrowing(self) -> None:
         metadata = planner.cargo_metadata()
         members = set(metadata["workspace_members"])
