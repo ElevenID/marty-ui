@@ -102,7 +102,7 @@ def assert_kubernetes_bindings(documents, config):
     }
     service = resource(documents, "Service", "issuance")
     assert environment(issuance)["SIGNING_KEYS_INTERNAL_URL"] == {
-        "value": "http://signing-keys:8017/internal"
+        "value": "http://gateway:8000/internal/signing-keys"
     }
     assert flow["envFrom"] == [{"configMapRef": {"name": "marty-config"}}]
     assert config["metadata"]["name"] == "marty-config"
@@ -230,7 +230,7 @@ def assert_selfhost_bindings(compose):
     }
     issuance = services["issuance"]
     assert issuance["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
-        "http://signing-keys:8017/internal"
+        "http://gateway:8000/internal/signing-keys"
     )
     assert issuance["build"]["dockerfile"] == "services/Dockerfile"
     assert issuance["build"]["args"]["SERVICE_NAME"] == "issuance-native"

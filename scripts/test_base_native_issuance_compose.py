@@ -247,7 +247,7 @@ def assert_sources(base, profile, runtime):
             assert env[key] == "true"
             continue
         if key == "SIGNING_KEYS_INTERNAL_URL":
-            assert legacy[key] == "http://signing-keys:8017/internal"
+            assert legacy[key] == "http://gateway:8000/internal/signing-keys"
             assert env[key] == "http://gateway:8000/internal/signing-keys"
             continue
         if key == "CANVAS_MIRROR_WORKER_ENABLED":

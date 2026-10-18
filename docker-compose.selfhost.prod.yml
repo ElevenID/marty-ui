@@ -693,7 +693,7 @@ services:
       CANVAS_LTI_TOOL_PUBLIC_JWKS: ${CANVAS_LTI_TOOL_PUBLIC_JWKS:-}
       DIDCOMM_DELIVERY_OWNER: native
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
-      SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal
+      SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       BAO_ADDR: ${BAO_ADDR:-}
       BAO_TOKEN_FILE: /run/secrets/openbao_service_token
       DIDCOMM_KMS_ADDR: ${BAO_ADDR:?BAO_ADDR must be set for DIDComm KMS}

@@ -477,6 +477,73 @@ async fn three_production_owners_keep_operation_identity_requests_and_privacy() 
 }
 
 #[tokio::test]
+async fn deployed_issuance_signing_url_uses_gateway_resolve_and_sign_routes() {
+    fn deployed_url(source: &str) -> reqwest::Url {
+        let model: serde_yaml::Value = serde_yaml::from_str(source).unwrap();
+        model["services"]["issuance"]["environment"]["SIGNING_KEYS_INTERNAL_URL"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap()
+    }
+    let base = deployed_url(include_str!("../../../../docker-compose.base.yml"));
+    let selfhost = deployed_url(include_str!("../../../../docker-compose.selfhost.prod.yml"));
+    assert_eq!(base, selfhost);
+    assert_eq!(base.path(), "/internal/signing-keys");
+    assert_eq!(base.host_str(), Some("gateway"));
+
+    let mut peer = Peer::new(Reply::json(503, b"{}".as_slice())).await;
+    peer.base.set_path(base.path());
+    let resolver = HttpIssuerContextResolver::new(
+        peer.base.clone(),
+        Some("synthetic-service-key"),
+        Duration::from_secs(2),
+    )
+    .unwrap();
+    let signer = HttpDidSigner::new(
+        peer.base.clone(),
+        Some("synthetic-issuer-sign-key"),
+        Duration::from_secs(2),
+    )
+    .unwrap()
+    .with_grant_minter(
+        SigningOrigin::IssuanceCredential,
+        crate::signing_grant_config::ContractGrantMinter(SigningOrigin::IssuanceCredential),
+    );
+    assert!(resolver
+        .resolve_raw(
+            "org-a",
+            "did:web:issuer.example",
+            None,
+            "jwt_vc_json",
+            "vc_jwt_issuer",
+            "EdDSA",
+        )
+        .await
+        .is_err());
+    assert!(signer.sign_did(sign_request()).await.is_err());
+    let requests = peer.take_requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].method, "GET");
+    assert!(requests[0]
+        .uri
+        .starts_with("/internal/signing-keys/resolve-issuer-did?"));
+    assert_eq!(requests[0].headers["x-api-key"], "synthetic-service-key");
+    assert_eq!(requests[1].method, "POST");
+    assert!(requests[1]
+        .uri
+        .starts_with("/internal/signing-keys/issuer-dids/sign?"));
+    assert_eq!(
+        requests[1].headers["x-api-key"],
+        "synthetic-issuer-sign-key"
+    );
+    assert!(requests[1]
+        .headers
+        .contains_key(marty_signing_grant::HEADER_NAME));
+    peer.close().await;
+}
+
+#[tokio::test]
 async fn redirects_continue_existing_success_validators_and_404_defaults() {
     let peer = Peer::new(Reply::json(302, b"{}".as_slice())).await;
     let resolver = HttpIssuerContextResolver::new(

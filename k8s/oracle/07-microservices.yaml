@@ -1114,7 +1114,7 @@ spec:
                   key: CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS
                   optional: true
             - name: SIGNING_KEYS_INTERNAL_URL
-              value: "http://signing-keys:8017/internal"
+              value: "http://gateway:8000/internal/signing-keys"
             - name: SIGNING_KEYS_INTERNAL_API_KEY
               valueFrom:
                 secretKeyRef:

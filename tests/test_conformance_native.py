@@ -324,7 +324,7 @@ def model(*, local=False, authcrypt=False):
         },
     }
     legacy["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
-        "http://signing-keys:8017/internal"
+        "http://gateway:8000/internal/signing-keys"
     )
     candidate["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
         "http://gateway:8000/internal/signing-keys"
