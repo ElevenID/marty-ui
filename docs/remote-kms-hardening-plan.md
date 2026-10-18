@@ -429,6 +429,19 @@ it succeeds and main/tag are unchanged, dispatch a fresh v1.1.257 claim.
 No tag, image promotion, GitHub release or signed fixed-restoration evidence
 was produced by the failed no-write claim.
 
+Concurrent Canvas queue (2026-10-18): the scheduled full CI
+[`39113210924`](https://github.com/ElevenID/marty-ui/actions/runs/39113210924)
+remains active without a failed job on `f572cbbc25cb5112bacbf079e3e06441a46d108c`.
+Meanwhile [PR #1407](https://github.com/ElevenID/marty-ui/pull/1407), a Canvas
+fresh-probe parity test, entered the protected merge queue at candidate
+`b9291b56122de9378594b7a3ae1ff108eacb0406`; its merge-group CI
+[`39116406456`](https://github.com/ElevenID/marty-ui/actions/runs/39116406456)
+is live. Protected main still equals `f572cbbc...`. Hold the v1.1.257 claim
+while this queue settles. If #1407 merges, cancel only genuinely superseded
+full-main work, then qualify the new exact main with one full CI and a fresh
+no-write claim. Do not use the earlier successful manual CI or failed claim
+for the changed source. The dedicated `STACK_RELEASE_TAG_TOKEN` remains absent.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
