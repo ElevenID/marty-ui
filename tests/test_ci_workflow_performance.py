@@ -763,8 +763,9 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
         check=True,
         capture_output=True,
     ).stdout.split(b"\0")
-    assert verified[-1] == b"" and len(verified) == 13
+    assert verified[-1] == b"" and len(verified) == 14
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    assert "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs" in leaves
     assert leaves[-2:] == [
         "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
         "rust/crates/oid4vp-contract/tests/transport_metadata.rs",
@@ -1987,6 +1988,11 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
             "tests/test_canvas_worker_oracle_script_closure.py",
             "tests/test_ci_workflow_performance.py",
         },
+        "canvas-worker-mixed-roster-current-inputs.json": {
+            ".github/workflows/ci.yml",
+            "tests/test_canvas_worker_oracle_script_closure.py",
+            "tests/test_ci_workflow_performance.py",
+        },
         "canvas-json-depth-current-inputs.json": {
             ".github/workflows/ci.yml",
             "tests/test_ci_workflow_performance.py",
@@ -2126,6 +2132,7 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         "contracts/canvas-worker-timeout-current-inputs.json",
         "contracts/canvas-worker-provider-recovery-current-inputs.json",
         "contracts/canvas-json-depth-current-inputs.json",
+        "contracts/canvas-worker-mixed-roster-current-inputs.json",
         "contracts/canvas-operations-input-current-inputs.json",
         "contracts/canvas-worker-tier-obligations.json",
         "contracts/python-value-fast-obligations.json",
@@ -4045,8 +4052,9 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     assert 'relay_target_timing "$flow_pid" "$flow_log" "$flow_end" flow &' in published
     assert 'wait "$composition_pid" || composition_status=$?' in published
     assert 'wait "$flow_pid" || flow_status=$?' in published
+    assert '  --name flow_acceptance --owner canvas -- \\' in published
     assert published.index('wait "$composition_pid" || composition_status=$?') < published.index(
-        '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+        '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
     )
     assert 'wait "$worker_pid" || worker_status=$?' in published
     assert (

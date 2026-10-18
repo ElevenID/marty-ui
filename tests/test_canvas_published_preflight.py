@@ -271,8 +271,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
-    flow_full = '"$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    flow_full = '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
     assert script.splitlines().count(flow_full) == 1
+    assert (
+        script.splitlines()[script.splitlines().index(flow_full) - 1]
+        == "  --name flow_acceptance --owner canvas -- \\"
+    )
     assert script.index('wait "$composition_pid" || composition_status=$?') < script.index(
         flow_full
     )
@@ -445,6 +449,14 @@ if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
   printf '%s\\n' '-----BEGIN CERTIFICATE-----' 'synthetic-public-ca' '-----END CERTIFICATE-----' > "$3"
   printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"https://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ca_cert_file":"'"$3"'"}}'
   exit 0
+fi
+if [[ "${{1:-}}" == */rust_db_obligations.py ]]; then
+  # This shell fixture owns orchestration, not compiler JSON/libtest protocol.
+  # The recorder's real child and cancellation behavior have separate tests.
+  shift
+  [[ "$1" == --name && "$2" == flow_acceptance && "$3" == --owner && "$4" == canvas && "$5" == -- ]] || exit 90
+  shift 5
+  exec "$@"
 fi
 exec "{Path(sys.executable).as_posix()}" "$@"
 ''',

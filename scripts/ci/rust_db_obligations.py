@@ -1,4 +1,4 @@
-"""Record effective libtest obligations for the existing serial DB runner.
+"""Record effective libtest obligations for DB and Flow acceptance runners.
 
 Discovery uses the same executable and selection arguments as execution. libtest
 --list includes ignored tests by default, so a second ignored-only discovery is
@@ -12,9 +12,11 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from pathlib import Path
 
@@ -24,6 +26,11 @@ PREFIX = "MARTY_DB_OBLIGATION_V1 "
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_SHA")
 FIXTURE_OWNER = ".github/compose/rust-ci-fixtures.yml"
 RUNNER_OWNER = "scripts/ci/run-rust-db-contracts.sh"
+FLOW_OWNERS = {
+    "flow-pr": "scripts/ci/run-flow-acceptance-contracts.sh",
+    "canvas": "scripts/ci/run-published-canvas-contracts.sh",
+}
+FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/canvas_published_database.rs"
 CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
 # Stable libtest's separate result log is unaffected by stdout inherited by a
 # tested process. --logfile is deprecated but supported by pinned Rust 1.95;
@@ -146,6 +153,17 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             target,
             ("MARTY_ISSUANCE_POSTGRES_CONTRACT_URL",),
         )
+    entries["flow_acceptance"] = (
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+        (
+            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_ISSUANCE_TEST_BINARY",
+            "MARTY_BASE_COMPOSE_BINARY",
+            "MARTY_DIDCOMM_TEST_PYTHON",
+            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+        ),
+    )
     if name not in entries:
         raise ValueError("unknown_dispatch")
     package, target, variables = entries[name]
@@ -162,6 +180,15 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
         }
         for variable in variables
     ]
+    if name == "flow_acceptance":
+        for item in inputs:
+            item["owner"] = "Flow acceptance runner (selected by call site)"
+            item["provisioner"] = (
+                ".github/workflows/ci.yml"
+                if item["name"]
+                in {"MARTY_BASE_COMPOSE_BINARY", "MARTY_DIDCOMM_TEST_PYTHON"}
+                else "Flow acceptance runner (selected by call site)"
+            )
     # These tests use a Rust-owned HTTPS Signing Keys fixture by default, or an
     # explicitly supplied live route. Record the conditional dependency names,
     # without treating absent optional route inputs as absent test execution.
@@ -236,7 +263,12 @@ def libtest_harness(package: str, target: str) -> dict:
         if package == "marty-issuance-service"
         else package.removeprefix("marty-")
     )
-    manifest_path = ROOT / "rust/services" / service / "Cargo.toml"
+    manifest_path = (
+        ROOT / "rust/crates/flow-acceptance/Cargo.toml"
+        if package == "marty-flow-acceptance"
+        and target == "flow_published_schema_contract"
+        else ROOT / "rust/services" / service / "Cargo.toml"
+    )
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest["package"]["name"] != package:
         raise ValueError("foreign_harness_manifest")
@@ -262,7 +294,9 @@ def libtest_harness(package: str, target: str) -> dict:
     }
 
 
-def selection(arguments: list[str]) -> tuple[list[str], str]:
+def selection(
+    arguments: list[str], *, allow_nocapture: bool = False
+) -> tuple[list[str], str]:
     mode = "default"
     selectors = []
     for argument in arguments:
@@ -270,8 +304,10 @@ def selection(arguments: list[str]) -> tuple[list[str], str]:
             if mode != "default":
                 raise ValueError("ambiguous_ignored_selection")
             mode = argument.removeprefix("--")
-        elif argument == "--exact" or re.fullmatch(
-            r"--test-threads=[1-9][0-9]*", argument
+        elif (
+            argument == "--exact"
+            or (argument == "--nocapture" and allow_nocapture)
+            or re.fullmatch(r"--test-threads=[1-9][0-9]*", argument)
         ):
             selectors.append(argument)
         elif re.fullmatch(CASE, argument):
@@ -285,8 +321,12 @@ def list_cases(command: list[str]) -> set[str]:
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode:
         raise ValueError("libtest_discovery_failed")
+    return parse_case_listing(result.stdout)
+
+
+def parse_case_listing(output: str) -> set[str]:
     cases = []
-    for line in result.stdout.splitlines():
+    for line in output.splitlines():
         if match := re.fullmatch(rf"({CASE}): test", line):
             cases.append(match[1])
         elif line and not re.fullmatch(r"\d+ tests?, \d+ benchmarks?", line):
@@ -296,8 +336,35 @@ def list_cases(command: list[str]) -> set[str]:
     return set(cases)
 
 
-def expected_cases(executable: str, arguments: list[str]) -> tuple[set[str], set[str]]:
-    selectors, mode = selection(arguments)
+def verify_flow_roster(executable: str, expected: set[str], ignored: set[str]) -> None:
+    # One shared exact roster is owned by the existing Flow script. Do not
+    # replicate its names in this evidence collector.
+    roster = subprocess.run(
+        ["bash", str(ROOT / "scripts/ci/list-flow-acceptance-cases.sh"), executable],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if roster.returncode or ignored or parse_case_listing(roster.stdout) != expected:
+        raise ValueError("flow_roster_drift")
+
+
+def flow_source_inputs(owner: str) -> list[dict[str, str]]:
+    # These are the runner's direct non-Cargo inputs, not a claim that every
+    # internally spawned process or rendered configuration is inventoried.
+    paths = (
+        "contracts/canvas-worker-consumer-range-oracle.json",
+        "scripts/ci/pull-pinned-dockerhub-image.sh",
+        "scripts/ci/list-flow-acceptance-cases.sh",
+        FLOW_OWNERS[owner],
+    )
+    return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+def expected_cases(
+    executable: str, arguments: list[str], *, allow_nocapture: bool = False
+) -> tuple[set[str], set[str]]:
+    selectors, mode = selection(arguments, allow_nocapture=allow_nocapture)
     listing = [
         executable,
         *selectors,
@@ -369,22 +436,145 @@ def emit(evidence: dict) -> None:
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(encoded + "\n")
-    print(PREFIX + encoded, flush=True)
+    # Libtest can leave an unterminated progress row before cancellation.
+    print("\n" + PREFIX + encoded, flush=True)
 
 
-def run_contract(name: str, command: list[str]) -> int:
+class HarnessInterrupted(Exception):
+    def __init__(self, signum: int):
+        self.signum = signum
+
+
+def settle_owned_child(
+    child: subprocess.Popen, initial_signal: int = signal.SIGTERM
+) -> None:
+    """Stop only this harness's process group, then reap its direct child."""
+    if os.name != "posix":
+        if child.poll() is None:
+            child.terminate()
+            try:
+                child.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                child.kill()
+        child.wait(timeout=5)
+        return
+
+    try:
+        os.killpg(child.pid, initial_signal)
+    except ProcessLookupError:
+        pass
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        child.poll()
+        try:
+            os.killpg(child.pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.05)
+    else:
+        try:
+            os.killpg(child.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        child.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait(timeout=5)
+
+
+def run_owned_harness(
+    command: list[str], result_log: Path, evidence: dict
+) -> tuple[int, str]:
+    """Keep signals attached to the exact libtest and its owned descendants."""
+    child = None
+    previous = {}
+    interrupted = False
+    interruption_signal = signal.SIGTERM
+    spawning = True
+    pending_signal = None
+
+    def interrupt(signum: int, _frame: object) -> None:
+        nonlocal pending_signal
+        if spawning:
+            pending_signal = signum
+            return
+        raise HarnessInterrupted(signum)
+
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous[signum] = signal.signal(signum, interrupt)
+        child = subprocess.Popen(
+            [
+                *command,
+                "--format",
+                "pretty",
+                "--color",
+                "never",
+                "--logfile",
+                str(result_log),
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=os.name == "posix",
+        )
+        spawning = False
+        if pending_signal is not None:
+            raise HarnessInterrupted(pending_signal)
+        output = []
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        while chunk := child.stdout.read1(65536):
+            decoded = decoder.decode(chunk)
+            print(decoded, end="", flush=True)
+            output.append(decoded)
+        remaining = decoder.decode(b"", final=True)
+        print(remaining, end="", flush=True)
+        output.append(remaining)
+        status = child.wait()
+        evidence["command_status"] = status
+        return status, "".join(output)
+    except HarnessInterrupted as error:
+        interrupted = True
+        interruption_signal = error.signum
+        evidence["command_status"] = 128 + error.signum
+        raise
+    finally:
+        for signum in previous:
+            signal.signal(signum, signal.SIG_IGN)
+        try:
+            if child is not None:
+                if interrupted or child.poll() is None:
+                    settle_owned_child(child, interruption_signal)
+                if child.stdout is not None:
+                    child.stdout.close()
+        finally:
+            for signum, handler in previous.items():
+                signal.signal(signum, handler)
+
+
+def run_contract(name: str, command: list[str], owner: str = "contracts") -> int:
+    flow = name == "flow_acceptance"
     evidence = {
         "schema": "marty.rust-db-obligation/v1",
-        "gate": "test-rust-services/contracts",
-        "owner": RUNNER_OWNER,
-        "runtime_fixture_owner": FIXTURE_OWNER,
+        "gate": f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
+        if flow
+        else "test-rust-services/contracts",
+        "owner": FLOW_OWNERS.get(owner) if flow else RUNNER_OWNER,
+        "runtime_fixture_owner": FLOW_FIXTURE_OWNER if flow else FIXTURE_OWNER,
         "result_source": "libtest_logfile",
         "run": {key: os.environ.get(key) for key in RUN_IDENTITY},
         "status": "failed",
     }
     status = 1
     try:
+        if (flow and owner not in FLOW_OWNERS) or (not flow and owner != "contracts"):
+            raise ValueError("invalid_dispatch_owner")
         package, target, inputs = obligation(name)
+        if flow:
+            for item in inputs:
+                item["owner"] = FLOW_OWNERS[owner]
+                if item["provisioner"] != ".github/workflows/ci.yml":
+                    item["provisioner"] = FLOW_OWNERS[owner]
+            evidence["direct_source_inputs"] = flow_source_inputs(owner)
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
@@ -397,9 +587,15 @@ def run_contract(name: str, command: list[str]) -> int:
         # Never probe --list on custom harnesses, which may ignore the flag and
         # execute their bodies. All current dispatches use standard libtest.
         evidence["harness"] = libtest_harness(package, target)
-        selection(command[1:])  # Validate before allowing arguments into evidence.
+        selection(command[1:], allow_nocapture=flow)  # Validate before evidence.
         evidence["selection_arguments"] = command[1:]
-        expected, ignored = expected_cases(command[0], command[1:])
+        expected, ignored = expected_cases(
+            command[0], command[1:], allow_nocapture=flow
+        )
+        if flow:
+            if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
+                raise ValueError("missing_published_schema_gate")
+            verify_flow_roster(command[0], expected, ignored)
         evidence["selected"] = sorted(expected)
         evidence["selected_ignored"] = sorted(ignored)
         if not expected:
@@ -407,39 +603,16 @@ def run_contract(name: str, command: list[str]) -> int:
         for item in inputs:
             if item["requirement"] == "required" and not os.environ.get(item["name"]):
                 raise ValueError("missing_required_runtime_input")
-        output = []
         # Preserve every selection/serialism argument and all live raw output.
         # A separate libtest result stream identifies case completion even when
         # inherited child stdout splits the human `test name ... ok` framing.
         with tempfile.TemporaryDirectory(prefix="marty-libtest-results-") as directory:
             result_log = Path(directory) / "results.log"
-            with subprocess.Popen(
-                [
-                    *command,
-                    "--format",
-                    "pretty",
-                    "--color",
-                    "never",
-                    "--logfile",
-                    str(result_log),
-                ],
-                stdout=subprocess.PIPE,
-            ) as child:
-                decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-                # Forward partial progress immediately, like the outer tee.
-                while chunk := child.stdout.read1(65536):
-                    decoded = decoder.decode(chunk)
-                    print(decoded, end="", flush=True)
-                    output.append(decoded)
-                remaining = decoder.decode(b"", final=True)
-                print(remaining, end="", flush=True)
-                output.append(remaining)
-                status = child.wait()
-            evidence["command_status"] = status
+            status, output = run_owned_harness(command, result_log, evidence)
             if not result_log.is_file():
                 raise ValueError("missing_libtest_result_log")
             result_lines = result_log.read_text(encoding="utf-8").splitlines()
-        lines = "".join(output).splitlines()
+        lines = output.splitlines()
         evidence["observed_cases"] = [
             {"name": name, "outcome": outcome}
             for name, outcome in case_results(result_lines).items()
@@ -448,6 +621,9 @@ def run_contract(name: str, command: list[str]) -> int:
         if status != 0 or evidence["failed"] or evidence["summary_status"] != "ok":
             raise ValueError("libtest_execution_failed")
         evidence["status"] = "ok"
+    except HarnessInterrupted as error:
+        status = 128 + error.signum
+        evidence["reason"] = "interrupted"
     except (OSError, ValueError, KeyError, IndexError) as error:
         # Exception text can contain filesystem/environment values. Only our
         # fixed reason codes are evidence; the unchanged child stream has logs.
@@ -467,10 +643,11 @@ def run_contract(name: str, command: list[str]) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True)
+    parser.add_argument("--owner", default="contracts")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
-    return run_contract(args.name, command)
+    return run_contract(args.name, command, args.owner)
 
 
 if __name__ == "__main__":

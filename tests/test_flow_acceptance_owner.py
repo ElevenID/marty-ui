@@ -38,15 +38,23 @@ def test_flow_cases_have_one_required_source_and_runner_owner():
         assert len(re.findall(rf"(?:async )?fn {name}\(\)", nested_source)) == 1
         assert runner.count(f"public_startup::{name}: test'") == 0
         assert flow_inventory.count(f"public_startup::{name}: test'") == 1
-    assert 'flow_tests=$(bash "$(dirname "${BASH_SOURCE[0]}")/list-flow-acceptance-cases.sh" "$flow_executable")' in runner
+    assert (
+        'flow_tests=$(bash "$(dirname "${BASH_SOURCE[0]}")/list-flow-acceptance-cases.sh" "$flow_executable")'
+        in runner
+    )
+    assert "--name flow_acceptance --owner canvas --" in runner
     assert '"$flow_executable" --nocapture --test-threads=4' in runner
-    assert "Flow executable changed its exact nine-case owner inventory" in flow_inventory
+    assert (
+        "Flow executable changed its exact nine-case owner inventory" in flow_inventory
+    )
     assert "flow_status == 0" in runner
     flow_only = (ROOT / "scripts/ci/run-flow-acceptance-contracts.sh").read_text()
     assert "list-flow-acceptance-cases.sh" in flow_only
     assert "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1" in flow_only
     assert "MARTY_ISSUANCE_TEST_BINARY=" in flow_only
     assert "--nocapture --test-threads=4" in flow_only
+    assert "--name flow_acceptance --owner flow-pr --" in flow_only
+    assert "rust_db_obligations.py" in flow_only and "rust_db_obligations.py" in runner
     assert "9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out" in flow_only
 
 
@@ -57,7 +65,9 @@ def test_shared_fixtures_keep_canvas_unit_tests_once_and_release_scope():
     assert "marty-flow" in flow_manifest["dev-dependencies"]
     assert "features" not in canvas_manifest
     assert "features" not in flow_manifest
-    redis = (ROOT / "rust/services/issuance/tests/support/base_runtime_redis.rs").read_text()
+    redis = (
+        ROOT / "rust/services/issuance/tests/support/base_runtime_redis.rs"
+    ).read_text()
     gateway = (
         ROOT / "rust/services/issuance/tests/support/didcomm_gateway_replay.rs"
     ).read_text()
@@ -83,11 +93,11 @@ def test_linux_only_canvas_cases_explain_cross_platform_inventory():
     diagnostics = (CANVAS / "tests/support/runtime_failure_diagnostics.rs").read_text()
     rendered = (CANVAS / "tests/support/rendered_base_process.rs").read_text()
     assert re.search(
-        r'#\[cfg\(unix\)\]\s*#\[tokio::test\]\s*async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly',
+        r"#\[cfg\(unix\)\]\s*#\[tokio::test\]\s*async fn canvas_mirror_worker_enabled_packaged_main_runs_and_shuts_down_cleanly",
         source,
     )
     assert re.search(
-        r'#\[cfg\(unix\)\]\s*#\[test\]\s*fn linked_directory_marker_and_output_are_refused',
+        r"#\[cfg\(unix\)\]\s*#\[test\]\s*fn linked_directory_marker_and_output_are_refused",
         diagnostics,
     )
     assert re.search(
