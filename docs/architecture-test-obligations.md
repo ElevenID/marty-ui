@@ -331,6 +331,16 @@ the parent cases. This still does not prove assertion reachability, the
 internally provisioned PostgreSQL/Redis state, or complete rendered/child
 input closure, and grants no new selection authority.
 
+The recorder now also hashes the first observed non-Cargo hop in the rendered
+Flow case: the Python renderer invoked by the Rust support module and its two
+direct `runpy` Compose-owner helpers. A static check rejects a changed literal
+Rust renderer argument or a changed set of `runpy.run_path` calls in that
+renderer; it does not prove that those calls were reached at runtime. The
+record is deliberately labeled incomplete: those helpers load further Python
+owners and rendered Compose profiles, while the child also consumes generated
+loader files. The added hashes improve input visibility but neither prove
+transitive closure nor change the PR, merge-group, or release selector.
+
 ## Issuance-to-Revocation Profile runtime input
 
 Issuance has two independent non-Cargo transports to Revocation Profile. The

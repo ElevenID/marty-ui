@@ -7,6 +7,7 @@ harness execution, not proof that every assertion inside a test was reached.
 """
 
 import argparse
+import ast
 import codecs
 import hashlib
 import json
@@ -578,6 +579,65 @@ def flow_source_inputs(owner: str) -> list[dict[str, str]]:
     return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
 
 
+def flow_rendered_first_hop_inputs() -> list[dict[str, str]]:
+    # The compiled Flow test invokes this Python renderer, which loads two
+    # helpers with runpy. This is only the first non-Cargo hop: the helpers
+    # read further scripts and Compose models, so it cannot authorize a skip.
+    paths = (
+        "scripts/render_flow_native_runtime_fixture.py",
+        "scripts/test_base_native_issuance_compose.py",
+        "scripts/test_selfhost_native_owner_compose.py",
+    )
+    caller = (
+        ROOT / "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs"
+    ).read_text(encoding="utf-8")
+    renderer = (ROOT / paths[0]).read_text(encoding="utf-8")
+    if re.findall(r'\.arg\(root\(\)\.join\("([^"]+)"\)\)', caller) != [paths[0]]:
+        raise ValueError("flow_renderer_source_drift")
+
+    try:
+        renderer_tree = ast.parse(renderer)
+    except SyntaxError as error:
+        raise ValueError("flow_renderer_source_drift") from error
+    calls = sorted(
+        (
+            node
+            for node in ast.walk(renderer_tree)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "runpy"
+                and node.func.attr == "run_path"
+            )
+        ),
+        key=lambda node: (node.lineno, node.col_offset),
+    )
+    imports = []
+    for node in calls:
+        if node.keywords or len(node.args) != 1:
+            raise ValueError("flow_renderer_source_drift")
+        value = node.args[0]
+        if not (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Name)
+            and value.func.id == "str"
+            and len(value.args) == 1
+            and not value.keywords
+            and isinstance(value.args[0], ast.BinOp)
+            and isinstance(value.args[0].op, ast.Div)
+            and isinstance(value.args[0].left, ast.Name)
+            and value.args[0].left.id == "ROOT"
+            and isinstance(value.args[0].right, ast.Constant)
+            and isinstance(value.args[0].right.value, str)
+        ):
+            raise ValueError("flow_renderer_source_drift")
+        imports.append(value.args[0].right.value)
+    if imports != list(paths[1:]):
+        raise ValueError("flow_renderer_source_drift")
+    return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
 def selfhost_source_inputs(owner: str) -> list[dict[str, str]]:
     # Direct runner/pin inputs only. The caller separately validates the local
     # image ID; this is not retained image provenance or a full source graph.
@@ -909,6 +969,10 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 if item["provisioner"] != ".github/workflows/ci.yml":
                     item["provisioner"] = FLOW_OWNERS[owner]
             evidence["direct_source_inputs"] = flow_source_inputs(owner)
+            evidence["observed_first_hop_source_inputs"] = (
+                flow_rendered_first_hop_inputs()
+            )
+            evidence["transitive_source_closure"] = "incomplete"
         if selfhost:
             evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
         if canvas:
