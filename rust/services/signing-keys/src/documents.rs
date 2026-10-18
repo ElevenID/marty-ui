@@ -7,6 +7,7 @@ use base64::Engine;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use marty_crypto::certificate::{get_certificate_info, load_certificate_pem};
 use marty_crypto::jwk::certificate_pem_to_jwk;
+use marty_key_material_policy::contains_populated_private_jwk_fields;
 use percent_encoding::percent_decode_str;
 use redis::{aio::ConnectionManager, AsyncCommands};
 use regex::Regex;
@@ -16,8 +17,6 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::{private_material::contains_private_key, registry::RotationLease};
-
-const PRIVATE_JWK_FIELDS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"];
 
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum DocumentError {
@@ -967,14 +966,6 @@ pub fn sanitize_public_jwk(
             "provider did not return a usable public JWK".to_string(),
         ));
     }
-    if PRIVATE_JWK_FIELDS
-        .iter()
-        .any(|field| nested.get(*field).is_some_and(|value| !value.is_null()))
-    {
-        return Err(DocumentError::Invalid(
-            "provider response contains private key material".to_string(),
-        ));
-    }
     let mut sanitized = nested
         .iter()
         .filter(|(_, value)| !value.is_null())
@@ -1156,11 +1147,7 @@ pub fn update_jwks_document(
         .updates
         .as_object()
         .ok_or_else(|| DocumentError::Invalid("updates must be a JSON object".to_string()))?;
-    if PRIVATE_JWK_FIELDS
-        .iter()
-        .any(|field| updates.get(*field).is_some_and(|value| !value.is_null()))
-        || contains_private_key(&request.updates)
-    {
+    if contains_populated_private_jwk_fields(updates) || contains_private_key(&request.updates) {
         return Err(DocumentError::Invalid(
             "JWKS update contains private key material".to_string(),
         ));
@@ -1763,6 +1750,85 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sanitized["kid"], "key-1");
+    }
+
+    #[test]
+    fn provider_sanitizer_preserves_private_member_and_null_behavior() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"] {
+            for value in [
+                json!(null),
+                json!(""),
+                json!(false),
+                json!(0),
+                json!([]),
+                json!({}),
+                json!("secret"),
+            ] {
+                let mut jwk = json!({"kty":"RSA", "n":"public-n", "e":"AQAB"});
+                jwk[member] = value.clone();
+                for wrapper in [
+                    None,
+                    Some("public_jwk"),
+                    Some("publicKeyJwk"),
+                    Some("jwk"),
+                    Some("key"),
+                ] {
+                    let candidate = if let Some(wrapper) = wrapper {
+                        let mut object = Map::new();
+                        object.insert(wrapper.into(), jwk.clone());
+                        Value::Object(object)
+                    } else {
+                        jwk.clone()
+                    };
+                    let result = sanitize_public_jwk(&candidate, Some("key-1"));
+                    if value.is_null() {
+                        let public = result.unwrap();
+                        assert!(public.get(member).is_none());
+                        assert_eq!(public["kid"], "key-1");
+                        assert_eq!(public["n"], "public-n");
+                    } else {
+                        assert_eq!(
+                            result.unwrap_err(),
+                            DocumentError::Invalid(
+                                "provider response contains private key material".into()
+                            )
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jwks_updates_reject_populated_private_members_without_kty() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"] {
+            for value in [
+                json!(null),
+                json!(""),
+                json!(false),
+                json!(0),
+                json!([]),
+                json!({}),
+                json!("secret"),
+            ] {
+                let document =
+                    json!({"keys":[{"kid":"key-1", "kty":"RSA", "n":"public-n", "e":"AQAB"}]});
+                let mut updates = json!({"status":"active"});
+                updates[member] = value.clone();
+                let result = update_jwks_document(document, "key-1", UpdateJwkRequest { updates });
+                if value.is_null() {
+                    let (document, response) = result.unwrap();
+                    assert_eq!(response.updated, ["status"]);
+                    assert_eq!(document["keys"][0]["status"], "active");
+                    assert!(document["keys"][0].get(member).is_none());
+                } else {
+                    assert_eq!(
+                        result.unwrap_err(),
+                        DocumentError::Invalid("JWKS update contains private key material".into())
+                    );
+                }
+            }
+        }
     }
 
     #[test]

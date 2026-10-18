@@ -10,19 +10,28 @@ pub fn parse(bytes: &[u8]) -> Option<LosslessJson> {
 }
 
 pub(crate) fn parse_tree(bytes: &[u8]) -> Option<JsonTree> {
-    parse_with_numbers(bytes, false)
+    parse_with_numbers(bytes, false, false)
 }
 
 pub(crate) fn parse_json_tree(bytes: &[u8]) -> Option<JsonTree> {
-    parse_with_numbers(bytes, true)
+    parse_with_numbers(bytes, true, false)
 }
 
-fn parse_with_numbers(bytes: &[u8], literal_numbers: bool) -> Option<JsonTree> {
+pub(crate) fn parse_json_tree_preserving_duplicates(bytes: &[u8]) -> Option<JsonTree> {
+    parse_with_numbers(bytes, true, true)
+}
+
+fn parse_with_numbers(
+    bytes: &[u8],
+    literal_numbers: bool,
+    preserve_duplicates: bool,
+) -> Option<JsonTree> {
     let points = decode(bytes)?;
     let mut parser = Parser {
         points,
         position: 0,
         literal_numbers,
+        preserve_duplicates,
     };
     let value = parser.value()?;
     parser.space();
@@ -112,6 +121,7 @@ struct Parser {
     points: Vec<u32>,
     position: usize,
     literal_numbers: bool,
+    preserve_duplicates: bool,
 }
 
 impl Parser {
@@ -231,7 +241,9 @@ impl Parser {
                         key,
                     } => {
                         let key = std::mem::take(key);
-                        if let Some(index) = positions.get(&key).copied() {
+                        if self.preserve_duplicates {
+                            entries.push((key, id));
+                        } else if let Some(index) = positions.get(&key).copied() {
                             entries[index] = (key, id);
                         } else {
                             positions.insert(key.clone(), entries.len());
@@ -522,6 +534,33 @@ mod tests {
         assert_eq!(entries[1].0.as_scalar(), Some("a"));
         assert_eq!(entries[2].0.codepoints().collect::<Vec<_>>(), [0xd800]);
         assert_eq!(tree.node(entries[2].1), &JsonNode::Scalar(json!(5)));
+    }
+
+    #[test]
+    fn admission_parser_preserves_duplicate_values_without_changing_default_parsing() {
+        let raw = br#"{"metadata":{"d":"secret","\u0064":null},"metadata":null}"#;
+        let ordinary = JsonTree::from_json_bytes(raw).unwrap();
+        assert_eq!(
+            ordinary.to_scalar(false, false).unwrap(),
+            json!({"metadata":null})
+        );
+
+        let inspected = JsonTree::from_json_bytes_preserving_duplicates(raw).unwrap();
+        let JsonNode::Object(entries) = inspected.node(inspected.root()) else {
+            panic!("expected object")
+        };
+        assert_eq!(entries.len(), 2);
+        let JsonNode::Object(nested) = inspected.node(entries[0].1) else {
+            panic!("expected nested object")
+        };
+        assert_eq!(nested.len(), 2);
+        assert_eq!(nested[0].0.as_scalar(), Some("d"));
+        assert_eq!(nested[1].0.as_scalar(), Some("d"));
+        assert_eq!(
+            inspected.node(nested[0].1),
+            &JsonNode::Text(PythonText::from("secret".to_owned()))
+        );
+        assert_eq!(inspected.node(nested[1].1), &JsonNode::Scalar(Value::Null));
     }
 
     #[test]
