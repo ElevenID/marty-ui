@@ -10,7 +10,57 @@ const {
   employeePolicyPayload,
   employeeTrustProfilePayload,
   requireConfigurationBinding,
+  approveAndIssue,
 } = require('./audit-beta-employee-access');
+
+test('employee approval and issuance wait for native actions and reject applicant self-claim', async () => {
+  for (const wrongEndpoint of [false, true]) {
+    const events = [];
+    const responseQueue = [];
+    const org = process.env.BETA_AUDIT_ORG_ID || require('./beta-credential-contract').DEFAULT_BETA_ORGANIZATION_ID;
+    const locator = name => ({
+      async waitFor() { events.push(`visible:${name}`); },
+      async fill() { events.push(`fill:${name}`); },
+      getByRole(_role, options) { return locator(options.name); },
+      async click() {
+        events.push(`click:${name}`);
+        if (name === 'Confirm Approval') responseQueue.shift()('approve');
+        if (name === 'Display OID4VCI Invite') responseQueue.shift()('issue');
+      },
+    });
+    const page = {
+      getByText: name => locator(String(name)),
+      getByRole: (_role, options) => locator(options.name),
+      async waitForTimeout() {},
+      waitForResponse(predicate) {
+        events.push('listen');
+        return new Promise(resolve => responseQueue.push(action => {
+          const url = action === 'issue' && wrongEndpoint
+            ? 'https://beta.elevenidllc.com/v1/me/applications/app-1/claim'
+            : `https://beta.elevenidllc.com/v1/organizations/${org}/applicants/app-1/${action}`;
+          const response = {
+            url: () => url,
+            request: () => ({method: () => 'POST'}), ok: () => true, status: () => 200,
+            json: async () => action === 'approve' ? {status: 'APPROVED'} : {credential_offer_uri: 'synthetic-offer'},
+          };
+          assert.equal(predicate(response), true);
+          resolve(response);
+        }));
+      },
+    };
+    const recording = {async hold(action, phase) {events.push(`hold:${action}:${phase}`);}};
+    if (wrongEndpoint) {
+      await assert.rejects(approveAndIssue(page, 'app-1', recording), /incorrectly called applicant self-claim/);
+    } else {
+      const result = await approveAndIssue(page, 'app-1', recording);
+      assert.equal(result.nativeAdminControlsUsed, true);
+      assert.equal(result.approved.status, 'APPROVED');
+    }
+    assert.ok(events.indexOf('fill:Approval note (optional)') < events.indexOf('click:Confirm Approval'));
+    assert.ok(events.indexOf('listen') < events.indexOf('click:Confirm Approval'));
+    assert.ok(events.lastIndexOf('listen') < events.indexOf('click:Display OID4VCI Invite'));
+  }
+});
 
 const source = {
   issuer_did: 'did:web:beta.example:orgs:issuer',

@@ -8,6 +8,7 @@ const { chromium } = require('@playwright/test');
 
 const {
   ensureActiveRevocationProfile,
+  createLifecycleRecording,
   findCredentialRow,
   getCredentialStatus,
   login,
@@ -43,6 +44,7 @@ const {
   createArtifactDir,
   finalizeVideo,
   showStep,
+  showVerificationResult,
 } = require('./demo-recording');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -376,16 +378,40 @@ async function createAndSubmitApplication(page, applicationTemplateId, employeeI
   return { created, submitted, formData };
 }
 
-async function approveAndIssue(page, applicationId) {
+async function approveAndIssue(page, applicationId, recording) {
   const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
-  const lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire reviewer lock');
-  const approved = await requireJson(page, `${root}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({ notes: 'D-04 release qualification approval' }),
-  }, 'Approve employee application');
-  await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release reviewer lock');
-  const issued = await requireJson(page, `${root}/issue`, { method: 'POST' }, 'Issue employee credential');
-  return { lock, approved, issued };
+  // The actual review page acquires the reviewer lock on mount.
+  await page.getByText('You have this open', {exact: true}).waitFor({state: 'visible', timeout: 30000});
+  const approve = page.getByRole('button', {name: 'Approve', exact: true});
+  await recording.hold('approve', 'button', approve);
+  await approve.click();
+  const dialog = page.getByRole('dialog', {name: 'Approve Application', exact: true});
+  await dialog.waitFor({state: 'visible'});
+  await dialog.getByRole('textbox', {name: 'Approval note (optional)', exact: true})
+    .fill('Synthetic scenario: Jamie has completed onboarding and is approved for employee access.');
+  await recording.hold('approve', 'reason', dialog, 3200);
+  const approvalResponse = page.waitForResponse(response => response.url().endsWith(`${root}/approve`)
+    && response.request().method() === 'POST');
+  await dialog.getByRole('button', {name: 'Confirm Approval', exact: true}).click();
+  const response = await approvalResponse;
+  const approved = await response.json();
+  if (!response.ok()) throw new Error(`Native employee approval failed: HTTP ${response.status()}`);
+  await dialog.waitFor({state: 'hidden'});
+  await recording.hold('approve', 'native-result', page.getByText(/Application approved\. Click/), 2600);
+  const invite = page.getByRole('button', {name: 'Display OID4VCI Invite', exact: true});
+  await recording.hold('issue', 'button', invite, 2400);
+  const issuanceResponse = page.waitForResponse(result => result.request().method() === 'POST'
+    && (result.url().endsWith(`${root}/issue`)
+      || result.url().endsWith(`/v1/me/applications/${encodeURIComponent(applicationId)}/claim`)));
+  await invite.click();
+  const issuance = await issuanceResponse;
+  if (!issuance.url().endsWith(`${root}/issue`)) {
+    throw new Error(`Admin invite incorrectly called applicant self-claim: HTTP ${issuance.status()}`);
+  }
+  const issued = await issuance.json();
+  if (!issuance.ok()) throw new Error(`Native employee issuance failed: HTTP ${issuance.status()}`);
+  await page.waitForTimeout(RECORD_VIDEO ? 3200 : 0);
+  return { lockAcquired: true, approved, issued, nativeAdminControlsUsed: true };
 }
 
 async function cleanup(page, applicationId, credentialId) {
@@ -444,6 +470,8 @@ async function main() {
     });
     applicantContext = await browser.newContext({ viewport: VIDEO_SIZE, ignoreHTTPSErrors: LOCAL_BETA_PROXY });
     const page = await adminContext.newPage();
+    const recording = createLifecycleRecording(page);
+    report.actionEvidence = recording.evidence;
     adminPage = page;
     const walletPage = await adminContext.newPage();
     const applicantPage = await applicantContext.newPage();
@@ -504,10 +532,11 @@ async function main() {
       timeout: 60_000,
     });
     await page.getByText(employeeId).first().waitFor({ state: 'visible', timeout: 30_000 });
-    await showEmployeeStep(page, 'Employee application submitted', 'A real applicant submitted the employee fields and the organization review queue requires a decision.');
+    await showEmployeeStep(page, 'Review Jamie’s employee application', 'Synthetic applicant fields were submitted through the applicant API. The administrator now uses the real portal to approve onboarding and create the wallet invite.');
 
-    const approval = await approveAndIssue(page, applicationId);
-    report.application.lockAcquired = Boolean(approval.lock?.id);
+    const approval = await approveAndIssue(page, applicationId, recording);
+    report.application.lockAcquired = approval.lockAcquired;
+    report.application.nativeAdminControlsUsed = approval.nativeAdminControlsUsed;
     report.application.approvalOk = String(approval.approved?.status || '').toUpperCase() === 'APPROVED';
     report.application.approvedStatus = approval.approved?.status || null;
     const offerUri = approval.issued?.credential_offer_uri
@@ -517,8 +546,7 @@ async function main() {
       issueOk: Boolean(offerUri),
       vct: configuration.credential.vct,
     };
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await showEmployeeStep(page, 'Employee approved and credential offered', 'The reviewer lock, approval transition, and application-bound Rust issuance flow all completed.');
+    await showEmployeeStep(page, 'Jamie’s employee credential is ready', 'The administrator approved the application and generated a credential invite using the portal. Jamie will accept it in the first-party wallet.');
     if (!offerUri) throw new Error('Employee issuance returned no credential offer');
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
@@ -545,6 +573,10 @@ async function main() {
       result: activeVerification.result,
     };
     await showEmployeeStep(page, 'Active employee access allowed', 'The status-aware access policy returned an explicit allow decision for the active credential.');
+    await showVerificationResult(page, activeVerification.result, {
+      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: 'D-04 active employee access',
+      evaluatedState: activeStatus.lifecycleStatus, comparison: 'Jamie’s active credential',
+    });
 
     await page.goto(`${BETA_ORIGIN}/console/org/operate/issuance`, {
       waitUntil: 'domcontentloaded',
@@ -555,7 +587,8 @@ async function main() {
       page,
       row,
       'suspend',
-      'D-04 employee access suspension qualification',
+      'Synthetic scenario: temporarily suspend access during a security investigation.',
+      recording,
     );
     const suspendedStatus = await getCredentialStatus(page, credentialId);
     const suspendedVerification = await verify(page, walletPage, 'D-04 suspended employee access', {
@@ -569,6 +602,10 @@ async function main() {
       result: suspendedVerification.result,
     };
     await showEmployeeStep(page, 'Suspended employee access denied', 'The same credential now receives an explicit deny decision because its lifecycle status is suspended.');
+    await showVerificationResult(page, suspendedVerification.result, {
+      enabled: RECORD_VIDEO, actor: 'Status-aware test verifier', testId: 'D-04 suspended employee access',
+      evaluatedState: suspendedStatus.lifecycleStatus, comparison: 'Same credential after admin suspension',
+    });
 
     report.behaviorAssertions = employeeAccessBehaviorAssertions(report);
     report.cleanup = await cleanup(page, applicationId, credentialId);
@@ -601,6 +638,10 @@ async function main() {
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
+  } catch (error) {
+    report.releaseReady = false;
+    report.error = redact(error.message || String(error));
+    throw error;
   } finally {
     if (!cleanupComplete && adminPage && (applicationId || credentialId)) {
       await cleanup(adminPage, applicationId, credentialId)
@@ -610,6 +651,8 @@ async function main() {
     if (applicantContext) await applicantContext.close().catch(() => {});
     if (adminContext) await adminContext.close().catch(() => {});
     await browser.close();
+    report.finishedAt = report.finishedAt || new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
   }
 }
 
@@ -621,6 +664,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  approveAndIssue,
   employeeApplicationTemplatePayload,
   employeeCredentialPayload,
   employeeFlowPayload,
