@@ -131,6 +131,14 @@ pending, cancellation was requested only after confirming the old run's head
 was not protected main. GitHub now reports the old run terminal `cancelled`;
 its evidence is preserved. The new exact-main run began scheduling jobs at
 `58e92ace...`. Do not count the cancelled duplicate as release qualification.
+The existing clean WSL v1.1.257 source repository fetched `58e92ace...`
+without changing its detached older checkout, so a separate exact-source
+worktree can be created after the signed release. C: free space fell to about
+9.6 GiB during concurrent local work. `docker system df` reports substantial
+reclaimable containers/volumes, but they have not been attributed to safe
+owners; do not prune shared or evidence-bearing Docker state. D: still has
+about 55 GiB free. Resolve storage and WSL integration before the fresh
+installed acceptance, preserving the running production project.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
