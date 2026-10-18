@@ -32,7 +32,8 @@ def run_filter(sample: str, phase: str = "release_binaries") -> subprocess.Compl
     )
 
 
-def test_public_builder_emits_only_allowlisted_numeric_cache_counters() -> None:
+@pytest.mark.parametrize("phase", ["release_binaries", "dependency_cook", "recovery_probe"])
+def test_public_builder_emits_only_allowlisted_numeric_cache_counters(phase: str) -> None:
     sample = (
         "Compile requests                    3166\n"
         "Cache hits                          2247\n"
@@ -43,11 +44,11 @@ def test_public_builder_emits_only_allowlisted_numeric_cache_counters() -> None:
         "Base directories                /private/workspace\n"
         "Cache hits rate                   100.00 %\n"
     )
-    result = run_filter(sample)
+    result = run_filter(sample, phase)
     assert result.returncode == 0, result.stderr
     assert result.stdout.startswith(MARKER)
     assert json.loads(result.stdout.removeprefix(MARKER)) == {
-        "phase": "release_binaries",
+        "phase": phase,
         "counters": {
             "compile_requests": 3166,
             "cache_hits": 2247,

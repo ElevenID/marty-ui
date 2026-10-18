@@ -7,6 +7,16 @@ This is the initial group inventory for A0, the exact obligation record for the 
 
 ## Existing groups and ownership constraints
 
+The coordinated integration-secret restore probe now flushes fixed-label progress
+and per-command preparation timing without changing its eight Cargo invocations.
+`python scripts/probe_integration_secret_coordinated_restore.py --prepare-rust-only`
+calls that same preparation owner without starting Docker or TLS fixtures; it is
+not recovery qualification. The default command retains every live PostgreSQL,
+Raft, signing, DIDComm and HAIP phase. CI keeps the tiny timing JSONL and optional
+allowlisted cache counters for seven days, including failed runs. Cache counters
+are sampled after the complete recovery probe, not attributed to an individual
+Cargo command. This adds visibility, not warming, artifact reuse or a speed claim.
+
 | Group / current entry point | Obligations and inputs | Execution / relocation constraints |
 | --- | --- | --- |
 | Workspace behavior: contracts lane, `cargo test --locked --workspace` | Service/domain behavior, embedded contract corpora, explicit test targets and grouped behavior modules | Some tests return early without configured environments; a successful default workspace run is not evidence of live acceptance. Preserve explicit later invocations. |

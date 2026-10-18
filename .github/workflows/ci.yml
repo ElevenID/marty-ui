@@ -925,10 +925,30 @@ jobs:
       - name: Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+          MARTY_RECOVERY_PREPARATION_TIMING_FILE: ${{ runner.temp }}/rust-recovery-preparation.jsonl
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0
           CARGO_PROFILE_TEST_DEBUG: 0
         run: python3 scripts/probe_integration_secret_coordinated_restore.py
+      - name: Record optional recovery compiler cache outcomes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 10s sccache --show-stats 2>/dev/null |
+            awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk |
+            tee "$RUNNER_TEMP/rust-recovery-cache-counters.jsonl" || true
+      - name: Retain recovery preparation evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-recovery-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rust-recovery-preparation.jsonl
+            ${{ runner.temp }}/rust-recovery-cache-counters.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
