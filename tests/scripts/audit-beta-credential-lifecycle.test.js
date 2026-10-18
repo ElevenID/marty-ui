@@ -8,6 +8,10 @@ const test = require('node:test');
 
 const {
   candidateUiFileForRequest,
+  createLifecycleRecording,
+  LIFECYCLE_DEMO_REASONS,
+  performLifecycleAction,
+  renewCredential,
   dismissLifecycleUpdatedNotification,
   findCredentialRow,
   requireDismissedLifecycleNotification,
@@ -168,4 +172,65 @@ test('renewal waits for the one successor linked to the exact predecessor', () =
     () => selectRenewedCredential([...records, { ...records[2], id: 'duplicate' }], 'template', 'source'),
     /multiple successor/,
   );
+});
+
+
+test('recording cadence records monotonic observation boundaries and stays inert outside recordings', async () => {
+  let clock = 1000;
+  const calls = [];
+  const page = {waitForTimeout: async ms => {calls.push(ms); clock += ms;}};
+  const locator = {waitFor: async () => calls.push('visible'), scrollIntoViewIfNeeded: async () => calls.push('scroll')};
+  const recording = createLifecycleRecording(page, {enabled: true, now: () => clock});
+  await recording.hold('suspend', 'reason', locator, 3200);
+  assert.deepEqual(calls, ['visible', 'scroll', 3200]);
+  assert.deepEqual(recording.evidence.events.map(e => [e.phase, e.elapsedSeconds]),
+    [['reason-visible', 0], ['reason-hold-end', 3.2]]);
+  assert.equal(recording.evidence.videoFrameAlignmentEstablished, false);
+  assert.equal(recording.evidence.editorMustAlignToSourceFrames, true);
+  const disabled = createLifecycleRecording({}, {enabled: false});
+  await disabled.hold('suspend', 'reason', null);
+  await disabled.explain('suspend');
+  disabled.mark('suspend', 'confirm');
+  assert.deepEqual(disabled.evidence.events, []);
+});
+
+test('lifecycle recording shows the real dialog reason before confirm and waits for the actual resulting status', async () => {
+  for (const [action, state] of [['suspend', 'suspended'], ['reinstate', 'active'], ['revoke', 'revoked']]) {
+    const calls = [];
+    const reason = LIFECYCLE_DEMO_REASONS[action];
+    const dialog = {
+      getByRole: (role) => role === 'textbox'
+        ? {fill: async value => calls.push(['fill', value])}
+        : {click: async () => calls.push('confirm')},
+      waitFor: async () => calls.push('dialog-hidden'),
+    };
+    const row = {
+      getByRole: () => ({click: async () => calls.push('open-dialog')}),
+      getByText: pattern => {assert.ok(pattern.test(state)); return {actualStatus: state};},
+    };
+    const page = {
+      waitForResponse: () => Promise.resolve({ok: () => true, status: () => 200, json: async () => ({status: state})}),
+      getByRole: () => dialog,
+    };
+    const recording = {explain: async () => calls.push('explain'),
+      hold: async (_action, phase, target) => calls.push(['hold', phase, target.actualStatus || null]),
+      mark: (_action, phase) => calls.push(phase)};
+    const result = await performLifecycleAction(page, row, action, reason, recording);
+    assert.equal(result.ok, true);
+    assert.deepEqual(calls, ['explain', ['hold', 'button', null], 'button-click', 'open-dialog',
+      ['hold', 'dialog', null], ['fill', reason], ['hold', 'reason', null], 'confirm-click', 'confirm',
+      'dialog-hidden', 'response-success', ['hold', 'resulting-status', state]]);
+    assert.match(reason, /^Synthetic scenario:/);
+  }
+});
+
+test('renewal uses the real direct button without inventing a dialog or reason field', async () => {
+  const calls = [];
+  const page = {waitForResponse: () => Promise.resolve({ok: () => true, status: () => 200,
+    json: async () => ({credential_offer_uri: 'fixture-offer', transaction_id: 'fixture'})})};
+  const row = {getByRole: () => ({click: async () => calls.push('click')})};
+  const recording = {explain: async () => calls.push('explain'), hold: async () => calls.push('hold'),
+    mark: (_action, phase, detail) => calls.push([phase, detail])};
+  assert.equal((await renewCredential(page, row, recording)).ok, true);
+  assert.deepEqual(calls, ['explain', 'hold', ['button-click', {confirmationDialog: false, reasonField: false}], 'click']);
 });
