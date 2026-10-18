@@ -66,7 +66,7 @@ function SectionCard({ title, icon, children }) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export default function IssuingSection({ applicationId, applicationStatus }) {
+export default function IssuingSection({ organizationId, applicationId, applicationStatus }) {
   const protocols = getAvailableProtocols();
   const singleProtocol = protocols.length === 1;
 
@@ -87,7 +87,7 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await selectedProtocol.generateOffer(applicationId);
+      const data = await selectedProtocol.generateOffer(applicationId, { organizationId });
       if (!data?.offer_url) {
         setError('Credential offer URI was not returned. The issuance service may be unavailable. Please try again.');
         return;
@@ -99,7 +99,7 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     } finally {
       setLoading(false);
     }
-  }, [selectedProtocol, applicationId]);
+  }, [selectedProtocol, organizationId, applicationId]);
 
   // ── Regenerate (e.g. after expiry) ──────────────────────────────────────
 
@@ -108,14 +108,14 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await selectedProtocol.generateOffer(applicationId);
+      const data = await selectedProtocol.generateOffer(applicationId, { organizationId });
       setOfferData(data);
     } catch (err) {
       setError(err.message || 'Failed to regenerate issuance invite');
     } finally {
       setLoading(false);
     }
-  }, [selectedProtocol, applicationId]);
+  }, [selectedProtocol, organizationId, applicationId]);
 
   const REISSUE_STATUSES = ['issued', 'credentialed'];
   const isReissue = REISSUE_STATUSES.includes(applicationStatus);

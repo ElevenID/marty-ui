@@ -777,7 +777,7 @@ export default function ApplicationReviewPage() {
         )}
 
         {/* Approved – credential issuance section */}
-        <IssuingSection applicationId={applicationId} applicationStatus={application.status} />
+        <IssuingSection organizationId={organizationId} applicationId={applicationId} applicationStatus={application.status} />
 
         {/* Needs-info state */}
         {application.status === 'needs_info' && (
