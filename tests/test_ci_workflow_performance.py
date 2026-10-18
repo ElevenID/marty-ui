@@ -798,8 +798,19 @@ def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
     assert verified[-1] == b"" and len(verified) == 14
     leaves = [value.decode("utf-8") for value in verified[:-1]]
     unit_leaves = [
+        "rust/services/issuance/src/canvas_operation_http_prepared_tests.rs",
+        "rust/services/issuance/src/canvas_sync_provider_http_tests.rs",
+        "rust/services/issuance/src/canvas_sync_processor_tests.rs",
         "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs",
         "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs",
+        (
+            "rust/services/issuance/src/initiation_didcomm/tests/"
+            "initiation_didcomm_renewal_tests.rs"
+        ),
+        "rust/services/issuance/src/python_format_tests.rs",
+        "rust/services/issuance/src/signing_http_projection_tests.rs",
+        "rust/services/issuance/src/signing_http_response_tests.rs",
+        "rust/services/issuance/src/token_rate_limit_http_tests.rs",
     ]
     assert set(unit_leaves) <= set(leaves)
     assert "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs" in leaves
@@ -812,6 +823,11 @@ def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
         "initiation_didcomm_renewal_tests.rs"
     )
     assert nested in leaves
+    assert nested in unit_leaves
+    assert (
+        "rust/services/issuance/src/passport_http_reconciliation_tests.rs"
+        not in unit_leaves
+    )
     for leaf, selected in zip(
         leaves,
         _classify_changed_paths(leaves, tmp_path, include_rust_plan=True),
