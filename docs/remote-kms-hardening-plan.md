@@ -223,6 +223,16 @@ tag/release remain absent. Wait for complete CI success and an unchanged main
 before a new no-write claim; do not reuse claim `39094334496` from the older
 source.
 
+Local contract validation at the exact main source (2026-10-17): the clean
+Windows checkout at `31c3c49fe112cb0f08e4f5c63549706f29a32b9a` passed
+179 focused release, self-host, public KMS helper, installed-journey, TLS
+bootstrap, and affected-Rust planning tests (548 subtests); 13 Linux-only
+cases were skipped on Windows. Exact-main CI `39097234971` is still live in
+the Canvas isolated database-contract step; every other completed job has
+passed. Protected main still equals its head and v1.1.256 remains untagged.
+This local validation does not replace the full hosted gate or signed-artifact
+fresh-install and restored-journey acceptance.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
