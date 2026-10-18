@@ -327,6 +327,27 @@ planning tests (548 subtests); 13 Linux-only cases were skipped. This is local
 contract evidence, not a replacement for full exact-main CI or installed
 artifact acceptance.
 
+Occupied v1.1.256 release coordinates (2026-10-18): full exact-main
+[CI 39104929628](https://github.com/ElevenID/marty-ui/actions/runs/39104929628)
+passed at protected main `218451f4c79f8ca1f997053253deba5daba0aef9`,
+including Canvas and terminal CI Gate. A fresh
+[no-write claim 39107508561](https://github.com/ElevenID/marty-ui/actions/runs/39107508561)
+correctly refused because `ui:1.1.256` already exists; it wrote no tag or
+release. The immutable `stack-release-promotion-complete-39099758515`
+checkpoint from the earlier failed publication records state `promoted`, all
+five versioned image tags, original source `31c3c49f...`, and no publication.
+Read-only registry inspection confirmed each of those five tags still resolves
+to the checkpoint's exact digest. The v1.1.256 Git tag and GitHub release are
+absent. Preserve these occupied coordinates; do not overwrite, delete or
+misrepresent them as a signed release. Current protected main cannot safely
+publish v1.1.256. Grouped [UI PR #1404](https://github.com/ElevenID/marty-ui/pull/1404)
+at `89a54d636dad3c7f395f93832734a366d1048a5f` selects fresh v1.1.257
+in the lock, frozen test and cutover/source notes. Its tag, release and checked
+UI version tag were absent before PR; 185 related local tests and diff checks
+passed. Auto-merge is enabled; require protected PR and merge-group checks,
+then new exact-main CI and a fresh v1.1.257 claim. The dedicated publisher
+secret is still unprovisioned, so do not dispatch another Stack release yet.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
