@@ -45,6 +45,11 @@ function fakePage(responses) {
   return {
     requests,
     async evaluate(_callback, request) {
+      if (request?.selectedOrganizationId) {
+        const oldStorage = global.localStorage;
+        global.localStorage = { setItem: (key, value) => { this.storageWrites = [...(this.storageWrites || []), {key, value}]; } };
+        try { return _callback(request); } finally { global.localStorage = oldStorage; }
+      }
       requests.push(request);
       const response = responses.shift();
       if (!response) throw new Error(`Unexpected request to ${request.requestPath}`);
@@ -469,4 +474,14 @@ test('selectOrganization fails closed without an eligible organization membershi
     activeOrgId: null,
   });
   assert.equal(page.requests.length, 1);
+});
+
+test('organization bootstrap replaces stale local selection only after membership and preferences pass', async () => {
+ const page=fakePage([{ok:true,status:200,body:[{id:'selected',name:'Selected',membership:{has_org_console_access:true}}]},{ok:true,status:200,body:{}}]);
+ page.goto=async()=>{};page.waitForFunction=async()=>{};
+ await selectOrganization(page,{organizationId:'selected',consoleOrigin:'https://beta.example.test'});
+ assert.deepEqual(page.storageWrites,[{key:'activeOrgId',value:'selected'}]);
+ const denied=fakePage([{ok:true,status:200,body:[{id:'selected',membership:{has_org_console_access:false}}]}]);
+ await selectOrganization(denied,{organizationId:'selected',consoleOrigin:'https://beta.example.test'});
+ assert.equal(denied.storageWrites,undefined);
 });

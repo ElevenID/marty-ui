@@ -713,6 +713,12 @@ async function main() {
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
+  } catch (error) {
+    report.error = redact(error.stack || error.message || String(error));
+    report.releaseReady = false;
+    report.finishedAt = new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    throw error;
   } finally {
     if (context) await context.close().catch(() => {});
     await browser.close();
