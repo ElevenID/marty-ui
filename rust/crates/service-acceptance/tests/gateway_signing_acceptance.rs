@@ -717,6 +717,28 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
         direct["public_jwk"]["kid"],
         direct["verification_method_id"]
     );
+    let context = reqwest::Client::new()
+        .get(format!("{signing_url}/internal/issuer-context"))
+        .timeout(std::time::Duration::from_secs(10))
+        .header("x-api-key", "internal-signing-key")
+        .query(&[
+            ("organization_id", organization_id.as_str()),
+            ("issuer_did", issuer_did.as_str()),
+        ])
+        .send()
+        .await
+        .expect("direct issuer context");
+    assert_eq!(context.status(), StatusCode::OK);
+    let context: Value = context
+        .json()
+        .await
+        .expect("direct issuer context response");
+    assert_eq!(context["issuer_did"], issuer_did);
+    assert_eq!(direct["signing_key_reference"], profile_reference);
+    assert_eq!(
+        context["signing_key_reference"],
+        direct["signing_key_reference"]
+    );
     let sign_body = json!({
         "organization_id": "org-other", "issuer_did": issuer_did,
         "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
