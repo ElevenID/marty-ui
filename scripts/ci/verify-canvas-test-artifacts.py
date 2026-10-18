@@ -6,15 +6,18 @@ import subprocess
 import sys
 from pathlib import Path
 
-TEST_TARGETS = (
+CANVAS_TEST_TARGETS = (
     ("marty-canvas-worker-acceptance", "canvas_published_worker_contract", "test"),
     ("marty-canvas-acceptance", "canvas_published_schema_contract", "test"),
     ("marty-flow-acceptance", "flow_published_schema_contract", "test"),
     ("marty-selfhost-acceptance", "selfhost_public_image_contract", "test"),
     ("marty-issuance-service", "canvas_oauth_behavior", "test"),
     ("marty-issuance-service", "issuance-behavior", "test"),
+)
+RENEWAL_UNIT_TEST_TARGETS = (
     ("marty-issuance-service", "marty_issuance_service", "lib"),
 )
+TEST_TARGETS = (*CANVAS_TEST_TARGETS, *RENEWAL_UNIT_TEST_TARGETS)
 BIN_TARGETS = (
     ("marty-issuance-service", "marty-issuance-service", "bin"),
     ("marty-issuance-service", "marty-canvas-sync-worker", "bin"),
@@ -26,7 +29,6 @@ WORKER_BIN_TARGETS = (BIN_TARGETS[1],)
 FLOW_TEST_TARGETS = (TEST_TARGETS[2],)
 FLOW_BIN_TARGETS = (BIN_TARGETS[0], BIN_TARGETS[3])
 SELFHOST_TEST_TARGETS = (TEST_TARGETS[3],)
-RENEWAL_UNIT_TEST_TARGETS = (TEST_TARGETS[6],)
 
 
 def verify(
@@ -54,7 +56,7 @@ def verify(
     elif renewal_unit_only:
         required = RENEWAL_UNIT_TEST_TARGETS
     else:
-        required = (*TEST_TARGETS, *BIN_TARGETS)
+        required = (*CANVAS_TEST_TARGETS, *BIN_TARGETS)
     worker_test_executable = None
     for package, target, kind in required:
         matches = [

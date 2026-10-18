@@ -273,9 +273,11 @@ the expected outcomes remain the independently frozen
 | `marty-issuance-service` library test `frozen_operations_input_rejections_do_not_require_postgres` | The contracts-lane workspace test executes all 36 pre-SQL rejections: one 400, one 401, and 34 422. The real router uses an unreachable lazy PostgreSQL pool and a two-second per-request limit; any unexpected database access fails rather than becoming a mocked success. The test checks all 75 unique case names and the rejection counts. | `contracts/canvas-operations-input-scenarios.json`, `contracts/canvas-operations-input-oracle.json`, the shared Rust HTTP request helper, and the issuance router/configuration. |
 | `marty-canvas-acceptance` target `canvas_published_schema_contract`, test `operations_inputs_match_frozen_published_python` | The Canvas lane explicitly discovers this named test and runs it with `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`. It verifies the pinned producer's complete frozen oracle output, then replays all 39 successful reads through the real router and owned PostgreSQL database. The test asserts the 39-case count; it does not substitute a mock for persistence. | The same scenario/oracle pair and shared request helper, plus the pinned historical producer image, published migrations, and an owned disposable PostgreSQL database. |
 
-The Canvas lane also compiles the issuance library target with `--no-run` as
-part of its existing shared compile; the contracts lane executes the rejection
-test. The two case sets are disjoint by
+The contracts lane executes the issuance-library rejection test; the
+dedicated renewal-unit lane also executes the exact issuance-library harness
+on its selected leaf paths. Canvas compiles the production issuance library
+for its selected acceptance targets but does not need a duplicate library
+test harness. The two case sets are disjoint by
 frozen status and together account for all 75 named observations. This is
 test-obligation ownership, not a new permission to skip Canvas or contracts
 validation, and not a measured CI wall-time saving.
@@ -504,7 +506,7 @@ formatting the environment value. No PostgreSQL limit or timing is changed.
 
 The sixth unchanged ID is
 `canvas_operation_http::tests::native_socket_case`, still in
-`canvas_operation_http.rs`. The Canvas lane's existing owned TLS fixture calls
+`canvas_operation_http.rs`. The contracts lane's owned TLS fixture calls
 it through `run_canvas_timeout_consumer_oracle.py`, now explicitly selecting
 `--ignored --exact`. The native-case and origin environment inputs, client TLS
 configuration, exactly-one observation requirement and two-routine/104-full

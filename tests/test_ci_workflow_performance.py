@@ -1899,7 +1899,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Prepare required rendered base executable acceptance",
         "Preflight published worker parity in two isolated groups",
         "Prepare owned runtime failure diagnostics",
-        "Test native Canvas operation timeout TLS parity",
     }
     contracts = {
         "Prepare database contract executables",
@@ -1910,6 +1909,7 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Run Flow database contract after workspace suite",
         "Test beta passport reconciliation and native batch on PostgreSQL",
         "Test native passport Gateway signed webhook on PostgreSQL",
+        "Test native Canvas operation timeout TLS parity",
     }
     for name in canvas:
         assert steps[name]["if"] == "matrix.lane == 'canvas'"
@@ -4209,8 +4209,20 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
         for step in steps
         if step.get("name") == "Test native Canvas operation timeout TLS parity"
     )
-    assert gate["if"] == "matrix.lane == 'canvas'"
+    assert gate["if"] == "matrix.lane == 'contracts'"
     assert not gate.get("continue-on-error", False)
+    matrix = document["jobs"]["test-rust-services"]["strategy"]["matrix"]["lane"]
+    for literal in re.findall(r"'(\[[^']+\])'", matrix):
+        lanes = json.loads(literal)
+        if "canvas" in lanes:
+            assert "contracts" in lanes
+    compile_step = next(
+        step["run"]
+        for step in steps
+        if step.get("name") == "Compile reusable Rust test executables"
+    )
+    assert 'elif [[ "${{ matrix.lane }}" == contracts ]]; then' in compile_step
+    assert "cargo test --locked --workspace --no-run" in compile_step
     assert (
         "grep -Fx 'canvas_operation_http::tests::native_socket_case: test'"
         in gate["run"]
@@ -5293,6 +5305,15 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     capture_step = steps["Capture host compiler cache counters after compile"]
     assert "--network none --read-only" in compile_step
     assert "--locked --offline" in compile_step
+    assert 'host_mold="$(command -v mold)"' in compile_step
+    assert '"$(realpath "$host_mold")" == /usr/local/bin/mold' in compile_step
+    assert "mold 2[.]41[.]0" in compile_step
+    assert "--env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold'" in compile_step
+    assert '--volume "$host_mold:/usr/local/bin/ld.mold:ro"' in compile_step
+    assert 'ld.mold --version | grep -Eq' in compile_step
+    assert 'probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"' in compile_step
+    assert '-fuse-ld=mold -o "$probe"' in compile_step
+    assert compile_step.index('"$probe"\n') < compile_step.index('rm -- "$probe"')
     assert "bookworm-host-phases.tsv" in compile_step
     for phase, command in (
         ("cargo_fetch", "cargo fetch --locked"),
