@@ -114,6 +114,21 @@ it is queued. Wait for its full success and reconfirm main before a no-write
 v1.1.256 claim. No new release or signed-artifact restored journey is proven
 by merge-group CI.
 
+Release-lock reconciliation (2026-10-17): unrelated test PR #1393 merged
+while exact-main CI `39086502512` was running, advancing protected main to
+`b90e0bf46201837d5e53d2cd4c8bc2e363db8567`. The superseded CI run was
+cancelled to avoid spending its remaining Rust jobs on a no-longer-current
+source. Main still selected the already published v1.1.255, so a fresh
+v1.1.256 claim was not possible. From the new exact main, grouped
+[UI PR #1395](https://github.com/ElevenID/marty-ui/pull/1395) at
+`9b3578804` selects v1.1.256, updates its frozen release contract, and keeps
+cutover closed pending signed fresh-install and restored-journey gates. The
+v1.1.256 tag/release were absent; 120 related local Python tests and diff
+checks passed. Require this PR's protected checks and merge, then a new full
+exact-main CI before claim and release. Local WSL command entry currently
+times out, while Docker Desktop and the existing production loopback remain
+responsive; do not restart either WSL distro or Docker while the site runs.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
