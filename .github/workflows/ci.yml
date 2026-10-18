@@ -1264,9 +1264,11 @@ jobs:
               "$bookworm_builder" \
               sh -ceu '
                  ld.mold --version | grep -Eq "^mold 2[.]41[.]0 [(].*compatible with GNU ld[)]$"
+                 probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"
                  printf "int main(void){return 0;}\\n" | cc -x c - \
-                   -fuse-ld=mold -o /tmp/marty-mold-link-probe
-                 /tmp/marty-mold-link-probe
+                   -fuse-ld=mold -o "$probe"
+                 "$probe"
+                 rm -- "$probe"
                  metrics="$CARGO_TARGET_DIR/bookworm-compile-phases.tsv"
                  printf "phase\telapsed_seconds\ttarget_bytes\texit_code\n" > "$metrics"
                  run_cargo_phase() {

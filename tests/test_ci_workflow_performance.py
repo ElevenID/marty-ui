@@ -5299,7 +5299,9 @@ def test_bookworm_compile_phase_timings_keep_exact_offline_targets() -> None:
     assert "--env 'RUSTFLAGS=-C link-arg=-fuse-ld=mold'" in compile_step
     assert '--volume "$host_mold:/usr/local/bin/ld.mold:ro"' in compile_step
     assert 'ld.mold --version | grep -Eq' in compile_step
-    assert '-fuse-ld=mold -o /tmp/marty-mold-link-probe' in compile_step
+    assert 'probe="$CARGO_TARGET_DIR/.marty-mold-link-probe"' in compile_step
+    assert '-fuse-ld=mold -o "$probe"' in compile_step
+    assert compile_step.index('"$probe"\n') < compile_step.index('rm -- "$probe"')
     assert "bookworm-host-phases.tsv" in compile_step
     for phase, command in (
         ("cargo_fetch", "cargo fetch --locked"),
