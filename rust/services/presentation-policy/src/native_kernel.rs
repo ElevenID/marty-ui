@@ -18,6 +18,61 @@ type JsonObject = Map<String, Value>;
 type VerifiedJwtMaterial = (CredentialVerificationEvidence, Option<JsonObject>);
 type OpenBadgeDocument = (JsonObject, JsonObject);
 
+/// Resolves public signature keys through deployment-bounded transport. This does
+/// not alter the policy's trust profile or mark any issuer as trusted.
+pub struct ResolvingCredentialKernel {
+    resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
+}
+
+impl ResolvingCredentialKernel {
+    pub fn new(
+        resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
+    ) -> Self {
+        Self { resolver }
+    }
+}
+
+#[async_trait]
+impl CredentialVerificationKernel for ResolvingCredentialKernel {
+    async fn verify(
+        &self,
+        context: &CredentialVerificationContext,
+    ) -> Result<CredentialVerificationEvidence, PresentationVerificationError> {
+        let mut resolved = context.clone();
+        // The public request map cannot supply this field. Clear even caller
+        // hints so this adapter only admits its own bounded resolver result.
+        resolved.resolved_issuer_public_jwk = None;
+        if matches!(
+            context.format,
+            DetectedCredentialFormat::W3cVc | DetectedCredentialFormat::OpenbadgeV3
+        ) {
+            if let Some(token) = context.token.as_str() {
+                if governed_public_jwk(context, token).is_none() {
+                    if let Some((issuer, Some(kid))) = jwt_selector(token) {
+                        if issuer.starts_with("did:web:") && kid.starts_with(&format!("{issuer}#"))
+                        {
+                            if let Ok(material) = self.resolver.resolve(&issuer).await {
+                                let matches: Vec<_> = material
+                                    .verification_keys
+                                    .iter()
+                                    .filter(|key| {
+                                        key.get("kid").and_then(Value::as_str) == Some(kid.as_str())
+                                    })
+                                    .filter(|key| key.as_object().is_some_and(public_jwk))
+                                    .collect();
+                                if matches.len() == 1 {
+                                    resolved.resolved_issuer_public_jwk = Some(matches[0].clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        RustCredentialKernel.verify(&resolved).await
+    }
+}
+
 /// Direct adapter over the canonical Marty Rust credential verifiers.
 #[derive(Clone, Debug, Default)]
 pub struct RustCredentialKernel;
@@ -294,7 +349,9 @@ async fn verify_vc_jwt_material(
 ) -> Result<VerifiedJwtMaterial, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
-    if let Some(public_jwk) = governed_public_jwk(context, token) {
+    if let Some(public_jwk) =
+        governed_public_jwk(context, token).or_else(|| context.resolved_issuer_public_jwk.clone())
+    {
         request["issuer_public_jwk"] = public_jwk;
     }
     let raw = if open_badge_v3 {
@@ -1140,6 +1197,7 @@ mod tests {
 
     fn context(document: Value) -> CredentialVerificationContext {
         CredentialVerificationContext {
+            resolved_issuer_public_jwk: None,
             format: DetectedCredentialFormat::SdJwt,
             token: Value::Null,
             nonce: None,

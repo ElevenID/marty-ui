@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 fn context(format: DetectedCredentialFormat, token: Value) -> CredentialVerificationContext {
     CredentialVerificationContext {
+        resolved_issuer_public_jwk: None,
         format,
         token,
         nonce: Some("behavioral-challenge".into()),
