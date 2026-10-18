@@ -331,15 +331,18 @@ the parent cases. This still does not prove assertion reachability, the
 internally provisioned PostgreSQL/Redis state, or complete rendered/child
 input closure, and grants no new selection authority.
 
-The recorder now also hashes the first observed non-Cargo hop in the rendered
-Flow case: the Python renderer invoked by the Rust support module and its two
-direct `runpy` Compose-owner helpers. A static check rejects a changed literal
-Rust renderer argument or a changed set of `runpy.run_path` calls in that
-renderer; it does not prove that those calls were reached at runtime. The
-record is deliberately labeled incomplete: those helpers load further Python
-owners and rendered Compose profiles, while the child also consumes generated
-loader files. The added hashes improve input visibility but neither prove
-transitive closure nor change the PR, merge-group, or release selector.
+The recorder hashes the first observed non-Cargo hop from the Rust support
+module to the Python renderer. The merged #1424 extension also records the
+statically observed eleven-script `runpy` graph, six selected/extended Compose
+models, loader source, public CA fixture and three config/source reads. It
+rejects changed literal call edges and Compose model selection. The follow-on
+local import audit records each helper's static Python import names and rejects
+relative, direct dynamic-loader, non-stdlib/non-PyYAML, or checkout-shadowed
+imports. These are source observations, not proof that a conditional call or
+assertion ran.
+Generated outputs, external package/tool versions and full child provenance
+remain outside this graph. `transitive_source_closure` stays `incomplete`, and
+no PR, merge-group or release selector changes.
 
 ## Issuance-to-Revocation Profile runtime input
 

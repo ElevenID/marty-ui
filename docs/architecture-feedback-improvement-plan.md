@@ -400,6 +400,15 @@ assertion reachability. Retain `transitive_source_closure=incomplete` and all
 existing broad/protected gates. The renderer checkout-root provenance check
 and negative tests address the review finding without asserting full closure.
 
+Next A0 maintenance candidate (local, not yet hosted): inventory each of the
+eleven renderer helpers' static Python import names in the run-bound record.
+Reject relative, direct dynamic-loader, non-stdlib/non-PyYAML and
+checkout-shadowed imports before accepting the observed source graph. This
+does not pin third-party package bytes or prove conditional execution,
+generated outputs, external tools or assertion reachability; retain
+`transitive_source_closure=incomplete`
+and the unchanged protected gates.
+
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
 the OpenBao recovery preparation. The trusted-main workspace warmer hit its own

@@ -596,6 +596,15 @@ def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None
     assert all(
         entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in subgraph
     )
+    imports = INVENTORY.flow_renderer_python_imports()
+    assert {entry["path"] for entry in imports} == set(
+        INVENTORY.FLOW_RENDERER_RUNPY_EDGES
+    )
+    assert any("yaml" in entry["modules"] for entry in imports)
+    assert all(
+        set(entry["modules"]) <= (INVENTORY.sys.stdlib_module_names | {"yaml"})
+        for entry in imports
+    )
 
     def fake_roster(command, **_kwargs):
         assert command == [
@@ -667,6 +676,34 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
 
     helper = tmp_path / "scripts/test_beta_application_image_compose.py"
     original = helper.read_text(encoding="utf-8")
+    for added in (
+        "import extra_flow_helper\n",
+        "from scripts import extra_flow_helper\n",
+        '__import__("extra_flow_helper")\n',
+        'from runpy import run_path\nrun_path("scripts/extra_flow_helper.py")\n',
+        'import runpy as loader\nloader.run_path("scripts/extra_flow_helper.py")\n',
+        'from importlib import import_module\nimport_module("extra_flow_helper")\n',
+        'loader = runpy.run_path\nloader("scripts/extra_flow_helper.py")\n',
+        'getattr(runpy, "run_path")("scripts/extra_flow_helper.py")\n',
+    ):
+        helper.write_text(original + "\n" + added, encoding="utf-8")
+        with pytest.raises(ValueError, match="flow_renderer_import_drift"):
+            INVENTORY.flow_renderer_subgraph_inputs()
+    helper.write_text(original, encoding="utf-8")
+
+    shadow = tmp_path / "scripts/json.py"
+    shadow.write_text("# test shadow\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="flow_renderer_import_drift"):
+        INVENTORY.flow_renderer_python_imports()
+    shadow.unlink()
+    extension = tmp_path / (
+        "scripts/json" + INVENTORY.importlib.machinery.EXTENSION_SUFFIXES[0]
+    )
+    extension.write_bytes(b"test shadow")
+    with pytest.raises(ValueError, match="flow_renderer_import_drift"):
+        INVENTORY.flow_renderer_python_imports()
+    extension.unlink()
+
     helper.write_text(
         original + '\nrunpy.run_path(str(ROOT / "scripts/new_helper.py"))\n',
         encoding="utf-8",
@@ -830,6 +867,9 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     )
     assert record["observed_renderer_subgraph_source_inputs"] == (
         INVENTORY.flow_renderer_subgraph_inputs()
+    )
+    assert record["observed_renderer_python_imports"] == (
+        INVENTORY.flow_renderer_python_imports()
     )
     assert record["transitive_source_closure"] == "incomplete"
     assert "child-inherited-stdout" in output

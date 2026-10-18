@@ -10,6 +10,7 @@ import argparse
 import ast
 import codecs
 import hashlib
+import importlib.machinery
 import json
 import os
 import re
@@ -638,6 +639,97 @@ FLOW_RENDERER_RUNPY_EDGES = {
 }
 
 
+def flow_renderer_python_imports() -> list[dict[str, object]]:
+    """Inventory static imports; reject unobserved direct local loaders."""
+    observed = []
+    suffixes = (
+        *importlib.machinery.SOURCE_SUFFIXES,
+        *importlib.machinery.BYTECODE_SUFFIXES,
+        *importlib.machinery.EXTENSION_SUFFIXES,
+    )
+    for path in FLOW_RENDERER_RUNPY_EDGES:
+        try:
+            tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeError, OSError) as error:
+            raise ValueError("flow_renderer_import_drift") from error
+        parents = {
+            child: node
+            for node in ast.walk(tree)
+            for child in ast.iter_child_nodes(node)
+        }
+        modules = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    module = alias.name.split(".", 1)[0]
+                    if module in {"importlib", "builtins"} or (
+                        module == "runpy" and alias.asname
+                    ):
+                        raise ValueError("flow_renderer_import_drift")
+                    modules.add(module)
+            elif isinstance(node, ast.ImportFrom):
+                if node.level or node.module is None:
+                    raise ValueError("flow_renderer_import_drift")
+                module = node.module.split(".", 1)[0]
+                if module in {"runpy", "importlib", "builtins"}:
+                    raise ValueError("flow_renderer_import_drift")
+                modules.add(module)
+            elif (
+                isinstance(node, ast.Name)
+                and node.id == "runpy"
+                and isinstance(node.ctx, ast.Load)
+            ):
+                attribute = parents.get(node)
+                call = parents.get(attribute)
+                if not (
+                    isinstance(attribute, ast.Attribute)
+                    and attribute.attr == "run_path"
+                    and isinstance(call, ast.Call)
+                    and call.func is attribute
+                ):
+                    raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id in {
+                    "__import__",
+                    "exec",
+                    "eval",
+                    "getattr",
+                    "globals",
+                    "locals",
+                    "vars",
+                    "run_path",
+                    "run_module",
+                    "import_module",
+                    "spec_from_file_location",
+                    "module_from_spec",
+                }:
+                    raise ValueError("flow_renderer_import_drift")
+                if isinstance(node.func, ast.Attribute) and node.func.attr in {
+                    "import_module",
+                    "run_module",
+                    "__import__",
+                    "exec",
+                    "eval",
+                    "spec_from_file_location",
+                    "module_from_spec",
+                }:
+                    raise ValueError("flow_renderer_import_drift")
+        modules.discard("__future__")
+        if not modules <= (sys.stdlib_module_names | {"yaml"}):
+            raise ValueError("flow_renderer_import_drift")
+        for module in modules:
+            for directory in (ROOT, ROOT / "scripts"):
+                local_package = directory / module
+                if local_package.exists() or local_package.is_symlink() or any(
+                    (directory / f"{module}{suffix}").exists()
+                    or (directory / f"{module}{suffix}").is_symlink()
+                    for suffix in suffixes
+                ):
+                    raise ValueError("flow_renderer_import_drift")
+        observed.append({"path": path, "modules": sorted(modules)})
+    return observed
+
+
 def _flow_renderer_runpy_edges(path: str) -> tuple[str, ...]:
     try:
         tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
@@ -794,6 +886,7 @@ def _flow_literal_assignment(path: str, name: str) -> str:
 def flow_renderer_subgraph_inputs() -> list[dict[str, str]]:
     """Observed static runpy graph and selected source files, not runtime closure."""
     flow_rendered_first_hop_inputs()
+    flow_renderer_python_imports()
     for path, expected in FLOW_RENDERER_RUNPY_EDGES.items():
         if _flow_renderer_runpy_edges(path) != expected:
             raise ValueError("flow_renderer_subgraph_drift")
@@ -1266,6 +1359,9 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             )
             evidence["observed_renderer_subgraph_source_inputs"] = (
                 flow_renderer_subgraph_inputs()
+            )
+            evidence["observed_renderer_python_imports"] = (
+                flow_renderer_python_imports()
             )
             evidence["transitive_source_closure"] = "incomplete"
         if selfhost:
