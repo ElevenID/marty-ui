@@ -62,6 +62,16 @@ or wallet acceptance. The UI exact-main CI 39167241560 remains live at
 `35dc7400...`, with its Canvas database-contract shard still in progress.
 Unrelated auto-merging UI #1426 may advance protected main before a v1.1.257
 claim, so revalidate the exact-main gate after its protected outcome.
+Local install preflight (2026-10-18): the production loopback still returned
+HTTP 200 and Windows Docker Desktop reported 16,265,662,464 bytes of RAM.
+C: had approximately 15-16 GiB free, below the runbook's 20 GiB target.
+Inside Ubuntu-24.04, `/usr/bin/docker` currently points to a missing Docker
+Desktop WSL CLI mount; `docker.exe` works from Windows/WSL, but its path and
+bind-mount behavior has not been qualified for the Linux installation scripts.
+Do not disrupt the running production Docker engine to repair WSL integration.
+Resolve this local runner issue and remeasure resources before the fresh
+signed-artifact install; do not count the earlier v1.1.255 disposable run for
+v1.1.257 acceptance.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
