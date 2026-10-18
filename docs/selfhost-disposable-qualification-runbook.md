@@ -454,3 +454,15 @@ The runner builds `public-kms-jwk` from the clean, exact release checkout into
 a fresh temporary Cargo home and target before startup. The host needs access
 to the locked Rust dependencies; ambient Cargo/compiler overrides and existing
 converter binaries are not accepted as custody evidence.
+
+An opt-in Stack release producer can now retain the **already exercised**
+release-mode converter and an exact-byte receipt as two separately attested
+files for seven days. This is a temporary producer bridge, not a qualified
+public asset or proof of reproducible compilation. A local admission verifier
+checks the protected producer run, both verified certificate run identities,
+the receipt, and the Ubuntu 24.04 loader/dependencies plus a bounded smoke
+test. It is deliberately not connected to this runner: the public release
+asset closure does not yet carry the helper, so the fresh source build above
+remains mandatory. A future public handoff must bind the exact helper and both
+attestations to one qualified release before reuse can be enabled; a manually
+supplied or ambient binary is not an acceptable substitute.
