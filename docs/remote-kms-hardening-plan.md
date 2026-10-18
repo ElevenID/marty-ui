@@ -186,6 +186,17 @@ is active; wait for its protected landing, then run full exact-main CI and
 make a fresh no-write claim for the final source. Preserve this successful but
 superseded claim as evidence; no v1.1.256 publication occurred.
 
+Current exact-main retry (2026-10-17): unrelated self-host KMS helper PR #1396
+passed its five protected merge-group gates and merged as
+`acb9263a842c0d3eec82f945b79f7e00fead6400`. It adds release-run
+attestation and verification for the public KMS helper used by the self-host
+preview. The v1.1.256 tag/release remain absent and the release lock remains
+selected. Full [exact-main CI 39094702401](https://github.com/ElevenID/marty-ui/actions/runs/39094702401)
+was dispatched and its run head verified as that exact protected-main SHA; it
+is queued. Wait for its full success and reconfirm main before a new no-write
+claim. The prior successful claim `39094334496` remains source-bound to the
+older SHA and must not be used for this release dispatch.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
