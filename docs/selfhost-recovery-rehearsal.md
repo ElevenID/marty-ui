@@ -44,3 +44,31 @@ For a local container smoke test of the state mechanics:
 $env:MARTY_RUN_DOCKER_RECOVERY_TEST = '1'
 pytest tests/test_rehearse_selfhost_state_recovery.py -q
 ```
+
+## Coordinated restored-stack verification
+
+`scripts/verify_selfhost_restored_journey.py` is the next check after a
+**quiesced, coordinated** copy of PostgreSQL, Redis, Applicant, OpenBao Raft,
+operator secrets and environment into one isolated `recovery-*` root. Preserve
+ownership and modes when copying OpenBao state: its TLS bootstrap rejects
+copied identity files with altered ownership. Render the restored Compose
+models with new disposable project names and loopback ports, then start only
+the 28 local services selected by `run_selfhost_business_journey.py`; do not
+start the tunnel roles. The verifier does not start or tear down containers.
+
+Pass the recovery root, its `state`, `openbao-state`, `secrets`,
+`install/selfhost-prepared`, `selfhost.env`, the isolated app/OpenBao project
+names, clean exact-source and pinned integration checkouts, their commit SHAs,
+and a new output path under the recovery root. Supply the same eight
+`SELFHOST_*` fixture variables required by the fresh installed journey,
+pointing their URLs to the restored loopback ports. The optional
+`--compose-override` is for a clearly identified local candidate image; the
+report records its use and the verifier's own digest. Omit the override and
+run the verifier from the exact release source for signed-image qualification.
+
+The verifier requires the exact 28-service closure, unsealed Raft, the public
+issue/present/verify/revoke journey, Keycloak issuance and refresh, and both
+database custody scans. Its mode-0600 JSON report remains `unqualified`:
+the tool cannot establish backup provenance, a consistent source recovery
+point, off-host retention, signed image identity, or cutover/rollback by
+itself. Establish those independently before claiming supported recovery.
