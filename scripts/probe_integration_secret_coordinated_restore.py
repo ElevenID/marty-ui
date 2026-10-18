@@ -6,6 +6,7 @@ It uses random, labeled Docker containers and synthetic data only.
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
@@ -49,6 +50,37 @@ GO_IMAGE = next(
     .splitlines()
     if line.startswith("FROM golang:")
 )
+RUST_PREPARATION_PHASES = (
+    "signing_keys_binary",
+    "signing_keys_holder_proof",
+    "issuance_library",
+    "issuance_oauth_postgres",
+    "issuance_remote_kms",
+    "flow_haip_live_signing",
+    "flow_haip_remote_http",
+    "flow_haip_expired_http",
+)
+
+
+def record_preparation_timing(phase: str, status: str, started: float) -> None:
+    # Fixed labels only: do not retain commands, paths, exceptions or environment.
+    if phase not in RUST_PREPARATION_PHASES or status not in {"ok", "failed", "timeout", "error"}:
+        raise ValueError("Unknown recovery preparation timing label")
+    record = {
+        "schema_version": 1,
+        "phase": phase,
+        "status": status,
+        "duration_ms": max(0, int((time.monotonic() - started) * 1000)),
+    }
+    line = json.dumps(record, sort_keys=True)
+    print(f"MARTY_RECOVERY_PREPARATION_V1 {line}", flush=True)
+    output = os.environ.get("MARTY_RECOVERY_PREPARATION_TIMING_FILE")
+    if output:
+        try:
+            with Path(output).open("a", encoding="utf-8", newline="\n") as evidence:
+                evidence.write(line + "\n")
+        except OSError:
+            print("[kms-recovery-prepare] optional timing artifact unavailable", flush=True)
 
 
 def port_of(name: str, internal: str) -> int:
@@ -63,7 +95,7 @@ def free_port() -> int:
 
 def build_rust() -> Path:
     rust = ROOT / "rust"
-    for command in (
+    commands = (
         [
             "cargo",
             "+1.95.0",
@@ -143,10 +175,24 @@ def build_rust() -> Path:
             ]
             for target in ("haip_live_signing", "haip_remote_http", "haip_expired_http")
         ),
-    ):
-        result = subprocess.run(command, cwd=rust, timeout=1800, check=False)
-        if result.returncode:
-            raise RuntimeError("Candidate Rust recovery target did not build")
+    )
+    for phase, command in zip(RUST_PREPARATION_PHASES, commands, strict=True):
+        print(f"[kms-recovery-prepare] starting {phase}", flush=True)
+        started = time.monotonic()
+        status = "error"
+        try:
+            result = subprocess.run(command, cwd=rust, timeout=1800, check=False)
+            if result.returncode:
+                status = "failed"
+                raise RuntimeError("Candidate Rust recovery target did not build")
+            status = "ok"
+        except subprocess.TimeoutExpired:
+            status = "timeout"
+            raise RuntimeError("Candidate Rust recovery preparation timed out") from None
+        except OSError:
+            raise RuntimeError("Candidate Rust recovery preparation could not start") from None
+        finally:
+            record_preparation_timing(phase, status, started)
     binary = (
         rust
         / "target/debug"
@@ -994,5 +1040,19 @@ def run() -> None:
                 )
 
 
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--prepare-rust-only",
+        action="store_true",
+        help="Prepare the same Rust targets without starting disposable services",
+    )
+    args = parser.parse_args(argv)
+    if args.prepare_rust_only:
+        build_rust()
+    else:
+        run()
+
+
 if __name__ == "__main__":
-    run()
+    main()

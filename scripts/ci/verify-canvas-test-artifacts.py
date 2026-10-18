@@ -26,6 +26,7 @@ WORKER_BIN_TARGETS = (BIN_TARGETS[1],)
 FLOW_TEST_TARGETS = (TEST_TARGETS[2],)
 FLOW_BIN_TARGETS = (BIN_TARGETS[0], BIN_TARGETS[3])
 SELFHOST_TEST_TARGETS = (TEST_TARGETS[3],)
+RENEWAL_UNIT_TEST_TARGETS = (TEST_TARGETS[6],)
 
 
 def verify(
@@ -35,9 +36,10 @@ def verify(
     worker_only: bool = False,
     flow_only: bool = False,
     selfhost_only: bool = False,
+    renewal_unit_only: bool = False,
     check_worker_inventory: bool = False,
 ) -> None:
-    if sum((worker_only, flow_only, selfhost_only)) > 1:
+    if sum((worker_only, flow_only, selfhost_only, renewal_unit_only)) > 1:
         raise ValueError("Artifact scope must have one owner")
     debug = target_directory.resolve() / "debug"
     records = [
@@ -49,11 +51,13 @@ def verify(
         required = (*FLOW_TEST_TARGETS, *FLOW_BIN_TARGETS)
     elif selfhost_only:
         required = SELFHOST_TEST_TARGETS
+    elif renewal_unit_only:
+        required = RENEWAL_UNIT_TEST_TARGETS
     else:
         required = (*TEST_TARGETS, *BIN_TARGETS)
     worker_test_executable = None
     for package, target, kind in required:
-        matches = {
+        matches = [
             (record["executable"], record["profile"].get("test"))
             for record in records
             if record.get("reason") == "compiler-artifact"
@@ -62,7 +66,9 @@ def verify(
             and kind in record.get("target", {}).get("kind", ())
             and record.get("executable") is not None
             and record.get("profile", {}).get("test") is (kind != "bin")
-        }
+        ]
+        if not renewal_unit_only:
+            matches = list(set(matches))
         if len(matches) != 1:
             raise ValueError(
                 f"Expected exactly one {package}/{target} executable; found {len(matches)}"
@@ -102,11 +108,17 @@ if __name__ == "__main__":
         args.remove("--check-worker-inventory")
     if len(args) not in (2, 3) or (
         len(args) == 3
-        and args[0] not in ("--worker-only", "--flow-only", "--selfhost-only")
+        and args[0]
+        not in (
+            "--worker-only",
+            "--flow-only",
+            "--selfhost-only",
+            "--renewal-unit-only",
+        )
     ):
         raise SystemExit(
             "Usage: verify-canvas-test-artifacts.py "
-            "[--worker-only|--flow-only|--selfhost-only] "
+            "[--worker-only|--flow-only|--selfhost-only|--renewal-unit-only] "
             "[--check-worker-inventory] ARTIFACTS TARGET_DIRECTORY"
         )
     scoped = len(args) == 3
@@ -117,5 +129,6 @@ if __name__ == "__main__":
         worker_only=scoped and args[0] == "--worker-only",
         flow_only=scoped and args[0] == "--flow-only",
         selfhost_only=scoped and args[0] == "--selfhost-only",
+        renewal_unit_only=scoped and args[0] == "--renewal-unit-only",
         check_worker_inventory=check_worker_inventory,
     )

@@ -1,7 +1,7 @@
 # Emit only allowlisted numeric counters from the public-image compiler cache.
 # No cache coordinates, paths, source text, credentials, or raw backend output.
 BEGIN {
-    if (phase != "release_binaries" && phase != "dependency_cook") {
+    if (phase != "release_binaries" && phase != "dependency_cook" && phase != "recovery_probe") {
         exit 2
     }
     labels["Compile requests"] = "compile_requests"

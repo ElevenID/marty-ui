@@ -309,7 +309,7 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Start digest-pinned Rust test services after registry setup"
     )
-    assert setup["if"] == "matrix.lane != 'selfhost'"
+    assert setup["if"] == "matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
     for image in (
         "postgres:15-alpine@sha256:fceb6f86328c36f2438fae3b851b0cc57c4a7e69a58c866d9ce24281f2cf0c9c",
         "redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
@@ -321,7 +321,9 @@ def _assert_python_service_job_preserves_full_suite(document) -> None:
         step for step in rust["steps"]
         if step.get("name") == "Remove owned Rust test services and volumes"
     )
-    assert cleanup["if"] == "always() && matrix.lane != 'selfhost'"
+    assert cleanup["if"] == (
+        "always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
+    )
     assert "down --volumes --remove-orphans" in cleanup["run"]
     chain_step_name = (
         "Exercise scoped grant and managed passport chain over disposable HTTPS OpenBao"
@@ -1776,6 +1778,17 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert "ci-worker-diagnostic" in matrix
     assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "ci-selfhost-diagnostic" in matrix
+    assert "ci-renewal-unit-diagnostic" in matrix
+    assert matrix.count("ci-renewal-unit-diagnostic") == 2
+    assert '\'["canvas","contracts","worker","selfhost","renewal-unit"]\'' in matrix
+    assert '\'["canvas","contracts","selfhost","renewal-unit"]\'' in matrix
+    assert matrix.index(
+        '\'["canvas","contracts","worker","selfhost","renewal-unit"]\''
+    ) < matrix.index(
+        '\'["canvas","contracts","selfhost","renewal-unit"]\''
+    ) < matrix.index(
+        '\'["canvas","contracts","worker","selfhost"]\''
+    )
     assert '\'["canvas","contracts","selfhost"]\'' in matrix
     assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
@@ -1867,11 +1880,25 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         < names.index("Prepare pinned standalone Compose renderer for Rust contracts")
         < names.index("Run safe Rust contract groups concurrently")
     )
+    assert "if" not in steps["Compile reusable Rust test executables"]
+    assert steps["Run isolated database contract suites concurrently"]["if"] == (
+        "matrix.lane != 'renewal-unit'"
+    )
     for name in (
-        "Compile reusable Rust test executables",
-        "Run isolated database contract suites concurrently",
+        "Prefer cached Docker Hub images without restarting the runner daemon",
+        "Select the exact BuildKit image with registry fallback",
     ):
-        assert "if" not in steps[name]
+        assert steps[name]["if"] == "matrix.lane != 'renewal-unit'"
+    assert next(
+        step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-buildx-action@")
+    )["if"] == "matrix.lane != 'renewal-unit'"
+    focused = steps["Execute exact renewal handler library obligations"]
+    assert focused["if"] == "matrix.lane == 'renewal-unit'"
+    assert "--name renewal_unit --owner renewal-unit" in focused["run"]
+    assert "canvas_sync_worker::retry_handoff_tests:: --test-threads=4" in focused["run"]
+    compile_step = steps["Compile reusable Rust test executables"]["run"]
+    assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
+    assert "--renewal-unit-only \"$artifacts\" target" in compile_step
     assert steps["Preserve synthetic runtime failure diagnostics"]["if"] == (
         "always() && matrix.lane == 'canvas'"
     )
@@ -3743,7 +3770,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
         for step in steps
         if step.get("name") == "Run isolated database contract suites concurrently"
     )
-    assert "if" not in gate
+    assert gate["if"] == "matrix.lane != 'renewal-unit'"
     assert not gate.get("continue-on-error", False)
     assert "run-db-contract-groups.py worker-preflights" in gate["run"]
     assert "run-db-contract-groups.py worker-canvas" in gate["run"]

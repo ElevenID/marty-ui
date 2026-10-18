@@ -1,4 +1,4 @@
-"""Record effective libtest obligations for DB and Flow acceptance runners.
+"""Record effective libtest obligations for DB, Flow, and self-host runners.
 
 Discovery uses the same executable and selection arguments as execution. libtest
 --list includes ignored tests by default, so a second ignored-only discovery is
@@ -13,6 +13,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_NAME = "db-contract-obligations.jsonl"
+UNIT_EVIDENCE_NAME = "rust-unit-obligations.jsonl"
 PREFIX = "MARTY_DB_OBLIGATION_V1 "
+UNIT_PREFIX = "MARTY_RUST_UNIT_OBLIGATION_V1 "
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_SHA")
 FIXTURE_OWNER = ".github/compose/rust-ci-fixtures.yml"
 RUNNER_OWNER = "scripts/ci/run-rust-db-contracts.sh"
@@ -31,6 +34,43 @@ FLOW_OWNERS = {
     "canvas": "scripts/ci/run-published-canvas-contracts.sh",
 }
 FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/canvas_published_database.rs"
+SELFHOST_OWNER = "scripts/ci/run-published-canvas-contracts.sh"
+SELFHOST_FIXTURE_OWNER = (
+    "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
+)
+RENEWAL_UNIT_PREFIX = "canvas_sync_worker::retry_handoff_tests::"
+RENEWAL_UNIT_CASES = frozenset(
+    RENEWAL_UNIT_PREFIX + name
+    for name in (
+        "retry_delay_owns_all_normalized_header_shapes_and_backoff_edges",
+        "retry_hint_reaches_the_actual_worker_failure_port",
+        "terminal_validation_errors_reach_actual_worker_dead_letter_port",
+        "terminal_processor_errors_reach_actual_worker_dead_letter_port",
+    )
+) | frozenset(
+    RENEWAL_UNIT_PREFIX + "renewal_tests::" + name
+    for name in (
+        "lease_error_then_success",
+        "lease_error_then_retry",
+        "lease_error_then_terminal",
+        "lease_error_then_deadline",
+        "lease_error_then_cancel",
+        "target_error_then_success",
+        "target_error_then_retry",
+        "target_error_then_terminal",
+        "target_error_then_deadline",
+        "target_error_then_cancel",
+        "process_error_then_success",
+        "process_error_then_retry",
+        "process_error_then_terminal",
+        "process_error_then_deadline",
+        "process_error_then_cancel",
+        "lease_error_survives_failed_completion",
+        "target_error_survives_failed_retry_persistence",
+        "process_error_survives_failed_deadline_persistence",
+        "actual_cycle_does_not_count_persisted_success_after_renewal_error",
+    )
+)
 CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
 # Stable libtest's separate result log is unaffected by stdout inherited by a
 # tested process. --logfile is deprecated but supported by pinned Rust 1.95;
@@ -164,6 +204,23 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
         ),
     )
+    entries["selfhost_acceptance"] = (
+        "marty-selfhost-acceptance",
+        "selfhost_public_image_contract",
+        (
+            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_SELFHOST_TEST_IMAGE",
+            "MARTY_SELFHOST_TEST_REVISION",
+            "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
+            "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
+        ),
+    )
+    entries["renewal_unit"] = (
+        "marty-issuance-service",
+        "marty_issuance_service",
+        (),
+    )
     if name not in entries:
         raise ValueError("unknown_dispatch")
     package, target, variables = entries[name]
@@ -189,6 +246,15 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
                 in {"MARTY_BASE_COMPOSE_BINARY", "MARTY_DIDCOMM_TEST_PYTHON"}
                 else "Flow acceptance runner (selected by call site)"
             )
+    if name == "selfhost_acceptance":
+        for item in inputs:
+            item["owner"] = SELFHOST_OWNER
+            item["provisioner"] = (
+                ".github/workflows/ci.yml"
+                if item["name"].startswith("MARTY_SELFHOST_TEST_")
+                or item["name"] == "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
+                else SELFHOST_OWNER
+            )
     # These tests use a Rust-owned HTTPS Signing Keys fixture by default, or an
     # explicitly supplied live route. Record the conditional dependency names,
     # without treating absent optional route inputs as absent test execution.
@@ -213,7 +279,9 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
     return package, target, inputs
 
 
-def artifact_identity(executable: Path, package: str, target: str) -> dict:
+def artifact_identity(
+    executable: Path, package: str, target: str, *, library_test: bool = False
+) -> dict:
     executable_sha256 = digest(executable)
     runner_temp = os.environ.get("RUNNER_TEMP")
     if not runner_temp:
@@ -232,9 +300,12 @@ def artifact_identity(executable: Path, package: str, target: str) -> dict:
         if (
             value["package_id"].rsplit("#", 1)[-1].split("@", 1)[0] == package
             and value["target"]["name"] == target
-            and "test" in value["target"]["kind"]
+            and ("lib" if library_test else "test") in value["target"]["kind"]
+            and (not library_test or value.get("profile", {}).get("test") is True)
         ):
             matches.append(value)
+    if library_test and len(matches) != 1:
+        raise ValueError("missing_or_ambiguous_compiler_artifact")
     # Match the existing resolver's unique-path requirement. Workflow preparation
     # copies several binaries to readable aliases; prove byte identity to their
     # same-run Cargo executable instead of rejecting those deliberate copies.
@@ -263,15 +334,26 @@ def libtest_harness(package: str, target: str) -> dict:
         if package == "marty-issuance-service"
         else package.removeprefix("marty-")
     )
-    manifest_path = (
-        ROOT / "rust/crates/flow-acceptance/Cargo.toml"
-        if package == "marty-flow-acceptance"
-        and target == "flow_published_schema_contract"
-        else ROOT / "rust/services" / service / "Cargo.toml"
-    )
+    if (package, target) == ("marty-flow-acceptance", "flow_published_schema_contract"):
+        manifest_path = ROOT / "rust/crates/flow-acceptance/Cargo.toml"
+    elif (package, target) == (
+        "marty-selfhost-acceptance",
+        "selfhost_public_image_contract",
+    ):
+        manifest_path = ROOT / "rust/crates/selfhost-acceptance/Cargo.toml"
+    else:
+        manifest_path = ROOT / "rust/services" / service / "Cargo.toml"
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest["package"]["name"] != package:
         raise ValueError("foreign_harness_manifest")
+    if (package, target) == ("marty-issuance-service", "marty_issuance_service"):
+        if (manifest_path.parent / "src/lib.rs").is_file() and not manifest.get("lib"):
+            return {
+                "manifest": manifest_path.relative_to(ROOT).as_posix(),
+                "manifest_sha256": digest(manifest_path),
+                "harness": "libtest",
+            }
+        raise ValueError("unsupported_library_harness")
     declared = [
         entry for entry in manifest.get("test", []) if entry.get("name") == target
     ]
@@ -349,6 +431,17 @@ def verify_flow_roster(executable: str, expected: set[str], ignored: set[str]) -
         raise ValueError("flow_roster_drift")
 
 
+def verify_renewal_unit_roster(
+    arguments: list[str], expected: set[str], ignored: set[str]
+) -> None:
+    if (
+        arguments != [RENEWAL_UNIT_PREFIX, "--test-threads=4"]
+        or expected != RENEWAL_UNIT_CASES
+        or ignored
+    ):
+        raise ValueError("renewal_unit_roster_drift")
+
+
 def flow_source_inputs(owner: str) -> list[dict[str, str]]:
     # These are the runner's direct non-Cargo inputs, not a claim that every
     # internally spawned process or rendered configuration is inventoried.
@@ -359,6 +452,60 @@ def flow_source_inputs(owner: str) -> list[dict[str, str]]:
         FLOW_OWNERS[owner],
     )
     return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+def selfhost_source_inputs(owner: str) -> list[dict[str, str]]:
+    # Direct runner/pin inputs only. The caller separately validates the local
+    # image ID; this is not retained image provenance or a full source graph.
+    paths = [
+        "contracts/canvas-worker-consumer-range-oracle.json",
+        "scripts/ci/pull-pinned-dockerhub-image.sh",
+        SELFHOST_OWNER,
+    ]
+    if owner == "selfhost":
+        paths.append("scripts/ci/run-db-contract-groups.py")
+    return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+def selfhost_configured_inputs() -> dict[str, str]:
+    """Non-secret configured identities, not image or package provenance."""
+    image_id = os.environ["MARTY_SELFHOST_TEST_IMAGE"]
+    revision = os.environ["MARTY_SELFHOST_TEST_REVISION"]
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+        raise ValueError("invalid_selfhost_image_id")
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("invalid_selfhost_revision")
+
+    def binary_sha256(variable: str) -> str:
+        supplied = Path(os.environ[variable])
+        try:
+            resolved = supplied.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ValueError("invalid_selfhost_binary") from error
+        before = resolved.stat()
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024**3:
+            raise ValueError("invalid_selfhost_binary")
+        checksum = digest(resolved)
+        after = resolved.stat()
+        try:
+            same_path = supplied.resolve(strict=True) == resolved
+        except (OSError, RuntimeError):
+            same_path = False
+        if not same_path or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("changed_selfhost_binary")
+        return checksum
+
+    return {
+        "image_id": image_id,
+        "source_revision": revision,
+        "packager_sha256": binary_sha256("MARTY_SELFHOST_TEST_PACKAGER_BINARY"),
+        "compose_sha256": binary_sha256("MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"),
+    }
 
 
 def expected_cases(
@@ -430,14 +577,16 @@ def verify_execution(
 
 def emit(evidence: dict) -> None:
     encoded = json.dumps(evidence, sort_keys=True, separators=(",", ":"))
+    unit = evidence["schema"] == "marty.rust-unit-obligation/v1"
     runner_temp = os.environ.get("RUNNER_TEMP")
     if runner_temp:
-        output = Path(runner_temp) / "rust-build-evidence" / EVIDENCE_NAME
+        name = UNIT_EVIDENCE_NAME if unit else EVIDENCE_NAME
+        output = Path(runner_temp) / "rust-build-evidence" / name
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(encoded + "\n")
     # Libtest can leave an unterminated progress row before cancellation.
-    print("\n" + PREFIX + encoded, flush=True)
+    print("\n" + (UNIT_PREFIX if unit else PREFIX) + encoded, flush=True)
 
 
 class HarnessInterrupted(Exception):
@@ -553,20 +702,45 @@ def run_owned_harness(
 
 def run_contract(name: str, command: list[str], owner: str = "contracts") -> int:
     flow = name == "flow_acceptance"
+    selfhost = name == "selfhost_acceptance"
+    renewal_unit = name == "renewal_unit"
+    if flow:
+        gate = f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
+        runner = FLOW_OWNERS.get(owner)
+        fixture = FLOW_FIXTURE_OWNER
+    elif selfhost:
+        gate = f"test-rust-services/{'selfhost' if owner == 'selfhost' else 'canvas'}"
+        runner = SELFHOST_OWNER
+        fixture = SELFHOST_FIXTURE_OWNER
+    elif renewal_unit:
+        gate = "test-rust-services/renewal-unit"
+        runner = "scripts/ci/rust_db_obligations.py"
+        fixture = "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs"
+    else:
+        gate = "test-rust-services/contracts"
+        runner = RUNNER_OWNER
+        fixture = FIXTURE_OWNER
     evidence = {
-        "schema": "marty.rust-db-obligation/v1",
-        "gate": f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
-        if flow
-        else "test-rust-services/contracts",
-        "owner": FLOW_OWNERS.get(owner) if flow else RUNNER_OWNER,
-        "runtime_fixture_owner": FLOW_FIXTURE_OWNER if flow else FIXTURE_OWNER,
+        "schema": (
+            "marty.rust-unit-obligation/v1"
+            if renewal_unit
+            else "marty.rust-db-obligation/v1"
+        ),
+        "gate": gate,
+        "owner": runner,
+        "runtime_fixture_owner": fixture,
         "result_source": "libtest_logfile",
         "run": {key: os.environ.get(key) for key in RUN_IDENTITY},
         "status": "failed",
     }
     status = 1
     try:
-        if (flow and owner not in FLOW_OWNERS) or (not flow and owner != "contracts"):
+        if (
+            (flow and owner not in FLOW_OWNERS)
+            or (selfhost and owner not in {"selfhost", "canvas"})
+            or (renewal_unit and owner != "renewal-unit")
+            or (not flow and not selfhost and not renewal_unit and owner != "contracts")
+        ):
             raise ValueError("invalid_dispatch_owner")
         package, target, inputs = obligation(name)
         if flow:
@@ -575,6 +749,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 if item["provisioner"] != ".github/workflows/ci.yml":
                     item["provisioner"] = FLOW_OWNERS[owner]
             evidence["direct_source_inputs"] = flow_source_inputs(owner)
+        if selfhost:
+            evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
@@ -583,19 +759,34 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         ):
             raise ValueError("missing_run_identity")
         executable = Path(command[0])
-        evidence.update(artifact_identity(executable, package, target))
+        evidence.update(
+            artifact_identity(executable, package, target, library_test=True)
+            if renewal_unit
+            else artifact_identity(executable, package, target)
+        )
         # Never probe --list on custom harnesses, which may ignore the flag and
         # execute their bodies. All current dispatches use standard libtest.
         evidence["harness"] = libtest_harness(package, target)
-        selection(command[1:], allow_nocapture=flow)  # Validate before evidence.
+        selection(
+            command[1:], allow_nocapture=flow or selfhost
+        )  # Validate before evidence.
         evidence["selection_arguments"] = command[1:]
         expected, ignored = expected_cases(
-            command[0], command[1:], allow_nocapture=flow
+            command[0], command[1:], allow_nocapture=flow or selfhost
         )
+        if renewal_unit:
+            verify_renewal_unit_roster(command[1:], expected, ignored)
         if flow:
             if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             verify_flow_roster(command[0], expected, ignored)
+        if selfhost:
+            if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
+                raise ValueError("missing_published_schema_gate")
+            # The shell runner owns the exact names. This bounds its selected
+            # cardinality without maintaining a second 12-name roster here.
+            if len(expected) != 12 or ignored:
+                raise ValueError("selfhost_selection_drift")
         evidence["selected"] = sorted(expected)
         evidence["selected_ignored"] = sorted(ignored)
         if not expected:
@@ -603,6 +794,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         for item in inputs:
             if item["requirement"] == "required" and not os.environ.get(item["name"]):
                 raise ValueError("missing_required_runtime_input")
+        if selfhost:
+            evidence["configured_input_identities"] = selfhost_configured_inputs()
         # Preserve every selection/serialism argument and all live raw output.
         # A separate libtest result stream identifies case completion even when
         # inherited child stdout splits the human `test name ... ok` framing.

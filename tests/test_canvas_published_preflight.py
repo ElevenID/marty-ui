@@ -281,6 +281,18 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
         flow_full
     )
     assert script.index(flow_full) < script.index('wait "$flow_pid" || flow_status=$?')
+    selfhost_full = (
+        '    "$selfhost_executable" --nocapture --test-threads=4 '
+        '>"$selfhost_log" 2>&1 &'
+    )
+    assert script.splitlines().count(selfhost_full) == 1
+    assert (
+        script.splitlines()[script.splitlines().index(selfhost_full) - 1]
+        == "    --name selfhost_acceptance --owner canvas -- \\"
+    )
+    assert script.index('require_selfhost_tests "$selfhost_tests"') < script.index(
+        selfhost_full
+    )
     assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in script
     assert 'if [[ -n "$flow_relay_pid" ]]; then wait "$flow_relay_pid"' in script
     assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
@@ -454,7 +466,14 @@ if [[ "${{1:-}}" == */rust_db_obligations.py ]]; then
   # This shell fixture owns orchestration, not compiler JSON/libtest protocol.
   # The recorder's real child and cancellation behavior have separate tests.
   shift
-  [[ "$1" == --name && "$2" == flow_acceptance && "$3" == --owner && "$4" == canvas && "$5" == -- ]] || exit 90
+  [[ "$1" == --name && "$3" == --owner && "$5" == -- ]] || exit 90
+  if [[ "$2" == flow_acceptance ]]; then
+    [[ "$4" == canvas ]] || exit 90
+  elif [[ "$2" == selfhost_acceptance ]]; then
+    [[ "$4" == canvas || "$4" == selfhost ]] || exit 90
+  else
+    exit 90
+  fi
   shift 5
   exec "$@"
 fi
@@ -2031,7 +2050,7 @@ def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate
         "fi\n"
     )
     assert steps[image]["if"] == "matrix.lane == 'selfhost'"
-    assert "if" not in steps[full]
+    assert steps[full]["if"] == "matrix.lane != 'renewal-unit'"
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]

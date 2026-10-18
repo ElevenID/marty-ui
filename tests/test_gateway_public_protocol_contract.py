@@ -204,6 +204,22 @@ def test_vector_owner_guard_rejects_unowned_vectors_and_missing_workspace_gate(
             "true &&",
         ),
         (
+            "contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&",
+            "true &&",
+        ),
+        (
+            '\'["canvas","contracts","worker","selfhost","renewal-unit"]\' ||',
+            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
+        ),
+        (
+            '\'["canvas","contracts","selfhost","renewal-unit"]\' ||',
+            '\'["renewal-unit"]\' ||',
+        ),
+        (
+            "needs.changes.outputs.rust_runtime == 'true' &&",
+            "true &&",
+        ),
+        (
             '\'["canvas","contracts","worker","selfhost"]\' ||',
             "'[\"worker\"]' ||",
         ),

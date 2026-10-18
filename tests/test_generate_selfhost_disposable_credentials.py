@@ -66,6 +66,15 @@ def test_operator_policy_drift_and_invalid_randomness_fail_closed(tmp_path: Path
         validate_operator_password("Aa1!" + "a" * 64, realm)
 
 
+def test_operator_generator_validates_explicit_source_realm(tmp_path: Path) -> None:
+    realm = tmp_path / "realm.json"
+    realm.write_text(json.dumps({"passwordPolicy": OPERATOR_PASSWORD_POLICY}))
+    assert generate_operator_password(lambda _: "a" * 64, realm_file=realm) == "Aa1!" + "a" * 64
+    realm.write_text(json.dumps({"passwordPolicy": "length(8)"}))
+    with pytest.raises(ValueError, match="policy needs review"):
+        generate_operator_password(lambda _: "a" * 64, realm_file=realm)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private file modes")
 def test_operator_password_file_is_private_and_never_overwrites(tmp_path: Path, capsys) -> None:
     tmp_path.chmod(0o700)

@@ -13,7 +13,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import stage_selfhost_disposable_preview as stage  # noqa: E402
-from generate_selfhost_disposable_credentials import GENERATED  # noqa: E402
+from generate_selfhost_disposable_credentials import (  # noqa: E402
+    GENERATED, OPERATOR_PASSWORD_POLICY, validate_operator_password,
+)
 from record_selfhost_bundle_preparation import record  # noqa: E402
 
 
@@ -71,19 +73,33 @@ def preview_assets(tmp_path: Path) -> Path:
     return assets
 
 
+@pytest.mark.parametrize("with_operator_password", [False, True])
 def test_stages_exact_archive_and_private_credentials(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+    with_operator_password: bool,
 ) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
     assets = preview_assets(tmp_path)
     source = tmp_path / "source"
     source.mkdir()
+    realm = source / "config/keycloak/11id-realm.json"
+    realm.parent.mkdir(parents=True)
+    realm.write_text(json.dumps({"passwordPolicy": OPERATOR_PASSWORD_POLICY}))
     private = tmp_path / "private"
     monkeypatch.setattr(stage.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(stage, "clean_source_sha", lambda _source: SOURCE_SHA)
     monkeypatch.setattr(stage, "verify_descriptor", lambda *_args: None)
-    result = stage.stage(assets, source, private)
+    calls = []
+    original_write = stage.write_operator_password
+
+    def record_write(path: Path, *, realm_file: Path) -> None:
+        calls.append((path, realm_file))
+        original_write(path, realm_file=realm_file)
+
+    monkeypatch.setattr(stage, "write_operator_password", record_write)
+    result = stage.stage(assets, source, private,
+                         with_operator_password=with_operator_password)
     assert result["qualification"] == "unqualified"
     assert result["source_sha"] == SOURCE_SHA
     assert result["install_root"] == str(private / "install" / "selfhost-prepared")
@@ -93,8 +109,17 @@ def test_stages_exact_archive_and_private_credentials(
                          "scripts" / "launch.sh").stat().st_mode) == 0o755
     assert not (private / "install" / "selfhost-prepared" / "secrets").exists()
     assert json.loads((private / "stage.json").read_text(encoding="utf-8")) == result
+    password_file = private / "operator-password"
+    assert password_file.exists() is with_operator_password
+    assert calls == ([(password_file, realm)] if with_operator_password else [])
+    if with_operator_password:
+        password = password_file.read_text(encoding="ascii").strip()
+        validate_operator_password(password, realm)
+        assert stat.S_IMODE(password_file.stat().st_mode) == 0o600
+        assert password not in json.dumps(result)
+        assert password not in str(capsys.readouterr())
     with pytest.raises(ValueError, match="fresh private root"):
-        stage.stage(assets, source, private)
+        stage.stage(assets, source, private, with_operator_password=with_operator_password)
 
 
 def test_checksum_failure_precedes_private_root_creation(
@@ -113,14 +138,18 @@ def test_checksum_failure_precedes_private_root_creation(
     assert not private.exists()
 
 
+@pytest.mark.parametrize("with_operator_password", [False, True])
 def test_late_failure_removes_owned_partial_credentials_for_retry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, with_operator_password: bool,
 ) -> None:
     if os.name != "posix":
         pytest.skip("POSIX private-file behavior")
     assets = preview_assets(tmp_path)
     source = tmp_path / "source"
     source.mkdir()
+    realm = source / "config/keycloak/11id-realm.json"
+    realm.parent.mkdir(parents=True)
+    realm.write_text(json.dumps({"passwordPolicy": OPERATOR_PASSWORD_POLICY}))
     private = tmp_path / "private"
     monkeypatch.setattr(stage.os, "geteuid", lambda: 1000)
     monkeypatch.setattr(stage, "clean_source_sha", lambda _source: SOURCE_SHA)
@@ -128,15 +157,63 @@ def test_late_failure_removes_owned_partial_credentials_for_retry(
     original_generate = stage.generate
 
     def fail_after_secret_creation(root: Path) -> None:
+        assert (private / "operator-password").exists() is with_operator_password
         (root / "sensitive").write_text("do-not-retain", encoding="ascii")
         raise RuntimeError("injected staging failure")
 
     monkeypatch.setattr(stage, "generate", fail_after_secret_creation)
     with pytest.raises(RuntimeError, match="injected staging failure"):
-        stage.stage(assets, source, private)
+        stage.stage(assets, source, private, with_operator_password=with_operator_password)
     assert not private.exists()
     monkeypatch.setattr(stage, "generate", original_generate)
     assert stage.stage(assets, source, private)["qualification"] == "unqualified"
+
+
+@pytest.mark.parametrize("policy", [None, "length(8)"])
+def test_opt_in_uses_selected_source_policy_before_generating_service_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy,
+) -> None:
+    if os.name != "posix":
+        pytest.skip("POSIX private-file behavior")
+    assets = preview_assets(tmp_path)
+    source = tmp_path / "source"
+    source.mkdir()
+    if policy is not None:
+        realm = source / "config/keycloak/11id-realm.json"
+        realm.parent.mkdir(parents=True)
+        realm.write_text(json.dumps({"passwordPolicy": policy}))
+    private = tmp_path / "private"
+    monkeypatch.setattr(stage.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(stage, "clean_source_sha", lambda _source: SOURCE_SHA)
+    monkeypatch.setattr(stage, "verify_descriptor", lambda *_args: None)
+    monkeypatch.setattr(stage, "generate", lambda _: pytest.fail("service generation called"))
+    with pytest.raises(ValueError, match="shipped operator password policy"):
+        stage.stage(assets, source, private, with_operator_password=True)
+    assert not private.exists()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_cli_forwards_only_opt_in_and_sanitizes_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys, enabled: bool,
+) -> None:
+    paths = [tmp_path / name for name in ("assets", "source", "private")]
+    argv = ["stage", "--assets-dir", str(paths[0]), "--source-checkout", str(paths[1]),
+            "--private-root", str(paths[2])]
+    if enabled:
+        argv.append("--with-operator-password")
+    monkeypatch.setattr(sys, "argv", argv)
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise ValueError("sensitive-failure-detail")
+
+    monkeypatch.setattr(stage, "stage", fail)
+    assert stage.main() == 2
+    assert calls == [(tuple(paths), {"with_operator_password": enabled})]
+    captured = capsys.readouterr()
+    assert not captured.out
+    assert captured.err == "disposable preview staging failed: ValueError\n"
 
 
 def test_unsafe_parent_is_rejected_before_staging(

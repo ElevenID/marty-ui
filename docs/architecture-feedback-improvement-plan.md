@@ -34,7 +34,12 @@ paused actual-handler port tests, and a 21-input mixed-roster producer drift
 guard. Component worker reviews cleared the changes. The Flow shell suite
 passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
 and combined focused Python checks passed 168 tests (five platform skips).
-The nineteen new Rust cases still require compilation and execution in CI.
+PR CI `39084339386` compiled and executed all nineteen new Rust cases and four
+existing retry cases successfully. Its Flow evidence records nine selected and
+executed cases with same-run compiler-artifact identity. Independent review
+verified the named outcomes. Protected queue run `39085856892` passed and
+#1393 merged as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` on October 18
+at 01:39 UTC. The next maintenance batch starts from that actual main.
 The first batch CI release-contract run passed 6,938 tests but found one stale
 verified-leaf count after the new guarded test leaf was added. The correction
 retains the strict count and adds explicit new-leaf membership; its local
@@ -43,6 +48,70 @@ selection regression passed and independent review cleared it. The detailed
 No unique real-DB case, historical corpus, production behavior, required gate
 or connection limit is removed or weakened. Current-input drift evidence does
 not establish original-capture provenance or authorize qualification reuse.
+
+## Next reviewed maintenance batch (local; hosted validation pending)
+
+- A0: both self-host acceptance callers reuse the owned obligation recorder.
+  The twelve outer case outcomes, configured image/revision and bounded
+  packager/Compose byte identities do not prove nested assertion reachability,
+  upstream image provenance or installed-product cleanup.
+- Compilation visibility: the existing eight recovery preparation commands
+  emit flushed, fixed-label timings. Preparation-only mode reuses that owner
+  without Docker/TLS provisioning. Optional sanitized cache evidence and its
+  seven-day upload cannot weaken or block the required recovery qualification.
+- Profile consistency: host Rust test/lint and trusted-main warming explicitly
+  use zero dev/test debug info. This reduces CI debug information, not checks;
+  local debugging and production profiles remain unchanged. Package feature
+  graphs remain separate, and cache write failures remain undiagnosed.
+- A6: an opt-in PR diagnostic compiles the Issuance library and requires all
+  23 retry/renewal cases without Docker fixtures. Existing PR and protected
+  suites remain required, including existing optional worker diagnostics.
+  The classifier is unchanged. Narrow-feature hosted qualification must precede
+  any separately reviewed selective admission or speedup claim. Put the label
+  on the PR before its next synchronize event; label changes do not start CI.
+
+Independent integration review confirmed component identity and preserved gates.
+The combined local run passed 263 tests with five platform skips and exposed
+an obsolete container-only profile assertion. Its reviewed update preserves all
+container/compile-scope guards; 53 focused checks then passed. The batch is
+rebuilt on merged main `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` and
+independent review confirmed the reviewed code and main changes are preserved.
+Hosted validation remains required before merge.
+
+The first hosted batch exposed an exact protocol-owner guard that still
+recognized only the old diagnostic matrix. Its correction pins the new additive
+branches while retaining full-workspace and protected-matrix requirements;
+27 gateway tests passed, including new negative controls, and the complete
+public contract CLI passed against pinned protocol source
+`76c37dc229b328afe002b911a26624543f814a64`. Independent review cleared it.
+An additional reviewed ownership guard rejects symlink/non-regular Git-index
+Issuance test leaves before emitting verified ownership; all 35 ownership tests
+passed. Neither correction enables selective skipping.
+
+The same batch includes an opt-in staging flag that reuses the existing secure
+operator-password generator before provisioning. It validates the selected
+source checkout's realm, keeps the value out of reports/arguments/errors, and
+retains default staging and owned-root rollback. Existing released previews
+without the flag keep their separate helper; no v1.1.255 asset is changed.
+Independent review and 12 host tests passed; 15 POSIX cases still require
+Linux CI. This is setup assistance, not turnkey or installed qualification.
+
+The hosted fixture-free diagnostic executed all 23 exact cases successfully in
+run `39087827050`, job `117558108996`, artifact `12121287706`. Independent
+review verified the separate unit inventory, same-run compiler identity and
+that Docker, image and database steps were skipped only on this diagnostic.
+This does not authorize selective admission or prove overall feedback savings.
+The broader local six-module run recorded 496 passed, six platform skips and
+one stale assertion expecting the database step to be unconditional even on
+the new unit-only lane. Its reviewed one-line correction now requires exactly
+`matrix.lane != 'renewal-unit'`; all five focused ownership checks passed while
+retaining full shell/order/gate assertions. Complete hosted validation of the
+corrected head remains required. The previous full release lane recorded
+6,968 passes, 40 skips and 534 subtests, but three stale copies of this guard
+failed. The other two copies in pilot-workflow and dependency-order tests are
+corrected to the same exact condition, retaining their remaining assertions;
+all 26 checks in those two modules passed. The previous Linux stage/generator
+cases executed successfully, including opt-in private mode and owned cleanup.
 
 ## Prior handoff checkpoint (superseded delivery state)
 

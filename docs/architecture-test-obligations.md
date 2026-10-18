@@ -7,6 +7,24 @@ This is the initial group inventory for A0, the exact obligation record for the 
 
 ## Existing groups and ownership constraints
 
+The coordinated integration-secret restore probe now flushes fixed-label progress
+and per-command preparation timing without changing its eight Cargo invocations.
+`python scripts/probe_integration_secret_coordinated_restore.py --prepare-rust-only`
+calls that same preparation owner without starting Docker or TLS fixtures; it is
+not recovery qualification. The default command retains every live PostgreSQL,
+Raft, signing, DIDComm and HAIP phase. CI keeps the tiny timing JSONL and optional
+allowlisted cache counters for seven days, including failed runs. Cache counters
+are sampled after the complete recovery probe, not attributed to an individual
+Cargo command. This adds visibility, not warming, artifact reuse or a speed claim.
+
+Host Rust test, lint and trusted-main warming jobs explicitly use zero dev/test
+debug info with incremental compilation disabled, matching the recovery probe.
+This removes a known CI profile mismatch without unifying package feature graphs.
+Local line-table/debugging profiles, production optimization, required checks,
+read-only PR cache access and the warmer's existing thirty-minute budget remain
+unchanged. Cache write failures and actual resulting reuse still need evidence;
+profile alignment alone does not establish a turnaround improvement.
+
 | Group / current entry point | Obligations and inputs | Execution / relocation constraints |
 | --- | --- | --- |
 | Workspace behavior: contracts lane, `cargo test --locked --workspace` | Service/domain behavior, embedded contract corpora, explicit test targets and grouped behavior modules | Some tests return early without configured environments; a successful default workspace run is not evidence of live acceptance. Preserve explicit later invocations. |
@@ -191,6 +209,23 @@ selected SHA. The separate Canvas lane omits this delegated target. Protected
 merge groups retain the complete Rust matrix. A default workspace test or
 `--list` result alone does not prove the environment-gated parent/child loader
 executed.
+
+Both the dedicated self-host lane and the retained full/manual Canvas runner
+now record outer libtest selection,
+ignored status, outcomes, exact non-Cargo runner/image-pin input hashes, and
+configured image ID/revision plus packager/Compose executable byte identities
+through the shared Rust obligation recorder. In CI, the executable is bound to
+the same-run compiler-artifact manifest; local runs without that manifest are
+marked `local_unrecorded`. The shell's original 12-name
+roster, image checks, test arguments, parallelism, pass-count gate, and Rust
+resource cleanup remain authoritative. These records prove outer harness case
+completion only: `selfhost_public_image_loader_child` is an environment-gated
+child entry point, and its successful outer row does not prove the nested
+loader reached every assertion. The parent test retains its own nested
+completion/recovery checks. Interrupt forwarding settles the owned harness
+process group; it is not evidence of completed installed-product cleanup,
+upstream image/package provenance, or a complete transitive source graph. The
+record grants no skip authority.
 
 | Case group | Distinct obligation |
 | --- | --- |
@@ -387,3 +422,22 @@ in the protected lane, plus unchanged producer/oracle pins and disposable
 database cleanup. The 93.8-second Cargo timing observation is the entire
 Issuance `lib(test)` compile, not a worker-specific saving, and does not
 justify a new crate or a test reduction by itself.
+
+### Additive renewal-unit CI diagnostic (not selective admission)
+
+The local A6 pilot adds a `renewal-unit` Rust matrix lane only when a
+maintainer places `ci-renewal-unit-diagnostic` on a Rust-runtime PR before its
+next synchronize run. Label changes alone do not dispatch CI. The existing
+Canvas, contracts, and self-host lanes remain mandatory on that PR and on
+every protected merge group; the ordinary test-only-leaf PR still selects
+contracts. The focused lane compiles only the Issuance library test harness
+with its package's normal features and requires the same-run Cargo artifact,
+all four retry cases and all nineteen renewal cases to be discovered and
+executed without ignored or failed cases. It starts no Docker fixture.
+
+This is a hosted qualification experiment, not a measured speedup or permission
+to omit any SQL or process acceptance. Admission to a future selective PR plan
+requires an exact-head hosted success, feature/profile and artifact review,
+and a separate reviewed change to the classifier and CI Gate. Missing source
+ownership, an unknown/mixed diff, or changed test roster must retain the broad
+plan or fail the diagnostic; the 60 PostgreSQL renewal cases remain required.

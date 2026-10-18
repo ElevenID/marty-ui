@@ -19,7 +19,7 @@ from check_prepared_selfhost_consumer import (
     verify_extracted_bundle,
     verify_receipt,
 )
-from generate_selfhost_disposable_credentials import generate
+from generate_selfhost_disposable_credentials import generate, write_operator_password
 from record_selfhost_bundle_preparation import extract_owned_zip, file_digest
 
 
@@ -80,7 +80,8 @@ def clean_source_sha(source: Path) -> str:
     return revision
 
 
-def stage(assets: Path, source: Path, private_root: Path) -> dict:
+def stage(assets: Path, source: Path, private_root: Path,
+          *, with_operator_password: bool = False) -> dict:
     if os.name != "posix" or os.geteuid() == 0:
         raise ValueError("disposable staging requires a non-root Linux operator")
     if (not assets.is_absolute() or assets.is_symlink() or not assets.is_dir()
@@ -119,6 +120,9 @@ def stage(assets: Path, source: Path, private_root: Path) -> dict:
         verify_extracted_bundle(archive, install_root)
         if file_digest(archive) != bound["archive_sha256"]:
             raise ValueError("preview ZIP changed during staging")
+        if with_operator_password:
+            write_operator_password(private_root / "operator-password",
+                                    realm_file=source / "config/keycloak/11id-realm.json")
         generate(private_root / "secrets")
         report = {
             "schema": "marty.selfhost-disposable-stage/v1",
@@ -148,9 +152,12 @@ def main() -> int:
     parser.add_argument("--assets-dir", required=True, type=Path)
     parser.add_argument("--source-checkout", required=True, type=Path)
     parser.add_argument("--private-root", required=True, type=Path)
+    parser.add_argument("--with-operator-password", action="store_true",
+                        help="also create a private synthetic operator password file")
     args = parser.parse_args()
     try:
-        report = stage(args.assets_dir, args.source_checkout, args.private_root)
+        report = stage(args.assets_dir, args.source_checkout, args.private_root,
+                       with_operator_password=args.with_operator_password)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError,
             zipfile.BadZipFile) as error:
         print(f"disposable preview staging failed: {type(error).__name__}", file=sys.stderr)

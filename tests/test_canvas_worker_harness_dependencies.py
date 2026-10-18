@@ -90,7 +90,7 @@ def assert_dependency_setup(steps):
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert not steps[preflight].get("continue-on-error", False)
     full = names.index("Run isolated database contract suites concurrently")
-    assert "if" not in steps[full]
+    assert steps[full]["if"] == "matrix.lane != 'renewal-unit'"
     assert not steps[full].get("continue-on-error", False)
     assert 'if [[ "${{ matrix.lane }}" == worker ]]; then' in steps[full]["run"]
     assert (

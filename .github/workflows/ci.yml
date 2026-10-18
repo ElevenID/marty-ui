@@ -925,10 +925,30 @@ jobs:
       - name: Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
+          MARTY_RECOVERY_PREPARATION_TIMING_FILE: ${{ runner.temp }}/rust-recovery-preparation.jsonl
           CARGO_INCREMENTAL: 0
           CARGO_PROFILE_DEV_DEBUG: 0
           CARGO_PROFILE_TEST_DEBUG: 0
         run: python3 scripts/probe_integration_secret_coordinated_restore.py
+      - name: Record optional recovery compiler cache outcomes
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 10s sccache --show-stats 2>/dev/null |
+            awk -v phase=recovery_probe -f scripts/ci/public-sccache-stats.awk |
+            tee "$RUNNER_TEMP/rust-recovery-cache-counters.jsonl" || true
+      - name: Retain recovery preparation evidence
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rust-recovery-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/rust-recovery-preparation.jsonl
+            ${{ runner.temp }}/rust-recovery-cache-counters.jsonl
+          if-no-files-found: warn
+          retention-days: 7
 
   test-rust-services:
     name: Rust Service Tests (${{ matrix.lane }})
@@ -944,6 +964,15 @@ jobs:
         # Its normal Canvas/contracts/selfhost lanes and every merge-group gate remain.
         lane: >-
           ${{ fromJSON(github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
+          contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
+          needs.changes.outputs.rust_runtime == 'true' &&
+          '["canvas","contracts","worker","selfhost","renewal-unit"]' ||
+          github.event_name == 'pull_request' &&
+          contains(github.event.pull_request.labels.*.name, 'ci-renewal-unit-diagnostic') &&
+          needs.changes.outputs.rust_runtime == 'true' &&
+          '["canvas","contracts","selfhost","renewal-unit"]' ||
+          github.event_name == 'pull_request' &&
           contains(github.event.pull_request.labels.*.name, 'ci-worker-diagnostic') &&
           contains(github.event.pull_request.labels.*.name, 'ci-selfhost-diagnostic') &&
           needs.changes.outputs.rust_runtime == 'true' &&
@@ -961,6 +990,7 @@ jobs:
       contents: read
     env:
       CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
       CARGO_PROFILE_TEST_DEBUG: 0
       FLOW_POSTGRES_TEST_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
       VERIFICATION_SESSION_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/marty_atomic_test
@@ -972,8 +1002,10 @@ jobs:
         with:
           persist-credentials: false
       - name: Prefer cached Docker Hub images without restarting the runner daemon
+        if: matrix.lane != 'renewal-unit'
         run: bash scripts/ci/configure-dockerhub-mirror.sh
       - name: Select the exact BuildKit image with registry fallback
+        if: matrix.lane != 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -982,7 +1014,7 @@ jobs:
       - name: Start digest-pinned Rust test services after registry setup
         # Self-host acceptance creates its own isolated PostgreSQL container;
         # it never uses the shared PostgreSQL/Redis/OpenBao fixture services.
-        if: matrix.lane != 'selfhost'
+        if: matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -1002,6 +1034,7 @@ jobs:
           echo "MARTY_RUST_CI_POSTGRES_ID=$postgres_id" >> "$GITHUB_ENV"
           echo "MARTY_RUST_CI_REDIS_ID=$redis_id" >> "$GITHUB_ENV"
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+        if: matrix.lane != 'renewal-unit'
         with:
           driver-opts: image=${{ env.MARTY_CI_BUILDKIT_IMAGE }}
           buildkitd-config: .github/buildkit-ci-mirror.toml
@@ -1081,7 +1114,14 @@ jobs:
         run: |
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
-          if [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
+          if [[ "${{ matrix.lane }}" == renewal-unit ]]; then
+            # Diagnostic only. The initial PR still runs the complete matrix;
+            # this package-scoped compile has no database, image or service fixture.
+            cargo test --locked -p marty-issuance-service --lib --no-run \
+              --timings --message-format=json > "$artifacts"
+            python3 ../scripts/ci/verify-canvas-test-artifacts.py \
+              --renewal-unit-only "$artifacts" target
+          elif [[ "${{ matrix.lane }}" == worker || "${{ matrix.lane }}" == flow || "${{ matrix.lane }}" == selfhost ]]; then
             # Exact test-source owners compile in the same pinned Bookworm
             # environment as the full Canvas lane. The merge group stays full.
             cargo fetch --locked
@@ -1265,6 +1305,25 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
+      - name: Execute exact renewal handler library obligations
+        if: matrix.lane == 'renewal-unit'
+        working-directory: rust
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t executables < <(jq -r '
+            select(.reason == "compiler-artifact")
+            | select(.package_id | contains("#marty-issuance-service@"))
+            | select(.target.name == "marty_issuance_service")
+            | select(.target.kind | index("lib"))
+            | select(.profile.test == true)
+            | select(.executable != null) | .executable
+          ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
+          [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          python3 ../scripts/ci/rust_db_obligations.py \
+            --name renewal_unit --owner renewal-unit -- \
+            "${executables[0]}" \
+            canvas_sync_worker::retry_handoff_tests:: --test-threads=4
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
         shell: bash
@@ -1817,6 +1876,7 @@ jobs:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:canvas
         run: python3 scripts/probe_canvas_didcomm_sidecar.py
       - name: Run isolated database contract suites concurrently
+        if: matrix.lane != 'renewal-unit'
         working-directory: rust
         shell: bash
         env:
@@ -1972,7 +2032,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
       - name: Remove owned Rust test services and volumes
-        if: always() && matrix.lane != 'selfhost'
+        if: always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -1989,6 +2049,8 @@ jobs:
       contents: read
     env:
       CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: READ_ONLY
