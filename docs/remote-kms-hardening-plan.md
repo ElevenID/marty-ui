@@ -60,6 +60,19 @@ against a further restored-state business journey, writing private report
 The owned projects were stopped again and production stayed HTTP 200.
 This PR was opened after local testing against the restored clone; its hosted
 checks, protected merge, exact-main claim and signed release are pending.
+Additional archive recovery evidence (2026-10-17 local): a mode-0600 tar of
+the untouched quiesced backup was extracted as isolated clone E. All 3,299
+entries were relative, with no symlinks or unsafe paths; `diff -qr` matched
+the pre-rewrite source byte-for-byte, and OpenBao TLS directory ownership and
+mode matched. The archive SHA256 is
+`d1d288b64f09d8239f5b4795b824c0cdfb0674520056e84ae705d7e2ec6cea85`.
+After private root/port/project rebinding, restored OpenBao bootstrapped and
+the candidate migrator passed, followed by all 28 roles, the public journey,
+Keycloak refresh and both database custody checks. Private report:
+`/home/canvasrunner/kms-qualification/v1.1.255/private/recovery-39077407940-e/restored-journey-archive-report.json`.
+The isolated projects were stopped; production loopback remained HTTP 200.
+This tests local archive portability and ownership, not off-host retention,
+the signed fixed migrator, or a supported cutover.
 
 ## Objective and working agreement
 
