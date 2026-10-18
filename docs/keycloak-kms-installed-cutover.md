@@ -34,11 +34,14 @@ test-user accounts as part of installed acceptance.
    `v1.1.255` passed an independent fresh 28-service installed journey,
    but a coordinated cold restore exposed a restart failure in its native
    migration bootstrap: normalized signing-key purpose order was treated as a
-   conflicting binding. Do not use `v1.1.255` for the final cutover. Consider
-   signed `v1.1.256` only after its exact-main release and independent fresh
-   installed and restored-stack gates pass. Its source contains the restart
-   fix and a runtime-bound recovery verifier; neither its merge nor local
-   candidate replay establishes a qualified release or cutover.
+   conflicting binding. Do not use `v1.1.255` for the final cutover. The
+   `v1.1.256` source contains the restart fix and a runtime-bound recovery
+   verifier. Its transaction qualified and promoted all five image version
+   tags, but its GitHub tag push was rejected before publication. No signed
+   `v1.1.256` release or installed acceptance exists. Those image tags remain
+   bound to the original source and must not be reassigned. Consider signed
+   `v1.1.257` only after its exact-main release and independent fresh installed
+   and restored-stack gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full
