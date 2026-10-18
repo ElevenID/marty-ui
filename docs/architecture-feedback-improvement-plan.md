@@ -2,7 +2,43 @@
 
 Status: active requirements and queue, 2026-10-17.
 
-## Current delivery priority
+## Current delivery and maintenance-batch checkpoint
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously verified assets. Its unchanged bundle passed
+all fifteen local installed-journey phases in 169.812 seconds. The descriptor
+remains unqualified: no supported installer, hardware minimum or independent
+native Linux consumer installation is established. Outside testing can proceed
+under the approved unsupported-preview policy; do not wait for all A0-A7 work.
+
+[PR #1390](https://github.com/ElevenID/marty-ui/pull/1390) merged as
+`6daf4232cd110656652dec28fd57794693078fce` after successful protected run
+`39081635419`. It supplies early operator-password validation/generation and
+two executed virtual-clock timeout matrices; it does not modify v1.1.255 assets.
+
+The independent renewal-write overlap [PR #1391](https://github.com/ElevenID/marty-ui/pull/1391)
+passed all PR checks and is queued for protected validation. Hosted contracts
+artifact `12119516080` records write boundaries at 10.803 seconds, versus
+30.292/30.254 seconds in two earlier observations. This roughly 19.5-second
+targeted reduction is not a controlled paired or overall-pipeline speedup.
+The worker inventory records eleven passed tests and three unchanged ignored
+diagnostics, not sixty individual nested outcome lines. A separately reviewed
+local tmpfs probe directly observed all sixty outcomes and owned cleanup;
+its reused worker had unproven producer provenance, so it is not installed
+qualification, physical-durability evidence or a hardware support claim.
+
+This maintenance batch starts from the verified #1390 main and does not depend
+on #1391. It combines Flow case/input evidence and owned cancellation, nineteen
+paused actual-handler port tests, and a 21-input mixed-roster producer drift
+guard. Component worker reviews cleared the changes. The Flow shell suite
+passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
+and combined focused Python checks passed 168 tests (five platform skips).
+The nineteen new Rust cases still require compilation and execution in CI.
+No unique real-DB case, historical corpus, production behavior, required gate
+or connection limit is removed or weakened. Current-input drift evidence does
+not establish original-capture provenance or authorize qualification reuse.
+
+## Prior handoff checkpoint (superseded delivery state)
 
 Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
 predates known fresh-install repairs and should not be the next tester handoff.
