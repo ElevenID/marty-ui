@@ -455,6 +455,9 @@ def test_whole_library_rejects_unknown_ignored_owner_before_execution(
 ) -> None:
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", raising=False)
     monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY,
@@ -1088,6 +1091,150 @@ def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
         assert '"diagnostic":"direct-stdout"' in run.stdout
         assert "child-inherited-stdout" in run.stdout
         assert "test happy ... ok" not in run.stdout
+
+
+def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selection(
+    real_obligation_harness, monkeypatch, capsys
+) -> None:
+    executable = str(real_obligation_harness)
+    arguments = ["--skip", "fixture_case", "--nocapture", "--test-threads=1"]
+    assert INVENTORY.expected_cases(
+        executable, arguments, allow_skip=True, allow_nocapture=True
+    ) == ({"happy", "happy_extra"}, set())
+    with pytest.raises(ValueError, match="unsupported_selection_argument"):
+        INVENTORY.expected_cases(executable, arguments, allow_nocapture=True)
+    for invalid in (["--skip"], ["--skip", "../foreign"]):
+        with pytest.raises(ValueError):
+            INVENTORY.selection(invalid, allow_skip=True)
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
+    assert INVENTORY.run_contract(
+        "canvas_worker_acceptance", [executable, *arguments], owner="canvas"
+    ) == 0
+    records = [
+        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
+        for line in capsys.readouterr().out.splitlines()
+        if line.startswith(INVENTORY.CANVAS_PREFIX)
+    ]
+    assert len(records) == 1
+    assert records[0]["schema"] == "marty.rust-canvas-obligation/v1"
+    assert records[0]["selected"] == records[0]["executed"] == [
+        "happy",
+        "happy_extra",
+    ]
+    assert records[0]["ignored"] == []
+    assert records[0]["gate"] == "test-rust-services/canvas"
+    assert records[0]["canvas_qualification_mode"] == "routine"
+    assert set(records[0]["worker_tiers"].values()) == {None}
+
+
+def test_canvas_obligation_declares_kms_and_tier_names_without_values() -> None:
+    composition = INVENTORY.obligation("canvas_composition_acceptance")[2]
+    worker = INVENTORY.obligation("canvas_worker_acceptance")[2]
+    composition_inputs = {item["name"]: item for item in composition}
+    worker_inputs = {item["name"]: item for item in worker}
+    assert {
+        "MARTY_CANVAS_OPENBAO_URL",
+        "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
+        "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
+    } <= composition_inputs.keys()
+    assert {
+        "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER",
+        "MARTY_CANVAS_WORKER_VALIDATION_TIER",
+    } <= worker_inputs.keys()
+    for item in (*composition, *worker):
+        assert set(item) == {
+            "name",
+            "consumer",
+            "owner",
+            "provisioner",
+            "requirement",
+        }
+        assert item["owner"] == "scripts/ci/run-published-canvas-contracts.sh"
+
+
+def test_canvas_composition_inventory_never_records_the_kms_token(
+    real_obligation_harness, monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
+    monkeypatch.setenv("MARTY_ISSUANCE_TEST_BINARY", "synthetic-issuance")
+    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_URL", "https://127.0.0.1:1")
+    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_ROOT_TOKEN", "private-kms-token")
+    monkeypatch.setenv("MARTY_CANVAS_OPENBAO_CA_CERT_FILE", "synthetic-ca")
+    assert INVENTORY.run_contract(
+        "canvas_composition_acceptance",
+        [str(real_obligation_harness), "happy", "--exact", "--test-threads=1"],
+        owner="canvas",
+    ) == 0
+    output = capsys.readouterr().out
+    assert "private-kms-token" not in output
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
+        for line in output.splitlines()
+        if line.startswith(INVENTORY.CANVAS_PREFIX)
+    )
+    assert record["selected"] == record["executed"] == ["happy"]
+    assert record["runtime_fixture_owner"].endswith("canvas_published_database.rs")
+
+
+def test_canvas_obligation_files_are_separate_for_parallel_targets(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    for name in INVENTORY.CANVAS_EVIDENCE_NAMES:
+        INVENTORY.emit(
+            {"name": name, "schema": "marty.rust-canvas-obligation/v1", "status": "ok"}
+        )
+    assert capsys.readouterr().out.count(INVENTORY.CANVAS_PREFIX) == 2
+    for name, filename in INVENTORY.CANVAS_EVIDENCE_NAMES.items():
+        path = tmp_path / "rust-build-evidence" / filename
+        assert json.loads(path.read_text(encoding="utf-8"))["name"] == name
+
+
+def test_canvas_inventory_rejects_unreviewed_tier_before_harness_execution(
+    real_obligation_harness, monkeypatch, capsys
+) -> None:
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
+    monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", "0")
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", "unreviewed")
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", "routine")
+    assert INVENTORY.run_contract(
+        "canvas_worker_acceptance",
+        [str(real_obligation_harness), "happy", "--exact", "--test-threads=1"],
+        owner="canvas",
+    ) == 1
+    output = capsys.readouterr().out
+    assert "test happy ... ok" not in output
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.CANVAS_PREFIX))
+        for line in output.splitlines()
+        if line.startswith(INVENTORY.CANVAS_PREFIX)
+    )
+    assert record["status"] == "failed"
+    assert record["reason"] == "invalid_canvas_worker_tier"
+
+
+def test_canvas_runner_routes_all_worker_and_composition_bodies_through_inventory() -> None:
+    source = CANVAS_RUNNER.read_text(encoding="utf-8")
+    assert source.count("--name canvas_worker_acceptance --owner canvas") == 9
+    assert source.count("--name canvas_composition_acceptance --owner canvas") == 3
+    for line in source.splitlines():
+        if (
+            ("$worker_executable" in line or "$composition_executable" in line)
+            and "--nocapture" in line
+        ):
+            assert 'python3 "$obligation_runner" --name canvas_' in line
 
 
 @pytest.mark.parametrize(

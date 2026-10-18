@@ -1,4 +1,4 @@
-"""Record effective libtest obligations for DB, Flow, and self-host runners.
+"""Record effective libtest obligations for DB, Canvas, Flow, and self-host runners.
 
 Discovery uses the same executable and selection arguments as execution. libtest
 --list includes ignored tests by default, so a second ignored-only discovery is
@@ -24,8 +24,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 EVIDENCE_NAME = "db-contract-obligations.jsonl"
 UNIT_EVIDENCE_NAME = "rust-unit-obligations.jsonl"
+CANVAS_EVIDENCE_NAMES = {
+    "canvas_composition_acceptance": "canvas-composition-obligations.jsonl",
+    "canvas_worker_acceptance": "canvas-worker-obligations.jsonl",
+}
 PREFIX = "MARTY_DB_OBLIGATION_V1 "
 UNIT_PREFIX = "MARTY_RUST_UNIT_OBLIGATION_V1 "
+CANVAS_PREFIX = "MARTY_CANVAS_OBLIGATION_V1 "
 RUN_IDENTITY = ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_SHA")
 FIXTURE_OWNER = ".github/compose/rust-ci-fixtures.yml"
 RUNNER_OWNER = "scripts/ci/run-rust-db-contracts.sh"
@@ -252,6 +257,27 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
         ),
     )
+    entries["canvas_composition_acceptance"] = (
+        "marty-canvas-acceptance",
+        "canvas_published_schema_contract",
+        (
+            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_ISSUANCE_TEST_BINARY",
+            "MARTY_CANVAS_OPENBAO_URL",
+            "MARTY_CANVAS_OPENBAO_ROOT_TOKEN",
+            "MARTY_CANVAS_OPENBAO_CA_CERT_FILE",
+        ),
+    )
+    entries["canvas_worker_acceptance"] = (
+        "marty-canvas-worker-acceptance",
+        "canvas_published_worker_contract",
+        (
+            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_CANVAS_WORKER_TEST_BINARY",
+        ),
+    )
     entries["renewal_unit"] = (
         "marty-issuance-service",
         "marty_issuance_service",
@@ -291,6 +317,33 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
                 if item["name"].startswith("MARTY_SELFHOST_TEST_")
                 or item["name"] == "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
                 else SELFHOST_OWNER
+            )
+    if name in CANVAS_EVIDENCE_NAMES:
+        for item in inputs:
+            item["owner"] = "scripts/ci/run-published-canvas-contracts.sh"
+            item["provisioner"] = "scripts/ci/run-published-canvas-contracts.sh"
+        inputs.append(
+            {
+                "name": "MARTY_CANVAS_FULL_QUALIFICATION",
+                "consumer": package,
+                "owner": "scripts/ci/run-published-canvas-contracts.sh",
+                "provisioner": ".github/workflows/ci.yml",
+                "requirement": "default_routine_or_explicit_full",
+            }
+        )
+        if name == "canvas_worker_acceptance":
+            inputs.extend(
+                {
+                    "name": variable,
+                    "consumer": package,
+                    "owner": "scripts/ci/run-published-canvas-contracts.sh",
+                    "provisioner": "scripts/ci/run-published-canvas-contracts.sh",
+                    "requirement": "parallel_target_only",
+                }
+                for variable in (
+                    "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER",
+                    "MARTY_CANVAS_WORKER_VALIDATION_TIER",
+                )
             )
     # These tests use a Rust-owned HTTPS Signing Keys fixture by default, or an
     # explicitly supplied live route. Record the conditional dependency names,
@@ -378,6 +431,13 @@ def libtest_harness(package: str, target: str) -> dict:
         "selfhost_public_image_contract",
     ):
         manifest_path = ROOT / "rust/crates/selfhost-acceptance/Cargo.toml"
+    elif (package, target) in {
+        ("marty-canvas-acceptance", "canvas_published_schema_contract"),
+        ("marty-canvas-worker-acceptance", "canvas_published_worker_contract"),
+    }:
+        manifest_path = (
+            ROOT / "rust/crates" / package.removeprefix("marty-") / "Cargo.toml"
+        )
     else:
         manifest_path = ROOT / "rust/services" / service / "Cargo.toml"
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
@@ -414,11 +474,24 @@ def libtest_harness(package: str, target: str) -> dict:
 
 
 def selection(
-    arguments: list[str], *, allow_nocapture: bool = False
+    arguments: list[str], *, allow_nocapture: bool = False, allow_skip: bool = False
 ) -> tuple[list[str], str]:
     mode = "default"
     selectors = []
+    skip_value = False
     for argument in arguments:
+        if skip_value:
+            if not re.fullmatch(CASE, argument):
+                raise ValueError("invalid_skip_selector")
+            selectors.append(argument)
+            skip_value = False
+            continue
+        if argument == "--skip":
+            if not allow_skip:
+                raise ValueError("unsupported_selection_argument")
+            selectors.append(argument)
+            skip_value = True
+            continue
         if argument in {"--ignored", "--include-ignored"}:
             if mode != "default":
                 raise ValueError("ambiguous_ignored_selection")
@@ -433,6 +506,8 @@ def selection(
             selectors.append(argument)
         else:
             raise ValueError("unsupported_selection_argument")
+    if skip_value:
+        raise ValueError("missing_skip_selector")
     return selectors, mode
 
 
@@ -558,9 +633,15 @@ def selfhost_configured_inputs() -> dict[str, str]:
 
 
 def expected_cases(
-    executable: str, arguments: list[str], *, allow_nocapture: bool = False
+    executable: str,
+    arguments: list[str],
+    *,
+    allow_nocapture: bool = False,
+    allow_skip: bool = False,
 ) -> tuple[set[str], set[str]]:
-    selectors, mode = selection(arguments, allow_nocapture=allow_nocapture)
+    selectors, mode = selection(
+        arguments, allow_nocapture=allow_nocapture, allow_skip=allow_skip
+    )
     listing = [
         executable,
         *selectors,
@@ -631,14 +712,24 @@ def emit(evidence: dict) -> None:
         "marty.rust-library-obligation/v1",
     }
     runner_temp = os.environ.get("RUNNER_TEMP")
+    canvas = evidence["schema"] == "marty.rust-canvas-obligation/v1"
     if runner_temp:
-        name = UNIT_EVIDENCE_NAME if unit else EVIDENCE_NAME
+        name = (
+            UNIT_EVIDENCE_NAME
+            if unit
+            else CANVAS_EVIDENCE_NAMES[evidence["name"]]
+            if canvas
+            else EVIDENCE_NAME
+        )
         output = Path(runner_temp) / "rust-build-evidence" / name
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("a", encoding="utf-8", newline="\n") as stream:
             stream.write(encoded + "\n")
     # Libtest can leave an unterminated progress row before cancellation.
-    print("\n" + (UNIT_PREFIX if unit else PREFIX) + encoded, flush=True)
+    print(
+        "\n" + (UNIT_PREFIX if unit else CANVAS_PREFIX if canvas else PREFIX) + encoded,
+        flush=True,
+    )
 
 
 class HarnessInterrupted(Exception):
@@ -755,6 +846,7 @@ def run_owned_harness(
 def run_contract(name: str, command: list[str], owner: str = "contracts") -> int:
     flow = name == "flow_acceptance"
     selfhost = name == "selfhost_acceptance"
+    canvas = name in CANVAS_EVIDENCE_NAMES
     renewal_unit = name == "renewal_unit"
     library_unit = name == "issuance_library_unit"
     unit = renewal_unit or library_unit
@@ -766,6 +858,10 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         gate = f"test-rust-services/{'selfhost' if owner == 'selfhost' else 'canvas'}"
         runner = SELFHOST_OWNER
         fixture = SELFHOST_FIXTURE_OWNER
+    elif canvas:
+        gate = "test-rust-services/canvas"
+        runner = "scripts/ci/run-published-canvas-contracts.sh"
+        fixture = "rust/services/issuance/tests/support/canvas_published_database.rs"
     elif unit:
         gate = "test-rust-services/renewal-unit"
         runner = "scripts/ci/rust_db_obligations.py"
@@ -779,11 +875,14 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         runner = RUNNER_OWNER
         fixture = FIXTURE_OWNER
     evidence = {
+        "name": name,
         "schema": (
             "marty.rust-library-obligation/v1"
             if library_unit
             else "marty.rust-unit-obligation/v1"
             if renewal_unit
+            else "marty.rust-canvas-obligation/v1"
+            if canvas
             else "marty.rust-db-obligation/v1"
         ),
         "gate": gate,
@@ -798,8 +897,9 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         if (
             (flow and owner not in FLOW_OWNERS)
             or (selfhost and owner not in {"selfhost", "canvas"})
+            or (canvas and owner != "canvas")
             or (unit and owner != "renewal-unit")
-            or (not flow and not selfhost and not unit and owner != "contracts")
+            or (not flow and not selfhost and not canvas and not unit and owner != "contracts")
         ):
             raise ValueError("invalid_dispatch_owner")
         package, target, inputs = obligation(name)
@@ -811,6 +911,28 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             evidence["direct_source_inputs"] = flow_source_inputs(owner)
         if selfhost:
             evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
+        if canvas:
+            qualification = os.environ.get("MARTY_CANVAS_FULL_QUALIFICATION", "0")
+            if qualification not in {"0", "1"}:
+                raise ValueError("invalid_canvas_qualification_mode")
+            evidence["canvas_qualification_mode"] = (
+                "full" if qualification == "1" else "routine"
+            )
+            if name == "canvas_worker_acceptance":
+                tiers = {
+                    variable: os.environ.get(variable)
+                    for variable in (
+                        "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER",
+                        "MARTY_CANVAS_WORKER_VALIDATION_TIER",
+                    )
+                }
+                if any(value not in {None, "full", "routine"} for value in tiers.values()):
+                    raise ValueError("invalid_canvas_worker_tier")
+                if (tiers["MARTY_CANVAS_WORKER_RETRY_AFTER_TIER"] is None) != (
+                    tiers["MARTY_CANVAS_WORKER_VALIDATION_TIER"] is None
+                ):
+                    raise ValueError("incomplete_canvas_worker_tier")
+                evidence["worker_tiers"] = tiers
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
@@ -828,11 +950,13 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         # execute their bodies. All current dispatches use standard libtest.
         evidence["harness"] = libtest_harness(package, target)
         selection(
-            command[1:], allow_nocapture=flow or selfhost
+            command[1:], allow_nocapture=flow or selfhost or canvas,
+            allow_skip=canvas,
         )  # Validate before evidence.
         evidence["selection_arguments"] = command[1:]
         expected, ignored = expected_cases(
-            command[0], command[1:], allow_nocapture=flow or selfhost
+            command[0], command[1:], allow_nocapture=flow or selfhost or canvas,
+            allow_skip=canvas,
         )
         if renewal_unit:
             verify_renewal_unit_roster(command[1:], expected, ignored)

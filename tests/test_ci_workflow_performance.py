@@ -47,9 +47,19 @@ CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
     'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
     'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
-    '"$composition_executable" --skip "$serial_composition_test" '
+    'python3 "$obligation_runner" --name canvas_composition_acceptance '
+    '--owner canvas -- "$composition_executable" --skip "$serial_composition_test" '
     '"${config_skips[@]}" "${timeout_skips[@]}" --nocapture '
     '--test-threads=4 >"$composition_log" 2>&1 &'
+)
+CANVAS_WORKER_COMMAND = (
+    'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
+    'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
+    'python3 "$obligation_runner" --name canvas_worker_acceptance '
+    '--owner canvas -- "$worker_executable" --skip "$serial_test" '
+    '--skip "$deadline_serial_test" "${historical_serial_skips[@]}" '
+    '"${preflight_skips[@]}" --nocapture --test-threads=4 '
+    '>"$worker_log" 2>&1 &'
 )
 
 
@@ -4152,7 +4162,7 @@ def test_published_canvas_schema_gate_is_explicit_and_mandatory() -> None:
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            CANVAS_WORKER_COMMAND
         )
         == 1
     )
@@ -4259,7 +4269,7 @@ def _assert_gateway_operations_registration(
     )
     assert (
         published.splitlines().count(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &'
+            CANVAS_WORKER_COMMAND
         )
         == 1
     )
@@ -4357,13 +4367,19 @@ def test_gateway_operations_registration_rejects_disabled_or_incomplete_gate(
         )
     elif mutation == "filtered-full-run":
         published = published.replace(
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4',
-            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" unrelated_filter --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4',
+            CANVAS_WORKER_COMMAND,
+            CANVAS_WORKER_COMMAND.replace(
+                '"$worker_executable" --skip',
+                '"$worker_executable" unrelated_filter --skip',
+            ),
         )
     elif mutation == "filtered-composition-run":
         published = published.replace(
-            '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
-            '"$composition_executable" unrelated_filter --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4',
+            CANVAS_COMPOSITION_COMMAND,
+            CANVAS_COMPOSITION_COMMAND.replace(
+                '"$composition_executable" --skip',
+                '"$composition_executable" unrelated_filter --skip',
+            ),
         )
     else:
         start = source.index(f"async fn {name}")
