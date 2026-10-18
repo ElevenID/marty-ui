@@ -379,6 +379,17 @@ This document coordinates the new architecture work. [The original build audit](
 | A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Cheap Core preflight separation is landed. Preserve the complete KMS, lint, compatibility, feature and security checks; do not extrapolate timings. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Nightly qualification remains open: one Linux happy-path tier with no YouTube activity. Official releases retain complete happy/error E2E and official-only YouTube. Unknown tier or missing evidence fails closed. |
 
+A6 narrow PR pilot: a change containing only the two verified Issuance
+`canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
+full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
+and Docker-context proof must pass first. That lane discovers and executes the
+entire Issuance library roster, requires all 23 retry/renewal cases and the
+exact separately owned ignored cases, and retains run-bound artifact evidence.
+Mixed, missing, or unproved inputs keep the broader PR plan. Protected merge
+groups, main, and official releases retain their full required qualification;
+the 60 real-PostgreSQL renewal cases are not removed. Treat this as a selective
+feedback candidate, not a measured speedup until comparable hosted runs exist.
+
 ## Product packaging and integration gates
 
 The coordinating workspace product plan

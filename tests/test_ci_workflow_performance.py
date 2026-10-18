@@ -782,7 +782,7 @@ def test_merge_group_historical_input_shadow_keeps_full_validation(
     assert set(absent_base.values()) == {"true"}
 
 
-def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
+def test_verified_rust_test_leaves_select_owned_unit_or_contracts_not_runtime(
     tmp_path: Path,
 ) -> None:
     verified = subprocess.run(
@@ -797,6 +797,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     ).stdout.split(b"\0")
     assert verified[-1] == b"" and len(verified) == 14
     leaves = [value.decode("utf-8") for value in verified[:-1]]
+    unit_leaves = [
+        "rust/services/issuance/src/canvas_sync_worker_retry_tests.rs",
+        "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs",
+    ]
+    assert set(unit_leaves) <= set(leaves)
     assert "rust/services/issuance/src/canvas_sync_worker_renewal_tests.rs" in leaves
     assert leaves[-2:] == [
         "rust/crates/oid4vp-contract/tests/contract_vectors.rs",
@@ -818,7 +823,9 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
             "python": "false",
             "rust": "true",
             "rust_runtime": "false",
-            "rust_matrix": '["contracts"]',
+            "rust_matrix": (
+                '["renewal-unit"]' if leaf in unit_leaves else '["contracts"]'
+            ),
             "openbao": "false",
             "release": "false",
             "verification": "false",
@@ -827,6 +834,19 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert (
         _classify_changed_paths(
             leaves, tmp_path, combined=True, include_rust_plan=True
+        )[0]["rust_matrix"]
+        == '["contracts"]'
+    )
+    assert (
+        _classify_changed_paths(
+            unit_leaves, tmp_path, combined=True, include_rust_plan=True
+        )[0]["rust_matrix"]
+        == '["renewal-unit"]'
+    )
+    assert (
+        _classify_changed_paths(
+            [unit_leaves[0], leaves[-1]], tmp_path,
+            combined=True, include_rust_plan=True,
         )[0]["rust_matrix"]
         == '["contracts"]'
     )
@@ -860,6 +880,11 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     )[0]
     assert deleted["rust_runtime"] == "true"
     assert deleted["rust_matrix"] == '["canvas","contracts","selfhost"]'
+    unit_without_proof = _classify_changed_paths(
+        [unit_leaves[0]], tmp_path, include_rust_plan=True, proof_failure=True
+    )[0]
+    assert unit_without_proof["rust_runtime"] == "true"
+    assert unit_without_proof["rust_matrix"] == '["canvas","contracts","selfhost"]'
     nested_without_proof = _classify_changed_paths(
         [nested], tmp_path, include_rust_plan=True, proof_failure=True
     )[0]
@@ -881,7 +906,7 @@ def test_verified_rust_test_leaves_select_only_contracts_not_runtime(
     assert empty["rust"] == empty["rust_runtime"] == "false"
     assert empty["rust_matrix"] == '["canvas","contracts","selfhost"]'
     queued = _classify_changed_paths(
-        [leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
+        [unit_leaves[0]], tmp_path, event="merge_group", include_rust_plan=True
     )[0]
     assert queued["all"] == queued["rust_runtime"] == "true"
     assert queued["rust_matrix"] == '["canvas","contracts","selfhost"]'
@@ -1600,6 +1625,22 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         assert result.returncode == 0, (flags, result.stdout, result.stderr)
     assert exercise(("rust",), {"test-rust-services": "skipped"}).returncode != 0
     assert exercise(("rust",), leaf_only=True).returncode == 0
+    unit_plan = {"RUST_MATRIX": '["renewal-unit"]'}
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan
+    ).returncode == 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        event="merge_group",
+    ).returncode != 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        overrides={"test-rust-services": "skipped"},
+    ).returncode != 0
+    assert exercise(
+        ("rust",), leaf_only=True, selection_overrides=unit_plan,
+        overrides={"rust-supply-chain": "skipped"},
+    ).returncode != 0
     assert exercise(("rust",), worker_only=True).returncode == 0
     assert exercise(("rust",), flow_only=True).returncode == 0
     assert exercise(("rust",), selfhost_only=True).returncode == 0
