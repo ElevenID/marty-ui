@@ -1289,10 +1289,10 @@ jobs:
                      "$phase" "$elapsed" "$target_bytes" "$exit_code" >&2
                    return "$exit_code"
                  }
-                # Resolve shared test features once; the Canvas library is an
-                # empty ownership marker guarded separately from real targets.
+                # Resolve shared test features once. Acceptance libraries are
+                # empty ownership markers; the Issuance library harness is
+                # executed by the renewal-unit lane, not this Canvas lane.
                  run_cargo_phase tests cargo test --locked --offline -p marty-canvas-acceptance -p marty-canvas-worker-acceptance -p marty-flow-acceptance -p marty-selfhost-acceptance -p marty-issuance-service \
-                  --lib \
                   --test canvas_published_worker_contract \
                   --test canvas_published_schema_contract \
                   --test flow_published_schema_contract \

@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).parents[1]
 VERIFY = runpy.run_path(str(ROOT / "scripts/ci/verify-canvas-test-artifacts.py"))
 TEST_TARGETS = VERIFY["TEST_TARGETS"]
+CANVAS_TEST_TARGETS = VERIFY["CANVAS_TEST_TARGETS"]
 BIN_TARGETS = VERIFY["BIN_TARGETS"]
 
 
@@ -91,13 +92,14 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
     assert '[[ "${{ matrix.lane }}" == contracts ]]' in compile_run
     assert "cargo test --locked --workspace --no-run" in contracts_branch
     assert "--workspace" not in canvas_branch
-    for package, target, kind in (*TEST_TARGETS, *BIN_TARGETS):
+    for package, target, kind in (*CANVAS_TEST_TARGETS, *BIN_TARGETS):
         assert f"-p {package}" in canvas_branch
         assert (
             "--bin " if kind == "bin" else "--test " if kind == "test" else "--lib"
         ) in canvas_branch
         if kind != "lib":
             assert target in canvas_branch
+    assert "--lib" not in canvas_branch
     assert "verify-canvas-test-artifacts.py" in canvas_branch
     assert "--check-worker-inventory" in canvas_branch
     assert "cargo fetch --locked" in canvas_branch
@@ -144,7 +146,6 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
             "marty-selfhost-acceptance",
             "-p",
             "marty-issuance-service",
-            "--lib",
             "--test",
             "canvas_published_worker_contract",
             "--test",
@@ -419,6 +420,13 @@ def test_exact_canvas_artifacts_are_accepted(tmp_path: Path) -> None:
     _verify(artifacts, target_dir, records)
 
 
+def test_canvas_artifacts_do_not_require_renewal_unit_library_harness(
+    tmp_path: Path,
+) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    _verify(artifacts, target_dir, records[:6] + records[7:])
+
+
 def test_compiled_worker_inventory_runs_before_expensive_canvas_checks(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -542,7 +550,7 @@ def test_renewal_unit_artifact_requires_exact_library_harness(tmp_path: Path) ->
         VERIFY["verify"](artifacts, target_dir, renewal_unit_only=True, worker_only=True)
 
 
-@pytest.mark.parametrize("index", [0, 5, 6, 9])
+@pytest.mark.parametrize("index", [0, 5, 9])
 @pytest.mark.parametrize(
     "profile", [{}, {"test": None}, {"test": "false"}, {"test": 0}, {"test": 1}]
 )
@@ -571,7 +579,7 @@ def test_real_worker_is_selected_when_cargo_also_reports_its_test_harness(
     _verify(artifacts, target_dir, [*records, harness])
 
 
-@pytest.mark.parametrize("index", [0, 2, 5, 6, 9])
+@pytest.mark.parametrize("index", [0, 2, 5, 9])
 def test_missing_canvas_artifact_fails_closed(tmp_path: Path, index: int) -> None:
     artifacts, target_dir, records = _records(tmp_path)
     with pytest.raises(ValueError, match="Expected exactly one"):
