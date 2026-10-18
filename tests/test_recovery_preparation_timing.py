@@ -269,9 +269,12 @@ def test_optional_cache_failure_cannot_replace_build_result(probe, monkeypatch, 
     cache_file = module.ROOT / "cache.jsonl"
     monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
     cargo_calls = []
+    stats_calls = 0
 
     def execute(command, **kwargs):
+        nonlocal stats_calls
         if command[0] == "sccache":
+            stats_calls += 1
             raise subprocess.TimeoutExpired(command, 10, output="private-payload")
         cargo_calls.append(command)
         return subprocess.CompletedProcess(command, 0)
@@ -279,10 +282,45 @@ def test_optional_cache_failure_cannot_replace_build_result(probe, monkeypatch, 
     monkeypatch.setattr(module.subprocess, "run", execute)
     assert module.build_rust() == binary
     assert cargo_calls == expected_commands()
+    assert stats_calls == 1
     assert not cache_file.exists()
     assert "private-payload" not in capsys.readouterr().out
     with pytest.raises(ValueError, match="Unknown recovery"):
         module.record_preparation_cache("private-payload")
+
+
+def test_optional_cache_stops_after_first_phase_failure(probe, monkeypatch):
+    module, _, binary = probe
+    cache_file = module.ROOT / "cache.jsonl"
+    monkeypatch.setenv("MARTY_RECOVERY_PREPARATION_CACHE_FILE", str(cache_file))
+    cargo_calls = []
+    stats_calls = 0
+
+    def execute(command, **kwargs):
+        nonlocal stats_calls
+        if command[0] == "cargo":
+            cargo_calls.append(command)
+            return subprocess.CompletedProcess(command, 0)
+        if command[0] == "sccache":
+            stats_calls += 1
+            if stats_calls == 3:
+                raise subprocess.TimeoutExpired(command, 10)
+            return subprocess.CompletedProcess(command, 0, stdout="Cache hits (Rust)  1\n")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout='MARTY_PUBLIC_SCCACHE_V1 {"phase":"recovery_probe","counters":{"cache_hits_rust":1}}\n',
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", execute)
+    assert module.build_rust() == binary
+    assert cargo_calls == expected_commands()
+    assert stats_calls == 3
+    rows = [json.loads(line) for line in cache_file.read_text().splitlines()]
+    assert [row["phase"] for row in rows] == [
+        "preparation_baseline",
+        "signing_keys_binary",
+    ]
 
 
 def test_workflow_retains_tiny_failure_evidence_without_weakening_recovery():
