@@ -24,7 +24,7 @@ struct Templates;
 
 #[async_trait]
 impl TemplateProvider for Templates {
-    async fn get(&self, id: &str) -> Result<ApplicationTemplate, ProviderError> {
+    async fn get(&self, _: &str, id: &str) -> Result<ApplicationTemplate, ProviderError> {
         Ok(ApplicationTemplate {
             id: id.into(),
             organization_id: "issuer-org".into(),
