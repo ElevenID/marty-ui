@@ -40,8 +40,8 @@ def test_disposable_tls_root_contracts_have_executed_release_owner() -> None:
         "test_timeout_cleanup_retains_id_only_if_removal_fails",
     ):
         assert command.count(f"test_provision_selfhost_disposable_tls.py::{name}") == 1
-    assert "len(cases) != 5" in command
-    for required in ('("tests", 5)', '("skipped", 0)', '("failures", 0)', '("errors", 0)'):
+    assert "len(cases) != 6" in command
+    for required in ('("tests", 6)', '("skipped", 0)', '("failures", 0)', '("errors", 0)'):
         assert required in command
 CANVAS_COMPOSITION_COMMAND = (
     'MARTY_CANVAS_OPENBAO_URL="$kms_url" '

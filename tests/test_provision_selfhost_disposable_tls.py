@@ -109,6 +109,10 @@ def bundle(tmp_path: Path) -> Path:
         "services": {"gateway": SERVICES, "signing-keys": SERVICES},
         "openbao_didcomm_image": OPENBAO,
     }), encoding="utf-8")
+    (bundle_root / ".env.selfhost.production.example").write_bytes(
+        (ROOT / ".env.selfhost.production.example").read_bytes())
+    (bundle_root / "docker-compose.yml").write_bytes(
+        (ROOT / "docker-compose.selfhost.prod.yml").read_bytes())
     return bundle_root
 
 
@@ -120,6 +124,57 @@ def key_metadata() -> dict[str, object]:
             for role, name in stage.KEY_NAMES.items()
         ],
     }
+
+
+def test_tls_env_fragment_is_exact_and_drift_fails_closed(tmp_path: Path) -> None:
+    root = bundle(tmp_path)
+    fragment = stage.render_tls_env_fragment(root, key_metadata())
+    lines = fragment.splitlines()
+    assert len(lines) == 32
+    assert len(set(lines)) == 32
+    assert "GATEWAY_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client" in lines
+    assert "GATEWAY_TLS_KMS_KEY_VERSION=1" in lines
+    assert all("_TLS_KMS_KEY_NAME=" in line or "_TLS_KMS_KEY_VERSION=" in line
+               for line in lines)
+    assert not any(token in fragment for token in ("_ADDR=", "DOMAIN=", "DID=", "TOKEN="))
+
+    example = root / ".env.selfhost.production.example"
+    compose = root / "docker-compose.yml"
+    original_example = example.read_text(encoding="ascii")
+    original_compose = compose.read_text(encoding="ascii")
+    mutations = (
+        (example, original_example + "\nGATEWAY_TLS_KMS_KEY_NAME=duplicate\n"),
+        (example, original_example.replace("GATEWAY_TLS_KMS_KEY_VERSION=1",
+                                           "GATEWAY_TLS_KMS_KEY_VERSION=2")),
+        (example, original_example.replace("GATEWAY_TLS_KMS_KEY_VERSION=1\n", "")),
+        (example, original_example.replace("GATEWAY_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client",
+                                           "GATEWAY_TLS_KMS_KEY_NAME=workload-tls-other")),
+        (example, original_example.replace(
+            "GATEWAY_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client",
+            "GATEWAY_TLS_KMS_KEY_NAME=workload-tls-auth-client",
+        ).replace(
+            "AUTH_TLS_KMS_KEY_NAME=workload-tls-auth-client",
+            "AUTH_TLS_KMS_KEY_NAME=workload-tls-gateway-auth-client",
+        )),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:?",
+                                            "${UNLISTED_TLS_KMS_KEY_NAME:?", 1)),
+        (compose, original_compose.replace("${GATEWAY_TLS_KMS_KEY_NAME:?",
+                                            "${GATEWAY_TLS_KMS_KEY_VERSION:?", 1)),
+        (compose, original_compose + "\nx-drift: ${EXTRA_TLS_KMS_KEY_NAME:-other}\n"),
+    )
+    for path, changed in mutations:
+        path.write_text(changed, encoding="ascii")
+        with pytest.raises(ValueError, match="shipped TLS KMS"):
+            stage.render_tls_env_fragment(root, key_metadata())
+        path.write_text(original_example if path == example else original_compose,
+                        encoding="ascii")
+    (root / "docker-compose.yml").unlink()
+    with pytest.raises(ValueError, match="configuration input"):
+        stage.render_tls_env_fragment(root, key_metadata())
+    if os.name == "posix":
+        compose.symlink_to(ROOT / "docker-compose.selfhost.prod.yml")
+        with pytest.raises(ValueError, match="configuration input"):
+            stage.render_tls_env_fragment(root, key_metadata())
 
 
 def test_disposable_key_metadata_is_exact_and_nonsecret(
@@ -306,7 +361,12 @@ def test_stages_only_public_tls_outputs_into_existing_private_root(
     manifest = tmp_path / stage.KEY_METADATA_FILE
     assert json.loads(manifest.read_text(encoding="ascii")) == key_metadata()
     assert stat.S_IMODE(manifest.stat().st_mode) == 0o600
-    assert ownership == [(secret_root.stat().st_uid, secret_root.stat().st_gid)]
+    fragment = tmp_path / stage.KEY_ENV_FRAGMENT_FILE
+    assert fragment.read_text(encoding="ascii") == stage.render_tls_env_fragment(
+        root, key_metadata())
+    assert stat.S_IMODE(fragment.stat().st_mode) == 0o600
+    assert fragment.stat().st_uid == secret_root.stat().st_uid
+    assert ownership == [(secret_root.stat().st_uid, secret_root.stat().st_gid)] * 2
     assert manifest.stat().st_uid == secret_root.stat().st_uid
 
 
@@ -386,12 +446,14 @@ def test_ownership_failure_removes_all_staged_tls_inputs(
         stage.provision(root, secret_root, state, "marty-selfhost-openbao")
     assert list(secret_root.iterdir()) == []
     assert not (tmp_path / stage.KEY_METADATA_FILE).exists()
+    assert not (tmp_path / stage.KEY_ENV_FRAGMENT_FILE).exists()
 
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,
                     reason="Linux root-only disposable staging")
+@pytest.mark.parametrize("failed_diagnostic", ["metadata", "fragment"])
 def test_metadata_cleanup_failure_still_rolls_back_all_secrets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failed_diagnostic: str,
 ) -> None:
     secret_root = tmp_path / "secrets"
     secret_root.mkdir(mode=0o700)
@@ -420,15 +482,23 @@ def test_metadata_cleanup_failure_still_rolls_back_all_secrets(
 
     monkeypatch.setattr(stage.subprocess, "run", fake_run)
 
-    def fail_fchown(_fd: int, _uid: int, _gid: int) -> None:
-        raise OSError("injected owner failure")
+    original_fchown = stage.os.fchown
+    fchown_calls = 0
+
+    def fail_fchown(fd: int, uid: int, gid: int) -> None:
+        nonlocal fchown_calls
+        fchown_calls += 1
+        if fchown_calls == (1 if failed_diagnostic == "metadata" else 2):
+            raise OSError("injected owner failure")
+        original_fchown(fd, uid, gid)
 
     monkeypatch.setattr(stage.os, "fchown", fail_fchown)
     original_unlink = Path.unlink
-    manifest = tmp_path / stage.KEY_METADATA_FILE
+    failed_path = tmp_path / (stage.KEY_METADATA_FILE if failed_diagnostic == "metadata"
+                              else stage.KEY_ENV_FRAGMENT_FILE)
 
     def fail_manifest_unlink(path: Path, *args: object, **kwargs: object) -> None:
-        if path == manifest:
+        if path == failed_path:
             raise OSError("injected metadata cleanup failure")
         original_unlink(path, *args, **kwargs)
 
@@ -436,7 +506,10 @@ def test_metadata_cleanup_failure_still_rolls_back_all_secrets(
     with pytest.raises(RuntimeError, match="ownership rollback is incomplete"):
         stage.provision(root, secret_root, state, "marty-selfhost-openbao")
     assert list(secret_root.iterdir()) == []
-    assert manifest.exists()
+    assert failed_path.exists()
+    other = tmp_path / (stage.KEY_ENV_FRAGMENT_FILE if failed_diagnostic == "metadata"
+                        else stage.KEY_METADATA_FILE)
+    assert not other.exists()
 
 
 @pytest.mark.skipif(os.name != "posix" or os.geteuid() != 0,

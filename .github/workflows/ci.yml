@@ -2859,9 +2859,9 @@ jobs:
           if suite is None or suite.tag != "testsuite":
               raise SystemExit("root-owned TLS test report is missing")
           cases = list(suite.iter("testcase"))
-          if (len(cases) != 5 or any(
+          if (len(cases) != 6 or any(
               int(suite.attrib.get(name, "-1")) != expected
-              for name, expected in (("tests", 5), ("skipped", 0),
+              for name, expected in (("tests", 6), ("skipped", 0),
                                      ("failures", 0), ("errors", 0))
           )):
               raise SystemExit("root-owned TLS cases did not all execute and pass")
