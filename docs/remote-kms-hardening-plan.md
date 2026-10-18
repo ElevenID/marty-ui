@@ -384,6 +384,18 @@ merge. Require both actual merges and one new full exact-main CI on their
 final combined SHA before a v1.1.257 claim; the failed/cancelled 07a4 run
 cannot qualify the release.
 
+Protected v1.1.257 lock landing (2026-10-18): #1404's merge-group
+[CI 39109088634](https://github.com/ElevenID/marty-ui/actions/runs/39109088634)
+passed, including the full OpenBao recovery, Canvas, contracts and self-host
+shards. Its four other protected workflows (Actions/Rust CodeQL, organization
+quality and open-source policy) passed at candidate
+`c75bcc4e7444d63fa88843aaf09cc999e7c5f6a9`. #1404 merged at
+08:12 UTC and protected main matched that exact SHA. The full-main Canvas
+test correction #1405 is still open with its exact-head checks running;
+do not dispatch a v1.1.257 claim or count #1404's merge-group CI as the
+required full exact-main qualification. Wait for #1405's protected landing
+and then run full CI once on the final main SHA.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
