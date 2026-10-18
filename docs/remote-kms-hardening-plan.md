@@ -175,6 +175,17 @@ artifact and reconfirm the source before a Stack release transaction. The
 local WSL command entry still times out while Docker Desktop and the production
 loopback stay responsive; do not restart the live host to force installed tests.
 
+Claim/main race (2026-10-17): claim `39094334496` completed successfully and
+its downloaded no-write transaction is `claimed` for v1.1.256 at
+`9b40640121e55df8d24de612c7abc18ec19c3cea`; its preflight found the tag,
+GitHub release and all five image version tags absent. Before publication,
+unrelated test PR #1397 advanced protected main to
+`9363da8bf0de25278aec3670ecdef303d870f6ca`. The old claim no longer binds
+current main, so do not dispatch `cd.yml` from it. Additional merge-queue work
+is active; wait for its protected landing, then run full exact-main CI and
+make a fresh no-write claim for the final source. Preserve this successful but
+superseded claim as evidence; no v1.1.256 publication occurred.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
