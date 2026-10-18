@@ -684,6 +684,12 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
         'loader = __builtins__["__import__"]\nloader("extra_flow_helper")\n',
         'loader = sys.modules["importlib"].import_module\nloader("extra_flow_helper")\n',
         'loader = sys.modules["runpy"].__dict__["run_path"]\nloader("extra_flow_helper.py")\n',
+        'runpy = object()\n',
+        'import os as runpy\n',
+        'def shadow(runpy):\n    return runpy\n',
+        'match 1:\n    case runpy:\n        pass\n',
+        'match []:\n    case [*runpy]:\n        pass\n',
+        'match {}:\n    case {**runpy}:\n        pass\n',
         'from runpy import run_path\nrun_path("scripts/extra_flow_helper.py")\n',
         'import runpy as loader\nloader.run_path("scripts/extra_flow_helper.py")\n',
         'from importlib import import_module\nimport_module("extra_flow_helper")\n',
@@ -693,6 +699,10 @@ def test_flow_renderer_subgraph_fails_closed_on_edge_and_compose_drift(
         helper.write_text(original + "\n" + added, encoding="utf-8")
         with pytest.raises(ValueError, match="flow_renderer_import_drift"):
             INVENTORY.flow_renderer_subgraph_inputs()
+    helper.write_text(original, encoding="utf-8")
+    helper.write_text(original.replace("import runpy\n", "", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="flow_renderer_import_drift"):
+        INVENTORY.flow_renderer_subgraph_inputs()
     helper.write_text(original, encoding="utf-8")
 
     shadow = tmp_path / "scripts/json.py"

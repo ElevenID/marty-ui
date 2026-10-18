@@ -657,13 +657,26 @@ def flow_renderer_python_imports() -> list[dict[str, object]]:
             for node in ast.walk(tree)
             for child in ast.iter_child_nodes(node)
         }
+        runpy_imports = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            and any(alias.name == "runpy" for alias in node.names)
+        ]
+        expected_runpy = bool(FLOW_RENDERER_RUNPY_EDGES[path])
+        if len(runpy_imports) != int(expected_runpy) or (
+            expected_runpy and runpy_imports[0] not in tree.body
+        ):
+            raise ValueError("flow_renderer_import_drift")
         modules = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     module = alias.name.split(".", 1)[0]
-                    if module in {"importlib", "builtins"} or (
-                        module == "runpy" and alias.asname
+                    if (
+                        module in {"importlib", "builtins"}
+                        or (module == "runpy" and alias.asname)
+                        or alias.asname == "runpy"
                     ):
                         raise ValueError("flow_renderer_import_drift")
                     modules.add(module)
@@ -671,9 +684,24 @@ def flow_renderer_python_imports() -> list[dict[str, object]]:
                 if node.level or node.module is None:
                     raise ValueError("flow_renderer_import_drift")
                 module = node.module.split(".", 1)[0]
-                if module in {"runpy", "importlib", "builtins"}:
+                if module in {"runpy", "importlib", "builtins"} or any(
+                    alias.asname == "runpy" for alias in node.names
+                ):
                     raise ValueError("flow_renderer_import_drift")
                 modules.add(module)
+            elif isinstance(node, ast.arg) and node.arg == "runpy":
+                raise ValueError("flow_renderer_import_drift")
+            elif (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name == "runpy"
+            ):
+                raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, ast.ExceptHandler) and node.name == "runpy":
+                raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == "runpy":
+                raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, ast.MatchMapping) and node.rest == "runpy":
+                raise ValueError("flow_renderer_import_drift")
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
                 if node.id in {
                     "__builtins__",
@@ -701,6 +729,8 @@ def flow_renderer_python_imports() -> list[dict[str, object]]:
                         and call.func is attribute
                     ):
                         raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, ast.Name) and node.id == "runpy":
+                raise ValueError("flow_renderer_import_drift")
             elif isinstance(node, ast.Attribute):
                 if node.attr == "run_path":
                     if not (
