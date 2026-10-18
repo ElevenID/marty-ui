@@ -7,6 +7,15 @@ component report. Run it only after a signed Stack release was dispatched with
 release must already identify the same source commit. Do not use production
 credentials, a real CSCA/DSC, or a customer organization.
 
+The Stack publisher requires a dedicated `STACK_RELEASE_TAG_TOKEN` repository
+secret with Contents and Workflows write access limited to `ElevenID/marty-ui`.
+It is used only to create the annotated release tag when the source includes
+workflow changes; the other release steps retain the job token. The release
+validation stage rejects a missing credential, and checks the `workflow`
+scope early when the credential is a classic PAT. Do not substitute a
+cross-repository access token. The protected tag push is the final permission
+check for a fine-grained credential.
+
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and
 fresh database state, Docker Compose, Python 3.12 with the pinned integration
 test dependencies, Rust 1.95.0 with locked Cargo dependencies, OpenSSL, and

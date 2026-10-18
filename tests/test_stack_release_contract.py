@@ -1141,6 +1141,35 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     )
 
 
+def test_workflow_changing_source_tag_uses_scoped_publisher_credential() -> None:
+    jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
+    preflight = next(
+        step for step in jobs["validate-stack"]["steps"]
+        if step.get("name") == "Check publisher tag credential before image builds"
+    )
+    assert preflight["env"]["GH_TOKEN"] == "${{ secrets.STACK_RELEASE_TAG_TOKEN }}"
+    assert preflight["run"].index("git ls-remote --tags origin") < preflight[
+        "run"
+    ].index('test -n "$GH_TOKEN"')
+
+    publisher = jobs["publish-manifest"]
+    checkout = next(
+        step for step in publisher["steps"]
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    assert checkout["with"]["persist-credentials"] is False
+    tag_step = next(
+        step for step in publisher["steps"]
+        if step.get("name") == "Create or verify the late annotated source tag"
+    )
+    assert tag_step["env"]["GH_TOKEN"] == "${{ secrets.STACK_RELEASE_TAG_TOKEN }}"
+    assert tag_step["run"].index('if [ -n "$existing" ]; then') < tag_step[
+        "run"
+    ].index('test -n "$GH_TOKEN"')
+    assert "gh auth setup-git" in tag_step["run"]
+    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in tag_step["run"]
+
+
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:
     workflow = _text(".github/workflows/cd.yml")
     prepare = _text(".github/workflows/prepare-stack-tag.yml")
