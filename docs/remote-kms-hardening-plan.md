@@ -12,15 +12,14 @@ Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
 UI hardening #1192, and subsequent custody, restore, signing-route and
 secretless publisher-source repairs and Canvas fixture correction #1423 are
 merged. Protected UI main is
-`71c4bf4231d5daeda7052651cb9964f5b35d4655`, after #1422 and #1423. Full
+`35dc7400b3f9dccbe1a8b2d55101a545ca030beb`, after #1422, #1423 and
+#1424 passed protected merge. The earlier
 [exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
-failed the Canvas mixed-roster signer fixture (and consequently CI Gate); all
-other completed jobs passed or were skipped. Rust sends the pinned
-`verification_method_id`, but the synthetic grant-bound signer omitted it from
-its allowlist. [PR #1423](https://github.com/ElevenID/marty-ui/pull/1423)
-corrects that contract and has passed protected merge. `v1.1.257` remains
-untagged and unpublished. Require a new passing full CI on a settled exact
-main, fresh no-write claim,
+failed the Canvas mixed-roster signer fixture, fixed in #1423. Replacement
+[full exact-main CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
+is in progress at the verified current main SHA. `v1.1.257` remains untagged
+and unpublished. Require that run to pass with main unchanged, then a fresh
+no-write claim,
 promotion, verified local late-tag handoff, resumed signed publication,
 and fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
