@@ -254,7 +254,9 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                         "algorithm",
                     }
                     if owner.signer_contract == "grant_bound":
-                        expected_fields.add("key_reference")
+                        expected_fields.update(
+                            {"key_reference", "verification_method_id"}
+                        )
                     assert set(body) == expected_fields
                     assert body["issuer_did"] == ISSUER_DID
                     assert body["credential_format"] == "lti_tool_jwt"
@@ -264,6 +266,7 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                     owner._validate_assertion(payload.decode("ascii"))
                     if owner.signer_contract == "grant_bound":
                         assert body["key_reference"] == SIGNING_KEY_REFERENCE
+                        assert body["verification_method_id"] == VERIFICATION_METHOD
                         with (
                             owner.grant_server.RequestHandlerClass.request_observation_lock
                         ):
