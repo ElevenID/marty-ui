@@ -68,6 +68,11 @@ C: had approximately 15-16 GiB free, below the runbook's 20 GiB target.
 Inside Ubuntu-24.04, `/usr/bin/docker` currently points to a missing Docker
 Desktop WSL CLI mount; `docker.exe` works from Windows/WSL, but its path and
 bind-mount behavior has not been qualified for the Linux installation scripts.
+The Docker Desktop settings store explicitly has
+`EnableIntegrationWithDefaultWslDistro=false` and no integrated distro;
+Ubuntu also has no `/var/run/docker.sock`. D: has about 55 GiB free and may
+hold staging data, but this does not add capacity to Docker's current C:-backed
+image store or restore the missing Linux socket.
 Do not disrupt the running production Docker engine to repair WSL integration.
 Resolve this local runner issue and remeasure resources before the fresh
 signed-artifact install; do not count the earlier v1.1.255 disposable run for
