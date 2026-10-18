@@ -129,6 +129,18 @@ exact-main CI before claim and release. Local WSL command entry currently
 times out, while Docker Desktop and the existing production loopback remain
 responsive; do not restart either WSL distro or Docker while the site runs.
 
+Successor release PR gate (2026-10-17): #1395 head
+`9b35788042c834527f3350b25b6189f7ba730039` passed every PR-head check,
+including full CI `39087422766`, OpenBao recovery, Canvas database contracts,
+Rust service images, release contracts, CodeQL, organization quality, and
+open-source policy. Its review has no unresolved threads. GitHub placed it at
+merge-queue position 1 with candidate
+`83c0d8b2d12be75a09328e25a4e80ddd3cb0532e`. Merge-group policy,
+organization quality and Actions CodeQL passed; Rust CodeQL and
+[merge-group CI 39088843556](https://github.com/ElevenID/marty-ui/actions/runs/39088843556)
+remain live. The PR is not yet merged and no exact-main claim exists for
+v1.1.256. Wait for the actual merge and a fresh full exact-main CI.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
