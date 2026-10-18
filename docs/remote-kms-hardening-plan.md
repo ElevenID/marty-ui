@@ -22,8 +22,10 @@ passed at `35dc7400...` but was superseded by #1426. Fresh
 passed at the verified new main SHA. [No-write claim 39175253725](https://github.com/ElevenID/marty-ui/actions/runs/39175253725)
 also passed with an exact-source artifact and absent public coordinates.
 [Stack promotion 39175345017](https://github.com/ElevenID/marty-ui/actions/runs/39175345017)
-is queued. `v1.1.257` remains untagged and unpublished. Finish promotion,
-verified local late-tag handoff, resumed signed publication,
+completed the intended late-tag handoff after all other jobs passed. The
+verified helper pushed the annotated `v1.1.257` tag; [resumed publication
+39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
+is queued. Finish signed publication,
 and fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
@@ -140,7 +142,17 @@ rechecked at the exact SHA and the Git tag remained absent. Digest-first
 [Stack promotion 39175345017](https://github.com/ElevenID/marty-ui/actions/runs/39175345017)
 was dispatched from that main with claim run `39175253725`,
 `prepare_selfhost_lock=true` and the four preflighted external service
-digests. Verify its checkpoint before the local annotated-tag handoff.
+digests. Every build, qualification, self-host lock and prepared-consumer
+preflight job passed. Only `publish-manifest` failed at its intentional local
+late-tag gate; the immutable checkpoint digest is
+`sha256:d80b2bfb6da00ec86ce86508d1ef2a57ea2faeaefbb9313d5cc2b10e6c419bef`.
+Its transaction was inspected in state `promoted`, with exact source SHA,
+claim run and all five image roles. From the clean matching `main` checkout,
+`scripts/push_promoted_release_tag.py` revalidated the terminal run,
+checkpoint and live registry digests and atomically pushed annotated
+`v1.1.257`. [Resumed Stack release 39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
+was dispatched from the same main SHA with the exact claim, prior run and
+checkpoint artifact. It is pending signed-publication verification.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
