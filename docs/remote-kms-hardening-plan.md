@@ -66,13 +66,18 @@ Local install preflight (2026-10-18): the production loopback still returned
 HTTP 200 and Windows Docker Desktop reported 16,265,662,464 bytes of RAM.
 C: had approximately 15-16 GiB free, below the runbook's 20 GiB target.
 Inside Ubuntu-24.04, `/usr/bin/docker` currently points to a missing Docker
-Desktop WSL CLI mount; `docker.exe` works from Windows/WSL, but its path and
-bind-mount behavior has not been qualified for the Linux installation scripts.
+Desktop WSL CLI mount; `docker.exe` reaches the Windows Docker engine, but
+cannot serve the Linux installation scripts' bind mounts as currently configured.
 The Docker Desktop settings store explicitly has
 `EnableIntegrationWithDefaultWslDistro=false` and no integrated distro;
 Ubuntu also has no `/var/run/docker.sock`. D: has about 55 GiB free and may
 hold staging data, but this does not add capacity to Docker's current C:-backed
 image store or restore the missing Linux socket.
+Two disposable read-only bind-mount probes ruled out an unqualified
+`docker.exe` substitution: a WSL `/home/...` source is absent from Docker's
+daemon, and a `\\wsl.localhost\Ubuntu-24.04\home\...` source reaches the
+disabled distro-services socket and is refused. The tiny probe file and
+directory were removed; no production container was changed.
 Do not disrupt the running production Docker engine to repair WSL integration.
 Resolve this local runner issue and remeasure resources before the fresh
 signed-artifact install; do not count the earlier v1.1.255 disposable run for
