@@ -366,6 +366,24 @@ publisher secret still prevents a release dispatch; a local pre-created tag
 cannot substitute because pre-promotion explicitly rejects an existing tag
 before image promotion.
 
+Concurrent exact-main CI regression (2026-10-18): after #1403 landed,
+[full-main CI 39108971112](https://github.com/ElevenID/marty-ui/actions/runs/39108971112)
+on `07a46e380be6c1fbe3d85dd267cbcdb5fde7bc66` failed its release-contract
+test suite: the new Canvas inventory test assumed `routine` while full CI
+correctly inherited `MARTY_CANVAS_FULL_QUALIFICATION=1` and recorded `full`.
+The remaining run was cancelled after the failure to save the long Rust shards.
+This failure is not evidence of a Canvas custody defect, but it makes full
+exact-main qualification impossible until the test is corrected. Local branch
+`fix/kms-canvas-inventory-full-mode-20261018` at `3f6bb8bb1` explicitly
+checks both `routine` and `full` and clears inherited worker-tier variables.
+Its targeted cases passed in both modes; the full Rust-contract test file
+passed with full qualification enabled (71 passed, five skipped), plus Ruff
+and diff checks. [PR #1405](https://github.com/ElevenID/marty-ui/pull/1405)
+is open with auto-merge under protected checks, behind #1404's v1.1.257
+merge. Require both actual merges and one new full exact-main CI on their
+final combined SHA before a v1.1.257 claim; the failed/cancelled 07a4 run
+cannot qualify the release.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
