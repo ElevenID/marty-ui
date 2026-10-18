@@ -9,6 +9,8 @@ const test = require('node:test');
 const {
   candidateUiFileForRequest,
   createLifecycleRecording,
+  initialActiveVerificationPassed,
+  showRenewalLineage,
   LIFECYCLE_DEMO_REASONS,
   performLifecycleAction,
   renewCredential,
@@ -233,4 +235,42 @@ test('renewal uses the real direct button without inventing a dialog or reason f
     mark: (_action, phase, detail) => calls.push([phase, detail])};
   assert.equal((await renewCredential(page, row, recording)).ok, true);
   assert.deepEqual(calls, ['explain', 'hold', ['button-click', {confirmationDialog: false, reasonField: false}], 'click']);
+});
+
+
+test('initial active evidence requires actual session, wallet and allowed verifier result', () => {
+  const evidence = {session: {ok: true}, wallet: {ok: true}, result: {httpStatus: 200, decision: 'allow'}};
+  assert.equal(initialActiveVerificationPassed(evidence), true);
+  for (const invalid of [null, {}, {...evidence, wallet: {ok: false}},
+    {...evidence, session: {ok: false}}, {...evidence, result: {httpStatus: 200, decision: 'deny'}},
+    {...evidence, result: {httpStatus: 500, decision: 'allow'}}]) {
+    assert.equal(initialActiveVerificationPassed(invalid), false);
+  }
+});
+
+test('renewal lineage selects actual predecessor and successor rows and fails if the UI link is absent', async () => {
+  const run = async (missingLink = false) => {
+    const calls = [];
+    const row = (id) => ({
+      waitFor: async () => calls.push(`row:${id}`),
+      locator: () => ({waitFor: async () => {}, getAttribute: async () => `CRD-${id}`}),
+      getByText: text => ({waitFor: async () => {
+        calls.push(`text:${id}:${text}`);
+        if (id === 'new' && missingLink) throw new Error('UI renewal link absent');
+      }}),
+    });
+    const page = {
+      getByPlaceholder: () => ({fill: async value => calls.push(`search:${value}`)}),
+      getByRole: () => ({click: async () => calls.push('refresh')}),
+      locator: selector => row(selector.includes('"old"') ? 'old' : 'new'),
+    };
+    const result = await showRenewalLineage(page, 'old', 'new', {hold: async (_a, phase) => calls.push(phase)});
+    assert.equal(result.evidence.predecessorRevokedVisible, true);
+    assert.equal(result.evidence.successorLinkVisible, true);
+    assert.ok(calls.includes('text:old:/^revoked$/i'));
+    assert.ok(calls.includes('text:new:Renewed from CRD-old'));
+    assert.ok(calls.indexOf('predecessor-revoked-status') < calls.indexOf('successor-link'));
+  };
+  await run();
+  await assert.rejects(run(true), /UI renewal link absent/);
 });
