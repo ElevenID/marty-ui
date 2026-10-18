@@ -13,7 +13,8 @@ UI hardening #1192, and subsequent custody, restore, signing-route and
 secretless publisher-source repairs are merged. Protected UI main is
 `c6008f34062e0ec7ad310a85534cf30626e01c7d` after #1419. Full
 [exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
-failed the Canvas mixed-roster signer fixture: Rust sends the pinned
+failed the Canvas mixed-roster signer fixture (and consequently CI Gate); all
+other completed jobs passed or were skipped. Rust sends the pinned
 `verification_method_id`, but the synthetic grant-bound signer omitted it from
 its allowlist. Locally verified [PR #1423](https://github.com/ElevenID/marty-ui/pull/1423)
 corrects that contract and is open under protected checks; it is not yet on
