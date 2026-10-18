@@ -320,10 +320,10 @@ async fn call_reconciler(app: &Router, application_id: &str) -> StatusCode {
 }
 
 #[tokio::test]
+#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt() {
-    let Ok(database_url) = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL") else {
-        return;
-    };
+    let database_url = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")
+        .unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"));
     let _database_guard = RECONCILIATION_DATABASE_LOCK.lock().await;
     assert_eq!(
         url::Url::parse(&database_url)
@@ -629,21 +629,25 @@ async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt
 }
 
 #[tokio::test]
+#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub() {
     run_beta_batch_http_recovery(false, false, false).await;
 }
 
 #[tokio::test]
+#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_batch_http_completes_receipts_when_wire_kms_fails() {
     run_beta_batch_http_recovery(true, false, false).await;
 }
 
 #[tokio::test]
+#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping() {
     run_beta_batch_http_recovery(false, true, false).await;
 }
 
 #[tokio::test]
+#[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_batch_http_never_creates_a_missing_batch_row_through_single_submit() {
     run_beta_batch_http_recovery(false, false, true).await;
 }
@@ -653,9 +657,8 @@ async fn run_beta_batch_http_recovery(
     misreport_batch_mapping: bool,
     omit_batch_companion_row: bool,
 ) {
-    let Ok(database_url) = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL") else {
-        return;
-    };
+    let database_url = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")
+        .unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"));
     let _database_guard = RECONCILIATION_DATABASE_LOCK.lock().await;
     assert_eq!(
         url::Url::parse(&database_url)

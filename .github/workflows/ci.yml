@@ -1115,7 +1115,7 @@ jobs:
           set -euo pipefail
           artifacts="$RUNNER_TEMP/rust-test-artifacts.json"
           if [[ "${{ matrix.lane }}" == renewal-unit ]]; then
-            # Diagnostic only. The initial PR still runs the complete matrix;
+            # Additive ordinary-library diagnostic; normal PR lanes remain required.
             # this package-scoped compile has no database, image or service fixture.
             cargo test --locked -p marty-issuance-service --lib --no-run \
               --timings --message-format=json > "$artifacts"
@@ -1305,7 +1305,7 @@ jobs:
             rm -f "$stats_file.tmp"
             echo 'Optional compiler cache stats unavailable; Rust validation remains authoritative.'
           fi
-      - name: Execute exact renewal handler library obligations
+      - name: Execute ordinary Issuance library obligations
         if: matrix.lane == 'renewal-unit'
         working-directory: rust
         shell: bash
@@ -1321,9 +1321,8 @@ jobs:
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
           python3 ../scripts/ci/rust_db_obligations.py \
-            --name renewal_unit --owner renewal-unit -- \
-            "${executables[0]}" \
-            canvas_sync_worker::retry_handoff_tests:: --test-threads=4
+            --name issuance_library_unit --owner renewal-unit -- \
+            "${executables[0]}" --test-threads=4
       - name: Prepare pinned standalone Compose renderer for Rust contracts
         if: matrix.lane == 'contracts' || matrix.lane == 'flow' || matrix.lane == 'selfhost'
         shell: bash
@@ -1350,7 +1349,7 @@ jobs:
           printf 'MARTY_DIDCOMM_TEST_PYTHON=%s\n' "$MARTY_DIDCOMM_TEST_PYTHON" >> "$GITHUB_ENV"
           python3 scripts/ci/run-canvas-config-proofs.py run "$RUNNER_TEMP/rust-test-artifacts.json"
       - name: Verify feature-regression observer isolation
-        if: matrix.lane == 'contracts'
+        if: matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'
         shell: bash
         run: |
           set -euo pipefail
@@ -1959,8 +1958,24 @@ jobs:
         run: |
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
+          # A libtest exit status can be green when all cases are ignored. Bind
+          # the compiled owner roster before the exact owned-DB invocation.
+          listed="$(cargo test --locked -p marty-issuance-service \
+            --lib passport_http::reconciliation_tests:: -- --ignored --list)"
+          mapfile -t cases < <(printf '%s\n' "$listed" | \
+            grep '^passport_http::reconciliation_tests::.*: test$')
+          [[ ${#cases[@]} == 5 ]]
+          for name in \
+            beta_reconciliation_replays_only_exact_material_and_binds_first_receipt \
+            beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub \
+            beta_batch_http_completes_receipts_when_wire_kms_fails \
+            beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping \
+            beta_batch_http_never_creates_a_missing_batch_row_through_single_submit; do
+            printf '%s\n' "${cases[@]}" | grep -Fx \
+              "passport_http::reconciliation_tests::$name: test" >/dev/null
+          done
           run_timed passport_reconciliation cargo test --locked -p marty-issuance-service \
-            --lib passport_http::reconciliation_tests:: -- --test-threads=1
+            --lib passport_http::reconciliation_tests:: -- --ignored --test-threads=1
       - name: Preserve synthetic runtime failure diagnostics
         if: always() && matrix.lane == 'canvas'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

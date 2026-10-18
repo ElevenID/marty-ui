@@ -206,6 +206,11 @@ def test_canvas_native_timeout_tiers_preserve_exact_frozen_observations(
     seen: list[str] = []
 
     def child(*_args, env, **_kwargs):
+        assert _args[0][1:4] == [
+            "canvas_operation_http::tests::native_socket_case",
+            "--exact",
+            "--ignored",
+        ]
         name = json.loads(env["MARTY_CANVAS_TIMEOUT_NATIVE_CASE"])["name"]
         seen.append(name)
         return SimpleNamespace(
@@ -1805,7 +1810,6 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
         "Test native Canvas operation timeout TLS parity",
     }
     contracts = {
-        "Verify feature-regression observer isolation",
         "Prepare database contract executables",
         "Create isolated Rust contract databases",
         "Run safe Rust contract groups concurrently",
@@ -1892,10 +1896,15 @@ def test_rust_matrix_keeps_canvas_state_local_and_contracts_parallel() -> None:
     assert next(
         step for step in job["steps"] if step.get("uses", "").startswith("docker/setup-buildx-action@")
     )["if"] == "matrix.lane != 'renewal-unit'"
-    focused = steps["Execute exact renewal handler library obligations"]
+    observer = steps["Verify feature-regression observer isolation"]
+    assert observer["if"] == "matrix.lane == 'contracts' || matrix.lane == 'renewal-unit'"
+    assert "--features feature-regression-observer" in observer["run"]
+    assert not observer.get("continue-on-error", False)
+    focused = steps["Execute ordinary Issuance library obligations"]
     assert focused["if"] == "matrix.lane == 'renewal-unit'"
-    assert "--name renewal_unit --owner renewal-unit" in focused["run"]
-    assert "canvas_sync_worker::retry_handoff_tests:: --test-threads=4" in focused["run"]
+    assert "--name issuance_library_unit --owner renewal-unit" in focused["run"]
+    assert '"${executables[0]}" --test-threads=4' in focused["run"]
+    assert "canvas_sync_worker::retry_handoff_tests::" not in focused["run"]
     compile_step = steps["Compile reusable Rust test executables"]["run"]
     assert "cargo test --locked -p marty-issuance-service --lib --no-run" in compile_step
     assert "--renewal-unit-only \"$artifacts\" target" in compile_step
@@ -4118,6 +4127,20 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
     assert '--qualification "$MARTY_CANVAS_FULL_QUALIFICATION"' in gate["run"]
     assert "select(.profile.test == true)" in gate["run"]
     assert "httpx==0.26.0 cryptography==44.0.3" in gate["run"]
+    source = (ROOT / "rust/services/issuance/src/canvas_operation_http.rs").read_text(
+        encoding="utf-8"
+    )
+    assert (
+        '#[tokio::test]\n    #[ignore = "requires the owned loopback TLS '
+        'and historical socket fixture"]\n    async fn native_socket_case()'
+    ) in source
+    assert 'let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")' not in source
+    assert '.unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"))' in source
+    assert '.expect("owned native Canvas socket case")' not in source
+    runner = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"canvas_operation_http::tests::native_socket_case",\n                    "--exact",\n                    "--ignored",' in runner
 
 
 GATEWAY_REGISTRATIONS = [
