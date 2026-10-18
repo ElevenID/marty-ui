@@ -1093,8 +1093,12 @@ def test_db_inventory_agrees_with_real_libtest_ignored_and_filter_selection(
         assert "test happy ... ok" not in run.stdout
 
 
+@pytest.mark.parametrize(
+    ("qualification_value", "expected_mode"),
+    [(None, "routine"), ("0", "routine"), ("1", "full")],
+)
 def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selection(
-    real_obligation_harness, monkeypatch, capsys
+    real_obligation_harness, monkeypatch, capsys, qualification_value, expected_mode
 ) -> None:
     executable = str(real_obligation_harness)
     arguments = ["--skip", "fixture_case", "--nocapture", "--test-threads=1"]
@@ -1108,7 +1112,10 @@ def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selecti
             INVENTORY.selection(invalid, allow_skip=True)
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
+    if qualification_value is None:
+        monkeypatch.delenv("MARTY_CANVAS_FULL_QUALIFICATION", raising=False)
+    else:
+        monkeypatch.setenv("MARTY_CANVAS_FULL_QUALIFICATION", qualification_value)
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", "synthetic-image")
     monkeypatch.setenv("MARTY_CANVAS_WORKER_TEST_BINARY", "synthetic-worker")
@@ -1128,7 +1135,7 @@ def test_canvas_inventory_records_real_libtest_skips_without_changing_db_selecti
     ]
     assert records[0]["ignored"] == []
     assert records[0]["gate"] == "test-rust-services/canvas"
-    assert records[0]["canvas_qualification_mode"] == "routine"
+    assert records[0]["canvas_qualification_mode"] == expected_mode
     assert set(records[0]["worker_tiers"].values()) == {None}
 
 
