@@ -456,6 +456,24 @@ its full success and unchanged main before a new v1.1.257 no-write claim. No
 v1.1.257 tag or release has been created, and the dedicated tag-push secret
 remains unprovisioned.
 
+Fresh v1.1.257 claim (2026-10-18): [full exact-main CI 39117936721](https://github.com/ElevenID/marty-ui/actions/runs/39117936721)
+passed at `b9291b56122de9378594b7a3ae1ff108eacb0406`, including Canvas,
+OpenBao coordinated recovery, contracts, self-host and the terminal gate.
+Protected main still matched and the v1.1.257 Git tag was absent. Fresh
+[no-write claim 39120259279](https://github.com/ElevenID/marty-ui/actions/runs/39120259279)
+succeeded on that exact SHA. Its downloaded `release-transaction.json` has
+state `claimed`, transaction ID
+`079dc206d905bb3ae0d5c708183de3059b6cd2782993ea6f965afde3c7162ac9`,
+stack-lock SHA256 `778082e382cacd60b69775b1f77e40b3e850aa84789edae2c74677179456a7c4`,
+and records absent Git tag, GitHub release and all five versioned image tags.
+The separate preparation evidence names the five successful merge-group
+workflows and full CI `39117936721`. The claim artifact ID is `12133911448`
+with digest `sha256:c20bef50b442ddf522143f4293d83e570ad8972bd801ffc4b075147420b12454`.
+`STACK_RELEASE_TAG_TOKEN` is still absent from repository Actions secrets, so
+do not dispatch the signed Stack release. Preserve this no-write claim and
+recheck main before release; if another PR advances main first, qualify and
+claim the successor source instead of publishing from stale evidence.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
