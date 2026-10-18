@@ -23,7 +23,7 @@ struct TemplateMock(ApplicationTemplate);
 
 #[async_trait]
 impl TemplateProvider for TemplateMock {
-    async fn get(&self, _: &str) -> Result<ApplicationTemplate, ProviderError> {
+    async fn get(&self, _: &str, _: &str) -> Result<ApplicationTemplate, ProviderError> {
         Ok(self.0.clone())
     }
 }

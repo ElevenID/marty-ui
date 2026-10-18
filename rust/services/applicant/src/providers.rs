@@ -36,10 +36,20 @@ impl HttpTemplateProvider {
 
 #[async_trait]
 impl TemplateProvider for HttpTemplateProvider {
-    async fn get(&self, id: &str) -> Result<ApplicationTemplate, ProviderError> {
+    async fn get(
+        &self,
+        organization_id: &str,
+        id: &str,
+    ) -> Result<ApplicationTemplate, ProviderError> {
+        if organization_id.trim().is_empty() {
+            return Err(ProviderError::Unavailable(
+                "template issuer organization is required".into(),
+            ));
+        }
         let mut request = self
             .client
-            .get(format!("{}/v1/application-templates/{id}", self.base_url));
+            .get(format!("{}/v1/application-templates/{id}", self.base_url))
+            .header("x-organization-id", organization_id);
         if let Some(api_key) = &self.api_key {
             request = request.header("x-api-key", api_key);
         }
@@ -52,12 +62,18 @@ impl TemplateProvider for HttpTemplateProvider {
                 "application template not found".into(),
             ));
         }
-        response
+        let template = response
             .error_for_status()
             .map_err(|error| ProviderError::Unavailable(error.to_string()))?
             .json::<ApplicationTemplate>()
             .await
-            .map_err(|error| ProviderError::Unavailable(error.to_string()))
+            .map_err(|error| ProviderError::Unavailable(error.to_string()))?;
+        if template.organization_id != organization_id {
+            return Err(ProviderError::Unavailable(
+                "template issuer organization mismatch".into(),
+            ));
+        }
+        Ok(template)
     }
 }
 
@@ -342,7 +358,10 @@ mod tests {
         let provider =
             HttpTemplateProvider::new(format!("http://{address}"), Some(api_key.to_owned()));
 
-        let template = provider.get("application-template-1").await.unwrap();
+        let template = provider
+            .get("org-1", "application-template-1")
+            .await
+            .unwrap();
         assert_eq!(template.id, "application-template-1");
         let (headers, uri) = captured.lock().unwrap().take().unwrap();
         assert_eq!(
@@ -350,6 +369,12 @@ mod tests {
             "/v1/application-templates/application-template-1"
         );
         assert_eq!(headers.get("x-api-key").unwrap(), api_key);
+        assert_eq!(headers.get("x-organization-id").unwrap(), "org-1");
+        assert!(provider
+            .get("foreign-org", "application-template-1")
+            .await
+            .is_err());
+        assert!(provider.get("", "application-template-1").await.is_err());
         server.abort();
     }
 
