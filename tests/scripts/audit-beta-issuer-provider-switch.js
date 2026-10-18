@@ -51,6 +51,51 @@ const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const MANAGED_SERVICE_ID = 'managed-openbao-transit';
 
+function providerVerificationDisplay(report, phase) {
+  const assertions = providerSwitchBehaviorAssertions(report);
+  const required = ['issue_with_provider_a', 'switch_signing_provider', 'verify_same_did_identity'];
+  if (phase === 'denied-switch') required.push('unpublished_signing_key_denied');
+  else if (phase !== 'after-switch') throw new Error('Unknown provider evidence phase');
+  if (required.some(id => assertions[id] !== true)) throw new Error('Provider display requires actual passing verification evidence');
+  const first = report.providerA.credential, second = report.providerB.credential;
+  const rows = [
+    ['Issuer DID (both credentials)', first.issuerDid],
+    ['Original credential key ID', first.kid],
+    ['New credential key ID', second.kid],
+    ['Original credential reverified after switch', String(report.providerA.reverifiedAfterSwitch)],
+    ['New credential signature verified', String(second.verified)],
+  ];
+  if (phase === 'denied-switch') {
+    const denied = report.unpublishedReplacement;
+    rows.push(['Unpublished replacement response', `HTTP ${denied.rebindStatus}; cutover accepted: ${denied.rebindOk}`],
+      ['Post-denial issuance still uses published key B', String(denied.credentialAfterDenial.kid === second.kid)],
+      ['Post-denial credential signature verified', String(denied.credentialAfterDenial.verified)]);
+  }
+  return {title:phase === 'denied-switch' ? 'Unpublished key denied; published key retained' : 'One issuer DID; both credentials verify', rows,
+    boundary:'Cryptographic test evidence from actual issued credentials and resolved public DID keys. Added recording panel; not an admin portal screen.',
+    custodyScope:'Distinct keys and provider configurations on one beta OpenBao backend.'};
+}
+
+async function showProviderVerification(page, report, phase) {
+  const payload = providerVerificationDisplay(report, phase);
+  if (!RECORD_VIDEO) return;
+  await page.evaluate(payload => {
+    document.getElementById('d02-verification-evidence')?.remove();
+    const panel = document.createElement('section'); panel.id = 'd02-verification-evidence';
+    Object.assign(panel.style,{position:'fixed',top:'96px',left:'276px',right:'28px',padding:'24px',
+      zIndex:'2147483646',background:'#0f172a',color:'#f8fafc',fontFamily:'Arial, sans-serif',border:'3px solid #38bdf8'});
+    const line = (text,size,color) => {const node=document.createElement('div');node.textContent=text;
+      Object.assign(node.style,{fontSize:size+'px',color:color || '#f8fafc',marginBottom:'9px',overflowWrap:'anywhere'});panel.appendChild(node);};
+    line('CRYPTOGRAPHIC TEST EVIDENCE',20,'#7dd3fc'); line(payload.title,32);
+    for (const [label,value] of payload.rows) line(label+': '+value,22);
+    line(payload.custodyScope,20,'#7dd3fc'); line(payload.boundary,18,'#cbd5e1');
+    document.body.appendChild(panel);
+  },payload);
+  await page.locator('#d02-verification-evidence').waitFor({state:'visible'});
+  await page.waitForTimeout(6000);
+  await page.evaluate(() => document.getElementById('d02-verification-evidence')?.remove());
+}
+
 async function showProviderStep(page, title, detail) {
   return showStep(page, title, detail, {
     enabled: RECORD_VIDEO,
@@ -637,6 +682,7 @@ async function main() {
       const oldReverification = await reverifyIssuedCredential(providerA.issued);
       report.providerA.reverifiedAfterSwitch = oldReverification.verified;
       report.didAfterSwitch = { assertionMethodIds: oldReverification.assertionMethodIds };
+      await showProviderVerification(page, report, 'after-switch');
       await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
       const beforeFailureConfig = await loadSigningConfig(page);
@@ -660,6 +706,7 @@ async function main() {
         issueAfterDenial: afterDenial.issuance,
         credentialAfterDenial: afterDenial.credential,
       };
+      await showProviderVerification(page, report, 'denied-switch');
       await showProviderStep(page, 'Unpublished replacement denied', 'An unavailable replacement key cannot cut over custody; issuance continues on the last published provider-B method.');
 
       report.behaviorAssertions = providerSwitchBehaviorAssertions(report);
@@ -733,6 +780,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  providerVerificationDisplay,
   cleanup,
   credentialEvidence,
   governedIssuerRequest,

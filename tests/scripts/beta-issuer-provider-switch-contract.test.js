@@ -53,3 +53,18 @@ test('does not accept a metadata-only switch or a failed-cutover key change', ()
   failOpen.unpublishedReplacement.credentialAfterDenial.kid = 'did:web:beta.example:orgs:d02#missing';
   assert.equal(providerSwitchBehaviorAssertions(failOpen).unpublished_signing_key_denied, false);
 });
+
+test('visible verification evidence binds real credential keys, revalidation and denial response', () => {
+  const {providerVerificationDisplay}=require('./audit-beta-issuer-provider-switch');
+  const report=passingReport();
+  const shown=providerVerificationDisplay(report,'denied-switch');
+  assert(shown.rows.some(([,value])=>value===report.providerA.credential.kid));
+  assert(shown.rows.some(([,value])=>value===report.providerB.credential.kid));
+  assert(shown.rows.some(([,value])=>value==='HTTP 503; cutover accepted: false'));
+  assert.match(shown.boundary,/not an admin portal screen/);
+  assert.match(shown.custodyScope,/one beta OpenBao backend/);
+  const invalid=passingReport();invalid.providerA.reverifiedAfterSwitch=false;
+  assert.throws(()=>providerVerificationDisplay(invalid,'after-switch'),/actual passing verification/);
+  const failOpen=passingReport();failOpen.unpublishedReplacement.rebindStatus=200;
+  assert.throws(()=>providerVerificationDisplay(failOpen,'denied-switch'),/actual passing verification/);
+});
