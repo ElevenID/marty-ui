@@ -33,6 +33,8 @@ pub struct WorkloadServerTlsFiles {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentationPolicyServiceConfig {
+    pub did_resolution_base_urls: Vec<String>,
+    pub did_web_allowed_hosts: Vec<String>,
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
@@ -140,7 +142,35 @@ impl PresentationPolicyServiceConfig {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        for base in &did_resolution_base_urls {
+            let parsed = Url::parse(base).map_err(|_| invalid("DID_RESOLUTION_BASE_URL"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(invalid("DID_RESOLUTION_BASE_URL"));
+            }
+        }
+        let did_web_allowed_hosts = value(&values, "DID_WEB_ALLOWED_HOSTS")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
         Ok(Self {
+            did_resolution_base_urls,
+            did_web_allowed_hosts,
             environment,
             http_addr,
             grpc_addr,
