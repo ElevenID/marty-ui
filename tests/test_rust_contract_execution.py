@@ -353,6 +353,162 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
     assert "owned child diagnostic" not in output
 
 
+def test_selfhost_inventory_binds_exact_owner_and_direct_inputs() -> None:
+    package, target, inputs = INVENTORY.obligation("selfhost_acceptance")
+    assert (package, target) == (
+        "marty-selfhost-acceptance",
+        "selfhost_public_image_contract",
+    )
+    assert INVENTORY.libtest_harness(package, target)["manifest"] == (
+        "rust/crates/selfhost-acceptance/Cargo.toml"
+    )
+    assert {item["name"] for item in inputs} == {
+        "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+        "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+        "MARTY_SELFHOST_TEST_IMAGE",
+        "MARTY_SELFHOST_TEST_REVISION",
+        "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
+        "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
+    }
+    assert all(item["consumer"] == package for item in inputs)
+    sources = INVENTORY.selfhost_source_inputs("selfhost")
+    assert {entry["path"] for entry in sources} == {
+        "contracts/canvas-worker-consumer-range-oracle.json",
+        "scripts/ci/pull-pinned-dockerhub-image.sh",
+        "scripts/ci/run-db-contract-groups.py",
+        "scripts/ci/run-published-canvas-contracts.sh",
+    }
+    assert all(
+        entry["sha256"] == INVENTORY.digest(ROOT / entry["path"]) for entry in sources
+    )
+    assert "scripts/ci/run-db-contract-groups.py" not in {
+        entry["path"] for entry in INVENTORY.selfhost_source_inputs("canvas")
+    }
+
+
+def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc unavailable for the selfhost libtest protocol check")
+    binary = tmp_path / (
+        "selfhost-harness.exe" if os.name == "nt" else "selfhost-harness"
+    )
+    build = subprocess.run(
+        [
+            rustc,
+            "--test",
+            str(ROOT / "tests/fixtures/rust_selfhost_obligation_harness.rs"),
+            "-o",
+            str(binary),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    monkeypatch.delenv("RUNNER_TEMP", raising=False)
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    for item in INVENTORY.obligation("selfhost_acceptance")[2]:
+        monkeypatch.setenv(item["name"], "private-runtime-value")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_IMAGE", "sha256:" + "a" * 64)
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_REVISION", "b" * 40)
+    packager = tmp_path / "packager"
+    compose = tmp_path / "compose"
+    packager.write_bytes(b"owned test packager")
+    compose.write_bytes(b"owned test renderer")
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_PACKAGER_BINARY", str(packager))
+    monkeypatch.setenv("MARTY_SELFHOST_BUNDLE_TEST_COMPOSE", str(compose))
+    command = [str(binary), "--nocapture", "--test-threads=4"]
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") == 0
+    output = capsys.readouterr().out
+    record = next(
+        json.loads(line.removeprefix(INVENTORY.PREFIX))
+        for line in output.splitlines()
+        if line.startswith(INVENTORY.PREFIX)
+    )
+    assert record["gate"] == "test-rust-services/selfhost"
+    assert record["owner"] == INVENTORY.SELFHOST_OWNER
+    assert len(record["selected"]) == 12
+    assert record["selected"] == record["executed"]
+    assert record["passed"] == 12 and record["failed"] == 0
+    assert record["configured_input_identities"] == {
+        "image_id": "sha256:" + "a" * 64,
+        "source_revision": "b" * 40,
+        "packager_sha256": INVENTORY.digest(packager),
+        "compose_sha256": INVENTORY.digest(compose),
+    }
+    assert output.count("test result: ok.") == 1
+    assert "nested child summary captured" in output
+    assert "private-runtime-value" not in json.dumps(record)
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "canvas") == 0
+    assert '"gate":"test-rust-services/canvas"' in capsys.readouterr().out
+    packager.write_bytes(b"mutated owned test packager")
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") == 0
+    assert (
+        f'"packager_sha256":"{INVENTORY.digest(packager)}"' in capsys.readouterr().out
+    )
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_IMAGE", "mutable:latest")
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+    assert "invalid_selfhost_image_id" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_IMAGE", "sha256:" + "a" * 64)
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_REVISION", "mutable-main")
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+    assert "invalid_selfhost_revision" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_REVISION", "b" * 40)
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_PACKAGER_BINARY", str(tmp_path / "absent"))
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+    assert "invalid_selfhost_binary" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_SELFHOST_TEST_PACKAGER_BINARY", str(packager))
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "contracts") != 0
+    assert "invalid_dispatch_owner" in capsys.readouterr().out
+    assert (
+        INVENTORY.run_contract(
+            "selfhost_acceptance",
+            [str(binary), "case01", "--exact", "--nocapture"],
+            "selfhost",
+        )
+        != 0
+    )
+    assert "selfhost_selection_drift" in capsys.readouterr().out
+    monkeypatch.setenv("MARTY_SELFHOST_SYNTHETIC_FAIL", "1")
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+    assert '"failed":1' in capsys.readouterr().out
+    monkeypatch.delenv("MARTY_SELFHOST_SYNTHETIC_FAIL")
+    monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "0")
+    assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+    assert "missing_published_schema_gate" in capsys.readouterr().out
+
+
+def test_selfhost_runner_keeps_roster_preflight_and_both_evidence_call_sites() -> None:
+    source = CANVAS_RUNNER.read_text(encoding="utf-8")
+    dedicated = source.split('if [[ "$mode" == selfhost-only ]]; then', 1)[1].split(
+        "\nfi", 1
+    )[0]
+    assert (
+        dedicated.count('require_selfhost_tests "$("$selfhost_executable" --list)"')
+        == 1
+    )
+    assert dedicated.index("require_selfhost_tests") < dedicated.index(
+        "pull_published_postgres"
+    )
+    assert dedicated.index("pull_published_postgres") < dedicated.index(
+        "--name selfhost_acceptance --owner selfhost --"
+    )
+    assert dedicated.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
+    assert dedicated.count("12 passed; 0 failed; 0 ignored;") == 1
+    assert source.count("--name selfhost_acceptance --owner canvas --") == 1
+    assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 2
+    assert source.index('require_selfhost_tests "$selfhost_tests"') < source.index(
+        "--name selfhost_acceptance --owner canvas --"
+    )
+    assert 'if [[ -n "$selfhost_pid" ]]; then kill "$selfhost_pid"' in source
+    assert 'if [[ -n "$selfhost_pid" ]]; then wait "$selfhost_pid"' in source
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX process groups are the CI owner")
 @pytest.mark.parametrize("signum", [signal.SIGTERM, signal.SIGINT])
 def test_obligation_wrapper_reaps_owned_harness_and_descendant(

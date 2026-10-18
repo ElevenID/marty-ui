@@ -250,7 +250,9 @@ if [[ "$mode" == selfhost-only ]]; then
   timed image_pull published_probe docker pull "${images[1]}"
   selfhost_log=$(mktemp "${RUNNER_TEMP:?}/canvas-selfhost-only.XXXXXX")
   trap 'rm -f -- "$selfhost_log"' EXIT
-  timed canvas_target selfhost "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"
+  timed canvas_target selfhost python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
+    --name selfhost_acceptance --owner selfhost -- \
+    "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"
   grep -Eq '^test result: ok\. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
   exit 0
 fi
@@ -615,7 +617,9 @@ selfhost_pid=
 selfhost_relay_pid=
 if (( selfhost_delegated == 0 )); then
   selfhost_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-  "$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
+  python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
+    --name selfhost_acceptance --owner canvas -- \
+    "$selfhost_executable" --nocapture --test-threads=4 >"$selfhost_log" 2>&1 &
   selfhost_pid=$!
   relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &
   selfhost_relay_pid=$!

@@ -1,4 +1,4 @@
-"""Record effective libtest obligations for DB and Flow acceptance runners.
+"""Record effective libtest obligations for DB, Flow, and self-host runners.
 
 Discovery uses the same executable and selection arguments as execution. libtest
 --list includes ignored tests by default, so a second ignored-only discovery is
@@ -13,6 +13,7 @@ import json
 import os
 import re
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -31,6 +32,10 @@ FLOW_OWNERS = {
     "canvas": "scripts/ci/run-published-canvas-contracts.sh",
 }
 FLOW_FIXTURE_OWNER = "rust/services/issuance/tests/support/canvas_published_database.rs"
+SELFHOST_OWNER = "scripts/ci/run-published-canvas-contracts.sh"
+SELFHOST_FIXTURE_OWNER = (
+    "rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs"
+)
 CASE = r"[A-Za-z_][A-Za-z0-9_:]*"
 # Stable libtest's separate result log is unaffected by stdout inherited by a
 # tested process. --logfile is deprecated but supported by pinned Rust 1.95;
@@ -164,6 +169,18 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
             "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
         ),
     )
+    entries["selfhost_acceptance"] = (
+        "marty-selfhost-acceptance",
+        "selfhost_public_image_contract",
+        (
+            "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST",
+            "MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE",
+            "MARTY_SELFHOST_TEST_IMAGE",
+            "MARTY_SELFHOST_TEST_REVISION",
+            "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
+            "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
+        ),
+    )
     if name not in entries:
         raise ValueError("unknown_dispatch")
     package, target, variables = entries[name]
@@ -188,6 +205,15 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
                 if item["name"]
                 in {"MARTY_BASE_COMPOSE_BINARY", "MARTY_DIDCOMM_TEST_PYTHON"}
                 else "Flow acceptance runner (selected by call site)"
+            )
+    if name == "selfhost_acceptance":
+        for item in inputs:
+            item["owner"] = SELFHOST_OWNER
+            item["provisioner"] = (
+                ".github/workflows/ci.yml"
+                if item["name"].startswith("MARTY_SELFHOST_TEST_")
+                or item["name"] == "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"
+                else SELFHOST_OWNER
             )
     # These tests use a Rust-owned HTTPS Signing Keys fixture by default, or an
     # explicitly supplied live route. Record the conditional dependency names,
@@ -263,12 +289,15 @@ def libtest_harness(package: str, target: str) -> dict:
         if package == "marty-issuance-service"
         else package.removeprefix("marty-")
     )
-    manifest_path = (
-        ROOT / "rust/crates/flow-acceptance/Cargo.toml"
-        if package == "marty-flow-acceptance"
-        and target == "flow_published_schema_contract"
-        else ROOT / "rust/services" / service / "Cargo.toml"
-    )
+    if (package, target) == ("marty-flow-acceptance", "flow_published_schema_contract"):
+        manifest_path = ROOT / "rust/crates/flow-acceptance/Cargo.toml"
+    elif (package, target) == (
+        "marty-selfhost-acceptance",
+        "selfhost_public_image_contract",
+    ):
+        manifest_path = ROOT / "rust/crates/selfhost-acceptance/Cargo.toml"
+    else:
+        manifest_path = ROOT / "rust/services" / service / "Cargo.toml"
     manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest["package"]["name"] != package:
         raise ValueError("foreign_harness_manifest")
@@ -359,6 +388,60 @@ def flow_source_inputs(owner: str) -> list[dict[str, str]]:
         FLOW_OWNERS[owner],
     )
     return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+def selfhost_source_inputs(owner: str) -> list[dict[str, str]]:
+    # Direct runner/pin inputs only. The caller separately validates the local
+    # image ID; this is not retained image provenance or a full source graph.
+    paths = [
+        "contracts/canvas-worker-consumer-range-oracle.json",
+        "scripts/ci/pull-pinned-dockerhub-image.sh",
+        SELFHOST_OWNER,
+    ]
+    if owner == "selfhost":
+        paths.append("scripts/ci/run-db-contract-groups.py")
+    return [{"path": path, "sha256": digest(ROOT / path)} for path in paths]
+
+
+def selfhost_configured_inputs() -> dict[str, str]:
+    """Non-secret configured identities, not image or package provenance."""
+    image_id = os.environ["MARTY_SELFHOST_TEST_IMAGE"]
+    revision = os.environ["MARTY_SELFHOST_TEST_REVISION"]
+    if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+        raise ValueError("invalid_selfhost_image_id")
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("invalid_selfhost_revision")
+
+    def binary_sha256(variable: str) -> str:
+        supplied = Path(os.environ[variable])
+        try:
+            resolved = supplied.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise ValueError("invalid_selfhost_binary") from error
+        before = resolved.stat()
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 1024**3:
+            raise ValueError("invalid_selfhost_binary")
+        checksum = digest(resolved)
+        after = resolved.stat()
+        try:
+            same_path = supplied.resolve(strict=True) == resolved
+        except (OSError, RuntimeError):
+            same_path = False
+        if not same_path or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise ValueError("changed_selfhost_binary")
+        return checksum
+
+    return {
+        "image_id": image_id,
+        "source_revision": revision,
+        "packager_sha256": binary_sha256("MARTY_SELFHOST_TEST_PACKAGER_BINARY"),
+        "compose_sha256": binary_sha256("MARTY_SELFHOST_BUNDLE_TEST_COMPOSE"),
+    }
 
 
 def expected_cases(
@@ -553,20 +636,35 @@ def run_owned_harness(
 
 def run_contract(name: str, command: list[str], owner: str = "contracts") -> int:
     flow = name == "flow_acceptance"
+    selfhost = name == "selfhost_acceptance"
+    if flow:
+        gate = f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
+        runner = FLOW_OWNERS.get(owner)
+        fixture = FLOW_FIXTURE_OWNER
+    elif selfhost:
+        gate = f"test-rust-services/{'selfhost' if owner == 'selfhost' else 'canvas'}"
+        runner = SELFHOST_OWNER
+        fixture = SELFHOST_FIXTURE_OWNER
+    else:
+        gate = "test-rust-services/contracts"
+        runner = RUNNER_OWNER
+        fixture = FIXTURE_OWNER
     evidence = {
         "schema": "marty.rust-db-obligation/v1",
-        "gate": f"test-rust-services/{'flow' if owner == 'flow-pr' else 'canvas'}"
-        if flow
-        else "test-rust-services/contracts",
-        "owner": FLOW_OWNERS.get(owner) if flow else RUNNER_OWNER,
-        "runtime_fixture_owner": FLOW_FIXTURE_OWNER if flow else FIXTURE_OWNER,
+        "gate": gate,
+        "owner": runner,
+        "runtime_fixture_owner": fixture,
         "result_source": "libtest_logfile",
         "run": {key: os.environ.get(key) for key in RUN_IDENTITY},
         "status": "failed",
     }
     status = 1
     try:
-        if (flow and owner not in FLOW_OWNERS) or (not flow and owner != "contracts"):
+        if (
+            (flow and owner not in FLOW_OWNERS)
+            or (selfhost and owner not in {"selfhost", "canvas"})
+            or (not flow and not selfhost and owner != "contracts")
+        ):
             raise ValueError("invalid_dispatch_owner")
         package, target, inputs = obligation(name)
         if flow:
@@ -575,6 +673,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 if item["provisioner"] != ".github/workflows/ci.yml":
                     item["provisioner"] = FLOW_OWNERS[owner]
             evidence["direct_source_inputs"] = flow_source_inputs(owner)
+        if selfhost:
+            evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
@@ -587,15 +687,24 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         # Never probe --list on custom harnesses, which may ignore the flag and
         # execute their bodies. All current dispatches use standard libtest.
         evidence["harness"] = libtest_harness(package, target)
-        selection(command[1:], allow_nocapture=flow)  # Validate before evidence.
+        selection(
+            command[1:], allow_nocapture=flow or selfhost
+        )  # Validate before evidence.
         evidence["selection_arguments"] = command[1:]
         expected, ignored = expected_cases(
-            command[0], command[1:], allow_nocapture=flow
+            command[0], command[1:], allow_nocapture=flow or selfhost
         )
         if flow:
             if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             verify_flow_roster(command[0], expected, ignored)
+        if selfhost:
+            if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
+                raise ValueError("missing_published_schema_gate")
+            # The shell runner owns the exact names. This bounds its selected
+            # cardinality without maintaining a second 12-name roster here.
+            if len(expected) != 12 or ignored:
+                raise ValueError("selfhost_selection_drift")
         evidence["selected"] = sorted(expected)
         evidence["selected_ignored"] = sorted(ignored)
         if not expected:
@@ -603,6 +712,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         for item in inputs:
             if item["requirement"] == "required" and not os.environ.get(item["name"]):
                 raise ValueError("missing_required_runtime_input")
+        if selfhost:
+            evidence["configured_input_identities"] = selfhost_configured_inputs()
         # Preserve every selection/serialism argument and all live raw output.
         # A separate libtest result stream identifies case completion even when
         # inherited child stdout splits the human `test name ... ok` framing.

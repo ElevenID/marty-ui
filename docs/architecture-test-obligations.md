@@ -192,6 +192,23 @@ merge groups retain the complete Rust matrix. A default workspace test or
 `--list` result alone does not prove the environment-gated parent/child loader
 executed.
 
+Both the dedicated self-host lane and the retained full/manual Canvas runner
+now record outer libtest selection,
+ignored status, outcomes, exact non-Cargo runner/image-pin input hashes, and
+configured image ID/revision plus packager/Compose executable byte identities
+through the shared Rust obligation recorder. In CI, the executable is bound to
+the same-run compiler-artifact manifest; local runs without that manifest are
+marked `local_unrecorded`. The shell's original 12-name
+roster, image checks, test arguments, parallelism, pass-count gate, and Rust
+resource cleanup remain authoritative. These records prove outer harness case
+completion only: `selfhost_public_image_loader_child` is an environment-gated
+child entry point, and its successful outer row does not prove the nested
+loader reached every assertion. The parent test retains its own nested
+completion/recovery checks. Interrupt forwarding settles the owned harness
+process group; it is not evidence of completed installed-product cleanup,
+upstream image/package provenance, or a complete transitive source graph. The
+record grants no skip authority.
+
 | Case group | Distinct obligation |
 | --- | --- |
 | One remote-secret fixture case | Verified loopback HTTPS and a public CA for the test oracle. |
