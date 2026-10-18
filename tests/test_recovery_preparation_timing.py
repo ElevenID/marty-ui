@@ -392,3 +392,33 @@ def test_host_rust_ci_and_warmer_share_fast_debug_settings():
         == lint["env"]["SCCACHE_GHA_RW_MODE"]
         == "READ_ONLY"
     )
+
+
+def test_main_warmer_reuses_exact_recovery_build_only_owner():
+    workflow = yaml.safe_load(
+        (ROOT / ".github/workflows/warm-ci-caches.yml").read_text()
+    )
+    warmer = workflow["jobs"]["rust"]
+    assert warmer["if"] == "github.ref == 'refs/heads/main'"
+    assert warmer["env"]["SCCACHE_GHA_RW_MODE"] == "READ_WRITE"
+    assert (
+        "scripts/probe_integration_secret_coordinated_restore.py"
+        in workflow[True]["push"]["paths"]
+    )
+    steps = warmer["steps"]
+    names = [step.get("name") for step in steps]
+    build = names.index("Compile Rust service tests")
+    exact = names.index("Warm exact Rust recovery graphs")
+    clippy = names.index("Warm clippy cache")
+    assert build < exact < clippy
+    assert steps[exact]["run"] == (
+        "python3 scripts/probe_integration_secret_coordinated_restore.py "
+        "--prepare-rust-only"
+    )
+    assert not steps[exact].get("continue-on-error", False)
+    assert any(
+        step.get("uses")
+        == "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97"
+        and step.get("with", {}).get("python-version") == "3.12"
+        for step in steps[:exact]
+    )
