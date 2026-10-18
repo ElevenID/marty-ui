@@ -379,6 +379,25 @@ This document coordinates the new architecture work. [The original build audit](
 | A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Cheap Core preflight separation is landed. Preserve the complete KMS, lint, compatibility, feature and security checks; do not extrapolate timings. |
 | A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Nightly qualification remains open: one Linux happy-path tier with no YouTube activity. Official releases retain complete happy/error E2E and official-only YouTube. Unknown tier or missing evidence fails closed. |
 
+October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
+landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
+the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
+feature graph but did not warm those exact package graphs. Reviewed
+[UI #1414](https://github.com/ElevenID/marty-ui/pull/1414) reuses the existing
+eight-command Rust-only preparation in the main-only warmer; full PR and
+protected combined-head CI passed before merge. The first
+[main warmer](https://github.com/ElevenID/marty-ui/actions/runs/39148458877)
+passed in 19m42s, with zero cache-write errors. A later read-only
+[#1416 recovery job](https://github.com/ElevenID/marty-ui/actions/runs/39150263162)
+recorded six Rust misses versus 355 pre-warmer; unchanged Flow live signing
+went from 104 misses to zero. Preparation and job time were 6m07s and 5m58s
+shorter respectively across these two runs, but Signing Keys/Issuance source
+and hosted conditions also changed. This demonstrates cache reuse, not a
+guaranteed time saving. Cache occupancy approached the included 10 GiB limit;
+retention and later-run performance need watching. A0 input closure, A3 shadow
+coverage and the remaining A4-A6 obligations stay open; no check or release
+gate was removed.
+
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
 full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
