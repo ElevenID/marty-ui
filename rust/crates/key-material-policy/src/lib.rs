@@ -3,6 +3,8 @@
 use marty_response_compat::lossless_json_tree::{JsonNode, JsonTree};
 use serde_json::{Map, Value};
 
+const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
 /// Enumerate prohibited members of an object being admitted as a public JWK.
 ///
 /// Presence is enough: null or empty private members are rejected too. Unlike
@@ -10,11 +12,25 @@ use serde_json::{Map, Value};
 /// and does not require `kty` to be present. Callers retain algorithm, public
 /// coordinate, and metadata validation.
 pub fn private_jwk_members(jwk: &Map<String, Value>) -> impl Iterator<Item = &'static str> + '_ {
-    const MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
-    MEMBERS
+    PRIVATE_JWK_MEMBERS
         .iter()
         .copied()
         .filter(|member| jwk.contains_key(*member))
+}
+
+fn is_private_jwk_field(name: &str) -> bool {
+    PRIVATE_JWK_MEMBERS.contains(&name) || name == "rsa_d"
+}
+
+/// Detect populated private JWK fields, including the legacy `rsa_d` alias.
+///
+/// Null values are permitted and `kty` is not required. Use this for metadata
+/// updates; public JWK shape admission must use `private_jwk_members` instead.
+#[must_use]
+pub fn contains_populated_private_jwk_fields(values: &Map<String, Value>) -> bool {
+    values
+        .iter()
+        .any(|(name, value)| !value.is_null() && is_private_jwk_field(name))
 }
 
 /// Detect private key material in JSON values, including JSON-encoded strings.
@@ -44,12 +60,8 @@ fn contains_private_key_inner(value: &Value, decoded_depth: usize) -> bool {
                 }
                 let trimmed = value.trim_start();
                 if trimmed.starts_with('{') || trimmed.starts_with('[') {
-                    let decoded = serde_json::from_str::<Value>(trimmed)
-                        .map(|decoded| contains_private_key_inner(&decoded, decoded_depth + 1))
-                        .unwrap_or_else(|_| {
-                            contains_private_key_json_inner(trimmed, decoded_depth + 1)
-                                .unwrap_or(false)
-                        });
+                    let decoded = contains_private_key_json_inner(trimmed, decoded_depth + 1)
+                        .unwrap_or(false);
                     if decoded {
                         return true;
                     }
@@ -79,10 +91,7 @@ fn has_private_key_fields(values: &Map<String, Value>) -> bool {
     let private_named_field = values
         .iter()
         .any(|(name, value)| !value.is_null() && is_private_field_name(name));
-    let private_jwk = values.contains_key("kty")
-        && ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"]
-            .iter()
-            .any(|name| values.get(*name).is_some_and(|value| !value.is_null()));
+    let private_jwk = values.contains_key("kty") && contains_populated_private_jwk_fields(values);
     private_named_field || private_jwk
 }
 
@@ -114,7 +123,7 @@ fn contains_private_key_json_inner(raw: &str, decoded_depth: usize) -> Option<bo
     if decoded_depth > 16 {
         return Some(true);
     }
-    let tree = JsonTree::from_json_bytes(raw.as_bytes())?;
+    let tree = JsonTree::from_json_bytes_preserving_duplicates(raw.as_bytes())?;
     let mut pending = vec![tree.root()];
     while let Some(id) = pending.pop() {
         let text = match tree.node(id) {
@@ -144,9 +153,7 @@ fn contains_private_key_json_inner(raw: &str, decoded_depth: usize) -> Option<bo
                         let populated = !matches!(tree.node(*child), JsonNode::Scalar(Value::Null));
                         if populated
                             && (is_private_field_name(name)
-                                || (has_kty
-                                    && ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"]
-                                        .contains(&name)))
+                                || (has_kty && is_private_jwk_field(name)))
                         {
                             return Some(true);
                         }
@@ -168,8 +175,79 @@ pub fn has_private_key_marker(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_private_key, contains_private_key_json, private_jwk_members};
+    use super::{
+        contains_populated_private_jwk_fields, contains_private_key, contains_private_key_json,
+        private_jwk_members,
+    };
     use serde_json::json;
+
+    #[test]
+    fn populated_policy_preserves_null_and_kty_boundaries_in_both_scanners() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"] {
+            for value in [
+                json!(null),
+                json!(""),
+                json!(false),
+                json!(0),
+                json!([]),
+                json!({}),
+                json!("secret"),
+            ] {
+                let populated = !value.is_null();
+                for has_kty in [false, true] {
+                    let mut object = serde_json::Map::new();
+                    object.insert(member.into(), value.clone());
+                    if has_kty {
+                        // Existing metadata policy tests presence, not the value of kty.
+                        object.insert("kty".into(), json!(null));
+                    }
+                    assert_eq!(contains_populated_private_jwk_fields(&object), populated);
+                    assert_eq!(
+                        private_jwk_members(&object).next().is_some(),
+                        member != "rsa_d"
+                    );
+                    let nested = json!({"metadata": [object]});
+                    let expected = populated && has_kty;
+                    assert_eq!(contains_private_key(&nested), expected, "{nested}");
+                    let raw = nested.to_string();
+                    assert_eq!(contains_private_key_json(&raw), Some(expected), "{raw}");
+                    assert_eq!(contains_private_key(&json!(raw)), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lossless_policy_checks_populated_duplicate_members_in_either_order() {
+        for member in ["d", "p", "q", "dp", "dq", "qi", "oth", "k", "rsa_d"] {
+            for values in ["null,\"secret\"", "\"secret\",null"] {
+                let (first, second) = values.split_once(',').unwrap();
+                let raw = format!(r#"{{"kty":"RSA","{member}":{first},"{member}":{second}}}"#);
+                assert_eq!(contains_private_key_json(&raw), Some(true), "{raw}");
+                assert!(contains_private_key(&json!({"metadata": raw})), "{raw}");
+            }
+        }
+    }
+
+    #[test]
+    fn encoded_admission_checks_overwritten_objects_and_allows_public_duplicates() {
+        for raw in [
+            r#"{"publicKeyJwk":{"kty":"RSA","d":"secret"},"publicKeyJwk":null}"#,
+            r#"{"kty":"RSA","d":"secret","\u0064":null}"#,
+            r#"{"private_key":"secret","private_key":null}"#,
+        ] {
+            assert_eq!(contains_private_key_json(raw), Some(true));
+            assert!(contains_private_key(&json!({"metadata": raw})));
+        }
+        for raw in [
+            r#"{"kty":"RSA","d":null,"d":null}"#,
+            r#"{"note":"public","note":"also public"}"#,
+            r#"{"key_reference":"transit/keys/a","key_reference":"transit/keys/b"}"#,
+        ] {
+            assert_eq!(contains_private_key_json(raw), Some(false));
+            assert!(!contains_private_key(&json!({"metadata": raw})));
+        }
+    }
 
     #[test]
     fn public_jwk_admission_rejects_private_members_even_when_empty_or_null() {

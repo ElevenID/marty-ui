@@ -47,6 +47,13 @@ impl JsonTree {
     pub fn from_json_bytes(bytes: &[u8]) -> Option<Self> {
         crate::canvas_response_json::parse_json_tree(bytes)
     }
+
+    /// Retain every object entry for admission checks that must inspect values
+    /// hidden by duplicate keys. Ordinary response/database parsing keeps its
+    /// established last-value semantics through the other constructors.
+    pub fn from_json_bytes_preserving_duplicates(bytes: &[u8]) -> Option<Self> {
+        crate::canvas_response_json::parse_json_tree_preserving_duplicates(bytes)
+    }
     pub(crate) fn new(nodes: Vec<JsonNode>, root: usize) -> Self {
         Self { nodes, root }
     }
