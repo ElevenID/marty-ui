@@ -29,6 +29,20 @@ unprovisioned; obtain access and complete those acceptance checks before
 closing the KMS goal. The milestone table below contains historical status;
 use the dated evidence log and live run/PR states for the latest gate.
 
+Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
+`codex/managed-evidence-cleanup-20261018` worktree without changing its
+uncommitted files. Carried its useful evidence-chain fix and Python software
+KMS removal into current Marty main on
+[PR #125](https://github.com/ElevenID/Marty/pull/125), commit `d31f7c3`.
+The final branch removes the software/file provider options and classes,
+requires explicit managed provider identity for an injected adapter, binds
+the predecessor before hashing/signing under a lock, and checks content
+against the signed hash. The worker's test-generated private key was replaced
+with a keyless orchestration double; this does not qualify real KMS custody.
+All 225 Marty unit tests, Ruff and diff checks passed locally. PR checks and
+protected merge remain pending. No production managed adapter was added by
+this Python cleanup; Rust/OpenBao remains the custody implementation.
+
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
 `db-migrate` rejected a managed signing-key purpose binding solely because the
