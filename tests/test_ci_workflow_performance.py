@@ -4131,7 +4131,8 @@ def test_native_canvas_socket_timeout_gate_is_explicit_and_mandatory() -> None:
         'and historical socket fixture"]\n    async fn native_socket_case()'
     ) in source
     assert 'let Ok(raw) = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")' not in source
-    assert '.expect("owned native Canvas socket case")' in source
+    assert '.unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"))' in source
+    assert '.expect("owned native Canvas socket case")' not in source
     runner = (ROOT / "scripts/run_canvas_timeout_consumer_oracle.py").read_text(
         encoding="utf-8"
     )

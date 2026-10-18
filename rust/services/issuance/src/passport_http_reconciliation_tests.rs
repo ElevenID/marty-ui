@@ -323,7 +323,7 @@ async fn call_reconciler(app: &Router, application_id: &str) -> StatusCode {
 #[ignore = "requires the owned passport reconciliation PostgreSQL fixture"]
 async fn beta_reconciliation_replays_only_exact_material_and_binds_first_receipt() {
     let database_url = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")
-        .expect("owned passport reconciliation PostgreSQL URL");
+        .unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"));
     let _database_guard = RECONCILIATION_DATABASE_LOCK.lock().await;
     assert_eq!(
         url::Url::parse(&database_url)
@@ -658,7 +658,7 @@ async fn run_beta_batch_http_recovery(
     omit_batch_companion_row: bool,
 ) {
     let database_url = std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")
-        .expect("owned passport reconciliation PostgreSQL URL");
+        .unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"));
     let _database_guard = RECONCILIATION_DATABASE_LOCK.lock().await;
     assert_eq!(
         url::Url::parse(&database_url)

@@ -584,7 +584,7 @@ mod tests {
     #[ignore = "requires the owned loopback TLS and historical socket fixture"]
     async fn native_socket_case() {
         let raw = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_CASE")
-            .expect("owned native Canvas socket case");
+            .unwrap_or_else(|_| panic!("owned native Canvas socket case is absent"));
         let case: Value = serde_json::from_str(&raw).unwrap();
         let origin = std::env::var("MARTY_CANVAS_TIMEOUT_NATIVE_ORIGIN").unwrap();
         assert!(origin.starts_with("https://127.0.0.1:"));

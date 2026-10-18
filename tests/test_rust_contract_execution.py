@@ -166,7 +166,7 @@ def _assert_explicit_passport_reconciliation_fixture(source: str, script: str) -
         assert re.search(r"^\s+" + re.escape(name) + r"(?:\s*\\|; do)$", script, re.MULTILINE)
     assert source.count('std::env::var("MARTY_PASSPORT_RECONCILIATION_TEST_URL")') == 2
     assert 'let Ok(database_url) = std::env::var(' not in source
-    assert source.count('.expect("owned passport reconciliation PostgreSQL URL")') == 2
+    assert source.count('.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))') == 2
     assert "--lib passport_http::reconciliation_tests:: -- --ignored --list" in script
     assert '"passport_http::reconciliation_tests::$name: test"' in script
     assert "[[ ${#cases[@]} == 5 ]]" in script
@@ -191,7 +191,16 @@ def test_passport_reconciliation_cases_require_owned_postgres_and_exact_roster()
         )
     with pytest.raises(AssertionError):
         _assert_explicit_passport_reconciliation_fixture(
-            source.replace('.expect("owned passport reconciliation PostgreSQL URL")', '.unwrap_or_default()', 1),
+            source.replace('.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))', '.unwrap_or_default()', 1),
+            script,
+        )
+    with pytest.raises(AssertionError):
+        _assert_explicit_passport_reconciliation_fixture(
+            source.replace(
+                '.unwrap_or_else(|_| panic!("owned passport reconciliation PostgreSQL URL is absent"))',
+                '.expect("owned passport reconciliation PostgreSQL URL")',
+                1,
+            ),
             script,
         )
     with pytest.raises(AssertionError):
