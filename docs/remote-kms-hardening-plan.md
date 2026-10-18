@@ -211,6 +211,18 @@ candidate `31c3c49fe112cb0f08e4f5c63549706f29a32b9a`, with CI
 the resulting protected main before another no-write v1.1.256 claim. No
 v1.1.256 tag or release exists yet.
 
+Protected queue landing (2026-10-17): PR #1398's merge-group
+[CI 39095803323](https://github.com/ElevenID/marty-ui/actions/runs/39095803323)
+passed, including OpenBao recovery, Canvas, contracts and the terminal CI Gate.
+The PR merged at 2026-10-18 04:28 UTC; its candidate and protected main equal
+`31c3c49fe112cb0f08e4f5c63549706f29a32b9a`. No other recent feature PR
+remained queued. Full
+[exact-main CI 39097234971](https://github.com/ElevenID/marty-ui/actions/runs/39097234971)
+was dispatched and verified to target that SHA; it is queued. The v1.1.256
+tag/release remain absent. Wait for complete CI success and an unchanged main
+before a new no-write claim; do not reuse claim `39094334496` from the older
+source.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
