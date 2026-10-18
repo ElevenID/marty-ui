@@ -110,14 +110,25 @@ fresh disposable OpenBao state and secret roots, followed by a new install and
 bootstrap. The current helpers deliberately do not rotate live Keycloak or
 workload TLS files in place.
 
-Generate the synthetic `11id` operator password with the reviewed credential
-helper, in a fresh staged private root, before provisioning or starting the
-journey:
+New source revisions offer an optional `--with-operator-password` staging flag.
+If the matching checkout's `stage_selfhost_disposable_preview.py --help` lists
+it, append it to the initial staging command above. Released previews whose
+matching source lacks the flag must use the separate helper below; do not
+substitute a different source revision or restage an existing private root.
+The flag uses the reviewed
+credential helper to create `operator-password` (mode `0600`) in the fresh
+private root, validating the matching source checkout's realm policy. It does
+not provision an operator or qualify the stack. Without the flag, staging is
+unchanged; generate the synthetic `11id` operator password separately, before
+provisioning or starting the journey:
 
 ```bash
 python3 "$source_root/scripts/generate_selfhost_disposable_credentials.py" \
   --operator-password-file "$private_root/operator-password"
 ```
+
+Do not run the separate command if staging already created that file. Existing
+private roots are never restaged, and existing password files are never replaced.
 
 Have the operator secret runner read that file into `SELFHOST_TEST_PASSWORD`;
 do not print it. This separate operator password guarantees the shipped realm's

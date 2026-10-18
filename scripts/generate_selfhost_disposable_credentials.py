@@ -64,20 +64,22 @@ def validate_operator_password(value: str, realm_file: Path | None = None) -> No
         raise ValueError("synthetic operator password does not satisfy the shipped realm policy")
 
 
-def generate_operator_password(random_hex: Callable[[int], str] = secrets.token_hex) -> str:
+def generate_operator_password(random_hex: Callable[[int], str] = secrets.token_hex,
+                               *, realm_file: Path | None = None) -> str:
     """Keep 256 random bits while guaranteeing all reviewed character classes."""
     material = random_hex(32)
     if not isinstance(material, str) or not HEX_32_BYTES.fullmatch(material):
         raise ValueError("operator password generator returned invalid material")
     value = "Aa1!" + material
-    validate_operator_password(value)
+    validate_operator_password(value, realm_file)
     return value
 
 
 def write_operator_password(path: Path,
-                            random_hex: Callable[[int], str] = secrets.token_hex) -> None:
+                            random_hex: Callable[[int], str] = secrets.token_hex,
+                            *, realm_file: Path | None = None) -> None:
     require_private_root(path.parent)
-    value = generate_operator_password(random_hex)
+    value = generate_operator_password(random_hex, realm_file=realm_file)
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                          getattr(os, "O_NOFOLLOW", 0), 0o600)
     try:
