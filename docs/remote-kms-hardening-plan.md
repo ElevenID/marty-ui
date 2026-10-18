@@ -90,6 +90,15 @@ cannot qualify the resulting source. Keep the current CI handle until its
 authoritative terminal state or main actually changes; then run one full CI
 on settled protected main before the no-write v1.1.257 claim.
 
+Full CI outcome (2026-10-18): [manual CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
+completed **success** at `35dc7400b3f9dccbe1a8b2d55101a545ca030beb`,
+including the long Canvas database-contract shard and aggregate CI Gate.
+Protected main still matched at completion. Do not start its no-write claim
+while #1426's protected merge-group CI 39170385605 is live: the queued source
+change would invalidate a claim or late tag if it merges first. Reuse this
+passing full run only if protected main remains `35dc7400...` after #1426's
+terminal outcome; otherwise dispatch a new full run at the merged SHA.
+
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
 `db-migrate` rejected a managed signing-key purpose binding solely because the
