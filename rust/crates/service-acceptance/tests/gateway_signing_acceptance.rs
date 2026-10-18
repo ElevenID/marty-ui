@@ -460,7 +460,7 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     let signing_url = format!("http://{}", signing_listener.local_addr().unwrap());
     let signing_server =
         tokio::spawn(async move { axum::serve(signing_listener, signing).await.unwrap() });
-    let gateway = gateway_with_signing_http(signing_url, &organization_id);
+    let gateway = gateway_with_signing_http(signing_url.clone(), &organization_id);
     let create = |cookie: bool| {
         let mut builder =
             Request::post("/v1/signing-keys").header("content-type", "application/json");
@@ -689,6 +689,34 @@ async fn authenticated_gateway_reaches_rust_managed_key_route_without_custody() 
     .unwrap();
     assert_eq!(status, StatusCode::OK, "{resolved}");
     assert_eq!(resolved["public_jwk"]["crv"], "Ed25519");
+    // The deployed Issuance peer bypasses Gateway; exercise its exact GET
+    // route against the same populated Signing Keys state.
+    let direct = reqwest::Client::new()
+        .get(format!("{signing_url}/internal/resolve-issuer-did"))
+        .timeout(std::time::Duration::from_secs(10))
+        .header("x-api-key", "internal-signing-key")
+        .query(&[
+            ("organization_id", organization_id.as_str()),
+            ("issuer_did", issuer_did.as_str()),
+            ("credential_format", "SD_JWT_VC"),
+            ("key_purpose", "vc_jwt_issuer"),
+            ("algorithm", "EdDSA"),
+        ])
+        .send()
+        .await
+        .expect("direct issuer resolution");
+    assert_eq!(direct.status(), StatusCode::OK);
+    let direct: Value = direct.json().await.expect("direct issuer response");
+    assert_eq!(direct["issuer_did"], issuer_did);
+    // Gateway intentionally omits JWK kid in its public response; compare
+    // the actual key material and bind the direct kid to the resolved method.
+    for field in ["kty", "crv", "x"] {
+        assert_eq!(direct["public_jwk"][field], resolved["public_jwk"][field]);
+    }
+    assert_eq!(
+        direct["public_jwk"]["kid"],
+        direct["verification_method_id"]
+    );
     let sign_body = json!({
         "organization_id": "org-other", "issuer_did": issuer_did,
         "key_purpose": "vc_jwt_issuer", "credential_format": "SD_JWT_VC",
