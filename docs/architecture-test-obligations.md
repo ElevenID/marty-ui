@@ -441,3 +441,47 @@ requires an exact-head hosted success, feature/profile and artifact review,
 and a separate reviewed change to the classifier and CI Gate. Missing source
 ownership, an unknown/mixed diff, or changed test roster must retain the broad
 plan or fail the diagnostic; the 60 PostgreSQL renewal cases remain required.
+
+### Ordinary library execution versus explicitly owned fixture cases
+
+Status: local candidate; compiled discovery and real PostgreSQL/TLS qualification
+remain required before merge. No Rust test ID, assertion, production API or
+fixture is removed. This changes six previously silent early-return cases to
+explicit ignored integration cases in the existing library harness. A default
+library run must not report their unavailable fixtures as successful assertions.
+
+All five IDs below keep the prefix
+`passport_http::reconciliation_tests::` in `marty-issuance-service`'s library
+target and their existing source `passport_http_reconciliation_tests.rs`:
+
+| Unchanged case suffix | Executing owner and required input |
+| --- | --- |
+| `beta_reconciliation_replays_only_exact_material_and_binds_first_receipt` | Contracts: `Test beta passport reconciliation and native batch on PostgreSQL`; `MARTY_PASSPORT_RECONCILIATION_TEST_URL` |
+| `beta_batch_http_binds_exact_flow_pair_and_replays_after_artifact_scrub` | Same owned PostgreSQL gate/input |
+| `beta_batch_http_completes_receipts_when_wire_kms_fails` | Same owned PostgreSQL gate/input |
+| `beta_batch_http_rejects_retained_response_with_wrong_receipt_mapping` | Same owned PostgreSQL gate/input |
+| `beta_batch_http_never_creates_a_missing_batch_row_through_single_submit` | Same owned PostgreSQL gate/input |
+
+The gate first discovers exactly these five compiled ignored cases, then runs
+them with `--ignored --test-threads=1` and the existing positive-execution guard.
+The schema/reset lock, dedicated database-name assertion, exact replay/wire/KMS
+and receipt assertions, fake-server ownership and teardown are unchanged.
+Missing or non-Unicode input now raises a fixed-message failure without
+formatting the environment value. No PostgreSQL limit or timing is changed.
+
+The sixth unchanged ID is
+`canvas_operation_http::tests::native_socket_case`, still in
+`canvas_operation_http.rs`. The Canvas lane's existing owned TLS fixture calls
+it through `run_canvas_timeout_consumer_oracle.py`, now explicitly selecting
+`--ignored --exact`. The native-case and origin environment inputs, client TLS
+configuration, exactly-one observation requirement and two-routine/104-full
+frozen socket-case selection are unchanged. Missing case input fails rather
+than returning success. Historical Python source pins and oracle bytes remain
+unchanged; this is not a shortened HTTP timeout or removed parity check.
+
+The separately owned seven ignored OpenBao cases and tracing child protocol
+are not changed. A future whole-library PR diagnostic must report genuine
+ordinary cases and fixture-owned exclusions separately, retain the independent
+feature-observer check, and qualify its own execution before changing selection.
+This ledger alone does not authorize a fixture-free claim for the whole crate
+or a narrower protected merge/release gate.
