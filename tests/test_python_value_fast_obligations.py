@@ -20,7 +20,7 @@ def test_current_source_and_targets_match_bounded_inventory() -> None:
     guard.validate(MANIFEST)
     assert len(MANIFEST["cases"]) == 4
     assert len(MANIFEST["retained_signing_detail"]["tests"]) == 12
-    assert len(MANIFEST["retained_http"]["tests"]) == 7
+    assert len(MANIFEST["retained_http"]["tests"]) == 8
     assert all(
         case["cheapest_proving_layer"] == "pure unit" for case in MANIFEST["cases"]
     )

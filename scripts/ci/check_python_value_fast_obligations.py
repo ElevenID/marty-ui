@@ -231,7 +231,7 @@ def validate(manifest: dict, root: Path = ROOT) -> None:
         "HTTP fixture include drift",
     )
     require(
-        len(http["tests"]) == len(set(http["tests"])) == 7,
+        len(http["tests"]) == len(set(http["tests"])) == 8,
         "HTTP case count/duplicate drift",
     )
     require(
@@ -247,7 +247,7 @@ def validate(manifest: dict, root: Path = ROOT) -> None:
 def main() -> int:
     validate(json.loads(INVENTORY.read_text(encoding="utf-8")))
     print(
-        "Python-value fast obligations: four unit, 12 distinct signing-detail, seven HTTP owners registered"
+        "Python-value fast obligations: four unit, 12 distinct signing-detail, eight HTTP owners registered"
     )
     return 0
 
