@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 from collections import defaultdict, deque
@@ -25,6 +26,91 @@ SELFHOST_CLEANUP_IMPORT = (
     '#[path = "../../canvas-acceptance/tests/support/owned_cleanup.rs"]'
 )
 SELFHOST_CLEANUP_RELATIVE = "../../canvas-acceptance/tests/support/owned_cleanup.rs"
+
+# This crate ships as a CLI inside a Compose image and drives live services.
+# Cargo reverse edges cannot represent that artifact/runtime relationship.
+# These witnesses explain a full shadow fallback; they never authorize a skip.
+PACKAGED_RUNTIME_PRODUCERS = {
+    "marty-canvas-demo-seed": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "db-migrate",
+        "witnesses": (
+            (
+                "services/Dockerfile.migrations",
+                "&& cargo build --locked --release -p marty-canvas-demo-seed --bin marty-canvas-demo-seed",
+            ),
+            (
+                "services/Dockerfile.migrations",
+                "COPY --from=rust-migration-builder /build/rust/target/release/marty-canvas-demo-seed /usr/local/bin/marty-canvas-demo-seed",
+            ),
+            (
+                "docker-compose.base.yml",
+                "  db-migrate:\n    build:\n      context: .\n      dockerfile: services/Dockerfile.migrations",
+            ),
+            (
+                "scripts/qualify-canvas-seed-disposable.sh",
+                "      db-migrate /usr/local/bin/marty-canvas-demo-seed --env-file /dev/null",
+            ),
+            (
+                "scripts/run-canvas-real-seed.sh",
+                "  db-migrate /usr/local/bin/marty-canvas-demo-seed --env-file /dev/null",
+            ),
+        ),
+    },
+}
+PACKAGED_WITNESS_MAX_BYTES = 1024 * 1024
+
+
+def _read_packaged_witness(path: Path) -> str:
+    """Read only bounded, unchanged regular files; unavailable evidence is empty."""
+    descriptor = None
+    source = ""
+    try:
+        before = path.lstat()
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_size > PACKAGED_WITNESS_MAX_BYTES
+        ):
+            return ""
+        descriptor = os.open(
+            path,
+            os.O_RDONLY
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_BINARY", 0),
+        )
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+            or opened.st_size > PACKAGED_WITNESS_MAX_BYTES
+        ):
+            return ""
+        data = bytearray()
+        while len(data) <= PACKAGED_WITNESS_MAX_BYTES:
+            chunk = os.read(
+                descriptor, min(65536, PACKAGED_WITNESS_MAX_BYTES + 1 - len(data))
+            )
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(descriptor)
+        if len(data) > PACKAGED_WITNESS_MAX_BYTES or (
+            opened.st_size,
+            opened.st_mtime_ns,
+        ) != (after.st_size, after.st_mtime_ns):
+            return ""
+        source = data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                source = ""
+    return source
+
 
 # One authenticated Gateway compatibility route serves several issuer-key
 # consumers. Keep its source witness shared while each consumer retains its
@@ -1378,10 +1464,17 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
         for package in packages
     }
 
-    def full(reason: str, *, observed_consumers: list[dict] | None = None) -> dict:
+    def full(
+        reason: str,
+        *,
+        observed_consumers: list[dict] | None = None,
+        packaged_consumers: list[dict] | None = None,
+    ) -> dict:
         result = {"all": True, "packages": sorted(names), "reason": reason}
         if observed_consumers:
             result["observed_non_cargo_consumers"] = observed_consumers
+        if packaged_consumers:
+            result["observed_packaged_runtime_consumers"] = packaged_consumers
         return result
 
     direct: set[str] = set()
@@ -1471,6 +1564,21 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
             if consumer not in affected:
                 affected.add(consumer)
                 queue.append(consumer)
+    packaged_consumers = []
+    for producer in sorted(affected & PACKAGED_RUNTIME_PRODUCERS.keys()):
+        edge = PACKAGED_RUNTIME_PRODUCERS[producer]
+        witnesses = []
+        for relative, marker in edge["witnesses"]:
+            source = _read_packaged_witness(root / relative)
+            witnesses.append({"evidence": relative, "present": marker in source})
+        packaged_consumers.append(
+            {
+                "producer": producer,
+                "consumer_kind": edge["consumer_kind"],
+                "consumer": edge["consumer"],
+                "witnesses": witnesses,
+            }
+        )
     # Services consume one another over HTTP/gRPC and deployment wiring, not
     # only Cargo dependencies. For example, Applicant/Gateway consume
     # Notification and Presentation Policy consumes Trust Profile. Until that
@@ -1490,6 +1598,14 @@ def plan(paths: list[str], metadata: dict, root: Path = ROOT) -> dict:
         return full(
             "unmapped non-Cargo runtime consumers of service packages",
             observed_consumers=observed,
+            packaged_consumers=packaged_consumers,
+        )
+    if packaged_consumers:
+        # Missing or changed witnesses stay broad too. Recognizing this one
+        # image does not establish its complete runtime/qualification closure.
+        return full(
+            "unmapped packaged-executable/runtime consumers of crate packages",
+            packaged_consumers=packaged_consumers,
         )
     return {
         "all": False,

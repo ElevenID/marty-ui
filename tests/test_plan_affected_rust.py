@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -683,6 +684,159 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 ["rust/crates/core/nested/src/lib.rs"], self.metadata(root), root
             )
             self.assertEqual(result["packages"], ["nested"])
+
+    def test_canvas_seed_crate_and_embedded_assets_keep_packaged_runtime_broad(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        for changed in (
+            "rust/crates/canvas-demo-seed/src/run.rs",
+            "rust/crates/canvas-demo-seed/assets/canvas_lti_setup.rb",
+            "rust/crates/canvas-demo-seed/assets/mint_canvas_admin_token.rb",
+            "rust/crates/demo-vendor-seed/src/lib.rs",
+        ):
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                [edge] = result["observed_packaged_runtime_consumers"]
+                self.assertEqual(edge["producer"], "marty-canvas-demo-seed")
+                self.assertEqual(edge["consumer"], "db-migrate")
+                self.assertTrue(all(item["present"] for item in edge["witnesses"]))
+                self.assertEqual(len(edge["witnesses"]), 5)
+
+    def test_canvas_seed_mixed_service_change_retains_existing_runtime_edges(
+        self,
+    ) -> None:
+        metadata = planner.cargo_metadata()
+        service = "rust/services/issuance/src/lib.rs"
+        baseline = planner.plan([service], metadata, ROOT)
+        mixed = planner.plan(
+            [service, "rust/crates/canvas-demo-seed/src/run.rs"], metadata, ROOT
+        )
+        self.assertTrue(mixed["all"])
+        self.assertEqual(mixed["reason"], baseline["reason"])
+        self.assertEqual(
+            mixed["observed_non_cargo_consumers"],
+            baseline["observed_non_cargo_consumers"],
+        )
+        self.assertIn("observed_packaged_runtime_consumers", mixed)
+
+    def test_canvas_seed_missing_packaging_witness_never_grants_isolation(self) -> None:
+        metadata = planner.cargo_metadata()
+        original_read = planner._read_packaged_witness
+        witnesses = planner.PACKAGED_RUNTIME_PRODUCERS["marty-canvas-demo-seed"][
+            "witnesses"
+        ]
+        for relative, marker in witnesses:
+            for missing_file in (False, True):
+
+                def changed_read(path):
+                    if path == ROOT / relative:
+                        if missing_file:
+                            return ""
+                        return original_read(path).replace(marker, "removed-witness")
+                    return original_read(path)
+
+                with self.subTest(
+                    relative=relative, marker=marker, missing=missing_file
+                ):
+                    with patch.object(planner, "_read_packaged_witness", changed_read):
+                        result = planner.plan(
+                            ["rust/crates/canvas-demo-seed/src/run.rs"], metadata, ROOT
+                        )
+                    self.assertTrue(result["all"])
+                    [edge] = result["observed_packaged_runtime_consumers"]
+                    self.assertFalse(all(item["present"] for item in edge["witnesses"]))
+
+    def test_packaged_witness_reader_is_bounded_and_closes_owned_descriptor(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "witness"
+            path.write_bytes(b"reviewed witness\n")
+            original_open = os.open
+            descriptors = []
+
+            def opened(target, flags):
+                self.assertEqual(target, path)
+                for flag in ("O_NONBLOCK", "O_NOFOLLOW"):
+                    self.assertEqual(flags & getattr(os, flag, 0), getattr(os, flag, 0))
+                descriptor = original_open(target, flags)
+                descriptors.append(descriptor)
+                return descriptor
+
+            with patch.object(planner.os, "open", opened):
+                self.assertEqual(
+                    planner._read_packaged_witness(path), "reviewed witness\n"
+                )
+            with self.assertRaises(OSError):
+                os.fstat(descriptors[0])
+            path.write_bytes(b"x" * (planner.PACKAGED_WITNESS_MAX_BYTES + 1))
+            with patch.object(
+                planner.os, "open", side_effect=AssertionError("oversized file opened")
+            ):
+                self.assertEqual(planner._read_packaged_witness(path), "")
+                self.assertEqual(planner._read_packaged_witness(root), "")
+                self.assertEqual(planner._read_packaged_witness(root / "missing"), "")
+            path.write_bytes(b"invalid UTF-8: \xff")
+            self.assertEqual(planner._read_packaged_witness(path), "")
+            path.write_bytes(b"reviewed\r\nwitness\r\n")
+            self.assertEqual(
+                planner._read_packaged_witness(path), "reviewed\nwitness\n"
+            )
+            original_close = os.close
+
+            def failed_close(descriptor):
+                original_close(descriptor)
+                raise OSError("synthetic close failure")
+
+            with patch.object(planner.os, "close", failed_close):
+                self.assertEqual(planner._read_packaged_witness(path), "")
+
+    def test_packaged_witness_reader_rejects_replaced_file_before_reading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "witness"
+            replacement = Path(directory) / "replacement"
+            path.write_bytes(b"original")
+            replacement.write_bytes(b"unowned")
+            original_open = os.open
+            descriptor = original_open(replacement, os.O_RDONLY)
+            with patch.object(planner.os, "open", return_value=descriptor):
+                with patch.object(
+                    planner.os, "read", side_effect=AssertionError("replacement read")
+                ):
+                    self.assertEqual(planner._read_packaged_witness(path), "")
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX FIFO/nonblocking ownership")
+    def test_packaged_witness_reader_refuses_symlinks_fifo_and_raced_fifo(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "witness"
+            path.write_bytes(b"reviewed")
+            linked = root / "linked"
+            linked.symlink_to(path)
+            fifo = root / "pipe"
+            os.mkfifo(fifo)
+            with patch.object(
+                planner.os, "open", side_effect=AssertionError("special file opened")
+            ):
+                self.assertEqual(planner._read_packaged_witness(linked), "")
+                self.assertEqual(planner._read_packaged_witness(fifo), "")
+            original_open = os.open
+
+            def swap_to_fifo(target, flags):
+                self.assertTrue(flags & os.O_NONBLOCK)
+                self.assertTrue(flags & os.O_NOFOLLOW)
+                path.unlink()
+                os.mkfifo(path)
+                return original_open(target, flags)
+
+            with patch.object(planner.os, "open", swap_to_fifo):
+                self.assertEqual(planner._read_packaged_witness(path), "")
 
     def test_selfhost_bundle_document_keeps_rust_consumers_in_shadow_plan(self) -> None:
         metadata = planner.cargo_metadata()
