@@ -7,6 +7,7 @@ const {
   cleanup,
   governedIssuerRequest,
   identityRequest,
+  managedTransitEndpoint,
   transitService,
   writableConfig,
 } = require('./audit-beta-issuer-provider-switch');
@@ -38,7 +39,7 @@ test('provider-switch configuration is lossless and never persists the managed p
     type_defaults: { vc_jwt_issuer: 'existing-provider' },
     key_reference_purposes: { 'existing-provider': { issuer: ['vc_jwt_issuer'] } },
   };
-  const replacement = transitService('provider-b', 'Provider B', 'issuer-b');
+  const replacement = transitService('provider-b', 'Provider B', 'issuer-b', 'https://openbao:8200');
   const payload = writableConfig(original, {
     extraServices: [replacement],
     defaultServiceId: 'provider-b',
@@ -49,7 +50,19 @@ test('provider-switch configuration is lossless and never persists the managed p
   assert.deepEqual(payload.type_defaults, original.type_defaults);
   assert.deepEqual(payload.key_reference_purposes, original.key_reference_purposes);
   assert.equal(replacement.auth_mode, 'service_token');
-  assert.equal(replacement.endpoint, 'http://openbao:8200');
+  assert.equal(replacement.endpoint, 'https://openbao:8200');
+});
+
+test('provider switch preserves deployed transit transport and rejects missing or unsafe endpoints', () => {
+  const config = (endpoint) => ({ services: [{ id: 'managed-openbao-transit', endpoint }] });
+  for (const endpoint of ['https://openbao:8200', 'http://openbao:8200']) {
+    assert.equal(managedTransitEndpoint(config(endpoint)), endpoint);
+  }
+  for (const endpoint of [undefined, '', 'file:///tmp/key', 'https://user:secret@openbao:8200', 'https://openbao:8200?token=secret']) {
+    assert.throws(() => managedTransitEndpoint(config(endpoint)), /endpoint is invalid/);
+  }
+  assert.throws(() => managedTransitEndpoint({ services: [] }), /one managed transit/);
+  assert.throws(() => transitService('b', 'B', 'key'), /endpoint is invalid/);
 });
 
 test('release recordings fail closed unless the ElevenID Keycloak theme rendered', () => {

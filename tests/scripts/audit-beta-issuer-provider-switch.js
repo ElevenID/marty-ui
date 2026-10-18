@@ -49,7 +49,6 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const MANAGED_SERVICE_ID = 'managed-openbao-transit';
-const INTERNAL_OPENBAO_ENDPOINT = 'http://openbao:8200';
 
 async function showProviderStep(page, title, detail) {
   return showStep(page, title, detail, {
@@ -155,14 +154,28 @@ async function signingKeyForIdentity(page, issuerDid) {
   return key.provider_key_name;
 }
 
-function transitService(id, name, keyReference) {
+function managedTransitEndpoint(config) {
+  const services = config?.services?.filter((service) => service.id === MANAGED_SERVICE_ID) || [];
+  if (services.length !== 1) throw new Error('Expected one managed transit service');
+  const endpoint = services[0].endpoint;
+  let parsed;
+  try { parsed = new URL(endpoint); } catch { throw new Error('Managed transit endpoint is invalid'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)
+    || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Managed transit endpoint is invalid');
+  }
+  return endpoint;
+}
+
+function transitService(id, name, keyReference, endpoint) {
+  managedTransitEndpoint({ services: [{ id: MANAGED_SERVICE_ID, endpoint }] });
   return {
     id,
     name,
     description: 'Release-scoped provider-switch qualification service.',
     service_type: 'openbao-transit',
     provider: 'openbao',
-    endpoint: INTERNAL_OPENBAO_ENDPOINT,
+    endpoint,
     mount: 'transit',
     namespace: '',
     region: '',
@@ -460,6 +473,7 @@ async function main() {
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     originalConfig = await loadSigningConfig(page);
+    const transitEndpoint = managedTransitEndpoint(originalConfig);
 
     let templateId = null;
     let governance = null;
@@ -528,7 +542,7 @@ async function main() {
 
       const providerBKey = await signingKeyForIdentity(page, seedDid);
       const latestConfig = await loadSigningConfig(page);
-      const providerB = transitService(providerBId, `D-02 Provider B ${stamp}`, providerBKey);
+      const providerB = transitService(providerBId, `D-02 Provider B ${stamp}`, providerBKey, transitEndpoint);
       const providerBConfig = await saveSigningConfig(page, writableConfig(latestConfig, {
         extraServices: [providerB],
         defaultServiceId: providerBId,
@@ -560,6 +574,7 @@ async function main() {
         providerCId,
         `D-02 Unpublished Provider ${stamp}`,
         `d02-unpublished-key-${stamp}`,
+        transitEndpoint,
       );
       await saveSigningConfig(page, writableConfig(beforeFailureConfig, {
         extraServices: [providerB, unavailable],
@@ -644,6 +659,7 @@ module.exports = {
   credentialEvidence,
   governedIssuerRequest,
   identityRequest,
+  managedTransitEndpoint,
   transitService,
   writableConfig,
 };
