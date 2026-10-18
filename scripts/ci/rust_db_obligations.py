@@ -674,22 +674,9 @@ def flow_renderer_python_imports() -> list[dict[str, object]]:
                 if module in {"runpy", "importlib", "builtins"}:
                     raise ValueError("flow_renderer_import_drift")
                 modules.add(module)
-            elif (
-                isinstance(node, ast.Name)
-                and node.id == "runpy"
-                and isinstance(node.ctx, ast.Load)
-            ):
-                attribute = parents.get(node)
-                call = parents.get(attribute)
-                if not (
-                    isinstance(attribute, ast.Attribute)
-                    and attribute.attr == "run_path"
-                    and isinstance(call, ast.Call)
-                    and call.func is attribute
-                ):
-                    raise ValueError("flow_renderer_import_drift")
-            elif isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id in {
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+                if node.id in {
+                    "__builtins__",
                     "__import__",
                     "exec",
                     "eval",
@@ -704,10 +691,31 @@ def flow_renderer_python_imports() -> list[dict[str, object]]:
                     "module_from_spec",
                 }:
                     raise ValueError("flow_renderer_import_drift")
-                if isinstance(node.func, ast.Attribute) and node.func.attr in {
+                if node.id == "runpy":
+                    attribute = parents.get(node)
+                    call = parents.get(attribute)
+                    if not (
+                        isinstance(attribute, ast.Attribute)
+                        and attribute.attr == "run_path"
+                        and isinstance(call, ast.Call)
+                        and call.func is attribute
+                    ):
+                        raise ValueError("flow_renderer_import_drift")
+            elif isinstance(node, ast.Attribute):
+                if node.attr == "run_path":
+                    if not (
+                        isinstance(node.value, ast.Name)
+                        and node.value.id == "runpy"
+                        and isinstance(parents.get(node), ast.Call)
+                        and parents[node].func is node
+                    ):
+                        raise ValueError("flow_renderer_import_drift")
+                elif node.attr in {
                     "import_module",
                     "run_module",
                     "__import__",
+                    "__dict__",
+                    "modules",
                     "exec",
                     "eval",
                     "spec_from_file_location",
