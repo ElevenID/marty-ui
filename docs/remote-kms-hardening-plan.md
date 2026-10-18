@@ -44,9 +44,24 @@ pinned chain head for archive verification and declares provider identity on
 the provider interface. A reconstructed truncated prefix fails against the
 original head; the export records the head but does not authenticate itself.
 All 232 Marty unit tests, Ruff and diff checks passed locally after updating
-onto main. Both review threads were resolved; final-head PR checks and
-protected merge remain pending. No production managed adapter was added by
+onto main. Both review threads were resolved before the final-head PR checks.
+No production managed adapter was added by
 this Python cleanup; Rust/OpenBao remains the custody implementation.
+
+Marty compatibility landing (2026-10-18): #125's final head `13e005e` passed
+CI Gate, native-wheel build, test, CodeQL, policy, and organization-quality
+checks. Its protected merge-group candidate
+`52f0c8fcb0419e7956a9a8ddc6c3f27c90a0c1a5` passed CI
+[39169411548](https://github.com/ElevenID/Marty/actions/runs/39169411548),
+policy 39169411513, protocol validation 39169411507, and organization quality
+39169411844. [PR #125](https://github.com/ElevenID/Marty/pull/125) merged at
+2026-10-18 21:49 UTC, and protected Marty main equals that exact commit.
+The stopped worker's uncommitted source remains untouched. This landing
+retires the Python local KMS options; it does not prove real managed-provider
+or wallet acceptance. The UI exact-main CI 39167241560 remains live at
+`35dc7400...`, with its Canvas database-contract shard still in progress.
+Unrelated auto-merging UI #1426 may advance protected main before a v1.1.257
+claim, so revalidate the exact-main gate after its protected outcome.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
