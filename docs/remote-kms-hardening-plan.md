@@ -25,8 +25,10 @@ also passed with an exact-source artifact and absent public coordinates.
 completed the intended late-tag handoff after all other jobs passed. The
 verified helper pushed the annotated `v1.1.257` tag; [resumed publication
 39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
-is queued. Finish signed publication,
-and fresh disposable Raft-backed install plus coordinated cold restore and
+passed and published the signed release. An exact-source
+[self-host producer run 39178041071](https://github.com/ElevenID/marty-ui/actions/runs/39178041071)
+is queued to satisfy the prepared-bundle consumer binding. Verify that artifact,
+then run a fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
 migration. Real AWS/Azure/GCP credentials and a physical wallet remain
@@ -153,6 +155,28 @@ checkpoint and live registry digests and atomically pushed annotated
 `v1.1.257`. [Resumed Stack release 39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
 was dispatched from the same main SHA with the exact claim, prior run and
 checkpoint artifact. It is pending signed-publication verification.
+
+Signed publication and prepared-bundle producer correction (2026-10-18):
+[resumed Stack release 39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
+passed every required job and published the non-draft
+[v1.1.257 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.257)
+at the exact tagged source SHA. The public `release-transaction.json` and
+`stack-manifest.json` match `SHA256SUMS` and each independently passed `gh
+attestation verify` pinned to the protected-main source SHA and `cd.yml`
+workflow. The separate immutable published-transaction artifact records state
+`published`, release ID `416778789` and publication run `39177395966`.
+The first promotion run's unqualified prepared self-host bundle cannot pass
+the released `check_selfhost_preparation_artifacts.py`: that verifier requires
+the producer workflow's terminal conclusion `success`, while the promotion
+run deliberately ended `failure` at the late-tag gate. Rather than weakening
+that verifier or consuming the failed-run artifact, a same-source resume
+[run 39178041071](https://github.com/ElevenID/marty-ui/actions/runs/39178041071)
+was dispatched with `prepare_selfhost_lock=true`, the same claim/checkpoint
+and exact four external digests. It should reuse the promoted transaction and
+verify the existing immutable release before producing a new unqualified
+bundle from a successful run. Require terminal success and before/after
+artifact binding before installed use. The public release is not installed
+acceptance.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
