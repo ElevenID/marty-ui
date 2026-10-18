@@ -501,6 +501,19 @@ availability; it is not KMS-only cutover or signed v1.1.257 acceptance. Keep
 local installed testing paused until the signed artifact exists and disk
 capacity is reviewed; do not globally prune Docker state.
 
+Local capacity correction (2026-10-18): a read-only inventory found 37.0 GiB
+of regenerable Cargo output in the older clean
+`worktrees/kms-tls-custody-20261014/rust/target` directory. After verifying
+that path stayed inside the workspace, was a real directory, and had no active
+Cargo/Rust compiler process, `cargo clean --manifest-path rust/Cargo.toml`
+removed 50,977 build files. The worktree's Git status remained clean; no
+source, branch, failed evidence, Docker image, volume or production data was
+removed. Windows C: free space rose from about 8.7 GB to 45.9 GB. The
+production self-host containers remained healthy and loopback HTTP returned
+200. This clears the immediate host-disk constraint for a later signed
+isolated install, but does not substitute for measured 16 GiB runtime
+qualification or the missing release credential.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
