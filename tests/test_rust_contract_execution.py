@@ -197,6 +197,108 @@ def test_db_inventory_never_probes_custom_or_unregistered_harnesses(
         INVENTORY.libtest_harness("marty-signing-keys", "custom")
 
 
+def test_renewal_unit_roster_is_exactly_the_two_owned_sources() -> None:
+    source = ROOT / "rust/services/issuance/src"
+    retry = (source / "canvas_sync_worker_retry_tests.rs").read_text(encoding="utf-8")
+    renewal = (source / "canvas_sync_worker_renewal_tests.rs").read_text(
+        encoding="utf-8"
+    )
+    direct = set(
+        re.findall(
+            r"#\[(?:tokio::)?test(?:\([^]]*\))?\]\s*(?:async )?fn\s+(\w+)",
+            retry,
+        )
+    )
+    primary = renewal.split("primary_cases! {", 1)[1].split("\n}", 1)[0]
+    generated = set(re.findall(r"^\s*(\w+):\s*\"", primary, re.MULTILINE))
+    secondary = set(
+        re.findall(
+            r"#\[tokio::test\([^]]*\)\]\s*async fn\s+(\w+)", renewal
+        )
+    )
+    assert len(direct) == 4 and len(generated) == 15 and len(secondary) == 4
+    expected = {
+        INVENTORY.RENEWAL_UNIT_PREFIX + name for name in direct
+    } | {
+        INVENTORY.RENEWAL_UNIT_PREFIX + "renewal_tests::" + name
+        for name in generated | secondary
+    }
+    assert expected == INVENTORY.RENEWAL_UNIT_CASES
+    assert len(expected) == 23
+    package, target, inputs = INVENTORY.obligation("renewal_unit")
+    assert (package, target, inputs) == (
+        "marty-issuance-service",
+        "marty_issuance_service",
+        [],
+    )
+    assert INVENTORY.libtest_harness(package, target)["harness"] == "libtest"
+
+
+def test_renewal_unit_selection_rejects_missing_substituted_ignored_or_extra_cases() -> None:
+    args = [INVENTORY.RENEWAL_UNIT_PREFIX, "--test-threads=4"]
+    selected = set(INVENTORY.RENEWAL_UNIT_CASES)
+    INVENTORY.verify_renewal_unit_roster(args, selected, set())
+    cases = sorted(selected)
+    for invalid in (
+        selected - {cases[0]},
+        (selected - {cases[0]}) | {"foreign::same_count_substitution"},
+        selected | {"foreign::extra_case"},
+    ):
+        with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
+            INVENTORY.verify_renewal_unit_roster(args, invalid, set())
+    with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
+        INVENTORY.verify_renewal_unit_roster(args, selected, {cases[0]})
+    with pytest.raises(ValueError, match="renewal_unit_roster_drift"):
+        INVENTORY.verify_renewal_unit_roster(["--test-threads=4"], selected, set())
+
+
+def test_renewal_unit_artifact_requires_same_run_library_test_profile(
+    tmp_path, monkeypatch
+) -> None:
+    executable = tmp_path / "marty_issuance_service-harness"
+    executable.write_bytes(b"bounded synthetic harness")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    record = {
+        "reason": "compiler-artifact",
+        "package_id": "path+file:///checkout#marty-issuance-service@0.1.0",
+        "target": {"kind": ["lib"], "name": "marty_issuance_service"},
+        "profile": {"test": True},
+        "executable": str(executable),
+    }
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    for invalid in (
+        [],
+        [{**record, "profile": {"test": False}}],
+        [{**record, "target": {"kind": ["bin"], "name": record["target"]["name"]}}],
+        [{**record, "package_id": "path+file:///checkout#foreign@0.1.0"}],
+        [record, record],
+        [record, {**record, "executable": str(tmp_path / "other-harness")}],
+    ):
+        artifacts.write_text("".join(json.dumps(row) + "\n" for row in invalid))
+        with pytest.raises(ValueError):
+            INVENTORY.artifact_identity(
+                executable, "marty-issuance-service", "marty_issuance_service",
+                library_test=True,
+            )
+    artifacts.write_text(json.dumps(record) + "\n")
+    assert INVENTORY.artifact_identity(
+        executable, "marty-issuance-service", "marty_issuance_service",
+        library_test=True,
+    )["binding"] == "same_path"
+
+
+def test_renewal_unit_evidence_is_separate_from_database_claims(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    evidence = {"schema": "marty.rust-unit-obligation/v1", "status": "ok"}
+    INVENTORY.emit(evidence)
+    output = tmp_path / "rust-build-evidence" / INVENTORY.UNIT_EVIDENCE_NAME
+    assert json.loads(output.read_text()) == evidence
+    assert INVENTORY.UNIT_PREFIX in capsys.readouterr().out
+    assert not (tmp_path / "rust-build-evidence" / INVENTORY.EVIDENCE_NAME).exists()
+
+
 def test_flow_inventory_binds_exact_crate_and_shared_roster(monkeypatch) -> None:
     package, target, inputs = INVENTORY.obligation("flow_acceptance")
     assert (package, target) == (

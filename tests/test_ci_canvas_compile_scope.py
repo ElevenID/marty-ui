@@ -214,7 +214,9 @@ def test_canvas_compile_selectors_preserve_complete_contracts_lane() -> None:
         "run-db-contract-groups.py "
         "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}"
     ) in group_run
-    assert "if" not in by_name["Run isolated database contract suites concurrently"]
+    assert by_name["Run isolated database contract suites concurrently"]["if"] == (
+        "matrix.lane != 'renewal-unit'"
+    )
     assert (
         "cargo test --locked --workspace"
         in by_name["Run safe Rust contract groups concurrently"]["run"]
@@ -232,6 +234,8 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     matrix = job["strategy"]["matrix"]["lane"]
     assert "github.event_name == 'pull_request'" in matrix
     assert "ci-worker-diagnostic" in matrix
+    assert "ci-renewal-unit-diagnostic" in matrix
+    assert '\'["canvas","contracts","selfhost","renewal-unit"]\'' in matrix
     assert "needs.changes.outputs.rust_runtime == 'true'" in matrix
     assert '\'["canvas","contracts","worker","selfhost"]\'' in matrix
     assert "|| needs.changes.outputs.rust_matrix) }}" in matrix
@@ -247,10 +251,10 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
     assert "--select-acceptance-test-lane" in classifier["run"]
     steps = {step.get("name"): step for step in job["steps"]}
     assert steps["Start digest-pinned Rust test services after registry setup"]["if"] == (
-        "matrix.lane != 'selfhost'"
+        "matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
     )
     assert steps["Remove owned Rust test services and volumes"]["if"] == (
-        "always() && matrix.lane != 'selfhost'"
+        "always() && matrix.lane != 'selfhost' && matrix.lane != 'renewal-unit'"
     )
     selfhost_source = (
         ROOT / "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
@@ -513,6 +517,28 @@ def test_selfhost_only_artifacts_require_exact_test_harness(tmp_path: Path) -> N
             VERIFY["verify"](
                 artifacts, target_dir, selfhost_only=True, **{other_scope: True}
             )
+
+
+def test_renewal_unit_artifact_requires_exact_library_harness(tmp_path: Path) -> None:
+    artifacts, target_dir, records = _records(tmp_path)
+    library = records[6]
+    artifacts.write_text(json.dumps(library) + "\n", encoding="utf-8")
+    VERIFY["verify"](artifacts, target_dir, renewal_unit_only=True)
+    for invalid in (
+        {**library, "profile": {"test": False}},
+        {**library, "target": {"name": "marty_issuance_service", "kind": ["bin"]}},
+        {**library, "package_id": "path+file:///fixture#foreign@0.1.0"},
+        {**library, "executable": str(target_dir / "debug/stale-library")},
+    ):
+        artifacts.write_text(json.dumps(invalid) + "\n", encoding="utf-8")
+        with pytest.raises(ValueError):
+            VERIFY["verify"](artifacts, target_dir, renewal_unit_only=True)
+    artifacts.write_text(2 * (json.dumps(library) + "\n"), encoding="utf-8")
+    with pytest.raises(ValueError, match="Expected exactly one"):
+        VERIFY["verify"](artifacts, target_dir, renewal_unit_only=True)
+    artifacts.write_text(json.dumps(library) + "\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="one owner"):
+        VERIFY["verify"](artifacts, target_dir, renewal_unit_only=True, worker_only=True)
 
 
 @pytest.mark.parametrize("index", [0, 5, 6, 9])

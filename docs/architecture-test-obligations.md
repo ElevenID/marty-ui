@@ -404,3 +404,22 @@ in the protected lane, plus unchanged producer/oracle pins and disposable
 database cleanup. The 93.8-second Cargo timing observation is the entire
 Issuance `lib(test)` compile, not a worker-specific saving, and does not
 justify a new crate or a test reduction by itself.
+
+### Additive renewal-unit CI diagnostic (not selective admission)
+
+The local A6 pilot adds a `renewal-unit` Rust matrix lane only when a
+maintainer places `ci-renewal-unit-diagnostic` on a Rust-runtime PR before its
+next synchronize run. Label changes alone do not dispatch CI. The existing
+Canvas, contracts, and self-host lanes remain mandatory on that PR and on
+every protected merge group; the ordinary test-only-leaf PR still selects
+contracts. The focused lane compiles only the Issuance library test harness
+with its package's normal features and requires the same-run Cargo artifact,
+all four retry cases and all nineteen renewal cases to be discovered and
+executed without ignored or failed cases. It starts no Docker fixture.
+
+This is a hosted qualification experiment, not a measured speedup or permission
+to omit any SQL or process acceptance. Admission to a future selective PR plan
+requires an exact-head hosted success, feature/profile and artifact review,
+and a separate reviewed change to the classifier and CI Gate. Missing source
+ownership, an unknown/mixed diff, or changed test roster must retain the broad
+plan or fail the diagnostic; the 60 PostgreSQL renewal cases remain required.
