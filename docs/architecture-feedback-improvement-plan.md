@@ -106,7 +106,12 @@ one stale assertion expecting the database step to be unconditional even on
 the new unit-only lane. Its reviewed one-line correction now requires exactly
 `matrix.lane != 'renewal-unit'`; all five focused ownership checks passed while
 retaining full shell/order/gate assertions. Complete hosted validation of the
-corrected head remains required; the previous release lane failed this guard.
+corrected head remains required. The previous full release lane recorded
+6,968 passes, 40 skips and 534 subtests, but three stale copies of this guard
+failed. The other two copies in pilot-workflow and dependency-order tests are
+corrected to the same exact condition, retaining their remaining assertions;
+all 26 checks in those two modules passed. The previous Linux stage/generator
+cases executed successfully, including opt-in private mode and owned cleanup.
 
 ## Prior handoff checkpoint (superseded delivery state)
 

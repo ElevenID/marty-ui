@@ -46,7 +46,7 @@ def test_only_canvas_database_step_receives_opt_in_and_remains_required() -> Non
         for step in steps
         if step.get("name") == "Run isolated database contract suites concurrently"
     )
-    assert "if" not in group
+    assert group["if"] == "matrix.lane != 'renewal-unit'"
     assert not group.get("continue-on-error", False)
     assert group["env"] == {
         "MARTY_CANVAS_OPENBAO_IMAGE": "marty-openbao-didcomm:canvas",
