@@ -3424,7 +3424,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 ]
                 self.assertEqual(
                     environment["SIGNING_KEYS_INTERNAL_URL"],
-                    "http://signing-keys:8017/internal",
+                    "http://gateway:8000/internal/signing-keys",
                 )
                 self.assertIn(
                     "SIGNING_KEYS_ISSUER_SIGN_KEY"

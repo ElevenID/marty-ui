@@ -399,15 +399,15 @@ coverage and the remaining A4-A6 obligations stay open; no check or release
 gate was removed.
 
 A3 shadow audit also identified Issuance's separate grant-authorized
-issuer-DID signing dependency on Signing Keys. Both standard Compose profiles
-configure Issuance to call the direct peer, not Gateway; the planner now records
-that edge without narrowing any gate. Source inspection found a likely runtime
-contract mismatch: the configured direct `/internal` base yields a GET
-`/internal/resolve-issuer-did` and POST `/internal/issuer-dids/sign`, whereas
-Signing Keys registers POST `/internal/compat/resolve-issuer-did` and POST
-`/internal/compat/issuer-dids/sign`. This is not a live reproduction or a claim
-that every issuance path fails. Qualify a route/method correction in a separate
-functional change before relying on this path for an external handoff.
+issuer-DID signing dependency on Signing Keys. The planner records that edge
+without narrowing any gate. Source inspection found a runtime contract mismatch:
+the former direct `/internal` base yielded a GET `/internal/resolve-issuer-did`
+and POST `/internal/issuer-dids/sign`, whereas Signing Keys registers POST
+`/internal/compat/resolve-issuer-did` and POST
+`/internal/compat/issuer-dids/sign`. The standard Compose profiles now route
+Issuance through Gateway's supported GET resolve and POST sign endpoints,
+with scoped API keys and the one-use KMS grant. This is source and local HTTP
+test evidence; an installed recovery remains required for the external handoff.
 
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing

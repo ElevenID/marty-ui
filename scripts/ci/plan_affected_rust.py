@@ -1141,9 +1141,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
         },
         {
             # Credential issuance separately signs through its configured
-            # Signing Keys peer with a scoped one-use KMS grant. The default
-            # Gateway path is an alternate configuration, not the deployed
-            # route in either standard Compose profile.
+            # Signing Keys through Gateway with a scoped one-use KMS grant.
             "package": "marty-issuance-service",
             "operation": "grant-authorized credential issuer-DID signing",
             "evidence": "rust/services/issuance/src/config.rs",
@@ -1172,7 +1170,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_grant_marker": "consume_bound_signing_grant(",
             "deployment_evidence": "docker-compose.base.yml",
             "deployment_service": "issuance",
-            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal",
+            "deployment_marker": "SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys",
             "deployment_sign_key_marker": "SIGNING_KEYS_ISSUER_SIGN_KEY:",
         },
         {
