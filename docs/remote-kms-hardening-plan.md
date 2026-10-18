@@ -257,17 +257,32 @@ GitHub's explicit rejection: its `GITHUB_TOKEN` GitHub App lacked Workflows
 permission to create a tag that carries workflow-file changes. No v1.1.256
 tag or GitHub release was created. Concurrent PR #1400 advanced protected
 main to `55209f002dad992c24a1c00a89435d6c520b8f15`; the older claim and
-failed release cannot qualify that new source. Local branch
-`fix/kms-release-workflow-tag-token-20261018` changes only the annotated-tag
-push to the existing `REPO_ACCESS_TOKEN` repository secret, with an early
-presence/authentication check and classic-PAT workflow-scope check before
-image builds. Checkout already disables persisted job-token credentials, so
-`gh auth setup-git` can use the scoped publisher credential for the tag push.
+failed release cannot qualify that new source. The first local proposal on
+`fix/kms-release-workflow-tag-token-20261018` used the existing private
+`REPO_ACCESS_TOKEN`; the public policy rejection below superseded that
+choice. The final proposal scopes a dedicated credential to the annotated-tag
+push, with an early presence/authentication check and classic-PAT workflow
+scope check before image builds. Checkout already disables persisted job-token
+credentials, so `gh auth setup-git` can use it for the tag push.
 The other release operations retain the short-lived job token. The 74 focused
 release, pre-promotion and self-host preparation tests plus Ruff and diff
 checks pass locally. The secret's actual workflow permission cannot be read
 from GitHub secret metadata; the protected release gate must prove the push.
 Do not manually tag the failed source or reuse its first-attempt artifact.
+The repair is now [UI PR #1402](https://github.com/ElevenID/marty-ui/pull/1402)
+at corrected head `94ccea76a`, with auto-merge enabled under protected
+checks. Local self-review found and removed a preflight assertion that assumed
+pretty-printed `gh api` JSON; the replacement check uses the API exit status
+and observable classic-PAT scope header. The first PR head then failed the
+public open-source policy because `REPO_ACCESS_TOKEN` is a private marker.
+The revised source requires a dedicated `STACK_RELEASE_TAG_TOKEN` secret with
+Contents and Workflows write access limited to `ElevenID/marty-ui`; it is not
+yet provisioned. All 74 focused tests, Ruff, diff checks, and the pinned
+ElevenID open-source policy audit passed locally on the revised head. Its new
+PR-head checks are running. Requalify the
+final merged protected-main source with full exact-main CI and a fresh
+v1.1.256 claim before another release dispatch; #1400 and any later main
+change invalidate the older claim's source binding.
 
 ## Objective and working agreement
 
