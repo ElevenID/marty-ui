@@ -37,8 +37,9 @@ and combined focused Python checks passed 168 tests (five platform skips).
 PR CI `39084339386` compiled and executed all nineteen new Rust cases and four
 existing retry cases successfully. Its Flow evidence records nine selected and
 executed cases with same-run compiler-artifact identity. Independent review
-verified the named outcomes. #1393 is ready and awaiting protected queue run
-`39085856892`; this is not yet a merged or full-main qualification claim.
+verified the named outcomes. Protected queue run `39085856892` passed and
+#1393 merged as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` on October 18
+at 01:39 UTC. The next maintenance batch starts from that actual main.
 The first batch CI release-contract run passed 6,938 tests but found one stale
 verified-leaf count after the new guarded test leaf was added. The correction
 retains the strict count and adds explicit new-leaf membership; its local
