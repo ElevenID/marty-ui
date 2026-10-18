@@ -85,12 +85,25 @@ Readable executable copies are accepted only when byte-identical to the unique
 package/target executable from this run's Cargo artifact log. The no-`RUNNER_TEMP`
 local fallback is explicitly marked `local_unrecorded`.
 
-This batch covers the 29 dispatches of `run-rust-db-contracts.sh`; the generic
-guard, separate Flow invocation and published/process acceptance runners are
-unchanged. Evidence proves libtest body execution and declared caller-provided
+That earlier batch covered the 29 dispatches of `run-rust-db-contracts.sh`;
+at that checkpoint the generic guard, separate Flow invocation and
+published/process acceptance runners were unchanged. Evidence proves libtest
+body execution and declared caller-provided
 inputs, not assertion reachability, every internally provisioned child input,
 or complete transitive runtime/source closure. It authorizes no selective skip
 and claims no measured speedup.
+
+The subsequent Canvas A0 evidence slice reuses the same libtest recorder for
+the published composition and worker targets. It records selection and actual
+case completion separately for exact preflights, serial cases and the parallel
+target groups, with exact Cargo executable identity and separate per-target
+JSONL files under `rust-build-evidence`. Flow and self-host retain their
+existing recorder paths. The runner's pinned images, tier-specific skips,
+serialism, parallel scheduling, child environment and cleanup are unchanged.
+This is execution evidence for declared inputs, not assertion reachability or
+complete source/mount/fixture closure, and authorizes no additional skipped
+tests or historical qualification reuse. Any timing cost or later CI speedup
+must be measured rather than inferred from the new records.
 
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 

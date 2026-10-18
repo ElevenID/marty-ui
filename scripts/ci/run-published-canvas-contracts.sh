@@ -2,6 +2,7 @@
 export MARTY_CANVAS_PUBLISHED_SCHEMA_TEST="1"
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/rust_contract_execution.sh"
+obligation_runner="$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py"
 timed() {
   local phase="$1" name="$2"
   shift 2
@@ -149,7 +150,7 @@ if [[ "$mode" == full || "$mode" == worker-full ||
 fi
 run_historical_serial_tests() {
   if (( ${#historical_serial_tests[@]} == 0 )); then return; fi
-  timed canvas_serial mixed_roster_reference "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
+  timed canvas_serial mixed_roster_reference python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
 }
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
@@ -183,7 +184,7 @@ if [[ "$mode" == worker-* ]]; then
   if [[ -n "$worker_preflight_target" ]]; then
     printf '%s\n' "$worker_tests" | grep -Fx "$worker_preflight_target: test"
     pull_worker_images
-    timed canvas_serial "$worker_mode" "$worker_executable" "$worker_preflight_target" --exact --nocapture --test-threads=1
+    timed canvas_serial "$worker_mode" python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$worker_preflight_target" --exact --nocapture --test-threads=1
     exit 0
   fi
   worker_preflight_skips=()
@@ -229,12 +230,12 @@ if [[ "$mode" == worker-* ]]; then
   worker_parallel=$(printf '%s\n' "$worker_parallel_list" | grep -c ': test$')
   [[ $((worker_all - worker_parallel)) == $((2 + ${#historical_serial_tests[@]} + expected_worker_skips)) ]]
   pull_worker_images
-  timed canvas_serial sql_logging "$worker_executable" "$worker_serial_test" --exact --nocapture --test-threads=1
-  timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
+  timed canvas_serial sql_logging python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$worker_serial_test" --exact --nocapture --test-threads=1
+  timed canvas_serial worker_deadline python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
   run_historical_serial_tests
   worker_log=$(mktemp "${RUNNER_TEMP:?}/canvas-worker-only.XXXXXX")
   trap 'rm -f -- "$worker_log"' EXIT
-  timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" "$worker_executable" --skip "$worker_serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
+  timed canvas_target worker env MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$worker_retry_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$worker_validation_tier" python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" --skip "$worker_serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${worker_preflight_skips[@]}" --nocapture --test-threads=4 2>&1 | tee "$worker_log"
   python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --require-execution canvas "$worker_log"
   exit 0
 fi
@@ -352,7 +353,7 @@ pull_images() {
 if [[ -n "$preflight_target" ]]; then
   printf '%s\n' "$worker_tests" | grep -Fx "$preflight_target: test"
   pull_images
-  timed canvas_serial "$mode" "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
+  timed canvas_serial "$mode" python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1
   exit 0
 fi
 flow_executable=$(find_executable flow_published_schema_contract)
@@ -533,10 +534,10 @@ fi
 printf '%s\0%s\n' "$worker_tests" "$worker_parallel_list" | python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" --selected "$mode" "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" "$serial_test" "$deadline_serial_test" "${historical_serial_tests[@]}"
 parallel_tests=$((composition_parallel_tests + flow_parallel_tests + worker_parallel_tests + selfhost_parallel_tests))
 [[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]
-timed canvas_serial sql_logging "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
+timed canvas_serial sql_logging python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$serial_test" --exact --nocapture --test-threads=1
 # The deadline replay measures a 10-second renewal against a frozen 14-second
 # bound. Run it without concurrent Canvas database owners or test threads.
-timed canvas_serial worker_deadline "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
+timed canvas_serial worker_deadline python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1
 run_historical_serial_tests
 
 # The packaged renewal cases need an actual non-exportable X25519 sender. Keep
@@ -571,11 +572,11 @@ grep -q -- 'BEGIN CERTIFICATE' "$kms_ca_file"
 ! grep -q -- 'PRIVATE KEY' "$kms_ca_file"
 scoped_signer_test='scoped_transit_signer_verifies_without_key_read_authority'
 "$composition_executable" --list --ignored | grep -Fx "$scoped_signer_test: test"
-timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
+timed canvas_serial kms_scoped_signer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$scoped_signer_test" --ignored --exact --nocapture --test-threads=1
 # This published-process probe covers the full frozen JSON corpus and has a
 # fixed 120-second deadline. Keep other Canvas tests off this runner while it
 # runs; contention must not turn its contract into an intermittent timeout.
-timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
+timed canvas_serial json_consumer env MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1
 # Each target owns its disposable database and process fixtures. Keep their
 # output separate, normally wait for all owners to finish cleanup, and fail
 # if any suite fails. The serial SQL-logging positive control stays outside
@@ -625,7 +626,7 @@ if (( selfhost_delegated == 0 )); then
   selfhost_relay_pid=$!
 fi
 composition_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
+MARTY_CANVAS_OPENBAO_URL="$kms_url" MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- "$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4 >"$composition_log" 2>&1 &
 composition_pid=$!
 relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &
 composition_relay_pid=$!
@@ -636,7 +637,7 @@ composition_relay_pid=$!
 flow_pid=
 flow_relay_pid=
 worker_started=$(python3 -c 'import time; print(time.monotonic_ns())')
-MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
+MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4 >"$worker_log" 2>&1 &
 worker_pid=$!
 relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &
 worker_relay_pid=$!
