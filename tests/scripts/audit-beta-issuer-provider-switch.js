@@ -76,21 +76,38 @@ function providerVerificationDisplay(report, phase) {
     custodyScope:'Distinct keys and provider configurations on one beta OpenBao backend.'};
 }
 
-async function showProviderVerification(page, report, phase) {
-  const payload = providerVerificationDisplay(report, phase);
-  if (!RECORD_VIDEO) return;
-  await page.evaluate(payload => {
+function renderProviderEvidence(payload) {
     document.getElementById('d02-verification-evidence')?.remove();
     const panel = document.createElement('section'); panel.id = 'd02-verification-evidence';
-    Object.assign(panel.style,{position:'fixed',top:'96px',left:'276px',right:'28px',padding:'24px',
+    Object.assign(panel.style,{position:'fixed',top:'76px',left:'276px',width:'840px',boxSizing:'border-box',padding:'20px',
       zIndex:'2147483646',background:'#0f172a',color:'#f8fafc',fontFamily:'Arial, sans-serif',border:'3px solid #38bdf8'});
     const line = (text,size,color) => {const node=document.createElement('div');node.textContent=text;
       Object.assign(node.style,{fontSize:size+'px',color:color || '#f8fafc',marginBottom:'9px',overflowWrap:'anywhere'});panel.appendChild(node);};
-    line('CRYPTOGRAPHIC TEST EVIDENCE',20,'#7dd3fc'); line(payload.title,32);
-    for (const [label,value] of payload.rows) line(label+': '+value,22);
-    line(payload.custodyScope,20,'#7dd3fc'); line(payload.boundary,18,'#cbd5e1');
+    line('CRYPTOGRAPHIC TEST EVIDENCE',18,'#7dd3fc'); line(payload.title,28);
+    for (const [label,value] of payload.rows) {
+      const row = document.createElement('div');
+      row.dataset.evidenceLabel = label;
+      Object.assign(row.style, {marginBottom:'10px',lineHeight:'1.15'});
+      const heading = document.createElement('div'); heading.textContent = label;
+      Object.assign(heading.style, {fontSize:'18px',color:'#cbd5e1',marginBottom:'3px'});
+      const actual = document.createElement('div'); actual.textContent = value;
+      actual.dataset.evidenceValue = 'true';
+      Object.assign(actual.style, {fontSize:'30px',overflowWrap:'anywhere',whiteSpace:'pre-wrap'});
+      row.append(heading,actual); panel.appendChild(row);
+    }
+    line(payload.custodyScope,18,'#7dd3fc'); line(payload.boundary,16,'#cbd5e1');
     document.body.appendChild(panel);
-  },payload);
+    const rectangle = panel.getBoundingClientRect();
+    if (rectangle.left < 0 || rectangle.right > window.innerWidth || rectangle.bottom > window.innerHeight - 12) {
+      panel.remove();
+      throw new Error('Provider evidence panel must fit the actual capture viewport without clipping');
+    }
+}
+
+async function showProviderVerification(page, report, phase) {
+  const payload = providerVerificationDisplay(report, phase);
+  if (!RECORD_VIDEO) return;
+  await page.evaluate(renderProviderEvidence,payload);
   await page.locator('#d02-verification-evidence').waitFor({state:'visible'});
   await page.waitForTimeout(6000);
   await page.evaluate(() => document.getElementById('d02-verification-evidence')?.remove());
@@ -795,6 +812,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  renderProviderEvidence,
   rebindThroughConsole,
   providerVerificationDisplay,
   cleanup,
