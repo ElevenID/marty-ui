@@ -9,34 +9,24 @@ artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
 Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
-UI hardening #1192, and subsequent custody, restore, and publisher-source
-repairs are merged. Signed [v1.1.255](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255)
-passed a fresh 28-service Raft-backed installed journey, but its cold restore
-exposed the native purpose-ordering defect fixed later in #1392. Local restored
-clones passed with the candidate fix; an exact signed fixed-release restore
-has not. The attempted v1.1.256 release promoted images but failed at tag
-creation, so it is not a signed release. At the latest live check, protected
-main is `0a91b88fbd4348b5709189f131c74d2848ffd2ee`, which includes
-Canvas compile-overhead [PR #1408](https://github.com/ElevenID/marty-ui/pull/1408).
-All five protected merge-group workflows passed at that SHA. Full exact-main
-[CI 39124289031](https://github.com/ElevenID/marty-ui/actions/runs/39124289031)
-passed, but a later exact-main CI dispatch was cancelled before any jobs
-started. The fresh no-write claim `39126691452` correctly rejected that
-latest cancelled run; replacement full exact-main
-[CI 39126809391](https://github.com/ElevenID/marty-ui/actions/runs/39126809391)
-passed. Fresh no-write [claim 39129687763](https://github.com/ElevenID/marty-ui/actions/runs/39129687763)
-passed on that exact SHA and confirmed absent release coordinates. The
-earlier successful claim `39120259279` targeted the superseded `b9291b56...`
-SHA and must not be used. The dedicated `STACK_RELEASE_TAG_TOKEN` repository
-secret is
-absent, so do not dispatch publication. Then qualify the signed fixed release
-with fresh installation, coordinated off-host backup/cold restore, custody and
-business journey, and measured 16 GiB coexistence; replace the two old
-installations fresh and prove cutover/rollback without migration. Real
-AWS/Azure/GCP credentials and a physical wallet remain unprovisioned; assign
-access and complete those acceptance checks before closing the KMS goal. The
-milestone table below contains historical status; use the dated evidence log
-and live run/PR states for the latest gate.
+UI hardening #1192, and subsequent custody, restore, signing-route and
+secretless publisher-source repairs are merged. Protected UI main is
+`c6008f34062e0ec7ad310a85534cf30626e01c7d` after #1419. Full
+[exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
+failed the Canvas mixed-roster signer fixture: Rust sends the pinned
+`verification_method_id`, but the synthetic grant-bound signer omitted it from
+its allowlist. Locally verified [PR #1423](https://github.com/ElevenID/marty-ui/pull/1423)
+corrects that contract and is open under protected checks; it is not yet on
+main. `v1.1.257` remains untagged and unpublished. Once #1423 merges, require
+a new passing full CI on the resulting exact main, fresh no-write claim,
+promotion, verified local late-tag handoff, resumed signed publication,
+and fresh disposable Raft-backed install plus coordinated cold restore and
+business/custody journey on this 16 GiB Docker host. Keep production online
+and measure coexistence; replace the two old installations fresh, with no
+migration. Real AWS/Azure/GCP credentials and a physical wallet remain
+unprovisioned; obtain access and complete those acceptance checks before
+closing the KMS goal. The milestone table below contains historical status;
+use the dated evidence log and live run/PR states for the latest gate.
 
 Recovery follow-up (2026-10-17): an isolated cold copy of the successful
 v1.1.255 installation reproduced a release-image restart defect: native
