@@ -9,6 +9,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 from urllib.parse import parse_qs
 
@@ -35,6 +36,50 @@ from run_selfhost_business_journey import (  # noqa: E402
 )
 from selfhost_journey_diagnostics import RunDiagnostics  # noqa: E402
 from selfhost_managed_reference import managed_reference  # noqa: E402
+
+
+def test_invalid_operator_password_aborts_before_compose_build_or_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "source"
+    realm = source / "config/keycloak/11id-realm.json"
+    realm.parent.mkdir(parents=True)
+    realm.write_text((Path(__file__).resolve().parents[1] / "config/keycloak/11id-realm.json").read_text())
+    env_file = tmp_path / "operator.env"
+    env_file.write_text("PUBLIC_DOMAIN=localhost\n")
+    paths = {name: tmp_path / name for name in (
+        "archive", "image_lock", "transaction", "receipt", "descriptor", "install_root",
+        "state_root", "secret_root", "integration_checkout", "openbao_state_root",
+        "kms_custody_evidence", "kms_custody_signature", "kms_custody_public_key",
+    )}
+    args = SimpleNamespace(**paths, env_file=env_file, source_checkout=source,
+                           project_name="marty-selfhost-qual-" + "a" * 16,
+                           fixture_setup=source / runner.FIXTURE_PATH,
+                           fixture_setup_sha256="f" * 64, source_sha="a" * 40,
+                           integration_sha="b" * 40)
+    for name in runner.JOURNEY_INPUTS:
+        monkeypatch.setenv(name, "present")
+    password = "Upperlower123"
+    monkeypatch.setenv("SELFHOST_TEST_PASSWORD", password)
+    monkeypatch.setattr(runner.sys, "platform", "linux")
+    monkeypatch.setattr(runner, "fixture_setup", lambda *args: None)
+    monkeypatch.setattr(runner, "source_bound_fixture", lambda *args: None)
+    monkeypatch.setattr(runner, "pinned_integration_checkout", lambda *args: None)
+    observed = []
+    def command(argv, **kwargs):
+        observed.append(argv)
+        assert argv == ["git", "rev-parse", "HEAD^{commit}"]
+        return args.source_sha
+    monkeypatch.setattr(runner, "command", command)
+    def premature(*args, **kwargs):
+        pytest.fail("invalid operator password reached later install work")
+    monkeypatch.setattr(runner, "check", premature)
+    monkeypatch.setattr(runner, "build_public_kms_jwk_tool", premature)
+    monkeypatch.setattr(runner, "installed_journey", premature)
+    with pytest.raises(ValueError, match="shipped realm policy") as caught:
+        runner.run(args)
+    assert password not in str(caught.value)
+    assert observed == [["git", "rev-parse", "HEAD^{commit}"]]
 
 
 def test_fresh_openbao_instances_enroll_distinct_custody_keys(

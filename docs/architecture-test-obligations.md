@@ -76,6 +76,29 @@ and claims no measured speedup.
 
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
+### A4 fast scoped-timeout policy matrix
+
+The issuance library's `canvas_sync_provider_http_tests` adds two in-memory,
+paused-clock tests alongside its existing scope-selection and adapter checks.
+They consume the four header cases and six prompt/progress/stall body cases
+from the existing `canvas-worker-*-timeout-scenarios.json` inputs. The actual
+provider selects the application/roster budget, and the actual `OperationSocket`
+reads scheduled bytes through its existing boxed I/O boundary. No production
+clock, duration, transport implementation or fixture corpus is replaced.
+
+The matrix checks the 17-second header distinction (application timeout, roster
+success), completed-read budget resets, complete byte delivery for progressing
+bodies that outlive a single budget, and the read-timeout phase/timing for stalled
+bodies. Tokio's paused-clock support is a development dependency only. The
+scripted writer is an inline owned future and is dropped on read completion.
+
+These unit tests do not qualify HTTP/TLS wiring, job outcome persistence,
+renewal/deadline scheduling, generation fencing, process liveness, late effects,
+handler joins or cleanup. All existing native, historical, database and process
+cases and their routine/full gate selection remain unchanged. This additive
+batch establishes faster failure localization; it claims no measured CI saving
+and authorizes no acceptance-case removal.
+
 ## First extraction: managed passport KMS chain
 
 - Old owner: `marty-issuance-service`, `tests/passport_managed_kms_chain.rs`.

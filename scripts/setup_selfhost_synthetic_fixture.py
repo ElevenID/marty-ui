@@ -22,6 +22,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from generate_selfhost_disposable_credentials import validate_operator_password
 from selfhost_openbao_client import (
     CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, custody_signer_public,
 )
@@ -46,6 +47,7 @@ def required_environment(values: dict[str, str]) -> dict[str, str]:
     missing = [name for name in names if not values.get(name)]
     if missing:
         raise ValueError("synthetic fixture inputs absent: " + ", ".join(missing))
+    validate_operator_password(values["SELFHOST_TEST_PASSWORD"])
     if (re.fullmatch(r"[0-9a-f]{64}", values["SELFHOST_CUSTODY_CHALLENGE"]) is None
             or re.fullmatch(r"[0-9a-f]{64}", values["SELFHOST_FIXTURE_SHA256"]) is None):
         raise ValueError("synthetic custody challenge or fixture digest is invalid")
@@ -223,6 +225,7 @@ def managed_key_binding(organization_id: str, reference: str) -> str:
 
 async def keycloak_user(client: httpx.AsyncClient, fixture: dict[str, str],
                         admin_password: str) -> None:
+    validate_operator_password(fixture["SELFHOST_TEST_PASSWORD"])
     token_result = await client.post("/realms/master/protocol/openid-connect/token", data={
         "grant_type": "password", "client_id": "admin-cli", "username": "admin",
         "password": admin_password,

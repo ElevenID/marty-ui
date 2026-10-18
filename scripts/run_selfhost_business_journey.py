@@ -25,6 +25,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import ProxyHandler, Request, build_opener
 
 from check_prepared_selfhost_consumer import check, verify_descriptor
+from generate_selfhost_disposable_credentials import validate_operator_password
 from check_selfhost_installed_runtime_plan import (
     BETA_SERVICES, EXPECTED_ROLE_SECRETS, EXPECTED_SERVICES, plan,
 )
@@ -650,6 +651,8 @@ def validate_inputs(args: argparse.Namespace) -> None:
     pinned_integration_checkout(args.integration_checkout, args.integration_sha)
     if command(["git", "rev-parse", "HEAD^{commit}"], cwd=args.source_checkout).strip() != args.source_sha:
         raise ValueError("source checkout differs from prepared ZIP source")
+    validate_operator_password(os.environ["SELFHOST_TEST_PASSWORD"],
+                               args.source_checkout / "config/keycloak/11id-realm.json")
     verify_descriptor(args.archive, args.image_lock, args.transaction,
                       args.receipt, args.descriptor)
 

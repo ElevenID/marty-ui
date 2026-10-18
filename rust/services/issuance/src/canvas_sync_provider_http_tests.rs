@@ -168,6 +168,149 @@ async fn explicit_rest_scopes_select_distinct_operation_budgets_without_changing
     }
 }
 
+fn scheduled_case_scope(case: &Value) -> CanvasProviderRunScope {
+    let target = match case["target_type"].as_str().unwrap() {
+        "learner_application" => CanvasSyncTargetType::LearnerApplication,
+        "background_roster" => CanvasSyncTargetType::BackgroundRoster,
+        _ => panic!("unclassified timeout fixture scope"),
+    };
+    CanvasProviderRunScope::from_target_type(target).unwrap()
+}
+
+fn assert_scheduled_read(
+    case: &Value,
+    observation: crate::canvas_operation_http::socket_test_io::ReadObservation,
+    offsets: &[Duration],
+    timeout_bounds: (f64, f64),
+) {
+    use crate::{
+        canvas_network_timeout::CanvasNetworkPhase, canvas_operation_http::CanvasOperationHttpError,
+    };
+    let name = case["name"].as_str().unwrap();
+    match case["expected_status"].as_str().unwrap() {
+        "succeeded" => {
+            let expected = (1..=offsets.len())
+                .map(|index| u8::try_from(index).unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(observation.result.unwrap(), expected, "{name}");
+            assert!(observation.elapsed >= *offsets.last().unwrap(), "{name}");
+            // Tokio timer granularity may round a scheduled completion upward.
+            assert!(
+                observation.elapsed <= *offsets.last().unwrap() + Duration::from_millis(2),
+                "{name}: {:?}",
+                observation.elapsed
+            );
+        }
+        "retry" => {
+            assert_eq!(
+                observation.result,
+                Err(CanvasOperationHttpError::Timeout(CanvasNetworkPhase::Read)),
+                "{name}"
+            );
+            // Bounds come from the independent checked-in scenario, not from
+            // the production timeout supplied to the operation socket.
+            assert!(
+                (timeout_bounds.0..=timeout_bounds.1).contains(&observation.elapsed.as_secs_f64()),
+                "{name}: {:?}",
+                observation.elapsed
+            );
+        }
+        _ => panic!("unclassified timeout fixture outcome"),
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn scoped_header_timeout_matrix_uses_real_policy_and_virtual_operation_clock() {
+    use crate::canvas_operation_http::socket_test_io::read_schedule;
+    let matrix: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-timeout-scenarios.json"
+    ))
+    .unwrap();
+    assert_eq!(matrix["schema"], "marty.canvas-worker-timeout-scenarios/v1");
+    let cases = matrix["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 4);
+    let (template, pool) = run_provider_without_database_io();
+    pool.close().await;
+    let mut observed = BTreeSet::new();
+    for case in cases {
+        assert!(observed.insert(case["name"].as_str().unwrap()));
+        let provider = template.fresh_run(scheduled_case_scope(case));
+        let budget = CanvasNetworkTimeout::from_seconds(provider.rest_timeout_seconds().unwrap());
+        let offsets = [Duration::from_secs_f64(
+            if case["delayed"].as_bool().unwrap() {
+                matrix["timing"]["delay_seconds"].as_f64().unwrap()
+            } else {
+                0.0
+            },
+        )];
+        let observation = read_schedule(budget, &offsets).await;
+        assert_scheduled_read(
+            case,
+            observation,
+            &offsets,
+            (
+                matrix["timing"]["application_timeout_min_seconds"]
+                    .as_f64()
+                    .unwrap(),
+                matrix["timing"]["application_timeout_max_seconds"]
+                    .as_f64()
+                    .unwrap(),
+            ),
+        );
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn scoped_body_timeout_matrix_resets_each_inactivity_budget_on_virtual_clock() {
+    use crate::canvas_operation_http::socket_test_io::read_schedule;
+    let matrix: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-body-timeout-scenarios.json"
+    ))
+    .unwrap();
+    assert_eq!(
+        matrix["schema"],
+        "marty.canvas-worker-body-timeout-scenarios/v1"
+    );
+    let cases = matrix["cases"].as_array().unwrap();
+    assert_eq!(cases.len(), 6);
+    let (template, pool) = run_provider_without_database_io();
+    pool.close().await;
+    let mut observed = BTreeSet::new();
+    for case in cases {
+        assert!(observed.insert(case["name"].as_str().unwrap()));
+        let provider = template.fresh_run(scheduled_case_scope(case));
+        let budget = CanvasNetworkTimeout::from_seconds(provider.rest_timeout_seconds().unwrap());
+        let mode = case["mode"].as_str().unwrap();
+        let offsets = matrix["schedules"][mode]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| Duration::from_secs_f64(value.as_f64().unwrap()))
+            .collect::<Vec<_>>();
+        let kind = match scheduled_case_scope(case) {
+            CanvasProviderRunScope::Application => "application",
+            CanvasProviderRunScope::BackgroundRoster => "roster",
+        };
+        let last_success = if mode == "stall" {
+            offsets[offsets.len() - 2].as_secs_f64()
+        } else {
+            0.0
+        };
+        let bounds = (
+            last_success
+                + matrix["timing"][format!("{kind}_inactivity_min_seconds")]
+                    .as_f64()
+                    .unwrap(),
+            last_success
+                + matrix["timing"][format!("{kind}_inactivity_max_seconds")]
+                    .as_f64()
+                    .unwrap(),
+        );
+        let observation = read_schedule(budget, &offsets).await;
+        assert_scheduled_read(case, observation, &offsets, bounds);
+    }
+}
+
 #[tokio::test]
 async fn malformed_bearer_and_rejected_origin_keep_closed_errors_without_connecting() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

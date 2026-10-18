@@ -110,6 +110,25 @@ fresh disposable OpenBao state and secret roots, followed by a new install and
 bootstrap. The current helpers deliberately do not rotate live Keycloak or
 workload TLS files in place.
 
+Generate the synthetic `11id` operator password with the reviewed credential
+helper, in a fresh staged private root, before provisioning or starting the
+journey:
+
+```bash
+python3 "$source_root/scripts/generate_selfhost_disposable_credentials.py" \
+  --operator-password-file "$private_root/operator-password"
+```
+
+Have the operator secret runner read that file into `SELFHOST_TEST_PASSWORD`;
+do not print it. This separate operator password guarantees the shipped realm's
+length, uppercase, lowercase, digit and special-character requirements while
+retaining 256 random bits. Arbitrary URL-safe tokens do not guarantee all those
+classes. Existing service credentials keep their original hexadecimal format.
+The helper refuses an existing output; never overwrite a previous attempt's
+password or reuse its state. Journey input validation rejects an incompatible
+operator password before Compose rendering, converter compilation or startup;
+the fixture also rejects it before contacting Keycloak.
+
 After provisioning, inspect the effective expirations without printing token
 values. Run this from the clean release source checkout with its `scripts/`
 directory on `PYTHONPATH`; `BAO_ADDR` must name the same locally controlled
