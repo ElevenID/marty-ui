@@ -5692,3 +5692,48 @@ def test_renewal_matrix_preserves_real_deadlines_and_all_combinations() -> None:
     assert "Duration::from_secs(20)" in source
     assert "Duration::from_secs(30)" in source
     assert "sum::<usize>(),60" in re.sub(r"\s+", "", source)
+
+
+def test_renewal_write_boundaries_overlap_only_with_owned_databases() -> None:
+    support = ROOT / "rust/services/issuance/tests/support"
+    source = (support / "canvas_worker_renewal_oracle.rs").read_text(encoding="utf-8")
+    dispatch = source.split("pub async fn assert_renewal_write_failure_boundaries", 1)[
+        1
+    ]
+    dispatch, assertions = dispatch.split("async fn assert_write_failure_boundary", 1)
+    assert "tokio::join!(" in dispatch
+    assert dispatch.count("settle_group(isolated_database(") == 3
+    for stage, attempts in (
+        ("lease", "[2, 0, 0]"),
+        ("target", "[2, 2, 0]"),
+        ("process", "[2, 2, 2]"),
+    ):
+        assert (
+            f'assert_write_failure_boundary(&pool, "{stage}", {attempts}).await'
+            in dispatch
+        )
+    assert dispatch.index("tokio::join!(") < dispatch.index(
+        "for result in [lease, target, process]"
+    )
+    assert "Duration::from_secs(10)" in source
+    for obligation in (
+        "await_write_failure(cycle.as_mut(), pool, expected_attempts).await",
+        "prior lease write remains committed",
+        "target heartbeat remains committed despite process heartbeat failure",
+        'assert_eq!(status, "leased")',
+        "renewal failure is not successful job completion",
+        "remove_write_probes(pool).await",
+    ):
+        assert obligation in assertions
+    owner = (support / "canvas_worker_renewal_job_outcomes.rs").read_text(
+        encoding="utf-8"
+    )
+    assert owner.count("CREATE DATABASE {database}") == 1
+    assert owner.count("DROP DATABASE {database}") == 1
+    assert owner.count(".max_connections(6)") == 1
+    assert "action(pool.clone()).await" in owner
+    assert (
+        owner.index("action(pool.clone()).await")
+        < owner.index("pool.close().await")
+        < owner.index("DROP DATABASE {database}")
+    )

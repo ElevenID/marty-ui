@@ -4,6 +4,57 @@ Status: active requirements and queue, 2026-10-17.
 
 ## Current delivery priority
 
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously downloadable files. Use this preview rather
+than v1.1.250. Exact protected-main source is
+`76a7fb4ef6e2ad594dc431da511686a1664979ab`, produced by successful
+[Stack run #39077407940](https://github.com/ElevenID/marty-ui/actions/runs/39077407940).
+Two independent anonymous download checks passed checksums, archive, receipt,
+descriptor, original preparation transaction and source/run binding. The preview
+tag resolves to that source; the attachments remain separately unsigned and the
+descriptor remains **unqualified**.
+
+A fresh unchanged-artifact local replay passed all 15 diagnostic phases in
+169.812 seconds: startup/readiness, public credential journey, live KMS custody,
+Keycloak refresh, both database custody checks and main-stack cleanup. Independent
+review matched all 28 expected local services and the source, fixture, transaction
+and artifact digests. Both attempts' separate disposable OpenBao projects were
+subsequently removed; private bind state and reports were retained under
+`/home/canvasrunner/kms-qualification/v1.1.255/private`.
+
+This enables the approved **unsupported experimental** external testing, not
+supported installer qualification. The shared Windows/WSL Docker VM exposed
+15.1 GiB RAM and used warm caches. Resource capture had errors; the Windows
+backing disk was below the qualification target, regardless of Linux-visible
+virtual free space. Do not infer a supported memory/disk minimum or native Linux
+qualification. Setup remains manual and requires the source and pinned harness.
+Next handoff evidence is an outside tester's independent install and feedback;
+qualified signed installer assets and a reviewed hardware envelope remain open.
+Do not delay experimental testing for unrelated A0-A7 completion.
+
+The first local attempt had a definite invalid fixture input: its generated
+operator password lacked a required special character. Exact HTTP failure
+details were not recovered. The fresh replay used a policy-compliant password
+and passed without changing any immutable artifact or realm policy. The preview
+guide documents those requirements. Reviewed [PR #1390](https://github.com/ElevenID/marty-ui/pull/1390)
+adds early validation/generation and virtual-clock Canvas timeout matrices;
+it is not included in v1.1.255 and still requires hosted Rust execution evidence.
+
+[PR #1389](https://github.com/ElevenID/marty-ui/pull/1389) merged as
+`7693e6ebd098be240a068525f3df710f2c2948bf` after full PR and protected merge-group
+checks. Its effective DB-obligation inventory does not complete A0's transitive
+input graph. The next test-only draft overlaps three isolated renewal-write
+scenarios while retaining all SQL/cancellation assertions and actual 10-second
+intervals. Static review, pinned Rust compilation and a pure settlement test
+passed locally; real DB validation, connection observations and comparable
+before/after timing remain open because the disk guard refused local provisioning.
+No CI speedup is claimed. Existing gates and connection limits remain unchanged.
+
+## Prior handoff checkpoints (superseded delivery state)
+
+The snapshots below retain earlier evidence and failures; they do not override
+the current checkpoint or imply that the older preview is suitable for handoff.
+
 Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
 predates known fresh-install repairs and should not be the next tester handoff.
 Stack v1.1.254 published its standard signed assets and an unqualified prepared
@@ -130,8 +181,9 @@ success do not establish installed Compose or supported release acceptance.
 - The complete local journey inventory closes all 76 secret names:
   17 scalar credentials,
   31 workload TLS files, seven Keycloak files, 15 OpenBao outputs and six
-  disabled-optional placeholders. A staged persistent root and fresh installed
-  acceptance still require evidence. The HAIP token retains its narrow KMS policy.
+  disabled-optional placeholders. Independent customer-installed acceptance and
+  supported persistent operation remain unqualified; the local disposable
+  component replay above does not satisfy them. The HAIP token retains its narrow KMS policy.
 - For generated text credentials, preserve the private POSIX directory (`0700`)
   and container-readable final files (`0444`), with initial `0600` creation and
   rollback on a failed mode transition. Six optional integration files may be empty only when those
