@@ -280,6 +280,36 @@ def test_grant_bound_signer_rejects_historical_unsigned_request(fixture_module, 
         ) == (500, {})
 
 
+def test_grant_bound_signer_rejects_wrong_verification_method(fixture_module, matrix):
+    with (
+        pytest.raises(
+            AssertionError, match="Synthetic signer assertion contract failed"
+        ),
+        fixture_module.MixedRosterHttpsFixture(matrix) as fixture,
+    ):
+        fixture.set_stage(matrix["cases"][0]["stages"][0])
+        assert request(
+            fixture,
+            "POST",
+            "/internal/signing-keys/issuer-dids/sign?organization_id=org-review",
+            signer=True,
+            headers={"X-API-Key": fixture_module.ISSUER_SIGN_KEY},
+            body=json.dumps(
+                {
+                    "issuer_did": fixture_module.ISSUER_DID,
+                    "credential_format": "lti_tool_jwt",
+                    "key_purpose": "lti_tool_signing",
+                    "algorithm": "RS256",
+                    "key_reference": fixture_module.SIGNING_KEY_REFERENCE,
+                    "verification_method_id": "did:web:wrong.example#key",
+                    "payload_b64": encoded(
+                        signing_input(fixture_module, fixture).encode()
+                    ),
+                }
+            ),
+        ) == (500, {})
+
+
 def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
     fixture_module, matrix
 ):
@@ -339,6 +369,7 @@ def test_synthetic_signer_and_canvas_tokens_keep_exact_transport_observations(
                 {
                     **selectors,
                     "key_reference": fixture_module.SIGNING_KEY_REFERENCE,
+                    "verification_method_id": fixture_module.VERIFICATION_METHOD,
                     "payload_b64": encoded(assertion_bytes),
                 }
             ),
