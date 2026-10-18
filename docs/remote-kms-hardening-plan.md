@@ -410,6 +410,25 @@ duplicate it or claim release readiness until it succeeds and main remains
 unchanged. The v1.1.257 Git tag/release and publisher credential are still
 unproven/absent; an installed fixed-release recovery has not yet run.
 
+Exact-main qualification and first v1.1.257 claim attempt (2026-10-18):
+[manual full CI 39113146906](https://github.com/ElevenID/marty-ui/actions/runs/39113146906)
+passed at protected main `f572cbbc25cb5112bacbf079e3e06441a46d108c`,
+including the full Canvas, OpenBao recovery, contracts and terminal gates.
+The clean detached local checkout at that SHA passed 185 focused release and
+self-host tests plus 71 Rust-contract tests under full Canvas qualification
+(five Windows-only skips); the worktree stayed clean. Main still matched and
+the v1.1.257 Git tag was absent. The first
+[no-write claim 39116169358](https://github.com/ElevenID/marty-ui/actions/runs/39116169358)
+failed safely: its tag policy selected a newer
+[scheduled full CI 39113210924](https://github.com/ElevenID/marty-ui/actions/runs/39113210924)
+on the same SHA, which was still in progress. This is not a source-test or
+release-coordinate failure; the policy deliberately requires the newest full
+Canvas qualification to finish successfully. Preserve the failed claim and
+wait for the live scheduled run rather than cancel it or relax the gate. If
+it succeeds and main/tag are unchanged, dispatch a fresh v1.1.257 claim.
+No tag, image promotion, GitHub release or signed fixed-restoration evidence
+was produced by the failed no-write claim.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
