@@ -73,6 +73,21 @@ Keycloak refresh and both database custody checks. Private report:
 The isolated projects were stopped; production loopback remained HTTP 200.
 This tests local archive portability and ownership, not off-host retention,
 the signed fixed migrator, or a supported cutover.
+PR #1392 review correction (2026-10-17): its first PR-head CI completed with
+28 successes, one neutral CodeQL aggregate and one skipped job, but GitHub
+refused merge-queue entry because two P1 review threads remained unresolved.
+Both findings were valid: the verifier checked a rendered model but did not
+bind it to the running containers, and it did not require mounted secret files
+to come from the recovery root. Commit `073b51abb` now compares live Compose
+configuration hashes, image IDs and mount sources for the 28 application and
+three OpenBao containers, validates used application secret paths and OpenBao
+bootstrap runtime-secret mounts, and rechecks bindings after the journey.
+The isolated archive clone passed the strengthened live verifier. Two negative
+probes changed the secret directory and a service setting after startup; both
+were rejected before the public journey. Ruff and diff checks passed; the
+projects were stopped and production stayed HTTP 200. Both review threads
+were resolved after the correction. The new PR head requires another full
+protected check/merge run; no signed release claim exists for it yet.
 
 ## Objective and working agreement
 
