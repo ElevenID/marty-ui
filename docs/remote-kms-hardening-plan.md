@@ -45,6 +45,17 @@ custody checks. Its private evidence is
 This is candidate-fix evidence, not a signed release or qualified off-host
 backup/cutover. Publish the fix in the next grouped UI PR, then repeat exact
 signed-artifact recovery before treating coordinated rollback as supported.
+The candidate branch now also has an opt-in
+`scripts/verify_selfhost_restored_journey.py` that checks the exact 28-role
+closure, isolated app/OpenBao mounts and loopback ports, each app KMS address,
+unsealed Raft, the public journey, Keycloak refresh and both database custody
+scans without fixture reset or automatic teardown. It marks reports
+`unqualified` and records any candidate Compose override. On the same restored
+clone, a second cold restart passed OpenBao bootstrap and native migration
+again (after transient service-readiness retries); the new verifier passed
+against a further restored-state business journey, writing private report
+`/home/canvasrunner/kms-qualification/v1.1.255/private/recovery-39077407940-d/restored-journey-runner-report-4.json`.
+The owned projects were stopped again and production stayed HTTP 200.
 
 ## Objective and working agreement
 
