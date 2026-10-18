@@ -1960,8 +1960,11 @@ jobs:
             | select(.executable != null) | .executable
           ' "$RUNNER_TEMP/rust-test-artifacts.json" | sort -u)
           [[ ${#executables[@]} == 1 && -x "${executables[0]}" ]]
+          MARTY_CANVAS_REUSE_PUBLISHED_BASE_PILOT=0 python3 \
+            ../scripts/ci/run-exact-ignored-canvas-test.py "${executables[0]}" \
+            canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads
           for test_name in \
-            canvas_published_database::diagnostic_tests::eight_fixed_published_databases_keep_migration_heads \
+            canvas_published_database::diagnostic_tests::fresh_probe_and_cached_restore_have_identical_schema_and_data \
             canvas_published_database::diagnostic_tests::immutable_published_base_keeps_revision_parity_and_case_isolation \
             canvas_published_database::diagnostic_tests::concurrent_published_base_keeps_eight_cases_isolated \
             canvas_published_database::diagnostic_tests::failed_published_base_restore_removes_only_its_owned_container; do

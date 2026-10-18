@@ -389,22 +389,31 @@ fn docker_create_failure_category(stderr: &[u8]) -> &'static str {
 // and its migration revisions/source digest have been checked before capture.
 // There is no cross-run cache, shared Docker volume, or deployment database.
 fn dump_published_base(postgres: &str) -> Result<Vec<u8>, String> {
-    let output = docker_output_with_timeout(
-        &[
-            "exec",
-            postgres,
-            "pg_dump",
-            "--no-owner",
-            "--no-privileges",
-            "--format=plain",
-            "-U",
-            "oracle",
-            "-d",
-            DATABASE,
-        ],
-        Duration::from_secs(120),
-        64 * 1024 * 1024,
-    )?;
+    dump_published_base_with_restrict_key(postgres, false)
+}
+
+fn dump_published_base_with_restrict_key(
+    postgres: &str,
+    deterministic_restrict_key: bool,
+) -> Result<Vec<u8>, String> {
+    let mut args = vec![
+        "exec",
+        postgres,
+        "pg_dump",
+        "--no-owner",
+        "--no-privileges",
+        "--format=plain",
+        "-U",
+        "oracle",
+        "-d",
+        DATABASE,
+    ];
+    if deterministic_restrict_key {
+        // pg_dump 15.17 emits a random psql restriction key by default.
+        // A fixed key is diagnostic-only, never used for the restore input.
+        args.push("--restrict-key=MartyCanvasParityDiagnostic20261018");
+    }
+    let output = docker_output_with_timeout(&args, Duration::from_secs(120), 64 * 1024 * 1024)?;
     if output.stdout.is_empty() {
         return Err("Pinned published base dump is empty".into());
     }

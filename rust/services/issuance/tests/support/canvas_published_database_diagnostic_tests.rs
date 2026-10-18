@@ -77,6 +77,7 @@ mod diagnostic_tests {
     #[tokio::test]
     #[ignore = "pinned Docker images required; run exact test in separate baseline and opt-in processes"]
     async fn eight_fixed_published_databases_keep_migration_heads() {
+        assert_ne!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
         let fixture: Value = serde_json::from_str(include_str!(
             "../../../../../contracts/canvas-worker-consumer-range-oracle.json"
         ))
@@ -96,6 +97,35 @@ mod diagnostic_tests {
             );
             owned.close_verified().unwrap();
         }
+    }
+
+    #[tokio::test]
+    #[ignore = "opt-in pinned Docker image pilot; compare the exact fresh and restored schema/data dumps"]
+    async fn fresh_probe_and_cached_restore_have_identical_schema_and_data() {
+        assert_eq!(std::env::var(BASE_REUSE_SWITCH).as_deref(), Ok("1"));
+        let restored = PublishedDatabase::start().await.unwrap();
+        assert!(
+            PUBLISHED_BASE.get().is_some(),
+            "missing verified published base"
+        );
+        let restored_dump =
+            dump_published_base_with_restrict_key(restored.postgres.as_deref().unwrap(), true)
+                .unwrap();
+        restored.close_verified().unwrap();
+
+        // Use a new pinned producer, not the cached constructor, as the
+        // independent baseline. Never print database contents on mismatch.
+        let fresh = PublishedDatabase::start_probe(None).await.unwrap();
+        let fresh_dump =
+            dump_published_base_with_restrict_key(fresh.postgres.as_deref().unwrap(), true)
+                .unwrap();
+        let same_schema_and_data = fresh_dump == restored_dump;
+        fresh.close_verified().unwrap();
+
+        assert!(
+            same_schema_and_data,
+            "fresh published probe and restored base have different schema/data"
+        );
     }
 
     #[tokio::test]
