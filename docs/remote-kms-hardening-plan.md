@@ -24,10 +24,11 @@ passed, but a later exact-main CI dispatch was cancelled before any jobs
 started. The fresh no-write claim `39126691452` correctly rejected that
 latest cancelled run; replacement full exact-main
 [CI 39126809391](https://github.com/ElevenID/marty-ui/actions/runs/39126809391)
-is queued. The earlier successful v1.1.257 claim `39120259279` targeted the
-superseded `b9291b56...` SHA and cannot authorize the changed source. After
-the replacement CI passes, make a fresh no-write claim. The dedicated
-`STACK_RELEASE_TAG_TOKEN` repository secret is
+passed. Fresh no-write [claim 39129687763](https://github.com/ElevenID/marty-ui/actions/runs/39129687763)
+passed on that exact SHA and confirmed absent release coordinates. The
+earlier successful claim `39120259279` targeted the superseded `b9291b56...`
+SHA and must not be used. The dedicated `STACK_RELEASE_TAG_TOKEN` repository
+secret is
 absent, so do not dispatch publication. Then qualify the signed fixed release
 with fresh installation, coordinated off-host backup/cold restore, custody and
 business journey, and measured 16 GiB coexistence; replace the two old
@@ -567,6 +568,25 @@ was dispatched at the same exact SHA and is queued. Wait for its terminal
 success and unchanged main before one new no-write claim. The dedicated
 release-tag secret remains absent. Clean WSL source and integration checkouts
 are staged at `0a91b88f...` and `5b3ec6a8...` with empty Git status.
+
+Fresh v1.1.257 release claim (2026-10-18): replacement full
+[exact-main CI 39126809391](https://github.com/ElevenID/marty-ui/actions/runs/39126809391)
+passed every job at `0a91b88fbd4348b5709189f131c74d2848ffd2ee`,
+including Canvas, contracts, self-host, OpenBao coordinated recovery and
+terminal CI Gate. It was the latest full run for that SHA, main still matched,
+and the v1.1.257 tag and GitHub release were absent. Fresh no-write
+[claim 39129687763](https://github.com/ElevenID/marty-ui/actions/runs/39129687763)
+passed at that exact SHA. The downloaded claim artifact ID `12137865836` has
+digest `sha256:b9801d1f0d82a9f1be0527081aa3cd16d45098a504ebc37daabe343cec0ea733`;
+its `release-transaction.json` is `state=claimed`, transaction ID
+`e8b8ebb74816f48a5d00d6ee18f5397eddf3950b445085bccaed822b6ab12eec`,
+stack-lock SHA256 `778082e382cacd60b69775b1f77e40b3e850aa84789edae2c74677179456a7c4`,
+and records absent Git tag, GitHub release and all five version image tags.
+Its preparation evidence binds the five protected merge-group workflows and
+full CI `39126809391`. The claim was downloaded to the OS temp directory,
+outside the repository. `STACK_RELEASE_TAG_TOKEN` remains absent from Actions
+secret metadata, so do not dispatch signed `cd.yml` yet. No signed fixed-release
+restore or production cutover is claimed.
 
 ## Objective and working agreement
 
