@@ -258,8 +258,8 @@ permission to create a tag that carries workflow-file changes. No v1.1.256
 tag or GitHub release was created. Concurrent PR #1400 advanced protected
 main to `55209f002dad992c24a1c00a89435d6c520b8f15`; the older claim and
 failed release cannot qualify that new source. The first local proposal on
-`fix/kms-release-workflow-tag-token-20261018` used the existing private
-`REPO_ACCESS_TOKEN`; the public policy rejection below superseded that
+`fix/kms-release-workflow-tag-token-20261018` used an existing broad private
+access-token secret; the public policy rejection below superseded that
 choice. The final proposal scopes a dedicated credential to the annotated-tag
 push, with an early presence/authentication check and classic-PAT workflow
 scope check before image builds. Checkout already disables persisted job-token
@@ -274,7 +274,7 @@ at corrected head `5eeaf8e44510195a704659357e85cac4e40f474d`, with auto-merge en
 checks. Local self-review found and removed a preflight assertion that assumed
 pretty-printed `gh api` JSON; the replacement check uses the API exit status
 and observable classic-PAT scope header. The first PR head then failed the
-public open-source policy because `REPO_ACCESS_TOKEN` is a private marker.
+public open-source policy because the broad private token name is a private marker.
 The revised source requires a dedicated `STACK_RELEASE_TAG_TOKEN` secret with
 Contents and Workflows write access limited to `ElevenID/marty-ui`; it is not
 yet provisioned. All 74 focused tests, Ruff, diff checks, and the pinned
