@@ -3,6 +3,7 @@ use std::{collections::HashMap, fmt, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, SecondsFormat, Utc};
+use marty_key_material_policy::private_jwk_members;
 use marty_oid4vci::{
     formats::{jwt_vc::assemble_jwt_vc, mdoc::assemble_mdoc, sd_jwt::assemble_sd_jwt},
     jose::normalize_ecdsa_signature,
@@ -23,7 +24,6 @@ use crate::credential::{
 };
 
 const VCDM_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
-const PRIVATE_JWK_MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 const VCDM_PROTECTED_TERMS: &[&str] = &[
     "@context",
     "credentialSchema",
@@ -829,11 +829,7 @@ fn public_issuer_jwk(
     let jwk = public_jwk
         .and_then(|value| value.as_object().cloned())
         .ok_or_else(|| signing_error("issuer DID resolution returned no public JWK"))?;
-    let mut private = PRIVATE_JWK_MEMBERS
-        .iter()
-        .filter(|member| jwk.contains_key(**member))
-        .copied()
-        .collect::<Vec<_>>();
+    let mut private = private_jwk_members(&jwk).collect::<Vec<_>>();
     private.sort_unstable();
     if !private.is_empty() {
         return Err(signing_error(format!(

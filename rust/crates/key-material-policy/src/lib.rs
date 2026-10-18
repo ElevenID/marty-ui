@@ -3,6 +3,20 @@
 use marty_response_compat::lossless_json_tree::{JsonNode, JsonTree};
 use serde_json::{Map, Value};
 
+/// Enumerate prohibited members of an object being admitted as a public JWK.
+///
+/// Presence is enough: null or empty private members are rejected too. Unlike
+/// the recursive metadata scanner, this is a strict top-level JWK shape check
+/// and does not require `kty` to be present. Callers retain algorithm, public
+/// coordinate, and metadata validation.
+pub fn private_jwk_members(jwk: &Map<String, Value>) -> impl Iterator<Item = &'static str> + '_ {
+    const MEMBERS: &[&str] = &["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+    MEMBERS
+        .iter()
+        .copied()
+        .filter(|member| jwk.contains_key(*member))
+}
+
 /// Detect private key material in JSON values, including JSON-encoded strings.
 #[must_use]
 pub fn contains_private_key(value: &Value) -> bool {
@@ -154,8 +168,42 @@ pub fn has_private_key_marker(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{contains_private_key, contains_private_key_json};
+    use super::{contains_private_key, contains_private_key_json, private_jwk_members};
     use serde_json::json;
+
+    #[test]
+    fn public_jwk_admission_rejects_private_members_even_when_empty_or_null() {
+        let invalid = json!({
+            "d": null, "p": "", "q": false, "dp": 0,
+            "dq": [], "qi": {}, "oth": null, "k": "symmetric-secret"
+        });
+        let mut rejected = private_jwk_members(invalid.as_object().unwrap()).collect::<Vec<_>>();
+        rejected.sort_unstable();
+        assert_eq!(rejected, ["d", "dp", "dq", "k", "oth", "p", "q", "qi"]);
+
+        // Metadata admission intentionally permits an unused null field, but
+        // public JWK admission must reject the private member's presence.
+        let null_private = json!({"kty": "EC", "d": null});
+        assert!(!contains_private_key(&null_private));
+        assert_eq!(
+            private_jwk_members(null_private.as_object().unwrap()).next(),
+            Some("d")
+        );
+    }
+
+    #[test]
+    fn public_jwk_admission_keeps_public_coordinates_and_remote_key_references() {
+        for public in [
+            json!({"kty":"EC", "crv":"P-256", "x":"public-x", "y":"public-y"}),
+            json!({"kty":"OKP", "crv":"Ed25519", "x":"public-x"}),
+            json!({"kty":"RSA", "n":"public-n", "e":"AQAB", "kid":"did:web:issuer#key"}),
+            json!({"key_reference":"transit/keys/issuer", "x5c":["public-certificate"]}),
+        ] {
+            assert!(private_jwk_members(public.as_object().unwrap())
+                .next()
+                .is_none());
+        }
+    }
 
     #[test]
     fn rejects_nested_or_encoded_private_material() {
