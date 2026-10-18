@@ -474,6 +474,17 @@ do not dispatch the signed Stack release. Preserve this no-write claim and
 recheck main before release; if another PR advances main first, qualify and
 claim the successor source instead of publishing from stale evidence.
 
+Release-input preparation (2026-10-18): the four independent infrastructure
+role digests (edge, tunnel proxy, PostgreSQL, Redis) were recovered from the
+verified v1.1.255 prepared image lock, without changing any application image
+or release coordinate. A clean detached Windows checkout was advanced to the
+exact `b9291b56...` source; its rendered self-host Compose model and that
+four-role JSON passed `scripts/check_selfhost_external_images.py` using the
+same pre-build shape check as `cd.yml`. The private dispatch input remains in
+the OS temp directory outside the repository. This is input validation, not
+signed v1.1.257 artifact or installed acceptance. The dedicated tag-push
+secret is still needed before publication.
+
 ## Objective and working agreement
 
 Complete remote key custody throughout the migrated Rust issuer and verifier
