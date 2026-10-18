@@ -1129,8 +1129,10 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     assert "Require the exact claimed protected-main source" in workflow
     assert "+refs/heads/main:refs/remotes/origin/main" in workflow
     assert "Create or verify the late annotated source tag" in workflow
-    assert 'git tag -a "$TAG" "$SOURCE_SHA"' in workflow
-    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in workflow
+    helper = _text("scripts/push_promoted_release_tag.py")
+    assert 'command("git", "tag", "-a", tag, source' in helper
+    assert 'command("git", "push", "--atomic", "origin", f"{source}:refs/heads/main"' in helper
+    assert 'f"refs/tags/{tag}:refs/tags/{tag}"' in helper
     assert 'test "$(git cat-file -t "refs/tags/$TAG")" = tag' in workflow
     assert (
         'test "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SOURCE_SHA"' in workflow
@@ -1141,16 +1143,9 @@ def test_stack_release_creates_the_annotated_tag_only_after_digest_qualification
     )
 
 
-def test_workflow_changing_source_tag_uses_scoped_publisher_credential() -> None:
+def test_workflow_changing_source_tag_uses_local_promotion_handoff() -> None:
     jobs = yaml.safe_load(_text(".github/workflows/cd.yml"))["jobs"]
-    preflight = next(
-        step for step in jobs["validate-stack"]["steps"]
-        if step.get("name") == "Check publisher tag credential before image builds"
-    )
-    assert preflight["env"]["GH_TOKEN"] == "${{ secrets.STACK_RELEASE_TAG_TOKEN }}"
-    assert preflight["run"].index("git ls-remote --tags origin") < preflight[
-        "run"
-    ].index('test -n "$GH_TOKEN"')
+    assert "STACK_RELEASE_TAG_TOKEN" not in _text(".github/workflows/cd.yml")
 
     publisher = jobs["publish-manifest"]
     checkout = next(
@@ -1162,12 +1157,12 @@ def test_workflow_changing_source_tag_uses_scoped_publisher_credential() -> None
         step for step in publisher["steps"]
         if step.get("name") == "Create or verify the late annotated source tag"
     )
-    assert tag_step["env"]["GH_TOKEN"] == "${{ secrets.STACK_RELEASE_TAG_TOKEN }}"
-    assert tag_step["run"].index('if [ -n "$existing" ]; then') < tag_step[
-        "run"
-    ].index('test -n "$GH_TOKEN"')
-    assert "gh auth setup-git" in tag_step["run"]
-    assert 'git push origin "refs/tags/$TAG:refs/tags/$TAG"' in tag_step["run"]
+    assert "GH_TOKEN" not in tag_step["env"]
+    assert "stack-release-promotion-complete-$GITHUB_RUN_ID" in tag_step["run"]
+    assert "exit 1" in tag_step["run"]
+    helper = _text("scripts/push_promoted_release_tag.py")
+    assert 'required_state="promoted"' in helper
+    assert "gh\", \"auth\", \"setup-git" in helper
 
 
 def test_stack_tag_requires_exact_main_gate_evidence() -> None:

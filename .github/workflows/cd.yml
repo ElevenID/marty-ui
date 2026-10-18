@@ -221,27 +221,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Check publisher tag credential before image builds
-        env:
-          GH_TOKEN: ${{ secrets.STACK_RELEASE_TAG_TOKEN }}
-          TAG: ${{ needs.resolve-transaction.outputs.tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
-          if [ -n "$existing" ]; then
-            exit 0
-          fi
-          test -n "$GH_TOKEN"
-          headers="$(gh api -i "repos/$GITHUB_REPOSITORY" | tr -d '\r')"
-          # Classic PAT scopes are observable here. Fine-grained token
-          # permissions are enforced by GitHub at the eventual tag push.
-          scopes="$(sed -n 's/^[Xx]-[Oo]auth-[Ss]copes: //p' <<<"$headers" | head -n 1)"
-          if [ -n "$scopes" ] && \
-             ! grep -Eq '(^|,)[[:space:]]*workflow([[:space:]]*,|$)' <<<"$scopes"; then
-            echo '::error::publisher token lacks the workflow scope required for tagging workflow-changing source'
-            exit 1
-          fi
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
@@ -2239,9 +2218,6 @@ jobs:
       - name: Create or verify the late annotated source tag
         env:
           CLAIM_RUN_ID: ${{ needs.resolve-transaction.outputs.claim_run_id }}
-          # Tagging a source commit that changed .github/workflows requires
-          # workflow scope, which the job's GITHUB_TOKEN cannot receive.
-          GH_TOKEN: ${{ secrets.STACK_RELEASE_TAG_TOKEN }}
           SOURCE_SHA: ${{ needs.resolve-transaction.outputs.source_sha }}
           TAG: ${{ needs.resolve-transaction.outputs.tag }}
           TRANSACTION_ID: ${{ needs.resolve-transaction.outputs.transaction_id }}
@@ -2251,8 +2227,6 @@ jobs:
           test "$GITHUB_REF" = refs/heads/main
           test "$GITHUB_SHA" = "$SOURCE_SHA"
           python scripts/check_stack_pre_promotion.py --transaction transaction/release-transaction.json
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           existing="$(git ls-remote --tags origin "refs/tags/$TAG" "refs/tags/$TAG^{}")"
           if [ -n "$existing" ]; then
             git fetch --force --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
@@ -2261,17 +2235,10 @@ jobs:
             git for-each-ref --format='%(contents)' "refs/tags/$TAG" > tag-message.txt
             grep -Fx "Release-Transaction: $TRANSACTION_ID" tag-message.txt
             grep -Fx "Claim-Run: $CLAIM_RUN_ID" tag-message.txt
+            grep -Fx "Source-SHA: $SOURCE_SHA" tag-message.txt
           else
-            test -n "$GH_TOKEN"
-            {
-              printf 'Release %s\n\n' "${TAG#v}"
-              printf 'Release-Transaction: %s\n' "$TRANSACTION_ID"
-              printf 'Claim-Run: %s\n' "$CLAIM_RUN_ID"
-              printf 'Source-SHA: %s\n' "$SOURCE_SHA"
-            } > tag-message.txt
-            git tag -a "$TAG" "$SOURCE_SHA" -F tag-message.txt
-            gh auth setup-git
-            git push origin "refs/tags/$TAG:refs/tags/$TAG"
+            echo "::error::Qualified images are promoted and checkpointed. Push the exact annotated tag locally with scripts/push_promoted_release_tag.py using this run ID, then dispatch a resume from stack-release-promotion-complete-$GITHUB_RUN_ID. No Actions secret is required."
+            exit 1
           fi
       - name: Detect only an exact resumable immutable release
         id: existing_release
