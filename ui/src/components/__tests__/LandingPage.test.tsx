@@ -155,7 +155,7 @@ describe('LandingPage', () => {
       { timeout: 10000 },
     );
     expect(screen.getByText('Verify a credential in one request.')).toBeInTheDocument();
-    expect(screen.getByText('POST /v1/credentials/verify')).toBeInTheDocument();
+    expect(screen.getByText('POST /v1/vc-api/credentials/verify')).toBeInTheDocument();
 
     expect(screen.getByTestId('get-started-btn')).toHaveAttribute('href', '/developers');
     expect(screen.getAllByRole('link', { name: 'View Verification API' })[0]).toHaveAttribute('href', '/verifiable-credential-api');
