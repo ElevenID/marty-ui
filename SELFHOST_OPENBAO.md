@@ -8,25 +8,28 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 - `SELFHOST_OPENBAO_EXPORT_DIR` stores zipped export archives created with `scripts/export-selfhost-openbao.py`
 - `SELFHOST_SECRET_DIR/openbao_service_token` is the runtime token the main self-host stack consumes
 
-The OpenBao state directory contains highly sensitive material, including the init JSON, the root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them.
+The OpenBao state directory contains highly sensitive material, including the initial root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them. The root token is still needed by several initial provisioning and snapshot helpers; retirement of that token remains a separate hardening gate.
 
 ## Start The Standalone OpenBao Stack
 
-```bash
-docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d
-```
-
-Or use the GNU make target in [Makefile](Makefile):
+For a fresh state directory, initialize once in this order:
 
 ```bash
-make selfhost-prod-openbao-up
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d openbao
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml run --rm --no-deps openbao-bootstrap
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d --wait openbao-unseal
 ```
 
-This stack does three things:
+The GNU make equivalent is `make selfhost-prod-openbao-bootstrap`. For later
+starts and restarts, use `make selfhost-prod-openbao-up` or ordinary Compose
+`up -d`; neither invokes the one-time bootstrap.
+
+This project has four services:
 
 - `openbao-tls-init` creates or verifies the OpenBao listener certificate and CA entirely in `SELFHOST_OPENBAO_STATE_DIR/tls`
 - `openbao` runs the standalone server on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}`
-- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, publishes only the public TLS CA as `SELFHOST_SECRET_DIR/openbao_tls_ca_cert`, and writes a fresh `openbao_service_token` if the current file is missing, still a placeholder, rejected by OpenBao, or unable to sign the credential issuer key
+- `openbao-bootstrap` is opt-in for initial transit/PKI/KV/policy provisioning and publishes scoped runtime tokens and the public TLS CA
+- `openbao-unseal` reads only the KMS-owned state directory and unseals an initialized node after restart through the authenticated HTTPS API
 
 For the main self-host application stack on the same machine, set `BAO_ADDR=https://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}`. The certificate covers that host name, and application containers use the published public CA. The TLS private keys stay within the KMS state volume.
 
@@ -34,7 +37,7 @@ The initializer renews a listener certificate that has less than 30 days left
 whenever it starts. The certificate and key occupy one owner-only PEM file, so
 replacement is atomic and keeps the same public CA. To rotate the listener
 identity while OpenBao is running, use `make selfhost-prod-openbao-rotate-tls`;
-the target renews the PEM, restarts OpenBao, and reruns bootstrap to unseal it.
+the target renews the PEM, restarts OpenBao, and waits for the unseal service.
 Plan a separate CA and client-trust cutover before the KMS-owned CA expires;
 listener renewal cannot extend the CA lifetime.
 
@@ -44,17 +47,9 @@ The recovery material lives under `SELFHOST_OPENBAO_STATE_DIR`.
 
 - If the host reboots, restart the standalone OpenBao compose project
 - For a cold move to another host, stop the OpenBao server, copy `SELFHOST_OPENBAO_STATE_DIR` to the new host, and start the same compose file there. Do not copy the live Raft data directory as a backup.
-- If `openbao_service_token` is missing on the destination, rerun the bootstrap service:
-
-```bash
-docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml run --rm openbao-bootstrap
-```
-
-Or:
-
-```bash
-make selfhost-prod-openbao-bootstrap
-```
+- Preserve the separately owned scoped token files with the installation's
+  secret generation. A missing runtime token needs explicit scoped recovery;
+  normal restart and TLS rotation do not recreate it with the root token.
 
 ## Export
 

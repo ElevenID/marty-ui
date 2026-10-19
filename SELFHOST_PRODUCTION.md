@@ -116,13 +116,10 @@ make selfhost-prod-logs
 make selfhost-prod-down
 ```
 
-The recommended same-machine bootstrap path is:
-
-```bash
-make selfhost-prod-license-issue
-make selfhost-prod-bootstrap
-make selfhost-prod-check
-```
+For a fresh image-locked installation, follow the ordered OpenBao, database
+migration, and one-time `kms-initialize` steps in [SELFHOST_BUNDLE.md](SELFHOST_BUNDLE.md).
+The ordinary `make selfhost-prod-up` target is for a previously initialized
+installation; it does not provision KMS/DID keys.
 
 ## Required secret files
 

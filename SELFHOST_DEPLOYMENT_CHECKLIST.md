@@ -40,12 +40,11 @@ Use this checklist for the workstation-local production self-host setup and for 
 
 ## Build And Launch
 
-- [ ] `docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml config` passes
-- [ ] `docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d` completes if using the local standalone OpenBao deployment
-- [ ] `npm run build:selfhost` passes in `ui/`
-- [ ] `docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml config` passes
-- [ ] `docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml up -d --build` completes
-- [ ] `docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.prod.yml ps` shows healthy core services
+- [ ] The exact release's image-locked bundle and OpenBao image digest are verified as described in [SELFHOST_BUNDLE.md](SELFHOST_BUNDLE.md)
+- [ ] For a fresh standalone OpenBao state, start the server, run the opt-in `openbao-bootstrap` once, and then start `openbao-unseal`
+- [ ] The image-locked application Compose model has no source builds or private-key mounts
+- [ ] The ordinary `db-migrate` role exits zero before the explicit one-time `kms-initialize` role exits zero
+- [ ] Ordinary `up -d` starts healthy application services without rerunning either privileged initializer
 
 ## Recovery And Transfer
 
