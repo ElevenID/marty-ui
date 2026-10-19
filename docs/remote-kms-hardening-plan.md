@@ -30,8 +30,13 @@ passed and published the signed release. An exact-source
 finished with a publication byte-comparison failure while its bundle preflight
 passed. The released producer binding therefore still rejects it; use it only
 for an explicitly unqualified local diagnostic and repair the binding design
-before final acceptance. Run a fresh disposable Raft-backed install plus coordinated cold restore and
-business/custody journey on this 16 GiB Docker host. Keep production online
+before final acceptance. A fresh disposable Raft-backed 16 GiB local install
+has now passed service readiness, the public issue/present/verify/revoke journey,
+Keycloak issuance/refresh, signed OpenBao custody evidence and both database
+custody scans, with owned teardown and the production website still online.
+This is exploratory, not final release qualification: the producer failed,
+the 32 GiB runbook target was not met, container OOM/peak measurements remain
+incomplete, and coordinated cold restore has not run. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
 migration. Real AWS/Azure/GCP credentials and a physical wallet remain
 unprovisioned; obtain access and complete those acceptance checks before
@@ -222,10 +227,44 @@ The synthetic 31-service Compose model is rendered for project
 `marty-selfhost-qual-75b2a9c0e340f812`; the matching source and integration
 checkouts remain clean. The existing production website returned HTTP 200
 before and after OpenBao startup and Rust build. One-hour custody signer and
-audit tokens have deliberately **not** been minted yet; the installed journey,
-database scans and restore remain unrun, and the failed producer still blocks
-final bundle acceptance. Keep this trial isolated and do not promote its
-diagnostic result to qualified release evidence.
+audit tokens were subsequently minted for the local trial. The first installed
+run failed startup because the synthetic environment retained the example
+`prod.example.com` OIDC issuer while Keycloak advertised `localhost`; its
+redacted diagnostic records the failure and successful owned Compose cleanup.
+The first OpenBao project was torn down and its failed-run private evidence
+was preserved; it was not reused. The failed producer still blocks final
+bundle acceptance.
+
+Fresh corrected local installed diagnostic (2026-10-18): A new private root
+and Raft state started OpenBao project `marty-preview-0f7bfe156b95c32e` on
+loopback port `18258`. Seven scoped Keycloak inputs, 33 keyless workload TLS
+inputs, six proven-disabled empty secrets, and one-hour scoped custody/audit
+tokens were staged again. The rendered Auth issuer now equals Keycloak's
+`https://localhost/realms/11id`. Exact `v1.1.257` source
+`58e92ace7bd159cc71a4e0eed159cee80887751b`, integration revision
+`5b3ec6a802a5e13201be8883741889405a86d146`, and the same immutable
+failed-producer digest bundle were used; no source overlay or private key file
+was used. The exact runner passed all phases: image pull, 28-service startup
+and readiness, fixture setup, OpenBao Transit custody signature verification,
+public issue/present/verify/revoke, Keycloak issuance/refresh, Keycloak and
+Marty database custody scans, and owned teardown. The signed custody evidence
+SHA-256 is `2bbc249b583ad82b17fdd2c289b72974ac2c2c08eea9e636aaf95cb440c52a47`;
+the OpenBao public-key SHA-256 is
+`3dac8bf8395ceff68e62f0771eceae21ed2788d65e19c885b7e21ecbf9986f15`.
+The redacted diagnostic and journey reports are in Docker volume
+`kms-v11257-diagnostic-20261018` at
+`operator-private/diagnostic-2/installed-diagnostic-3.json` and
+`installed-journey.json`. Total runner time was 166 seconds; Docker VM exposed
+16,265,662,464 bytes RAM, observed peak host use was 8,607,387,648 bytes,
+and observed swap use peaked at 1,722,585,088 bytes. The diagnostic could not
+measure container peak memory or OOM state, so it cannot establish a supported
+16 GiB operating minimum. All owned application containers were removed, and
+the production website still returned HTTP 200. This result remains
+**unqualified** because the producer run failed and the smaller-memory
+envelope has not been accepted. The separate OpenBao diagnostic project was
+then torn down without deleting its private evidence. Next repair the producer
+binding in one cohesive source PR, then prepare a bundle from a terminally
+successful run and repeat installed acceptance plus coordinated cold restore.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
