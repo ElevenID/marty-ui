@@ -1,0 +1,97 @@
+"""Activation changes only an owned KMS-only project and restores it on failure."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import sys
+
+import pytest
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+import activate_selfhost_renewed_secrets as activation  # noqa: E402
+
+
+def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
+    states = [
+        {"Service": "keycloak", "State": "running", "Health": "healthy"},
+        {"Service": "db-migrate", "State": "exited", "ExitCode": 0},
+    ]
+    assert activation.healthy(states, {"keycloak", "db-migrate"})
+    assert not activation.healthy(states, {"keycloak"})
+    states[1]["ExitCode"] = 1
+    assert not activation.healthy(states, {"keycloak", "db-migrate"})
+    states[1]["ExitCode"] = 0
+    states[0] = {"Service": "keycloak", "State": "exited", "ExitCode": 0}
+    assert not activation.healthy(states, {"keycloak", "db-migrate"})
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
+def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
+    old, new = tmp_path / "old", tmp_path / "new"
+    for root in (old, new):
+        root.mkdir()
+    old_env, new_env = tmp_path / "old.env", tmp_path / "new.env"
+    old_env.write_text(f"SELFHOST_SECRET_DIR={old}\nKEY_NAME=version-one\n")
+    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-one\n")
+    old_env.chmod(0o600)
+    new_env.chmod(0o600)
+    assert activation.checked_env(old_env, old) == activation.checked_env(new_env, new)
+    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-two\n")
+    assert activation.checked_env(old_env, old) != activation.checked_env(new_env, new)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
+def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:
+    project = "marty-selfhost-qual-0badcafedeadbeef"
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text("services: {}\n")
+    ca = tmp_path / "ca.crt"
+    ca.write_text("public CA")
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir(mode=0o700)
+    args = argparse.Namespace(
+        project_name=project, compose_file=compose,
+        current_env=tmp_path / "old.env", renewed_env=tmp_path / "new.env",
+        current_secrets=old, renewed_secrets=new, bao_addr="https://127.0.0.1:8200",
+        bao_ca=ca, bao_token_file=tmp_path / "operator.token",
+        minimum_token_ttl=3600, log_dir=log_dir, report=log_dir / "result.json",
+    )
+    monkeypatch.setattr(activation, "verify_generations", lambda *_: (81, 39))
+    monkeypatch.setattr(activation, "checked_env", lambda *_: ["KEY_NAME=version-one"])
+    monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
+    monkeypatch.setattr(activation, "Bao", lambda *_: object())
+    monkeypatch.setattr(activation, "checked_tokens", lambda *_: None)
+    old_model = {"services": {name: {} for name in
+                            ("keycloak", "gateway", "signing-keys", "postgres")},
+                 "secrets": {"sample": {"file": str(old / "sample")}}}
+    new_model = json.loads(json.dumps(old_model))
+    new_model["secrets"]["sample"]["file"] = str(new / "sample")
+    monkeypatch.setattr(activation, "run_json", lambda cmd, **_: (
+        new_model if str(args.renewed_env) in cmd else old_model))
+    states = [{"Service": name, "State": "running", "Health": "healthy"}
+              for name in old_model["services"]]
+    monkeypatch.setattr(activation, "statuses", lambda *_cmd, **_kw: states)
+    monkeypatch.setattr(activation, "secret_mounts", lambda *_: 184)
+    calls = []
+
+    def recreate(command, services, **_):
+        calls.append(command)
+        if str(args.renewed_env) in command:
+            raise RuntimeError("controlled new-generation failure")
+        return states
+
+    monkeypatch.setattr(activation, "recreate", recreate)
+    with pytest.raises(RuntimeError, match="prior KMS-only generation restored"):
+        activation.activate(args)
+    assert len(calls) == 2
+    assert str(args.renewed_env) in calls[0]
+    assert str(args.current_env) in calls[1]
+    assert json.loads(args.report.read_text())["result"] == "rolled_back"

@@ -16,14 +16,18 @@ import sys
 
 # Keep a receipt-verified extracted bundle immutable while importing siblings.
 sys.dont_write_bytecode = True
-from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES
-from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
-from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS
+from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES  # noqa: E402
+from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata  # noqa: E402
+from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa: E402
 
 
 MAX_SECRET_BYTES = 64 * 1024
 RENEWED_FILES = SELFHOST_TLS_FILES | KEYCLOAK_OUTPUTS
 CA_FILE = "workload_identity_ca_cert"
+RENEWED_CERT_FILES = SELFHOST_CERT_FILES | {
+    "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
+}
+RENEWED_TOKEN_FILES = RENEWED_FILES - RENEWED_CERT_FILES
 
 
 def private_empty_or_source(path: Path, *, empty: bool) -> Path:
@@ -62,6 +66,33 @@ def entries(root: Path) -> dict[str, Path]:
            for name, path in found.items()):
         raise ValueError("secret generation contains a non-regular entry")
     return found
+
+
+def verify_generations(current: Path, candidate: Path) -> tuple[int, int]:
+    """Require a complete KMS-only successor with identical static inputs."""
+    current = private_empty_or_source(current, empty=False)
+    candidate = private_empty_or_source(candidate, empty=False)
+    if current == candidate:
+        raise ValueError("secret generations must be distinct")
+    old, new = entries(current), entries(candidate)
+    if old.keys() != new.keys() or not RENEWED_FILES <= old.keys():
+        raise ValueError("secret generation file inventory changed")
+    changed = 0
+    token_values = []
+    for name in sorted(old):
+        before = bounded_file(old[name], allow_empty=name not in RENEWED_FILES)
+        after = bounded_file(new[name], allow_empty=name not in RENEWED_FILES)
+        if stat.S_IMODE(old[name].stat().st_mode) != stat.S_IMODE(new[name].stat().st_mode):
+            raise ValueError("secret generation file mode changed")
+        should_change = name in RENEWED_FILES and name != CA_FILE
+        if (before != after) != should_change:
+            raise ValueError("secret generation changed the wrong input")
+        changed += should_change
+        if name in RENEWED_TOKEN_FILES:
+            token_values.append(after)
+    if len(set(token_values)) != len(token_values):
+        raise ValueError("renewed scopes share a token")
+    return len(old), changed
 
 
 def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
@@ -119,6 +150,7 @@ def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
                 stream.flush()
                 os.fchmod(stream.fileno(), old_mode)
                 os.fsync(stream.fileno())
+        verify_generations(current, output)
     except Exception:
         for path in reversed(created):
             path.unlink(missing_ok=True)

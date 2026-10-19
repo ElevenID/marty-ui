@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from passport_remote_tls import SELFHOST_TLS_FILES  # noqa: E402
 from provision_selfhost_disposable_tls import KEY_METADATA_FILE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa: E402
-from stage_selfhost_renewed_secrets import stage  # noqa: E402
+from stage_selfhost_renewed_secrets import stage, verify_generations  # noqa: E402
 
 
 def test_assembly_ships_with_its_shared_producers() -> None:
@@ -23,6 +23,7 @@ def test_assembly_ships_with_its_shared_producers() -> None:
                  ["assets"])
     assert {
         "scripts/stage_selfhost_renewed_secrets.py",
+        "scripts/activate_selfhost_renewed_secrets.py",
         "scripts/passport_remote_tls.py",
         "scripts/provision_selfhost_disposable_tls.py",
         "scripts/provision_selfhost_keycloak_kms.py",
@@ -58,6 +59,7 @@ def test_stage_preserves_static_inputs_and_overlays_all_renewed_files(generation
     current, tls, keycloak, output = generation
     expected = len(SELFHOST_TLS_FILES | KEYCLOAK_OUTPUTS) + 1
     assert stage(current, tls, keycloak, output) == expected
+    assert verify_generations(current, output) == (expected, len(SELFHOST_TLS_FILES | KEYCLOAK_OUTPUTS) - 1)
     assert len(list(output.iterdir())) == expected
     assert output.joinpath("optional_empty_secret").read_bytes() == b""
     assert output.joinpath("workload_identity_ca_cert").read_bytes() == (
@@ -91,3 +93,17 @@ def test_stage_rejects_symlink_and_reused_token(generation) -> None:
     with pytest.raises(ValueError, match="did not change"):
         stage(current, tls, keycloak, output)
     assert list(output.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX secret generation contract")
+def test_activation_pair_rejects_static_value_and_mode_changes(generation) -> None:
+    current, tls, keycloak, output = generation
+    stage(current, tls, keycloak, output)
+    static = output / "optional_empty_secret"
+    static.write_text("unexpected", encoding="ascii")
+    with pytest.raises(ValueError, match="wrong input"):
+        verify_generations(current, output)
+    static.write_bytes(b"")
+    static.chmod(0o600)
+    with pytest.raises(ValueError, match="file mode"):
+        verify_generations(current, output)

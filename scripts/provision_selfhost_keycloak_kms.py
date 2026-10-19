@@ -95,6 +95,28 @@ def renewed_token(bao: Bao, policy: str, prefix: str) -> str:
     return token
 
 
+def signing_policy() -> str:
+    return "".join(
+        f'path "transit/keys/keycloak-{realm}-rs256" {{ capabilities = ["read"] }}\n'
+        f'path "transit/sign/keycloak-{realm}-rs256" {{ capabilities = ["update"] }}\n'
+        f'path "transit/keys/keycloak-{realm}-hs512" {{ capabilities = ["read"] }}\n'
+        f'path "transit/hmac/keycloak-{realm}-hs512/sha2-512" {{ capabilities = ["update"] }}\n'
+        f'path "transit/verify/keycloak-{realm}-hs512/sha2-512" {{ capabilities = ["update"] }}\n'
+        for realm in REALMS
+    )
+
+
+def jwe_policy(realm: str, purpose: str, version: str) -> str:
+    if realm not in REALMS or purpose not in PURPOSES or not VERSION.fullmatch(version):
+        raise ValueError("Keycloak JWE policy reference is invalid")
+    key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
+    return (f'path "{key_path}" {{ capabilities = ["read"] }}\n'
+            f'path "didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}" '
+            '{ capabilities = ["update"] }\n'
+            f'path "didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}" '
+            '{ capabilities = ["update"] }\n')
+
+
 def require_cert_lifetime(certificate: str) -> None:
     lifetime = subprocess.run(
         ["openssl", "x509", "-checkend", str(MIN_VALIDITY_SECONDS), "-noout"],
@@ -138,7 +160,6 @@ def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
             "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
         })
     outputs: dict[str, str] = {}
-    rsa_policy = ""
     for realm in REALMS:
         rsa_key = f"keycloak-{realm}-rs256"
         hmac_key = f"keycloak-{realm}-hs512"
@@ -177,16 +198,9 @@ def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
                 or public_key_der(extracted.stdout.decode("ascii")) != public_key_der(public_key)):
             raise RuntimeError("disposable Keycloak RS256 certificate key differs")
         outputs[f"keycloak_{realm}_rs256_cert"] = certificate
-        rsa_policy += (
-            f'path "transit/keys/{rsa_key}" {{ capabilities = ["read"] }}\n'
-            f'path "transit/sign/{rsa_key}" {{ capabilities = ["update"] }}\n'
-            f'path "transit/keys/{hmac_key}" {{ capabilities = ["read"] }}\n'
-            f'path "transit/hmac/{hmac_key}/sha2-512" {{ capabilities = ["update"] }}\n'
-            f'path "transit/verify/{hmac_key}/sha2-512" {{ capabilities = ["update"] }}\n'
-        )
     nonce = secrets.token_hex(6)
-    signing_token = (renewed_token(bao, rsa_policy, "selfhost-keycloak-sign-") if renew
-                     else scoped_token(bao, rsa_policy, f"selfhost-keycloak-sign-{nonce}"))
+    signing_token = (renewed_token(bao, signing_policy(), "selfhost-keycloak-sign-") if renew
+                     else scoped_token(bao, signing_policy(), f"selfhost-keycloak-sign-{nonce}"))
     for realm in REALMS:
         signed = bao.request("POST", f"transit/sign/keycloak-{realm}-rs256", {
             "input": base64.b64encode(b"selfhost-keycloak-probe").decode("ascii"),
@@ -208,11 +222,7 @@ def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
             version = current["version"]
             if not isinstance(version, str) or not VERSION.fullmatch(version):
                 raise RuntimeError("disposable Keycloak JWE version is invalid")
-            encode = f"didcomm/keycloak/jwe/encode/{realm}/{purpose}/{version}"
-            decode = f"didcomm/keycloak/jwe/decode/{realm}/{purpose}/{version}"
-            policy = (f'path "{key_path}" {{ capabilities = ["read"] }}\n'
-                      f'path "{encode}" {{ capabilities = ["update"] }}\n'
-                      f'path "{decode}" {{ capabilities = ["update"] }}\n')
+            policy = jwe_policy(realm, purpose, version)
             prefix = f"selfhost-keycloak-{realm}-{purpose}-"
             token = (renewed_token(bao, policy, prefix) if renew
                      else scoped_token(bao, policy, f"{prefix}{nonce}"))
