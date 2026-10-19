@@ -80,6 +80,30 @@ installed bundle or released-image acceptance. The unseal key remains in the
 OpenBao state directory under mode 0400; root-token retirement and stronger
 operational seal-key custody remain separate gates.
 
+One-time bootstrap and root-token audit (2026-10-19 UTC): local feature commits
+`702986d62` and `cd3b3330f` removed the operator TLS-rotation path's
+privileged rebootstrap, updated the fresh-install/restart instructions, retired
+the misleading source-tree `selfhost-prod-bootstrap` shortcut, and made the
+OpenBao bootstrap script reject an initialized Raft node before reading its
+saved root token. The current local plugin image passed the full disposable
+HTTPS/Raft probe: initial setup succeeded; a second bootstrap was refused;
+cold-copy and snapshot recovery still worked. `make -n` confirmed TLS rotation
+uses `openbao-unseal`, not bootstrap. This is local feature-branch evidence;
+the installed image and bundle have not been republished or qualified.
+
+Root-token retirement still requires a broader, explicit cut: the current
+Raft snapshot exporter archives `selfhost-init.json` and `root.token`, and
+disposable Keycloak/TLS, audit and custody-signer provisioning plus recovery
+probes still read the saved root token. A safe next design is a dedicated
+snapshot-read AppRole, separate from the credential-renewal AppRole because
+snapshot access can copy the entire KMS state.
+[OpenBao's snapshot policy example](https://openbao.org/docs/platform/k8s/helm/examples/snapshot-cronjob/)
+grants only `read` on `sys/storage/raft/snapshot`. Convert first-install helpers
+to short-lived scoped operator authority, make snapshot archives exclude the
+initial root token and init JSON, then verify fresh restore and revoke/delete
+the initial root token only after active and rollback generations pass. The
+unseal key and backup custody need their own protected recovery procedure.
+
 Continuous credential staging update (2026-10-19 UTC): local-only feature
 branch `feat/kms-continuous-credentials-20261019` now includes Rust workload
 TLS renewal commits `e1471d251` and `551389321`, plus Keycloak renewal commit
