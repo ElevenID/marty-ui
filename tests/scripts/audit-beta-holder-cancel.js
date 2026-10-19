@@ -75,6 +75,18 @@ function observeNativeCredentialApi() {
     });
   }});
 }
+function classifyStatus(text) {
+  if(text.includes('Preparing the wallet chooser'))return 'PREPARING_REQUEST';
+  if(text.includes('Opening your wallet chooser'))return 'OPENING_CHOOSER';
+  if(text.includes('Wallet request was canceled.'))return 'CANCELED';
+  if(text.includes('Wallet response received.'))return 'FINALIZING';
+  if(text.includes('Login session expired.'))return 'EXPIRED';
+  if(text.includes('Verified!'))return 'VERIFIED';
+  return text.trim()?'OTHER_NONEMPTY':'EMPTY';
+}
+function safeErrorName(name) {
+  return ['Error','TypeError','ReferenceError','SyntaxError','RangeError','AssertionError','TimeoutError','NotAllowedError','AbortError','SecurityError','NotSupportedError','InvalidStateError','NetworkError'].includes(name)?name:'OTHER_ERROR';
+}
 function cancellationAssertions(facts) {
   return {
     native_chooser_cancel: facts.nativeCancel?.state==='NATIVE_CANCEL_INVOKED' && facts.nativeCall?.errorName==='NotAllowedError' && facts.nativeCall?.returnedCredential!==true,
@@ -131,23 +143,39 @@ async function main(env=process.env) {
     authContext=browser.contexts()[0];await authContext.addInitScript(observeNativeCredentialApi);
     // Block external QR forwarding; this is not an auth response substitution.
     await authContext.route('https://api.qrserver.com/**',route=>route.abort());
-    authPage=await authContext.newPage();
+    authPage=await authContext.newPage();report.pageErrorNames=[];
+    authPage.on('pageerror',error=>report.pageErrorNames.push(safeErrorName(error.name)));
     authPage.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).origin===BASE&&/\/submit(?:\/|$)/.test(new URL(r.url()).pathname))submissionRequests++;});
     adminContext=await browser.newContext();operator=await adminContext.newPage();await login(operator,env.TEST_ADMIN_EMAIL,env.TEST_ADMIN_PASSWORD);
     initial=await protectedState();report.protectedBefore=initial;
     const me=async()=>{const response=await authContext.request.get(`${BASE}/v1/auth/me`);assert.ok(response.ok());return response.json();};
     assert.equal((await me()).authenticated,false);
     report.stage='request_actual_native_chooser';
+    report.substage='navigate_auth_page';
+    let prefetchResponse;
+    authPage.on('response',response=>{
+      const url=new URL(response.url());
+      if(url.origin===BASE&&/^\/v1\/flows\/instances\/[a-f0-9-]+\/request$/.test(url.pathname)&&url.searchParams.get('transport')==='dc_api')prefetchResponse=response;
+    });
     await authPage.goto(`${BASE}/v1/auth/credential-login`);
     const details=await authPage.evaluate(()=>({nonce:document.body.dataset.nonce,submit:document.body.dataset.dcApiSubmitUrl,
       protocol:document.body.dataset.dcApiProtocol,supported:typeof DigitalCredential!=='undefined'&&DigitalCredential.userAgentAllowsProtocol(document.body.dataset.dcApiProtocol)}));
     assert.equal(details.supported,true,'Real browser protocol capability is unavailable');
     const flowMatch=details.submit.match(/^\/v1\/flows\/instances\/([a-f0-9-]+)\/submit\/dc-api$/);assert.ok(flowMatch);assert.match(flowMatch[1],UUID);
     report.cancelFlowId=flowMatch[1];report.protocol=details.protocol;
+    report.substage='await_actual_signed_request_response';
+    await until(()=>prefetchResponse);
+    report.prefetch={httpStatus:prefetchResponse.status()};
+    assert.ok(prefetchResponse.ok(),'Actual signed request fetch failed');
+    assert.equal(await prefetchResponse.finished(),null,'Actual signed request transfer failed');
+    // Run a subsequent browser task after the real response has finished, so
+    // the product's response.text() and promise continuations can settle.
+    await authPage.evaluate(()=>new Promise(resolve=>setTimeout(resolve,0)));
+    report.prefetch.transferFinished=true;
+    report.substage='click_actual_open_wallet';
     await authPage.locator('[data-action="show-mobile"]').click();
     await authPage.locator('#wallet-link').click();
-    // Prefetch may still be pending; the product explicitly asks for another click.
-    if(await authPage.locator('#status').innerText().then(text=>text.includes('Preparing the wallet chooser'))){await delay(700);await authPage.locator('#wallet-link').click();}
+    report.substage='await_native_credential_invocation';
     await until(async()=>authPage.evaluate(()=>window.__d05NativeObservation?.calls.length===1));
     const nativeBefore=await authPage.evaluate(()=>window.__d05NativeObservation);report.nativeBeforeCancel=nativeBefore;
     assert.equal(nativeBefore.nativeImplementation,true);assert.equal(nativeBefore.calls[0].settled,false,'Browser rejected before a real holder cancellation');
@@ -182,7 +210,18 @@ async function main(env=process.env) {
     const presented=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/present`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^present$/i}).click();assert.ok((await presented).ok());
     await until(async()=>Boolean((await me()).authenticated),60000);report.facts.recovered=true;
     report.state='FUNCTIONAL_PASS';
-  } catch(error) {report.state='FAILED';report.failure={type:error.name,stage:report.stage};}
+  } catch(error) {
+    report.state='FAILED';report.failure={type:safeErrorName(error.name),stage:report.stage,substage:report.substage};
+    if(authPage)try{
+      report.failureObservation=await authPage.evaluate(()=>{
+        const observation=window.__d05NativeObservation;
+        return {nativeImplementation:observation?.nativeImplementation===true,callCount:observation?.calls?.length??null,
+          calls:(observation?.calls||[]).map(call=>({settled:call.settled,errorName:call.errorName,returnedCredential:call.returnedCredential}))};
+      });
+      report.failureObservation.calls=report.failureObservation.calls.map(call=>({...call,errorName:call.errorName?safeErrorName(call.errorName):undefined}));
+      report.failureObservation.statusClass=classifyStatus(await authPage.locator('#status').innerText({timeout:2000}));
+    }catch{report.failureObservationUnavailable=true;}
+  }
   finally {
     try {
       if(transaction&&operator) {
@@ -213,4 +252,4 @@ async function main(env=process.env) {
   assert.equal(report.holderCancelNoSession,true,'Actual browser cancellation/recovery evidence incomplete');
 }
 if(require.main===module)main().catch(error=>{console.error(`D05 cancellation failed: ${error.name}`);process.exitCode=1;});
-module.exports={fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
+module.exports={classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};

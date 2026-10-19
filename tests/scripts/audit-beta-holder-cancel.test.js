@@ -77,3 +77,33 @@ test('owned teardown invokes guarded fallback and fails closed if process surviv
   const child={exitCode:null,signalCode:null};
   await closeOwnedBrowser({child,forceStop:async()=>{child.exitCode=1;},wait:async()=>{}});
 });
+
+test('actual auth controller waits for signed request then real click invokes credentials and displays native cancellation',async()=>{
+  const fs=require('node:fs');
+  const asset=fs.readFileSync(path.resolve(__dirname,'../../services/auth/assets/credential-login.js'),'utf8');
+  let resolveFetch,rejectCredential;const calls=[];const handlers={};
+  const attributes={};
+  const walletLink={style:{},setAttribute:(k,v)=>attributes[k]=v,removeAttribute:k=>delete attributes[k],getAttribute:k=>attributes[k],addEventListener:(event,fn)=>handlers[event]=fn};
+  const status={innerHTML:''};
+  const bodyAttrs={'data-nonce':'unit-only','data-dc-api-request-url':'/unit-request','data-dc-api-submit-url':'/unit-submit','data-dc-api-protocol':'openid4vp-v1-signed'};
+  const sandbox={document:{body:{getAttribute:k=>bodyAttrs[k]},getElementById:id=>({'wallet-link':walletLink,status}[id]||null),querySelector:()=>null},
+    window:{isSecureContext:true,location:{origin:'https://unit.invalid'}},navigator:{userAgent:'Desktop',credentials:{get:options=>{calls.push(options);return new Promise((_,reject)=>rejectCredential=reject);}}},
+    DigitalCredential:{userAgentAllowsProtocol:()=>true},fetch:()=>new Promise(resolve=>resolveFetch=resolve),setInterval:()=>1,clearInterval:()=>{},console};
+  vm.runInNewContext(asset,sandbox);
+  const click=()=>handlers.click({preventDefault(){}});
+  click();click();assert.equal(calls.length,0);assert.match(status.innerHTML,/Preparing the wallet chooser/);
+  // Complete the real controller's prefetch promise; no fake readiness variable.
+  resolveFetch(new Response('synthetic-unit-request',{status:200}));
+  await new Promise(resolve=>setImmediate(resolve));
+  click();assert.equal(calls.length,1);assert.equal(calls[0].digital.requests[0].data.request,'synthetic-unit-request');
+  assert.equal(attributes['data-busy'],'true');
+  rejectCredential(Object.assign(new Error('unit native boundary simulation'),{name:'NotAllowedError'}));
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(status.innerHTML,/Wallet request was canceled/);assert.equal(attributes['data-busy'],undefined);
+});
+test('failure observations never preserve unknown status or arbitrary error strings',()=>{
+  const {classifyStatus,safeErrorName}=require('./audit-beta-holder-cancel');
+  assert.equal(classifyStatus('secret arbitrary URL and nonce'),'OTHER_NONEMPTY');
+  assert.equal(safeErrorName('secret arbitrary string'),'OTHER_ERROR');
+  assert.equal(classifyStatus('Preparing the wallet chooser. Tap Open wallet again in a moment.'),'PREPARING_REQUEST');
+});
