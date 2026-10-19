@@ -446,7 +446,7 @@ def run():
     data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "f29fb430a8444fdb4f49532c0afa5a029001352f969cd5a70d85d62a50d97234"
+        == "ad2a7766bd60375261809a0fa11cdd0f22ff3cf55afaad06c2b614e8bb741677"
     )
     before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])

@@ -9,8 +9,10 @@ credentials, a real CSCA/DSC, or a customer organization.
 
 The Stack publisher needs no tag secret. The first release run qualifies and
 promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
-then stops at the late tag gate. From a clean checkout of the **same current
-main commit**, an operator with local `gh` authentication including workflow
+then stops at the late tag gate. Use `prepare_selfhost_lock=false` on this
+intentionally failing first run to avoid preparing a bundle whose producer
+cannot pass the terminal-success binding. From a clean checkout of the
+**same current main commit**, an operator with local `gh` authentication including workflow
 permission runs:
 
 ```bash
@@ -21,9 +23,13 @@ python3 scripts/push_promoted_release_tag.py \
 
 The helper validates the promoted transaction, current main, and all five
 registry digests before pushing the exact annotated tag. Resume Stack release
-from the same source with `claim_run_id`, `resume_run_id=<first run ID>`, and
-`resume_artifact=stack-release-promotion-complete-<first run ID>`. The resumed
-run verifies the tag and publishes the release. Never put a cross-repository
+from the same source with `claim_run_id`, `resume_run_id=<first run ID>`,
+`resume_artifact=stack-release-promotion-complete-<first run ID>`,
+`prepare_selfhost_lock=true`, and the **same four immutable external-image
+digests**. The resumed run verifies the tag, publishes the release, and, when
+all its jobs succeed, owns the prepared self-host bundle as a terminally
+successful producer. Reusing the first failed promotion run as a producer is
+not valid. Never put a cross-repository
 access token into an Actions secret for this handoff.
 
 Use a host with at least 32 GiB RAM and 20 GiB free disk for all locked images and

@@ -2176,7 +2176,12 @@ jobs:
               ]
             }]
           ' "$LOCK_FILE" > release/complete-stack-lock.json
-          python scripts/build_stack_manifest.py --lock release/complete-stack-lock.json --output stack-manifest.json
+          # A resume must reproduce the public manifest byte-for-byte. Anchor
+          # its timestamp to the immutable source commit, not runner wall time.
+          manifest_timestamp="$(git show -s --format=%cI "$SOURCE_SHA")"
+          python scripts/build_stack_manifest.py \
+            --lock release/complete-stack-lock.json \
+            --generated-at "$manifest_timestamp" --output stack-manifest.json
           cp transaction/release-transaction.json release-transaction.json
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6
       - name: Sign and checksum manifest evidence
@@ -2267,8 +2272,14 @@ jobs:
               mkdir existing-release
               gh release download "$TAG" --dir existing-release
               operator_release_verify_published_assets existing-release "$SOURCE_SHA" "$GITHUB_REPOSITORY"
-              cmp --silent stack-manifest.json existing-release/stack-manifest.json
-              cmp --silent release-transaction.json existing-release/release-transaction.json
+              if ! cmp --silent stack-manifest.json existing-release/stack-manifest.json; then
+                echo '::error::Existing release manifest differs from this exact-source resume'
+                exit 1
+              fi
+              if ! cmp --silent release-transaction.json existing-release/release-transaction.json; then
+                echo '::error::Existing release transaction differs from this exact-source resume'
+                exit 1
+              fi
               {
                 echo "exists=true"
                 echo "release_id=$(jq -er .id release-response.json)"

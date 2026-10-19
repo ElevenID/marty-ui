@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -45,8 +47,27 @@ def stack_lock():
 def test_builds_public_v1_manifest(stack_lock):
     manifest = MODULE.build_manifest(stack_lock, generated_at="2026-07-16T00:00:00+00:00")
     assert manifest["schema"] == "marty.stack/v1"
+    assert manifest["generated_at"] == "2026-07-16T00:00:00+00:00"
     assert manifest["components"][0]["commit"] == "a" * 40
     assert "release_state" not in manifest
+
+
+def test_rejects_unanchored_release_timestamp(stack_lock):
+    with pytest.raises(ValueError, match="timezone"):
+        MODULE.build_manifest(stack_lock, generated_at="2026-07-16T00:00:00")
+
+
+def test_resume_reproduces_manifest_bytes(stack_lock, tmp_path):
+    lock = tmp_path / "lock.json"
+    lock.write_text(json.dumps(stack_lock), encoding="utf-8")
+    outputs = [tmp_path / "first.json", tmp_path / "resume.json"]
+    for output in outputs:
+        subprocess.run(
+            [sys.executable, str(SCRIPT), "--lock", str(lock), "--output", str(output),
+             "--generated-at", "2026-07-16T00:00:00+00:00"],
+            check=True, capture_output=True, text=True,
+        )
+    assert outputs[0].read_bytes() == outputs[1].read_bytes()
 
 
 @pytest.mark.parametrize("field,value", [("commit", "main"), ("version", ""), ("repository", "marty-core")])

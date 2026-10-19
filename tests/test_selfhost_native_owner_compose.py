@@ -33,6 +33,27 @@ def test_auth_login_uses_bootstrapped_organization_issuer_did():
     assert services["flow"]["environment"]["OID4VP_ISSUER_DID"] == expected
 
 
+def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
+    # Flow's physical-document health check contacts Issuance at startup.
+    # A restored Compose up can otherwise leave Issuance Created while Flow
+    # restarts, blocking Auth, Gateway and Edge behind Flow health.
+    model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
+    services = model["services"]
+    flow_dependencies = services["flow"]["depends_on"]
+    for peer in ("issuance", "issuance-native"):
+        assert flow_dependencies[peer] == {"condition": "service_healthy"}
+    for peer in ("issuance", "issuance-native"):
+        pending = [peer]
+        visited = set()
+        while pending:
+            service = pending.pop()
+            if service in visited:
+                continue
+            visited.add(service)
+            pending.extend(services[service].get("depends_on", {}))
+        assert "flow" not in visited
+
+
 def test_keycloak_preserves_scoped_openbao_token_file(tmp_path):
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     env = model["services"]["keycloak"]["environment"]
@@ -96,7 +117,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "f29fb430a8444fdb4f49532c0afa5a029001352f969cd5a70d85d62a50d97234"
+        == "ad2a7766bd60375261809a0fa11cdd0f22ff3cf55afaad06c2b614e8bb741677"
     )
     import json
 
