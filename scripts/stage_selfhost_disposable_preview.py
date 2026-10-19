@@ -14,13 +14,21 @@ import sys
 import zipfile
 from pathlib import Path
 
-from check_prepared_selfhost_consumer import (
-    verify_descriptor,
-    verify_extracted_bundle,
-    verify_receipt,
-)
-from generate_selfhost_disposable_credentials import generate, write_operator_password
-from record_selfhost_bundle_preparation import extract_owned_zip, file_digest
+try:
+    from check_prepared_selfhost_consumer import (
+        verify_descriptor,
+        verify_extracted_bundle,
+        verify_receipt,
+    )
+    from generate_selfhost_disposable_credentials import generate, write_operator_password
+    from record_selfhost_bundle_preparation import extract_owned_zip, file_digest
+except ModuleNotFoundError as error:
+    if error.name in {"jsonschema", "yaml"}:
+        print("disposable preview staging failed [TOOLS_MISSING]: install "
+              "scripts/selfhost-preview-tools.requirements.txt in the disposable "
+              "Python environment", file=sys.stderr)
+        raise SystemExit(2) from None
+    raise
 
 
 ASSETS = frozenset({
@@ -29,6 +37,24 @@ ASSETS = frozenset({
     "selfhost-preparation-transaction.json", "SELFHOST-PREVIEW-README.md",
 })
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+STAGING_GUIDANCE = {
+    "preview asset checksum differs from inventory": (
+        "CHECKSUM_MISMATCH", "download all assets again from one preview release"),
+    "source checkout is not clean or pinned": (
+        "SOURCE_NOT_CLEAN", "use a clean checkout at the preview's exact source commit"),
+    "private root already exists": (
+        "PRIVATE_ROOT_EXISTS", "choose a new private root; existing state was not changed"),
+}
+
+
+def safe_failure(error: BaseException) -> str:
+    if isinstance(error, ValueError) and str(error) in STAGING_GUIDANCE:
+        code, hint = STAGING_GUIDANCE[str(error)]
+        return f"disposable preview staging failed [{code}]: {hint}"
+    if isinstance(error, FileNotFoundError) and error.filename == "git":
+        return "disposable preview staging failed [GIT_MISSING]: install Git before staging"
+    return f"disposable preview staging failed [UNEXPECTED_{type(error).__name__.upper()}]: " \
+        "review the runbook and retry with a fresh private root"
 
 
 def trusted_parent(parent: Path) -> None:
@@ -84,9 +110,11 @@ def stage(assets: Path, source: Path, private_root: Path,
           *, with_operator_password: bool = False) -> dict:
     if os.name != "posix" or os.geteuid() == 0:
         raise ValueError("disposable staging requires a non-root Linux operator")
+    if private_root.exists():
+        raise ValueError("private root already exists")
     if (not assets.is_absolute() or assets.is_symlink() or not assets.is_dir()
             or not private_root.is_absolute() or private_root.is_symlink()
-            or private_root.exists() or not private_root.parent.is_dir()):
+            or not private_root.parent.is_dir()):
         raise ValueError("preview asset or fresh private root is invalid")
     trusted_parent(private_root.parent)
     source = source.resolve()
@@ -160,7 +188,7 @@ def main() -> int:
                        with_operator_password=args.with_operator_password)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError,
             zipfile.BadZipFile) as error:
-        print(f"disposable preview staging failed: {type(error).__name__}", file=sys.stderr)
+        print(safe_failure(error), file=sys.stderr)
         return 2
     print(f"Staged unqualified preview from run {report['run_id']}")
     return 0

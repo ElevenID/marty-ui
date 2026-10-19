@@ -1,6 +1,6 @@
 import { Suspense } from 'react';
 import { render, screen } from '@testing-library/react';
-import { MemoryRouter, Routes } from 'react-router';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../components/pages/LegalPages', () => ({
@@ -25,11 +25,14 @@ vi.mock('../../components/pages/DemoPages', () => ({
 
 import { renderMarketingRoutes } from '../publicSite.public';
 
-function renderMarketingRoute(path: string) {
+function renderMarketingRoute(path: string, showDemos = true) {
   render(
     <MemoryRouter initialEntries={[path]}>
       <Suspense fallback={<div>Loading</div>}>
-        <Routes>{renderMarketingRoutes({ login: vi.fn() })}</Routes>
+        <Routes>
+          {renderMarketingRoutes({ login: vi.fn(), showDemos })}
+          <Route path="*" element={<div>Not available</div>} />
+        </Routes>
       </Suspense>
     </MemoryRouter>,
   );
@@ -69,5 +72,10 @@ describe('publicSite.public demo routes', () => {
     renderMarketingRoute(path);
 
     expect(await screen.findByText(expectedText)).toBeInTheDocument();
+  });
+
+  it('omits demo routes from the tester profile without changing the full profile', async () => {
+    renderMarketingRoute('/demos/2026.07.0', false);
+    expect(await screen.findByText('Not available')).toBeInTheDocument();
   });
 });
