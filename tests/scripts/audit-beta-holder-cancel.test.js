@@ -50,3 +50,30 @@ test('observer forwards native Promise resolution and original rejection unchang
     assert.equal(observed.settled,true);assert.equal(observed.errorName,reject?'NotAllowedError':undefined);
   }
 });
+
+test('standard Fetch Response preflight accepts JSON and rejects HTTP failure before parsing',async()=>{
+  const {fetchPublicJson}=require('./audit-beta-holder-cancel');
+  const http=require('node:http');
+  const server=http.createServer((req,res)=>{res.writeHead(req.url==='/release'?200:503,{'Content-Type':'application/json'});res.end(JSON.stringify({source:'unit'}));});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+  try {
+    const base=`http://127.0.0.1:${server.address().port}`;
+    assert.deepEqual(await fetchPublicJson(base+'/release'),{source:'unit'});
+    await assert.rejects(fetchPublicJson(base+'/unavailable'),/Public beta HTTP preflight failed/);
+  }finally{await new Promise(resolve=>server.close(resolve));}
+});
+test('owned CDP teardown closes contexts then browser process before disconnect',async()=>{
+  const {closeOwnedBrowser}=require('./audit-beta-holder-cancel');const calls=[];
+  const child={exitCode:null,signalCode:null};
+  await closeOwnedBrowser({child,contexts:[{close:async()=>calls.push('context')}],browser:{
+    newBrowserCDPSession:async()=>({send:async method=>{calls.push(method);child.exitCode=0;}}),close:async()=>calls.push('disconnect')},
+    forceStop:async()=>assert.fail('graceful exit must not force terminate')});
+  assert.deepEqual(calls,['context','Browser.close','disconnect']);
+});
+test('owned teardown invokes guarded fallback and fails closed if process survives',async()=>{
+  const {closeOwnedBrowser}=require('./audit-beta-holder-cancel');let stops=0;
+  await assert.rejects(closeOwnedBrowser({child:{exitCode:null,signalCode:null},forceStop:async()=>stops++,wait:async()=>{}}),/preserve profile/);
+  assert.equal(stops,1);
+  const child={exitCode:null,signalCode:null};
+  await closeOwnedBrowser({child,forceStop:async()=>{child.exitCode=1;},wait:async()=>{}});
+});

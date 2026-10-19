@@ -35,6 +35,27 @@ function chromeArguments(profile) {
     '--no-first-run','--no-default-browser-check','--force-renderer-accessibility=complete',
     '--disable-background-networking','--disable-component-update','--new-window','about:blank'];
 }
+async function fetchPublicJson(url, fetcher=fetch) {
+  const response=await fetcher(url);
+  assert.equal(response.ok,true,'Public beta HTTP preflight failed');
+  return response.json();
+}
+async function closeOwnedBrowser({browser,contexts=[],child,forceStop,wait=delay}) {
+  for(const context of contexts.filter(Boolean))await context.close().catch(()=>{});
+  // browser.close() on a CDP attachment only disconnects. Ask this owned
+  // browser process to exit first, then disconnect the Playwright client.
+  if(browser){
+    try {const session=await browser.newBrowserCDPSession();await session.send('Browser.close');}catch{}
+    await browser.close().catch(()=>{});
+  }
+  if(!child)return;
+  for(let i=0;i<20&&child.exitCode===null&&child.signalCode===null;i++)await wait(250);
+  if(child.exitCode===null&&child.signalCode===null){
+    await forceStop();
+    for(let i=0;i<20&&child.exitCode===null&&child.signalCode===null;i++)await wait(250);
+  }
+  assert.ok(child.exitCode!==null||child.signalCode!==null,'Owned Chrome process did not exit; preserve profile for recovery');
+}
 function heldMediaHashes() {
   const files=['2026.08.0-membership-badge-login-r1/guided/membership-guided.mp4','2026.08.0-credential-lifecycle-r2/guided/lifecycle-guided.mp4'];
   return Object.fromEntries(files.map(file=>[file,fileHash(path.join(WORKSPACE,'marty-demo-recorder/artifacts',file))]));
@@ -87,20 +108,20 @@ async function main(env=process.env) {
   report.heldMediaBefore=heldMediaHashes();
   const lock=path.join(WORKSPACE,'marty-demo-recorder/artifacts/.recording.lock');fs.writeFileSync(lock,JSON.stringify({pid:process.pid,action:'d05-real-browser-cancel'}),{flag:'wx'});
   let profile,realProfile,child,browser,operator,walletPage,authPage,adminContext,walletContext,authContext,transaction,initial;
-  let submissionRequests=0;
+  let submissionRequests=0,spawnedAt;
   const request=(route,method='GET',body)=>requireJson(operator,route,{method,...(body?{body:JSON.stringify(body)}:{})});
   const protectedState=async()=>{
     const config=await request(`/v1/signing-keys/config?organization_id=${ORG}`);
-    const discovery=await fetch(`${BASE}/.well-known/openid-credential-issuer/org/${ORG}`);assert.ok(discovery.ok());
+    const discovery=await fetchPublicJson(`${BASE}/.well-known/openid-credential-issuer/org/${ORG}`);
     return {trust:hash({profile:await request(`/v1/trust-profiles/${TRUST}`),issuers:await request(`/v1/trust-profiles/${TRUST}/issuers`)}),
-      signingDefaults:hash(Object.fromEntries(['default_service_id','format_defaults','type_defaults'].map(k=>[k,config[k]]))),discovery:hash(await discovery.json())};
+      signingDefaults:hash(Object.fromEntries(['default_service_id','format_defaults','type_defaults'].map(k=>[k,config[k]]))),discovery:hash(discovery)};
   };
   try {
     profile=fs.mkdtempSync(path.join(privateRoot,'profile-'));realProfile=fs.realpathSync(profile);
-    const release=await fetch(`${BASE}/.well-known/marty-release`);assert.ok(release.ok());report.deployment=await release.json();
+    report.deployment=await fetchPublicJson(`${BASE}/.well-known/marty-release`);
     for(const component of ['marty-ui','marty-ui-auth','marty-ui-presentation-policy'])assert.equal(report.deployment.component_revisions[component],PRODUCT);
     report.stage='launch_owned_chrome';
-    child=spawn(CHROME,chromeArguments(profile),{stdio:'ignore',windowsHide:false});
+    spawnedAt=Date.now();child=spawn(CHROME,chromeArguments(profile),{stdio:'ignore',windowsHide:false});
     assert.ok(child.pid);child.on('error',()=>{});
     const port=await until(()=>{
       const file=path.join(profile,'DevToolsActivePort');if(!fs.existsSync(file))return null;
@@ -172,9 +193,14 @@ async function main(env=process.env) {
       if(walletContext)assert.ok((await walletContext.request.post(`${WALLET}/api/reset`)).ok());
       if(operator&&initial){report.protectedAfter=await protectedState();report.checks.protected_state_unchanged=hash(initial)===hash(report.protectedAfter);}
     } catch(error){report.cleanupFailure={type:error.name};report.state='FAILED';}
-    if(browser)await browser.close().catch(()=>{});
-    if(child&&child.exitCode===null){child.kill();await delay(1000);}
-    try {if(profile){assert.equal(fs.realpathSync(profile),realProfile);assert.equal(path.dirname(realProfile),privateReal);assert.equal(path.dirname(profile),privateRoot);fs.rmSync(profile,{recursive:true,force:true});}report.checks.owned_browser_profile_removed=true;}
+    try {
+      await closeOwnedBrowser({browser,contexts:[walletContext,adminContext],child,forceStop:async()=>{
+        const result=spawnSync('powershell',['-NoProfile','-NonInteractive','-File',path.join(__dirname,'stop-owned-credential-browser.ps1'),
+          '-BrowserProcessId',String(child.pid),'-BrowserExecutable',CHROME,'-SpawnedAtMilliseconds',String(spawnedAt)],{encoding:'utf8',windowsHide:true,timeout:15000});
+        assert.equal(result.status,0,'Owned browser tree termination failed');
+      }});
+      report.checks.owned_browser_exited=true;
+      if(profile){assert.equal(fs.realpathSync(profile),realProfile);assert.equal(path.dirname(realProfile),privateReal);assert.equal(path.dirname(profile),privateRoot);fs.rmSync(profile,{recursive:true,force:true});}report.checks.owned_browser_profile_removed=true;}
     catch(error){report.cleanupFailure={type:error.name};report.state='FAILED';}
     report.heldMediaAfter=heldMediaHashes();report.checks.held_media_unchanged=hash(report.heldMediaBefore)===hash(report.heldMediaAfter);
     report.behaviorAssertions=cancellationAssertions(report.facts);
@@ -187,4 +213,4 @@ async function main(env=process.env) {
   assert.equal(report.holderCancelNoSession,true,'Actual browser cancellation/recovery evidence incomplete');
 }
 if(require.main===module)main().catch(error=>{console.error(`D05 cancellation failed: ${error.name}`);process.exitCode=1;});
-module.exports={guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
+module.exports={fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
