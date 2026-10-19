@@ -28,6 +28,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         f"  keycloak: {{image: '{reference('keycloak', '9')}'}}\n"
         f"  keycloak-configurator: {{image: '{reference('keycloak', '9')}'}}\n"
         "  db-migrate: {build: '.'}\n"
+        "  kms-initialize: {build: '.'}\n"
         "  gateway: {build: '.'}\n"
         "  issuance-migrations: {build: '.'}\n"
         "  issuance: {build: '.'}\n"
@@ -37,6 +38,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
     (tmp_path / "override.yml").write_text(
         "services:\n"
         f"  db-migrate: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
+        f"  kms-initialize: {{image: '{PREFIX}/db-migrate:1.2.3'}}\n"
         f"  gateway: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance-migrations: {{image: '{PREFIX}/services:1.2.3'}}\n"
         f"  issuance: {{image: '{PREFIX}/services:1.2.3'}}\n"
@@ -47,6 +49,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
     (tmp_path / "docker-compose.selfhost.openbao.yml").write_text(
         "services:\n"
         "  openbao: {image: '${MARTY_OPENBAO_DIDCOMM_IMAGE:?required}'}\n"
+        "  openbao-unseal: {image: '${MARTY_OPENBAO_DIDCOMM_IMAGE:?required}'}\n"
         "  openbao-bootstrap: {image: '${MARTY_OPENBAO_DIDCOMM_IMAGE:?required}'}\n",
         encoding="utf-8")
     lock_file = tmp_path / "stack-lock.json"
@@ -82,6 +85,7 @@ def inputs(tmp_path: Path) -> tuple[dict, dict, Path, dict, dict]:
         "keycloak": {"image": reference("keycloak", "9")},
         "keycloak-configurator": {"image": reference("keycloak", "9")},
         "db-migrate": {"image": f"{PREFIX}/db-migrate:1.2.3"},
+        "kms-initialize": {"image": f"{PREFIX}/db-migrate:1.2.3"},
         "gateway": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance-migrations": {"image": f"{PREFIX}/services:1.2.3"},
         "issuance": {"image": f"{PREFIX}/services:1.2.3"},

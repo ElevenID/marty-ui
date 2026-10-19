@@ -33,7 +33,7 @@ class BundlePreparationTest(unittest.TestCase):
         source_image = "${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}"
         openbao_source = (Path(__file__).resolve().parents[1] /
                           "docker-compose.selfhost.openbao.yml").read_text(encoding="utf-8")
-        self.assertEqual(openbao_source.count(source_image), 3)
+        self.assertEqual(openbao_source.count(source_image), 4)
         self.contents = {
             ".marty-selfhost-images.json": self.lock.read_bytes(),
             "docker-compose.selfhost.openbao.yml": openbao_source.replace(

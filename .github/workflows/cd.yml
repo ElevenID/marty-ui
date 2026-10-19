@@ -1317,7 +1317,7 @@ jobs:
             --source-ref refs/heads/main --deny-self-hosted-runners
           docker pull "$image"
           docker run --rm --entrypoint /bin/sh "$image" -ec \
-            'test -x /plugins/openbao-didcomm-authcrypt'
+            'test -x /plugins/openbao-didcomm-authcrypt && test -x /usr/local/bin/selfhost-tls-init && test -x /usr/local/bin/selfhost-unseal'
           export MARTY_OPENBAO_PROBE_IMAGE="$image"
           python scripts/probe_didcomm_issuance_token.py
           python scripts/probe_didcomm_openbao_ha.py
