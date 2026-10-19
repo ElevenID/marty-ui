@@ -562,17 +562,37 @@ async function cleanup(page, templateId, issuerDids, governance = null) {
   return results;
 }
 
-async function main() {
+async function providerRunInputs(artifactDir, stamp, externalTransit, liveEvidence) {
+  const input = {
+    schemaVersion: 1, stamp, organizationId: ORG_ID, sourceTemplateId: SOURCE_TEMPLATE_ID,
+    issuerDid: `did:web:${new URL(BETA_ORIGIN).host}:orgs:d02-provider-switch-${stamp}`,
+    providerBId: `d02-provider-b-${stamp}`, providerCId: `d02-provider-unpublished-${stamp}`,
+    externalKeyReference: externalTransit.keyReference,
+    unpublishedKeyReference: externalTransit.unavailableKey,
+    scope: 'Synthetic provider-switch inputs; distinct keys on the same beta OpenBao backend.',
+  };
+  const file = 'provider-runtime-inputs.json';
+  fs.writeFileSync(path.join(artifactDir, file), JSON.stringify(input, null, 2) + '\n', { flag: 'wx' });
+  // These exact bytes supply the actual action IDs below. ACK precedes any
+  // browser or beta action; credentials remain outside the public fixture.
+  const bytes = liveEvidence ? await liveEvidence.readFixture(file) : fs.readFileSync(path.join(artifactDir, file));
+  const used = JSON.parse(bytes.toString('utf8'));
+  if (JSON.stringify(used) !== JSON.stringify(input)) throw new Error('Provider fixture changed before use');
+  if (liveEvidence) await liveEvidence.seal();
+  return Object.freeze(used);
+}
+
+async function main(liveEvidence = null) {
   const email = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
 
-  const externalTransit = externalTransitPrerequisites();
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
-  const artifactDir = createArtifactDir(ROOT, `beta-issuer-provider-switch-${stamp}`);
-  const issuerDid = `did:web:${new URL(BETA_ORIGIN).host}:orgs:d02-provider-switch-${stamp}`;
-  const providerBId = `d02-provider-b-${stamp}`;
-  const providerCId = `d02-provider-unpublished-${stamp}`;
+  const credentials = externalTransitPrerequisites();
+  const generatedStamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
+  const artifactDir = createArtifactDir(ROOT, `beta-issuer-provider-switch-${generatedStamp}`);
+  const fixture = await providerRunInputs(artifactDir, generatedStamp, credentials, liveEvidence);
+  const {stamp, issuerDid, providerBId, providerCId} = fixture;
+  const externalTransit = {...credentials, keyReference: fixture.externalKeyReference, unavailableKey: fixture.unpublishedKeyReference};
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
@@ -598,6 +618,7 @@ async function main() {
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
     const page = await context.newPage();
+    if (liveEvidence) liveEvidence.bindPage(page);
     const video = page.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     page.on('response', (response) => {
@@ -804,14 +825,27 @@ async function main() {
   }
 }
 
+async function runWithLiveEvidence() {
+  const liveEvidence = process.env.DEMO_EXECUTION_EVIDENCE_HELPER
+    ? await require(process.env.DEMO_EXECUTION_EVIDENCE_HELPER).createLiveEvidenceClient() : null;
+  try {
+    await main(liveEvidence);
+    // main has already closed capture and completed actual fixture cleanup.
+    if (liveEvidence && !process.exitCode) await liveEvidence.complete();
+  } finally {
+    if (liveEvidence) liveEvidence.close();
+  }
+}
+
 if (require.main === module) {
-  main().catch((error) => {
+  runWithLiveEvidence().catch((error) => {
     console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
     process.exitCode = 1;
   });
 }
 
 module.exports = {
+  providerRunInputs,
   renderProviderEvidence,
   rebindThroughConsole,
   providerVerificationDisplay,
