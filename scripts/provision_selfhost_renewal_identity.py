@@ -64,6 +64,8 @@ def operator_acl(policy_names: list[str]) -> str:
         "auth/token/lookup": ("update",),
         f"auth/token/create/{LEAF_ROLE}": ("update",),
         f"auth/token/roles/{LEAF_ROLE}": ("read",),
+        f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id": ("update",),
+        f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy": ("update",),
         "sys/policies/acl": ("list",),
         "workload-pki/cert/ca": ("read",),
         "keycloak-pki/cert/ca": ("read",),
@@ -187,9 +189,8 @@ def verify_denials(bao: Bao, token: str) -> None:
         raise ValueError("renewal operator exceeded its reviewed authority")
 
 
-def login(bao: Bao, identity: Path, output: Path) -> None:
+def checked_login(bao: Bao, identity: Path) -> tuple[str, str, list[str], str]:
     identity = private_empty_or_source(identity, empty=False)
-    output = private_empty_or_source(output, empty=True)
     role_id = private_file(identity / ROLE_ID_FILE).strip()
     secret_id = private_file(identity / SECRET_ID_FILE).strip()
     names = json.loads(private_file(identity / POLICY_NAMES_FILE))
@@ -214,18 +215,94 @@ def login(bao: Bao, identity: Path, output: Path) -> None:
             or role.get("token_explicit_max_ttl") != 8 * 60 * 60):
         raise ValueError("renewal leaf role drifted from the reviewed policy set")
     verify_denials(bao, token)
+    return role_id, secret_id, names, token
+
+
+def login(bao: Bao, identity: Path, output: Path) -> None:
+    output = private_empty_or_source(output, empty=True)
+    _, _, _, token = checked_login(bao, identity)
     write_private(output / TOKEN_FILE, token)
+
+
+def rotate(bao: Bao, identity: Path, output: Path) -> None:
+    """Stage a validated replacement, then revoke the old SecretID."""
+    identity = private_empty_or_source(identity, empty=False)
+    output = private_empty_or_source(output, empty=True)
+    if identity == output:
+        raise ValueError("replacement identity must be separate")
+    role_id, old_secret, names, old_token = checked_login(bao, identity)
+    path = f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id"
+    fresh = bao.request("POST", path, {}, token=old_token).get("data", {})
+    new_secret = fresh.get("secret_id")
+    if not isinstance(new_secret, str) or len(new_secret) < 20 or new_secret == old_secret:
+        raise ValueError("replacement SecretID is invalid")
+    staged = False
+    try:
+        response = bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
+            "role_id": role_id, "secret_id": new_secret,
+        }, authenticate=False)
+        auth = response.get("auth", {})
+        new_token = auth.get("client_token")
+        if (not isinstance(new_token, str) or len(new_token) < 20
+                or auth.get("policies") != [OPERATOR_POLICY]
+                or type(auth.get("lease_duration")) is not int
+                or not 3600 <= auth["lease_duration"] <= 8 * 60 * 60):
+            raise ValueError("replacement AppRole login is invalid")
+        verify_denials(bao, new_token)
+        write_private(output / ROLE_ID_FILE, role_id)
+        write_private(output / SECRET_ID_FILE, new_secret)
+        write_private(output / POLICY_NAMES_FILE,
+                      json.dumps(names, separators=(",", ":")), max_bytes=4096)
+        staged = True
+    finally:
+        if not staged:
+            for name in (ROLE_ID_FILE, SECRET_ID_FILE, POLICY_NAMES_FILE):
+                (output / name).unlink(missing_ok=True)
+            bao.request("POST", path + "/destroy", {"secret_id": new_secret}, token=old_token)
+    bao.request("POST", path + "/destroy", {"secret_id": old_secret}, token=new_token)
+    require_revoked(bao, role_id, old_secret)
+
+
+def require_revoked(bao: Bao, role_id: str, secret_id: str) -> None:
+    """An acknowledged destroy must actually prevent another AppRole login."""
+    try:
+        bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
+            "role_id": role_id, "secret_id": secret_id,
+        }, authenticate=False)
+    except HTTPError as error:
+        if error.code in (400, 403):
+            return
+        raise
+    raise ValueError("retired AppRole credential remains usable")
+
+
+def retire(bao: Bao, identity: Path, retired: Path) -> None:
+    """Finish an interrupted rotation using the validated replacement identity."""
+    identity = private_empty_or_source(identity, empty=False)
+    retired = private_empty_or_source(retired, empty=False)
+    if identity == retired:
+        raise ValueError("retired identity must be separate")
+    role_id, new_secret, _, token = checked_login(bao, identity)
+    old_role = private_file(retired / ROLE_ID_FILE).strip()
+    old_secret = private_file(retired / SECRET_ID_FILE).strip()
+    if old_role != role_id or old_secret == new_secret:
+        raise ValueError("retired identity does not match the active AppRole")
+    bao.request("POST", f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy",
+                {"secret_id": old_secret}, token=token)
+    require_revoked(bao, old_role, old_secret)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=("bootstrap", "login"), required=True)
+    parser.add_argument("--mode", choices=("bootstrap", "login", "rotate", "retire"),
+                        required=True)
     parser.add_argument("--bao-addr", required=True)
     parser.add_argument("--bao-ca", required=True, type=Path)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
     parser.add_argument("--root-token-file", type=Path)
     parser.add_argument("--current-secrets", type=Path)
     parser.add_argument("--identity", type=Path)
+    parser.add_argument("--retired-identity", type=Path)
     args = parser.parse_args()
     try:
         if (os.name != "posix" or not args.bao_addr.startswith("https://")
@@ -233,7 +310,8 @@ def main() -> int:
                 or not args.bao_ca.is_file()):
             raise ValueError("renewal OpenBao endpoint is invalid")
         if args.mode == "bootstrap":
-            if args.root_token_file is None or args.current_secrets is None or args.identity:
+            if (args.output is None or args.root_token_file is None
+                    or args.current_secrets is None or args.identity or args.retired_identity):
                 raise ValueError("renewal bootstrap inputs are incomplete")
             root_token = private_file(args.root_token_file).strip()
             if len(root_token) < 20:
@@ -243,7 +321,19 @@ def main() -> int:
         else:
             if args.identity is None or args.root_token_file or args.current_secrets:
                 raise ValueError("renewal login inputs are incomplete")
-            login(Bao(args.bao_addr, args.bao_ca, ""), args.identity, args.output)
+            if args.mode == "login":
+                if args.output is None or args.retired_identity:
+                    raise ValueError("renewal login inputs are incomplete")
+                login(Bao(args.bao_addr, args.bao_ca, ""), args.identity, args.output)
+            elif args.mode == "rotate":
+                if args.output is None or args.retired_identity:
+                    raise ValueError("renewal rotation inputs are incomplete")
+                rotate(Bao(args.bao_addr, args.bao_ca, ""), args.identity, args.output)
+            else:
+                if args.output is not None or args.retired_identity is None:
+                    raise ValueError("renewal retirement inputs are incomplete")
+                retire(Bao(args.bao_addr, args.bao_ca, ""),
+                       args.identity, args.retired_identity)
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"self-host renewal identity failed: {type(error).__name__}", file=sys.stderr)
         return 2

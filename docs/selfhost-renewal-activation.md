@@ -24,6 +24,19 @@ give it to activation via `--bao-token-file`. The stages reject a root token
 presented under the renewal variable. The AppRole SecretID itself stays out
 of the application Compose secret generation.
 
+Rotate the AppRole SecretID with `--mode rotate --identity <current-private-identity>
+--output <new-empty-0700-directory>` and the same HTTPS OpenBao address/CA.
+The scoped operator token mints a replacement SecretID, validates its login
+and forbidden-operation denials, writes the replacement identity as 0600
+files, then revokes the old SecretID. Keep the old identity directory until
+revocation has been confirmed; after a failure following the new files being
+written, finish with `--mode retire --identity <replacement-identity>
+--retired-identity <old-identity>` (no `--output`). A failed rotation before
+the replacement is written destroys the newly minted SecretID. After success,
+the old identity must fail login and a fresh `--mode login` with the new one
+must pass. This rotates the AppRole credential only, not a Transit key or CA;
+coordinated Raft restore and lost-identity recovery still need rehearsal.
+
 Stage the workload TLS set with the Rust `selfhost-renew` profile against the
 existing Raft OpenBao issuer and version-one Transit signers. Stage the
 Keycloak set with `scripts/provision_selfhost_keycloak_kms.py` using
