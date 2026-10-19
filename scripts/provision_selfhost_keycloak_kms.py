@@ -20,7 +20,7 @@ import subprocess
 import sys
 from urllib.error import HTTPError, URLError
 
-from selfhost_openbao_client import Bao, public_key_der
+from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der
 
 
 REALMS = ("master", "11id")
@@ -190,12 +190,7 @@ def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
         require_cert_lifetime(certificate)
         # OpenSSL only receives public data. Verify the mounted certificate is
         # bound to the non-exportable Transit version that Keycloak will sign.
-        extracted = subprocess.run(
-            ["openssl", "x509", "-pubkey", "-noout"], input=certificate.encode("ascii"),
-            capture_output=True, timeout=10, check=False,
-        )
-        if (extracted.returncode or not extracted.stdout
-                or public_key_der(extracted.stdout.decode("ascii")) != public_key_der(public_key)):
+        if certificate_public_key_der(certificate) != public_key_der(public_key):
             raise RuntimeError("disposable Keycloak RS256 certificate key differs")
         outputs[f"keycloak_{realm}_rs256_cert"] = certificate
     nonce = secrets.token_hex(6)

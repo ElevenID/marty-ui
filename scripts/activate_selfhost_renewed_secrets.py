@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import re
+import ssl
 import stat
 import subprocess
 import sys
@@ -23,7 +24,8 @@ if os.name == "posix":
     import fcntl
 
 sys.dont_write_bytecode = True
-from selfhost_openbao_client import Bao  # noqa: E402
+from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
+from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der  # noqa: E402
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import PURPOSES, REALMS, jwe_policy, signing_policy  # noqa: E402
 from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, verify_generations  # noqa: E402
@@ -35,6 +37,24 @@ COMPLETED_SERVICES = frozenset({
     "db-migrate", "issuance-migrations", "revocation-profile-migrate",
     "keycloak-configurator",
 })
+TLS_CERT_BY_ROLE = {
+    "signing-keys-server": "signing_keys_workload_server_cert",
+    "gateway-client": "gateway_workload_client_cert",
+    "auth-client": "auth_workload_client_cert",
+    "auth-server": "auth_workload_server_cert",
+    "compliance-profile-client": "compliance_profile_workload_client_cert",
+    "deployment-profile-client": "deployment_profile_workload_client_cert",
+    "organization-server": "org_workload_server_cert",
+    "event-stream-server": "es_workload_server_cert",
+    "notification-server": "notification_workload_server_cert",
+    "revocation-profile-server": "rp_workload_server_cert",
+    "credential-template-server": "ct_workload_server_cert",
+    "issuance-server": "issuance_workload_server_cert",
+    "flow-client": "flow_workload_client_cert",
+    "flow-server": "flow_workload_server_cert",
+    "pp-server": "pp_workload_server_cert",
+    "verification-client": "verification_workload_client_cert",
+}
 
 
 def private_file(path: Path) -> str:
@@ -118,6 +138,72 @@ def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
     ):
         raise RuntimeError("owned project secret mount differs from generation")
     return len(mounts)
+
+
+def checked_certificate_lifetime(certificate: str, minimum_ttl: int) -> None:
+    result = subprocess.run(
+        ["openssl", "x509", "-dates", "-noout"],
+        input=certificate.encode("ascii"), capture_output=True,
+        timeout=10, check=False,
+    )
+    dates = dict(line.split("=", 1) for line in result.stdout.decode("ascii").splitlines()
+                 if "=" in line)
+    if result.returncode or set(dates) != {"notBefore", "notAfter"}:
+        raise ValueError("renewed certificate validity is invalid")
+    now = time.time()
+    if (ssl.cert_time_to_seconds(dates["notBefore"]) > now
+            or ssl.cert_time_to_seconds(dates["notAfter"]) < now + minimum_ttl):
+        raise ValueError("renewed certificate is outside the required validity overlap")
+
+
+def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
+    if (set(TLS_CERT_BY_ROLE) != set(KEY_NAMES)
+            or set(TLS_CERT_BY_ROLE.values()) != SELFHOST_CERT_FILES - {"workload_identity_ca_cert"}):
+        raise ValueError("self-host TLS role and certificate inventory drifted")
+    issuers = {
+        "workload_identity_ca_cert": bao.request("GET", "workload-pki/cert/ca")
+        .get("data", {}).get("certificate"),
+        "keycloak": bao.request("GET", "keycloak-pki/cert/ca")
+        .get("data", {}).get("certificate"),
+    }
+    for issuer in issuers.values():
+        if not isinstance(issuer, str):
+            raise ValueError("renewed OpenBao issuer is absent")
+        checked_certificate_lifetime(issuer, minimum_ttl)
+    for root in (old, new):
+        workload_ca = (root / "workload_identity_ca_cert").read_text(encoding="ascii")
+        if workload_ca != issuers["workload_identity_ca_cert"]:
+            raise ValueError("workload issuer differs from the mounted trust anchor")
+        for role, cert_name in TLS_CERT_BY_ROLE.items():
+            key_name = KEY_NAMES[role]
+            metadata = bao.request("GET", f"transit/keys/{key_name}").get("data", {})
+            if (metadata.get("type") != "ecdsa-p256"
+                    or metadata.get("exportable") is not False
+                    or metadata.get("allow_plaintext_backup") is not False
+                    or metadata.get("latest_version") != 1):
+                raise ValueError("workload signer lost version-one non-exportable custody")
+            public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
+            if not isinstance(public_key, str):
+                raise ValueError("workload signer public key is absent")
+            certificate = (root / cert_name).read_text(encoding="ascii")
+            checked_certificate_lifetime(certificate, minimum_ttl)
+            if certificate_public_key_der(certificate) != public_key_der(public_key):
+                raise ValueError("workload certificate differs from its remote signer")
+        for realm in REALMS:
+            key_name = f"keycloak-{realm}-rs256"
+            metadata = bao.request("GET", f"transit/keys/{key_name}").get("data", {})
+            if (metadata.get("type") != "rsa-2048"
+                    or metadata.get("exportable") is not False
+                    or metadata.get("allow_plaintext_backup") is not False
+                    or metadata.get("latest_version") != 1):
+                raise ValueError("Keycloak signer lost version-one non-exportable custody")
+            public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
+            if not isinstance(public_key, str):
+                raise ValueError("Keycloak signer public key is absent")
+            certificate = (root / f"keycloak_{realm}_rs256_cert").read_text(encoding="ascii")
+            checked_certificate_lifetime(certificate, minimum_ttl)
+            if certificate_public_key_der(certificate) != public_key_der(public_key):
+                raise ValueError("Keycloak certificate differs from its remote signer")
 
 
 def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
@@ -232,6 +318,8 @@ def activate(args: argparse.Namespace) -> dict:
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     checked_tokens(bao, args.current_secrets, args.renewed_secrets,
                    args.minimum_token_ttl)
+    checked_certificates(bao, args.current_secrets, args.renewed_secrets,
+                         args.minimum_token_ttl)
     old = compose_args(args.project_name, args.current_env, args.compose_file)
     new = compose_args(args.project_name, args.renewed_env, args.compose_file)
     cwd = args.compose_file.parent

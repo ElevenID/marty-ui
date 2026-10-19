@@ -29,6 +29,16 @@ def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
     assert not activation.healthy(states, {"keycloak", "db-migrate"})
 
 
+def test_certificate_overlap_rejects_invalid_public_certificate() -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures/passport_beta_chain_public.json")
+                         .read_text(encoding="utf-8"))
+    activation.checked_certificate_lifetime(fixture["csca"], 3600)
+    with pytest.raises(ValueError, match="outside the required validity overlap"):
+        activation.checked_certificate_lifetime(fixture["csca"], 11 * 365 * 24 * 3600)
+    with pytest.raises(ValueError, match="validity is invalid"):
+        activation.checked_certificate_lifetime("not a certificate", 3600)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
 def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
     old, new = tmp_path / "old", tmp_path / "new"
@@ -69,6 +79,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
     monkeypatch.setattr(activation, "Bao", lambda *_: object())
     monkeypatch.setattr(activation, "checked_tokens", lambda *_: None)
+    monkeypatch.setattr(activation, "checked_certificates", lambda *_: None)
     old_model = {"services": {name: {} for name in
                             ("keycloak", "gateway", "signing-keys", "postgres")},
                  "secrets": {"sample": {"file": str(old / "sample")}}}

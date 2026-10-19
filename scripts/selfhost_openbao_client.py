@@ -69,6 +69,17 @@ def public_key_der(pem: str) -> bytes:
     return result.stdout
 
 
+def certificate_public_key_der(certificate: str) -> bytes:
+    """Extract only the public SPKI from an X.509 certificate."""
+    result = subprocess.run(
+        ["openssl", "x509", "-pubkey", "-noout"],
+        input=certificate.encode("ascii"), capture_output=True, timeout=10, check=False,
+    )
+    if result.returncode or not result.stdout:
+        raise RuntimeError("OpenBao certificate public key is invalid")
+    return public_key_der(result.stdout.decode("ascii"))
+
+
 class Bao:
     def __init__(self, endpoint: str, ca: Path, token: str) -> None:
         self.endpoint = endpoint
