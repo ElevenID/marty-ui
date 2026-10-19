@@ -1460,7 +1460,7 @@ function LandingPage() {
           {t('audienceRouting.title', AUDIENCE_ROUTING.title)}
         </SectionHeading>
         <Grid container spacing={3} sx={{ maxWidth: 960, mx: 'auto' }}>
-          {AUDIENCE_ROUTING.paths.map((path) => (
+          {AUDIENCE_ROUTING.paths.filter((path) => SHOW_PUBLIC_CTA || path.id !== 'developers').map((path) => (
             <Grid item xs={12} md={4} key={path.id}>
               <Card
                 elevation={2}
