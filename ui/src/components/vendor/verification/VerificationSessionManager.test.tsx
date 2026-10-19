@@ -7,12 +7,14 @@ import VerificationSessionManager from './VerificationSessionManager';
 const {
   mockListFlowExecutions,
   mockStartVerificationFlow,
+  mockGetVerificationResult,
   mockListPublicIssuerIdentities,
   mockListPresentationPolicies,
   mockListFlows,
 } = vi.hoisted(() => ({
   mockListFlowExecutions: vi.fn(),
   mockStartVerificationFlow: vi.fn(),
+  mockGetVerificationResult: vi.fn(),
   mockListPublicIssuerIdentities: vi.fn(),
   mockListPresentationPolicies: vi.fn(),
   mockListFlows: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('../../../services/flowsApi', () => ({
 
 vi.mock('../../../services/zkVerificationApi', () => ({
   startVerificationFlow: (...args: unknown[]) => mockStartVerificationFlow(...args),
+  getVerificationResult: (...args: unknown[]) => mockGetVerificationResult(...args),
 }));
 
 vi.mock('../../../services/signingKeysApi', () => ({
@@ -114,6 +117,39 @@ describe('VerificationSessionManager', () => {
 
     expect(await screen.findByRole('tab', { name: /active \(0\)/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /history \(1\)/i })).toBeInTheDocument();
+  });
+
+  it('loads actual terminal evidence before showing a historical result', async () => {
+    const user = userEvent.setup();
+    mockListFlowExecutions.mockResolvedValue([{
+      id: 'verified-session-1', flow_type: 'oid4vp_presentation', status: 'COMPLETED',
+      created_at: '2026-07-12T12:00:00Z', updated_at: '2026-07-12T12:05:00Z',
+    }]);
+    mockGetVerificationResult.mockResolvedValue({
+      instance_id: 'verified-session-1', status: 'COMPLETED', result: 'passed', decision: 'allow',
+      verified_claims: { age_over_21: true }, credential_results: [{ trust_check_passed: true }],
+    });
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('tab', { name: /history \(1\)/i }));
+    await user.click(await screen.findByRole('button', { name: 'View session details' }));
+    expect(mockGetVerificationResult).toHaveBeenCalledWith('verified-session-1');
+    expect(await screen.findByTestId('verification-result-summary')).toHaveAttribute(
+      'data-disclosed-claim-names', '["age_over_21"]',
+    );
+  });
+
+  it('does not infer a successful result from history status when evidence fails to load', async () => {
+    const user = userEvent.setup();
+    mockListFlowExecutions.mockResolvedValue([{
+      id: 'unavailable-session-1', flow_type: 'oid4vp_presentation', status: 'COMPLETED',
+      created_at: '2026-07-12T12:00:00Z', updated_at: '2026-07-12T12:05:00Z',
+    }]);
+    mockGetVerificationResult.mockRejectedValue(new Error('Result unavailable'));
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('tab', { name: /history \(1\)/i }));
+    await user.click(await screen.findByRole('button', { name: 'View session details' }));
+    expect(await screen.findByText('Result unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
   });
 
   it('generates the details QR code when the flow exposes only request_uri', async () => {

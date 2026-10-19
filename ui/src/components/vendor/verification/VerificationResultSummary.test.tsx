@@ -4,6 +4,40 @@ import { render, screen } from '@test/utils';
 import VerificationResultSummary from './VerificationResultSummary';
 
 describe('VerificationResultSummary', () => {
+  it('exposes only the backend-verified mDL claim names and explicit issuer check', () => {
+    render(
+      <VerificationResultSummary session={{
+        status: 'COMPLETED', result: 'passed', decision: 'allow',
+        verified_claims: { age_over_21: true },
+        credential_results: [{ trust_check_passed: true, signature_valid: true }],
+      }} />,
+    );
+    const summary = screen.getByTestId('verification-result-summary');
+    expect(summary).toHaveAttribute('data-disclosed-claim-names', '["age_over_21"]');
+    expect(summary).toHaveAttribute('data-issuer-trusted', 'true');
+    expect(screen.getByText('Credential')).toBeInTheDocument();
+    expect(screen.queryByText('Open Badge')).not.toBeInTheDocument();
+  });
+
+  it('does not turn a completed denial or missing trust check into qualified evidence', () => {
+    const { rerender } = render(
+      <VerificationResultSummary session={{
+        status: 'COMPLETED', result: 'failed', decision: 'deny',
+        decision_reason: 'Issuer not trusted', verified_claims: {},
+        credential_results: [{ trust_check_passed: false }],
+      }} />,
+    );
+    expect(screen.getByText('Not verified')).toBeInTheDocument();
+    expect(screen.getByText('Issuer not trusted')).toBeInTheDocument();
+    expect(screen.getByTestId('verification-result-summary')).not.toHaveAttribute('data-disclosed-claim-names');
+    expect(screen.getByTestId('verification-result-summary')).not.toHaveAttribute('data-issuer-trusted');
+    rerender(<VerificationResultSummary session={{
+      status: 'COMPLETED', result: 'passed', decision: 'allow',
+      verified_claims: { age_over_21: true }, credential_results: [{}],
+    }} />);
+    expect(screen.getByTestId('verification-result-summary')).not.toHaveAttribute('data-issuer-trusted');
+  });
+
   it('renders Open Badge verification checks, claims, and Canvas mirror provenance', () => {
     render(
       <VerificationResultSummary

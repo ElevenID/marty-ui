@@ -33,7 +33,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
-import { startVerificationFlow } from '../../../services/zkVerificationApi';
+import { getVerificationResult, startVerificationFlow } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
 import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
 import PolicySelectStep from './steps/PolicySelectStep';
@@ -155,6 +155,9 @@ function VerificationSessionManager({ organizationId }) {
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [detailResult, setDetailResult] = useState(null);
+  const [detailResultError, setDetailResultError] = useState(null);
+  const [detailResultLoading, setDetailResultLoading] = useState(false);
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -282,7 +285,11 @@ function VerificationSessionManager({ organizationId }) {
   const handleWizardBack = () => setWizardStep((s) => s - 1);
 
   const handleVerificationComplete = (completedSession) => {
-    showSuccess(`Verification ${completedSession.status}`);
+    if (String(completedSession?.status || '').toLowerCase() === 'completed'
+      && String(completedSession?.result || '').toLowerCase() === 'passed'
+      && String(completedSession?.decision || '').toLowerCase() === 'allow') {
+      showSuccess('Verification completed');
+    }
     fetchSessions();
   };
 
@@ -291,12 +298,28 @@ function VerificationSessionManager({ organizationId }) {
   const openDetail = async (session) => {
     setDetailSession(session);
     setDetailOpen(true);
-
+    setDetailResult(null);
+    setDetailResultError(null);
+    if (!['completed', 'failed'].includes(normalizeSessionStatus(session.status))) return;
+    setDetailResultLoading(true);
+    try {
+      const result = await getVerificationResult(session.session_id);
+      if (result?.instance_id !== session.session_id) {
+        throw new Error('Verification result did not match this session.');
+      }
+      setDetailResult(result);
+    } catch (err) {
+      setDetailResultError(err.message || 'Could not load the verified result.');
+    } finally {
+      setDetailResultLoading(false);
+    }
   };
 
   const closeDetail = () => {
     setDetailOpen(false);
     setDetailSession(null);
+    setDetailResult(null);
+    setDetailResultError(null);
   };
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -389,6 +412,7 @@ function VerificationSessionManager({ organizationId }) {
             </span>
           </Tooltip>
           <Button
+            data-testid="verification-new-session"
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openWizard}
@@ -498,6 +522,7 @@ function VerificationSessionManager({ organizationId }) {
           )}
           {wizardStep < 2 && (
             <Button
+              data-testid={wizardStep === 1 ? 'verification-start-session' : 'verification-next-step'}
               variant="contained"
               onClick={handleWizardNext}
               disabled={
@@ -553,9 +578,9 @@ function VerificationSessionManager({ organizationId }) {
                 </Box>
               )}
 
-              {normalizeSessionStatus(detailSession.status) !== 'pending' && (
-                <VerificationResultSummary session={detailSession} />
-              )}
+              {detailResultLoading && <CircularProgress size={20} />}
+              {detailResultError && <Alert severity="error">{detailResultError}</Alert>}
+              {detailResult && <VerificationResultSummary session={detailResult} />}
 
               <Box>
                 <Typography variant="caption" color="text.secondary">

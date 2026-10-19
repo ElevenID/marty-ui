@@ -60,6 +60,16 @@ export const getVerificationFlowInstance = async (instanceId) => {
   }
 };
 
+/** Read the terminal policy result, including disclosed claim names and checks. */
+export const getVerificationResult = async (instanceId) => {
+  try {
+    const response = await apiClient.get(`${FLOW_PATH}/instances/${instanceId}/result`);
+    return response.data;
+  } catch (error) {
+    throw handleApiError(error);
+  }
+};
+
 /**
  * Submit a VP token to complete verification flow
  *
@@ -120,6 +130,7 @@ export default {
   getVerificationRequest,
   submitVerification,
   getVerificationFlowInstance,
+  getVerificationResult,
   evaluatePresentation,
   evaluateInline,
   // Legacy

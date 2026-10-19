@@ -470,6 +470,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
             {isMobile && (
               <Stack spacing={2} sx={{ mb: 2 }}>
                 <Button
+                  data-testid="wallet-open-link"
                   variant="contained"
                   size="large"
                   fullWidth

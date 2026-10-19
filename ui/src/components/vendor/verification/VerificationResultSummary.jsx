@@ -60,6 +60,13 @@ function statusValue(value) {
   return String(value || '').toLowerCase();
 }
 
+function decisionPassed(value) {
+  const decision = statusValue(value);
+  if (['allow', 'approved', 'passed', 'verified'].includes(decision)) return true;
+  if (['deny', 'denied', 'rejected', 'failed'].includes(decision)) return false;
+  return undefined;
+}
+
 function nestedClaims(claims = {}) {
   const safeClaims = asObject(claims);
   const subject = asObject(safeClaims.credentialSubject);
@@ -76,6 +83,13 @@ function credentialResultValue(credentialResults, key) {
     if (result && result[key] !== undefined && result[key] !== null) return result[key];
   }
   return undefined;
+}
+
+function allCredentialChecks(credentialResults, key) {
+  if (!credentialResults.length) return undefined;
+  const values = credentialResults.map((result) => result?.[key]);
+  if (!values.every((value) => typeof value === 'boolean')) return undefined;
+  return values.every(Boolean);
 }
 
 function claimResultsFromMipMessage(session = {}) {
@@ -132,15 +146,25 @@ export function extractVerificationSummary(session = {}) {
     claims.canvasCredentialsId,
   );
 
-  const passed = firstPresent(
+  const explicitDecision = firstPresent(
+    decisionPassed(result.decision),
+    decisionPassed(rawResult.decision),
+    decisionPassed(session.decision),
+    decisionPassed(session.result_code),
+    decisionPassed(result.evaluation_result),
+    decisionPassed(rawResult.evaluation_result),
+    decisionPassed(rawResult.result),
+  );
+  const terminalFailure = ['failed', 'denied', 'rejected', 'expired', 'cancelled'].includes(statusValue(session.status));
+  const passed = terminalFailure || explicitDecision === false ? false : firstPresent(
     result.passed,
     rawResult.passed,
-    ['passed', 'completed'].includes(statusValue(session.status)) ? true : undefined,
-    session.result_code ? statusValue(session.result_code) === 'passed' : undefined,
-    rawResult.evaluation_result ? statusValue(rawResult.evaluation_result) === 'passed' : undefined,
-    rawResult.result ? statusValue(rawResult.result) === 'passed' : undefined,
+    explicitDecision,
+    ['passed', 'completed', 'verified'].includes(statusValue(session.status)) ? true : undefined,
   );
   const trustValidated = firstPresent(
+    allCredentialChecks(credentialResults, 'trust_check_passed'),
+    allCredentialChecks(credentialResults, 'trust_validated'),
     result.trust_validated,
     rawResult.trust_validated,
     rawResult.decision ? rawResult.decision === 'allow' : undefined,
@@ -161,6 +185,7 @@ export function extractVerificationSummary(session = {}) {
 
   return {
     passed: Boolean(passed),
+    isOpenBadge: Boolean(achievement.name || achievement.id || claims.open_badge || claims.badge),
     badgeName: firstPresent(
       achievement.name,
       claims.achievement_name,
@@ -183,7 +208,7 @@ export function extractVerificationSummary(session = {}) {
     claims,
     claimsSatisfied: asArray(result.claims_satisfied || rawResult.claims_satisfied),
     claimsMissing: asArray(result.claims_missing || rawResult.claims_missing),
-    failureReason: firstPresent(result.failure_reason, rawResult.failure_reason, rawResult.decision_reason, session.error),
+    failureReason: firstPresent(result.failure_reason, rawResult.failure_reason, rawResult.decision_reason, session.decision_reason, session.error),
   };
 }
 
@@ -254,9 +279,17 @@ function ClaimList({ claims, claimsSatisfied, claimsMissing }) {
 function VerificationResultSummary({ session }) {
   const summary = extractVerificationSummary(session);
   const hasCanvasMirror = Boolean(summary.canvasCredentialId || summary.canvasAccount || summary.canvasDeliveryId);
+  const disclosedClaims = summary.passed && session?.verified_claims && typeof session.verified_claims === 'object'
+    && !Array.isArray(session.verified_claims)
+    ? JSON.stringify(Object.keys(session.verified_claims).sort())
+    : undefined;
+  const issuerTrusted = summary.passed
+    && allCredentialChecks(asArray(session?.credential_results), 'trust_check_passed') === true
+    ? 'true' : undefined;
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }} data-testid="verification-result-summary">
+    <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }} data-testid="verification-result-summary"
+      data-disclosed-claim-names={disclosedClaims} data-issuer-trusted={issuerTrusted}>
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
           <Avatar
@@ -272,7 +305,7 @@ function VerificationResultSummary({ session }) {
               <Typography variant="h6" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>
                 {summary.badgeName}
               </Typography>
-              <Chip size="small" label="Open Badge" variant="outlined" />
+              <Chip size="small" label={summary.isOpenBadge ? 'Open Badge' : 'Credential'} variant="outlined" />
               <Chip
                 size="small"
                 label={summary.passed ? 'Verified' : 'Not verified'}
