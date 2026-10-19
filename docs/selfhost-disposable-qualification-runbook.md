@@ -9,8 +9,10 @@ credentials, a real CSCA/DSC, or a customer organization.
 
 The Stack publisher needs no tag secret. The first release run qualifies and
 promotes the five images, uploads `stack-release-promotion-complete-<run-id>`,
-then stops at the late tag gate. From a clean checkout of the **same current
-main commit**, an operator with local `gh` authentication including workflow
+then stops at the late tag gate. Use `prepare_selfhost_lock=false` on this
+intentionally failing first run to avoid preparing a bundle whose producer
+cannot pass the terminal-success binding. From a clean checkout of the
+**same current main commit**, an operator with local `gh` authentication including workflow
 permission runs:
 
 ```bash
