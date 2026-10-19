@@ -1,5 +1,6 @@
 import { Box, Divider, Link as MuiLink, Stack, Typography } from '@mui/material';
 import { Link as RouterLink } from 'react-router';
+import { SHOW_PUBLIC_DEMOS } from '@ui-public-config';
 
 const footerLinks = [
   { label: 'Privacy Policy', to: '/privacy-policy', testId: 'public-footer-privacy-link' },
@@ -43,7 +44,7 @@ function PublicFooter() {
             justifyContent: { xs: 'flex-start', md: 'flex-end' },
           }}
         >
-          {footerLinks.map((link) => (
+          {footerLinks.filter((link) => SHOW_PUBLIC_DEMOS || link.to !== '/demos').map((link) => (
             <MuiLink
               key={link.to}
               component={RouterLink}

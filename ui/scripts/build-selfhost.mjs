@@ -9,7 +9,13 @@ const projectRoot = path.resolve(__dirname, '..');
 const binDir = path.join(projectRoot, 'node_modules', '.bin');
 
 function localBin(name) {
-  return path.join(binDir, process.platform === 'win32' ? `${name}.cmd` : name);
+  if (process.platform === 'win32') {
+    for (const suffix of ['.cmd', '.exe']) {
+      const candidate = path.join(binDir, `${name}${suffix}`);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+  return path.join(binDir, name);
 }
 
 function parseEnvFile(pathname) {
@@ -72,6 +78,11 @@ function seedSelfhostBuildEnv() {
   if (process.env.VITE_UI_VARIANT === undefined) {
     process.env.VITE_UI_VARIANT = 'selfhost';
   }
+  const publicProfile = process.env.VITE_SELFHOST_PUBLIC_PROFILE || 'full';
+  if (!['full', 'tester'].includes(publicProfile)) {
+    throw new Error('VITE_SELFHOST_PUBLIC_PROFILE must be full or tester');
+  }
+  process.env.VITE_SELFHOST_PUBLIC_PROFILE = publicProfile;
 
   // Self-host UI is served by the same edge proxy as /v1 and /api. Keep browser
   // API calls same-origin by default so beta/dev .env files cannot leak into a

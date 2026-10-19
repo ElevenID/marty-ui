@@ -17,6 +17,9 @@ def test_only_explicit_official_dispatch_can_prepare_selfhost_lock() -> None:
     dispatch = value.get("on", value.get(True))["workflow_dispatch"]["inputs"]
     assert dispatch["prepare_selfhost_lock"]["type"] == "boolean"
     assert dispatch["prepare_selfhost_lock"]["default"] is False
+    assert dispatch["selfhost_public_profile"]["type"] == "choice"
+    assert dispatch["selfhost_public_profile"]["default"] == "tester"
+    assert dispatch["selfhost_public_profile"]["options"] == ["tester", "full"]
     assert dispatch["selfhost_external_images_json"]["required"] is False
     jobs = value["jobs"]
     for job_name in ("build-selfhost-lock-roles", "prepare-selfhost-image-lock"):
@@ -54,6 +57,7 @@ def test_new_roles_are_digest_only_signed_and_not_promoted() -> None:
     ui = next(step for step in images if step["with"]["file"] == "docker/ui.Dockerfile")
     assert ui["with"]["target"] == "selfhost"
     assert "UI_VARIANT=selfhost" in ui["with"]["build-args"]
+    assert "SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}" in ui["with"]["build-args"]
     assert "NGINX_CONFIG=nginx.spa.conf" in ui["with"]["build-args"]
     assert len([step for step in steps if step.get("uses", "").startswith(
         "actions/attest-build-provenance@")]) == 2
