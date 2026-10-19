@@ -45,6 +45,16 @@ unprovisioned; obtain access and complete those acceptance checks before
 closing the KMS goal. The milestone table below contains historical status;
 use the dated evidence log and live run/PR states for the latest gate.
 
+Current source repair: [UI PR #1427](https://github.com/ElevenID/marty-ui/pull/1427)
+anchors the release manifest to immutable source time and adds Flow's missing
+Issuance startup dependencies. Its exact final-head CI passed; protected
+merge-group CI is running on candidate `2983a67bd48f74f262ab885d63e7e6f7d77898fa`.
+The intended next release is `v1.1.258`, still untagged. After the protected
+merge, require one full exact-main CI, a fresh no-write claim, signed promotion,
+a terminally successful prepared-bundle producer, and fresh installed plus
+restored journeys before cutover. The 16 GiB host result remains exploratory;
+cloud-provider and physical-device acceptance remains unprovisioned.
+
 Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
 `codex/managed-evidence-cleanup-20261018` worktree without changing its
 uncommitted files. Carried its useful evidence-chain fix and Python software
