@@ -107,6 +107,22 @@ function classifyStatus(text) {
 function safeErrorName(name) {
   return ['Error','TypeError','ReferenceError','SyntaxError','RangeError','AssertionError','TimeoutError','NotAllowedError','AbortError','SecurityError','NotSupportedError','InvalidStateError','NetworkError'].includes(name)?name:'OTHER_ERROR';
 }
+const RECOVERY_ERROR_CODES=new Set(['invalid_request','invalid_request_uri','request_uri_fetch_failed','request_object_fetch_failed','invalid_request_object','invalid_signature','unsupported_format','unsupported_protocol','no_matching_credentials','credential_not_found','credential_revoked','credential_expired','presentation_rejected','verification_failed','invalid_nonce','invalid_state','access_denied']);
+function safeRecoveryCode(value){return typeof value==='string'&&RECOVERY_ERROR_CODES.has(value)?value:value===undefined||value===null?null:'OTHER_ERROR';}
+async function observeRecoveryResponse(response){
+  const body=await response.json().catch(()=>null);
+  return {httpStatus:response.status(),httpOk:response.ok(),jsonBody:body!==null,bodyOk:typeof body?.ok==='boolean'?body.ok:null,errorCode:safeRecoveryCode(body?.error_code??body?.code??body?.error),errorCodes:Array.isArray(body?.error_codes)?body.error_codes.slice(0,16).map(safeRecoveryCode):[]};
+}
+function validateRecoveryRequest(recovery,previousNonce){
+  assert.ok(typeof recovery.nonce==='string'&&recovery.nonce&&recovery.nonce!==previousNonce,'Fresh recovery nonce required');
+  const outer=new URL(recovery.href);assert.equal(outer.protocol,'openid4vp:','Canonical OpenID4VP recovery link required');
+  assert.equal(outer.username,'');assert.equal(outer.password,'');assert.equal(outer.hash,'');
+  const requests=outer.searchParams.getAll('request_uri');assert.equal(requests.length,1,'One signed request URI required');
+  const request=new URL(requests[0]);assert.equal(request.origin,BASE);assert.equal(request.username,'');assert.equal(request.password,'');assert.equal(request.hash,'');
+  assert.match(request.pathname,/^\/v1\/flows\/instances\/[a-f0-9-]{36}\/request$/);
+  assert.equal(request.search,'','Recovery must use the canonical first-party request, not DC API or compatibility transport');
+  return recovery.href; // Preserve the actual signed product link and all outer OID4VP parameters.
+}
 function cancellationAssertions(facts) {
   return {
     native_chooser_cancel: facts.nativeCancel?.state==='NATIVE_CANCEL_INVOKED' && facts.nativeCall?.errorName==='NotAllowedError' && facts.nativeCall?.returnedCredential!==true,
@@ -133,7 +149,7 @@ async function main(env=process.env) {
   report.driverSource=execFileSync('git',['rev-parse','HEAD'],{cwd:ROOT,encoding:'utf8'}).trim();report.chromeBinarySha256=fileHash(CHROME);
   const {chromium}=require('@playwright/test');
   const {login}=require('./audit-beta-credential-lifecycle');
-  const {requireJson}=require('./beta-demo-resource-helpers');
+  const {requireJson,browserJson}=require('./beta-demo-resource-helpers');
   const privateRoot=path.join(WORKSPACE,'_codex-private/beta-runtime-20261018/holder-cancel-browser');fs.mkdirSync(privateRoot,{recursive:true});
   const privateReal=fs.realpathSync(privateRoot), relativePrivate=path.relative(fs.realpathSync(WORKSPACE),privateReal);
   assert.ok(relativePrivate&&!relativePrivate.startsWith('..')&&!path.isAbsolute(relativePrivate),'Private runtime must remain inside workspace');
@@ -217,20 +233,33 @@ async function main(env=process.env) {
     report.facts.pendingStatus=status.status;report.facts.authenticated=(await me()).authenticated;
     report.facts.submissionRequests=submissionRequests;report.facts.flow=JSON.parse(sql(flowSql(report.cancelFlowId)));
     assert.ok(Object.entries(cancellationAssertions(report.facts)).filter(([key])=>key!=='trusted_recovery').every(([,value])=>value));
-    report.stage='trusted_first_party_recovery';
+    report.stage='trusted_first_party_recovery';report.recovery={};
+    report.substage='create_wallet_context';
     walletContext=await browser.newContext();walletPage=await walletContext.newPage();
-    const reset=await walletContext.request.post(`${WALLET}/api/reset`);assert.ok(reset.ok());
-    transaction=await request('/v1/issuance','POST',{organization_id:ORG,credential_template_id:TEMPLATE,subject_did:env.MARTY_TEST_WALLET_HOLDER_KID,
-      claims:{email:'demo.member@example.test',organization_id:ORG,role:'applicant',achievement_name:'Verified Member',achievement_description:'Synthetic holder cancellation recovery',issued_at:new Date().toISOString()}});
-    assert.match(transaction.id,UUID);report.recoveryTransactionId=transaction.id;
-    await walletPage.goto(WALLET);await walletPage.getByLabel('Credential offer URI').fill(transaction.credential_offer_uri);
-    const received=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/receive`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^receive$/i}).click();assert.ok((await received).ok());
-    await authPage.goto(`${BASE}/v1/auth/credential-login`);
+    report.substage='reset_first_party_wallet';
+    const reset=await walletContext.request.post(`${WALLET}/api/reset`);report.recovery.reset=await observeRecoveryResponse(reset);assert.ok(reset.ok());
+    report.substage='issue_recovery_credential';
+    const issuance=await browserJson(operator,'/v1/issuance',{method:'POST',body:JSON.stringify({organization_id:ORG,credential_template_id:TEMPLATE,subject_did:env.MARTY_TEST_WALLET_HOLDER_KID,
+      claims:{email:'demo.member@example.test',organization_id:ORG,role:'applicant',achievement_name:'Verified Member',achievement_description:'Synthetic holder cancellation recovery',issued_at:new Date().toISOString()}})});
+    report.recovery.issuance={httpStatus:issuance.status,httpOk:issuance.ok,errorCode:safeRecoveryCode(issuance.body?.error_code??issuance.body?.code??issuance.body?.error)};
+    transaction=issuance.body;assert.ok(issuance.ok,'Recovery issuance rejected');assert.match(transaction?.id,UUID);report.recoveryTransactionId=transaction.id;
+    report.substage='navigate_first_party_wallet';
+    const walletNavigation=await walletPage.goto(WALLET);report.recovery.walletNavigationStatus=walletNavigation?.status()??null;assert.ok(walletNavigation?.ok());
+    report.substage='receive_recovery_credential';
+    await walletPage.getByLabel('Credential offer URI').fill(transaction.credential_offer_uri);
+    const received=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/receive`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^receive$/i}).click();
+    report.recovery.receive=await observeRecoveryResponse(await received);assert.ok(report.recovery.receive.httpOk,'Recovery credential receipt rejected');
+    report.substage='navigate_fresh_recovery_auth';
+    const authNavigation=await authPage.goto(`${BASE}/v1/auth/credential-login`);report.recovery.authNavigationStatus=authNavigation?.status()??null;assert.ok(authNavigation?.ok());
+    report.substage='validate_fresh_recovery_request';
     const recovery=await authPage.evaluate(()=>({nonce:document.body.dataset.nonce,href:document.querySelector('#wallet-link').href}));
-    assert.notEqual(recovery.nonce,details.nonce);
-    await walletPage.getByLabel('Presentation request URI').fill(recovery.href);
-    const presented=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/present`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^present$/i}).click();assert.ok((await presented).ok());
-    await until(async()=>Boolean((await me()).authenticated),60000);report.facts.recovered=true;
+    const recoveryUri=validateRecoveryRequest(recovery,details.nonce);report.recovery.freshCanonicalRequest=true;
+    report.substage='present_recovery_credential';
+    await walletPage.getByLabel('Presentation request URI').fill(recoveryUri);
+    const presented=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/present`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^present$/i}).click();
+    report.recovery.present=await observeRecoveryResponse(await presented);assert.ok(report.recovery.present.httpOk&&report.recovery.present.bodyOk===true,'Recovery presentation rejected');
+    report.substage='await_recovered_authentication';
+    await until(async()=>{const state=await me();report.recovery.authenticated=state.authenticated===true;return report.recovery.authenticated;},60000);report.facts.recovered=true;
     report.state='FUNCTIONAL_PASS';
   } catch(error) {
     report.state='FAILED';report.failure={type:safeErrorName(error.name),stage:report.stage,substage:report.substage};
@@ -274,4 +303,4 @@ async function main(env=process.env) {
   assert.equal(report.holderCancelNoSession,true,'Actual browser cancellation/recovery evidence incomplete');
 }
 if(require.main===module)main().catch(error=>{console.error(`D05 cancellation failed: ${error.name}`);process.exitCode=1;});
-module.exports={nativeChooserBuild,assertProductBinding,classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
+module.exports={safeRecoveryCode,observeRecoveryResponse,validateRecoveryRequest,nativeChooserBuild,assertProductBinding,classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};

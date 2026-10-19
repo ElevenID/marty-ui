@@ -142,3 +142,20 @@ test('failure observations never preserve unknown status or arbitrary error stri
   assert.equal(safeErrorName('secret arbitrary string'),'OTHER_ERROR');
   assert.equal(classifyStatus('Preparing the wallet chooser. Tap Open wallet again in a moment.'),'PREPARING_REQUEST');
 });
+const {observeRecoveryResponse,safeRecoveryCode,validateRecoveryRequest}=require('./audit-beta-holder-cancel');
+test('recovery response diagnostics retain statuses and fixed codes without bodies, credentials or URLs',async()=>{
+ const secret='secret-nonce-token@example.test';
+ const response={status:()=>400,ok:()=>false,json:async()=>({ok:false,error:secret,error_codes:['credential_revoked',secret,{detail:secret}],credentials:[secret],request_uri:'https://private/?token='+secret})};
+ const observed=await observeRecoveryResponse(response);
+ assert.deepEqual(observed,{httpStatus:400,httpOk:false,jsonBody:true,bodyOk:false,errorCode:'OTHER_ERROR',errorCodes:['credential_revoked','OTHER_ERROR','OTHER_ERROR']});
+ assert.equal(JSON.stringify(observed).includes(secret),false);assert.equal(safeRecoveryCode('invalid_request'),'invalid_request');
+ assert.deepEqual(await observeRecoveryResponse({status:()=>502,ok:()=>false,json:async()=>{throw Error(secret);}}),{httpStatus:502,httpOk:false,jsonBody:false,bodyOk:null,errorCode:null,errorCodes:[]});
+ const accepted=await observeRecoveryResponse({status:()=>200,ok:()=>true,json:async()=>({ok:true,credential:secret})});assert.equal(accepted.bodyOk,true);assert.equal(JSON.stringify(accepted).includes(secret),false);
+});
+test('recovery uses unchanged actual OID4VP URI and rejects stale, foreign or DC API requests',()=>{
+ const request='https://beta.elevenidllc.com/v1/flows/instances/12345678-1234-4234-8234-123456789012/request';
+ const href='openid4vp://authorize?client_id='+encodeURIComponent('did:web:beta.elevenidllc.com')+'&request_uri='+encodeURIComponent(request);
+ assert.equal(validateRecoveryRequest({nonce:'new-unit-nonce',href},'old-unit-nonce'),href);
+ for(const value of [request,'https://foreign.test/?request_uri='+encodeURIComponent(request),href+'&request_uri='+encodeURIComponent(request),href.replace(encodeURIComponent(request),encodeURIComponent(request+'?transport=dc_api')),href.replace(encodeURIComponent(request),encodeURIComponent('https://foreign.test/request'))])assert.throws(()=>validateRecoveryRequest({nonce:'new-unit-nonce',href:value},'old-unit-nonce'));
+ assert.throws(()=>validateRecoveryRequest({nonce:'same',href},'same'));
+});
