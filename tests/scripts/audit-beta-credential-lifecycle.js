@@ -2,6 +2,8 @@
 /* eslint-disable no-console */
 
 const fs = require('fs');
+const crypto = require('node:crypto');
+const assert = require('node:assert/strict');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
@@ -38,6 +40,27 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const PRESENTATION_TEST_ID = 'LIFECYCLE-PRES-01';
+
+function lifecycleFixture(stamp) {
+  return {schemaVersion:1,organizationId:ORG_ID,sourceTemplateId:SOURCE_TEMPLATE_ID,policyId:POLICY_ID,stamp,
+    holder:{email:'lifecycle-holder@example.test',given:'Grace',family:'Hopper',employeeId:`LIFECYCLE-${stamp}`,department:'Security',position:'Lifecycle Auditor',date:'2026-07-12',dateTime:'2026-07-12T12:00:00Z'}};
+}
+async function prepareLiveInputs(artifactDir,stamp,client) {
+  const relative='lifecycle-fixture-input.json';
+  fs.writeFileSync(path.join(artifactDir,relative),JSON.stringify(lifecycleFixture(stamp),null,2),{flag:'wx'});
+  const input=JSON.parse((await client.readFixture(relative)).toString('utf8'));
+  assert.deepEqual(input,lifecycleFixture(stamp));
+  await client.seal();return input;
+}
+async function liveClient() {
+  assert.equal(BETA_ORIGIN,'https://beta.elevenidllc.com');assert.equal(TEST_WALLET_ORIGIN,'http://127.0.0.1:8787');
+  assert.equal(LOCAL_BETA_PROXY,false);assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED==='1');
+  assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST,'Canonical evidence requires deployed UI');
+  const helper=process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
+  assert.ok(helper&&process.connected,'Recorder-owned live IPC required');
+  assert.equal(crypto.createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256);
+  return require(helper).createLiveEvidenceClient();
+}
 
 function resolveUiCandidateDist(
   root = ROOT,
@@ -400,8 +423,8 @@ async function cleanupLifecycleDrafts(page, sourceTemplateId, activeTemplateId) 
   });
 }
 
-async function issueCredential(page, templateId) {
-  return page.evaluate(async ({ organizationId, templateId }) => {
+async function issueCredential(page, templateId, holder = lifecycleFixture("standalone").holder) {
+  return page.evaluate(async ({ organizationId, templateId, holder }) => {
     const templateResponse = await fetch(`/v1/credential-templates/${encodeURIComponent(templateId)}`, {
       credentials: 'include',
     });
@@ -419,16 +442,16 @@ async function issueCredential(page, templateId) {
       if (Array.isArray(options) && options.length) {
         const first = options[0];
         value = typeof first === 'object' ? first.value ?? first.label : first;
-      } else if (type === 'DATE') value = '2026-07-12';
-      else if (type === 'DATETIME') value = '2026-07-12T12:00:00Z';
+      } else if (type === 'DATE') value = holder.date;
+      else if (type === 'DATETIME') value = holder.dateTime;
       else if (type === 'NUMBER' || type === 'INTEGER') value = 1;
       else if (type === 'BOOLEAN') value = true;
-      else if (normalized.includes('email')) value = 'lifecycle-holder@example.test';
-      else if (normalized.includes('given') || normalized.includes('first')) value = 'Grace';
-      else if (normalized.includes('family') || normalized.includes('last') || normalized.includes('surname')) value = 'Hopper';
-      else if (normalized.includes('employee') || normalized.endsWith('_id')) value = `LIFECYCLE-${Date.now()}`;
-      else if (normalized.includes('department')) value = 'Security';
-      else if (normalized.includes('position') || normalized.includes('title')) value = 'Lifecycle Auditor';
+      else if (normalized.includes('email')) value = holder.email;
+      else if (normalized.includes('given') || normalized.includes('first')) value = holder.given;
+      else if (normalized.includes('family') || normalized.includes('last') || normalized.includes('surname')) value = holder.family;
+      else if (normalized.includes('employee') || normalized.endsWith('_id')) value = holder.employeeId;
+      else if (normalized.includes('department')) value = holder.department;
+      else if (normalized.includes('position') || normalized.includes('title')) value = holder.position;
       else value = `Lifecycle audit ${name || 'value'}`;
       return [name, value];
     }).filter(([name]) => Boolean(name)));
@@ -452,7 +475,7 @@ async function issueCredential(page, templateId) {
       offerUri: body?.credential_offer_uri || body?.offer_url || null,
       error: issuanceResponse.ok ? null : body?.detail || body?.message || 'Issuance failed',
     };
-  }, { organizationId: ORG_ID, templateId });
+  }, { organizationId: ORG_ID, templateId, holder });
 }
 
 async function receiveCredential(walletPage, offerUri, expectedVct) {
@@ -788,6 +811,10 @@ async function main() {
 
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-lifecycle-${stamp}`);
+  const evidence=await liveClient();
+  let browser;
+  try {
+  const input=await prepareLiveInputs(artifactDir,stamp,evidence);
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
@@ -808,13 +835,12 @@ async function main() {
     unexpectedResponses: [],
   };
 
-  const browser = await chromium.launch({
+  browser = await chromium.launch({
     headless: HEADLESS,
     args: LOCAL_BETA_PROXY
       ? ['--host-resolver-rules=MAP beta.elevenidllc.com 127.0.0.1', '--no-proxy-server']
       : [],
   });
-  try {
     const context = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
@@ -828,6 +854,7 @@ async function main() {
     if (RECORD_VIDEO) report.recordingActionEvidence = recording.evidence;
     recording.mark('setup', 'begin', {boundary: 'API_FIXTURE_SETUP_NOT_ADMIN_UI_DEMONSTRATION'});
     const walletPage = await context.newPage();
+    evidence.bindPage(page);evidence.bindPage(walletPage);
     const applicationVideo = page.video();
     const walletVideo = walletPage.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
@@ -857,7 +884,7 @@ async function main() {
       };
     }, ORG_ID);
 
-    report.revocationProfile = await ensureActiveRevocationProfile(page, stamp);
+    report.revocationProfile = await ensureActiveRevocationProfile(page, input.stamp);
     if (!report.revocationProfile.ok) {
       throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
     }
@@ -876,7 +903,7 @@ async function main() {
       throw new Error(`Lifecycle credential cleanup failed: ${JSON.stringify(report.credentialCleanup.failures)}`);
     }
 
-    report.issuance = await issueCredential(page, report.templateId);
+    report.issuance = await issueCredential(page, report.templateId, input.holder);
     if (!report.issuance.ok || !report.issuance.offerUri) {
       throw new Error(`Issuance failed: ${report.issuance.error}`);
     }
@@ -1038,6 +1065,7 @@ async function main() {
     );
     report.releaseReady = Boolean(report.engineeringReady && !uiCandidate);
     report.finishedAt = new Date().toISOString();
+    await evidence.complete();
     await context.close();
     if (RECORD_VIDEO) {
       report.recordings = {
@@ -1049,7 +1077,8 @@ async function main() {
     console.log(JSON.stringify(report, null, 2));
     if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
   } finally {
-    await browser.close();
+    evidence.close();
+    if(browser)await browser.close();
   }
 }
 
@@ -1061,6 +1090,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  lifecycleFixture,prepareLiveInputs,
   createLifecycleRecording,
   initialActiveVerificationPassed,
   showRenewalLineage,

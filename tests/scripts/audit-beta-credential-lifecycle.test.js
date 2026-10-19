@@ -6,6 +6,41 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+test('live fixture ACK and seal precede use of actual registered issuance inputs',async()=>{
+  const {prepareLiveInputs,issueCredential}=require('./audit-beta-credential-lifecycle');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'lifecycle-live-'));const events=[];
+  try {
+    const input=await prepareLiveInputs(directory,'unit-reset-01',{
+      readFixture:async file=>{events.push('read-ack');return fs.readFileSync(path.join(directory,file));},
+      seal:async()=>events.push('seal-ack'),
+    });
+    let issuance;
+    const page={evaluate:async(fn,args)=>{
+      const vm=require('node:vm');
+      return vm.runInNewContext(`(${fn.toString()})(args)`,{args,fetch:async(url,options)=>{
+        if(url.startsWith('/v1/credential-templates/'))return {ok:true,json:async()=>({name:'Synthetic',claims:[{name:'email'},{name:'employee_id'}]})};
+        events.push('issuance');issuance=JSON.parse(options.body);return {ok:true,status:200,json:async()=>({credential_offer_uri:'unit-offer'})};
+      }});
+    }};
+    await issueCredential(page,'unit-template',input.holder);
+    assert.deepEqual(events,['read-ack','seal-ack','issuance']);
+    assert.equal(issuance.claims.email,input.holder.email);assert.equal(issuance.claims.employee_id,'LIFECYCLE-unit-reset-01');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(directory,'lifecycle-fixture-input.json'))).holder.employeeId,issuance.claims.employee_id);
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
+
+test('live fixture rejection cannot seal and existing inputs are never overwritten',async()=>{
+  const {prepareLiveInputs}=require('./audit-beta-credential-lifecycle');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'lifecycle-live-fail-'));let sealed=false;
+  try {
+    await assert.rejects(prepareLiveInputs(directory,'unit',{readFixture:async()=>{throw Error('ACK rejected');},seal:async()=>{sealed=true;}}),/ACK rejected/);
+    assert.equal(sealed,false);
+    const before=fs.readFileSync(path.join(directory,'lifecycle-fixture-input.json'));
+    await assert.rejects(prepareLiveInputs(directory,'different',{}),{code:'EEXIST'});
+    assert.deepEqual(fs.readFileSync(path.join(directory,'lifecycle-fixture-input.json')),before);
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
+
 const {
   candidateUiFileForRequest,
   createLifecycleRecording,
