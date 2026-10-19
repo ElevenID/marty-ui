@@ -4,6 +4,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const { chromium } = require('@playwright/test');
 
 const {
@@ -49,7 +50,68 @@ const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const MANAGED_SERVICE_ID = 'managed-openbao-transit';
-const INTERNAL_OPENBAO_ENDPOINT = 'http://openbao:8200';
+
+function providerVerificationDisplay(report, phase) {
+  const assertions = providerSwitchBehaviorAssertions(report);
+  const required = ['issue_with_provider_a', 'switch_signing_provider', 'verify_same_did_identity'];
+  if (phase === 'denied-switch') required.push('unpublished_signing_key_denied');
+  else if (phase !== 'after-switch') throw new Error('Unknown provider evidence phase');
+  if (required.some(id => assertions[id] !== true)) throw new Error('Provider display requires actual passing verification evidence');
+  const first = report.providerA.credential, second = report.providerB.credential;
+  const rows = [
+    ['Issuer DID (both credentials)', first.issuerDid],
+    ['Original credential key ID', first.kid],
+    ['New credential key ID', second.kid],
+    ['Original credential reverified after switch', String(report.providerA.reverifiedAfterSwitch)],
+    ['New credential signature verified', String(second.verified)],
+  ];
+  if (phase === 'denied-switch') {
+    const denied = report.unpublishedReplacement;
+    rows.push(['Unpublished replacement response', `HTTP ${denied.rebindStatus}; cutover accepted: ${denied.rebindOk}`],
+      ['Post-denial issuance still uses published key B', String(denied.credentialAfterDenial.kid === second.kid)],
+      ['Post-denial credential signature verified', String(denied.credentialAfterDenial.verified)]);
+  }
+  return {title:phase === 'denied-switch' ? 'Unpublished key denied; published key retained' : 'One issuer DID; both credentials verify', rows,
+    boundary:'Cryptographic test evidence from actual issued credentials and resolved public DID keys. Added recording panel; not an admin portal screen.',
+    custodyScope:'Distinct keys and provider configurations on one beta OpenBao backend.'};
+}
+
+function renderProviderEvidence(payload) {
+    document.getElementById('d02-verification-evidence')?.remove();
+    const panel = document.createElement('section'); panel.id = 'd02-verification-evidence';
+    Object.assign(panel.style,{position:'fixed',top:'76px',left:'276px',width:'840px',boxSizing:'border-box',padding:'20px',
+      zIndex:'2147483646',background:'#0f172a',color:'#f8fafc',fontFamily:'Arial, sans-serif',border:'3px solid #38bdf8'});
+    const line = (text,size,color) => {const node=document.createElement('div');node.textContent=text;
+      Object.assign(node.style,{fontSize:size+'px',color:color || '#f8fafc',marginBottom:'9px',overflowWrap:'anywhere'});panel.appendChild(node);};
+    line('CRYPTOGRAPHIC TEST EVIDENCE',18,'#7dd3fc'); line(payload.title,28);
+    for (const [label,value] of payload.rows) {
+      const row = document.createElement('div');
+      row.dataset.evidenceLabel = label;
+      Object.assign(row.style, {marginBottom:'10px',lineHeight:'1.15'});
+      const heading = document.createElement('div'); heading.textContent = label;
+      Object.assign(heading.style, {fontSize:'18px',color:'#cbd5e1',marginBottom:'3px'});
+      const actual = document.createElement('div'); actual.textContent = value;
+      actual.dataset.evidenceValue = 'true';
+      Object.assign(actual.style, {fontSize:'30px',overflowWrap:'anywhere',whiteSpace:'pre-wrap'});
+      row.append(heading,actual); panel.appendChild(row);
+    }
+    line(payload.custodyScope,18,'#7dd3fc'); line(payload.boundary,16,'#cbd5e1');
+    document.body.appendChild(panel);
+    const rectangle = panel.getBoundingClientRect();
+    if (rectangle.left < 0 || rectangle.right > window.innerWidth || rectangle.bottom > window.innerHeight - 12) {
+      panel.remove();
+      throw new Error('Provider evidence panel must fit the actual capture viewport without clipping');
+    }
+}
+
+async function showProviderVerification(page, report, phase) {
+  const payload = providerVerificationDisplay(report, phase);
+  if (!RECORD_VIDEO) return;
+  await page.evaluate(renderProviderEvidence,payload);
+  await page.locator('#d02-verification-evidence').waitFor({state:'visible'});
+  await page.waitForTimeout(6000);
+  await page.evaluate(() => document.getElementById('d02-verification-evidence')?.remove());
+}
 
 async function showProviderStep(page, title, detail) {
   return showStep(page, title, detail, {
@@ -99,6 +161,57 @@ function writableConfig(config, { extraServices = [], defaultServiceId, resetDef
   };
 }
 
+function changedPaths(before, after, prefix = '') {
+  if (stateHash(before ?? null) === stateHash(after ?? null)) return [];
+  if (before && after && typeof before === 'object' && typeof after === 'object') return [...new Set([...Object.keys(before), ...Object.keys(after)])].flatMap(key => changedPaths(before[key], after[key], prefix ? `${prefix}.${key}` : key));
+  return [prefix];
+}
+
+function stateHash(value) {
+  const sorted = item => Array.isArray(item) ? item.map(sorted) : item && typeof item === 'object'
+    ? Object.fromEntries(Object.keys(item).sort().map(key => [key, sorted(item[key])])) : item;
+  return crypto.createHash('sha256').update(JSON.stringify(sorted(value))).digest('hex');
+}
+
+async function protectedFixtureState(page) {
+  const routes = {
+    loginTrust: '/v1/trust-profiles/60000000-0000-0000-0000-000000000001',
+    loginIssuers: '/v1/trust-profiles/60000000-0000-0000-0000-000000000001/issuers',
+    lifecycleSource: `/v1/credential-templates/${process.env.D02_PROTECTED_LIFECYCLE_TEMPLATE_ID}`,
+    discovery: `/.well-known/openid-credential-issuer/org/${ORG_ID}`,
+  };
+  const result = {};
+  for (const [name, route] of Object.entries(routes)) {
+    const response = await browserJson(page, route);
+    if (!response.ok) throw new Error(`Protected beta fixture ${name} unavailable (HTTP ${response.status})`);
+    result[name] = stateHash(response.body);
+  }
+  return result;
+}
+
+function restoredConfigurationEvidence(original, restored, createdManagedKeys = []) {
+  const before = writableConfig(original);
+  const actual = writableConfig(restored);
+  const normalized = structuredClone(actual);
+  const retainedManagedKeyReferences = [];
+  for (const key of createdManagedKeys) {
+    if (before.key_reference_purposes?.[MANAGED_SERVICE_ID]?.[key] === undefined
+        && stateHash(normalized.key_reference_purposes?.[MANAGED_SERVICE_ID]?.[key]) === stateHash(['vc_jwt_issuer'])) {
+      delete normalized.key_reference_purposes[MANAGED_SERVICE_ID][key];
+      retainedManagedKeyReferences.push(key);
+    }
+  }
+  return {
+    ok: stateHash(before) === stateHash(normalized),
+    originalWritableConfigSha256: stateHash(before),
+    actualWritableConfigSha256: stateHash(actual),
+    restoredControlConfigSha256: stateHash(normalized),
+    changedPaths: changedPaths(before, actual),
+    retainedManagedKeyReferences,
+    retentionReason: 'New non-exportable managed signing key records remain after retiring their synthetic issuer identity; existing keys and all controls must be unchanged.',
+  };
+}
+
 async function saveSigningConfig(page, payload) {
   const response = await browserJson(
     page,
@@ -106,7 +219,7 @@ async function saveSigningConfig(page, payload) {
     { method: 'PATCH', body: JSON.stringify(payload) },
   );
   if (!response.ok) {
-    throw new Error(`Signing configuration update failed (HTTP ${response.status})`);
+    throw new Error(`Signing configuration update failed (HTTP ${response.status})${safeErrorDetail(response.body)}`);
   }
   return response.body;
 }
@@ -155,25 +268,51 @@ async function signingKeyForIdentity(page, issuerDid) {
   return key.provider_key_name;
 }
 
-function transitService(id, name, keyReference) {
+function managedTransitEndpoint(config) {
+  const services = config?.services?.filter((service) => service.id === MANAGED_SERVICE_ID) || [];
+  if (services.length !== 1) throw new Error('Expected one managed transit service');
+  const endpoint = services[0].endpoint;
+  let parsed;
+  try { parsed = new URL(endpoint); } catch { throw new Error('Managed transit endpoint is invalid'); }
+  if (!['http:', 'https:'].includes(parsed.protocol)
+    || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error('Managed transit endpoint is invalid');
+  }
+  return endpoint;
+}
+
+function externalTransitPrerequisites(env = process.env) {
+  if (env.BETA_ORIGIN !== 'https://beta.elevenidllc.com'
+      || env.D02_SAME_BACKEND_FIXTURE !== '1'
+      || env.D02_EXTERNAL_TRANSIT_ENDPOINT !== 'https://openbao:8200'
+      || env.D02_EXTERNAL_TRANSIT_CA_FILE !== '/run/secrets/openbao_tls_ca_cert'
+      || !/^d02-external-[a-z0-9-]+$/.test(env.D02_EXTERNAL_TRANSIT_KEY || '')
+      || !env.D02_EXTERNAL_TRANSIT_TOKEN || /\s/.test(env.D02_EXTERNAL_TRANSIT_TOKEN)
+      || env.D02_EXTERNAL_TRANSIT_TOKEN.length > 16384) {
+    throw new Error('Scoped beta external-transit token, key, HTTPS CA and same-backend acknowledgement are required');
+  }
   return {
-    id,
-    name,
-    description: 'Release-scoped provider-switch qualification service.',
-    service_type: 'openbao-transit',
-    provider: 'openbao',
-    endpoint: INTERNAL_OPENBAO_ENDPOINT,
-    mount: 'transit',
-    namespace: '',
-    region: '',
-    auth_mode: 'service_token',
-    auth_reference: 'Managed by Marty service stack',
-    key_reference: keyReference,
-    key_aliases: [keyReference],
-    algorithms: ['ES256'],
-    key_purposes: ['vc_jwt_issuer'],
-    credential_formats: ['dc+sd-jwt'],
-    status: 'configured',
+    endpoint: env.D02_EXTERNAL_TRANSIT_ENDPOINT,
+    token: env.D02_EXTERNAL_TRANSIT_TOKEN,
+    caCertFile: env.D02_EXTERNAL_TRANSIT_CA_FILE,
+    keyReference: env.D02_EXTERNAL_TRANSIT_KEY,
+    unavailableKey: env.D02_EXTERNAL_TRANSIT_KEY + '-unpublished',
+  };
+}
+
+function transitService(id, name, keyReference, endpoint, credentials) {
+  managedTransitEndpoint({ services: [{ id: MANAGED_SERVICE_ID, endpoint }] });
+  if (!endpoint.startsWith('https:') || !credentials?.token || !credentials?.caCertFile) {
+    throw new Error('External transit requires explicit token authentication and HTTPS CA');
+  }
+  return {
+    id, name,
+    description: 'Synthetic provider configuration and key switch on the same beta OpenBao backend; not independent KMS products.',
+    service_type: 'openbao-transit', provider: 'openbao', endpoint,
+    mount: 'transit', namespace: '', region: '',
+    auth_mode: 'token', auth_reference: credentials.token, ca_cert_file: credentials.caCertFile,
+    key_reference: keyReference, key_aliases: [keyReference],
+    algorithms: ['ES256'], key_purposes: ['vc_jwt_issuer'], credential_formats: ['dc+sd-jwt'], status: 'configured',
   };
 }
 
@@ -229,6 +368,8 @@ async function createTemplateVersion(page, issuerDid, stamp) {
   }, {
     issuer: issuerDid,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
+    custodyScope: 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
+    externalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
     versionStamp: stamp,
   });
   return {
@@ -304,7 +445,7 @@ async function reverifyIssuedCredential(issued) {
   };
 }
 
-async function rebindThroughConsole(page, issuerDid) {
+async function rebindThroughConsole(page, issuerDid, {recording = RECORD_VIDEO} = {}) {
   await page.goto(`${BETA_ORIGIN}/console/org/deploy/issuer-identity`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
@@ -315,15 +456,30 @@ async function rebindThroughConsole(page, issuerDid) {
     new URL(response.url()).pathname === '/v1/signing-keys/issuer-identities'
     && response.request().method() === 'PATCH'
   ), { timeout: 60_000 });
-  await row.getByRole('button', { name: 'Move identity to default signing service' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Move identity' }).click();
+  const move = row.getByRole('button', { name: 'Move identity to default signing service' });
+  await move.waitFor({state:'visible'});
+  if (recording) { await move.hover(); await page.waitForTimeout(2200); }
+  await move.click();
+  const dialog = page.getByRole('dialog');
+  const confirm = dialog.getByRole('button', { name: 'Move identity' });
+  await dialog.waitFor({state:'visible'});
+  await confirm.waitFor({state:'visible'});
+  if (recording) { await page.waitForTimeout(2600); await confirm.hover(); await page.waitForTimeout(1400); }
+  await confirm.click();
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
+  if (response.ok()) {
+    await dialog.waitFor({state:'hidden'});
+    await row.waitFor({state:'visible'});
+    if (recording) await page.waitForTimeout(2200);
+  }
   return {
     ok: response.ok(),
     status: response.status(),
     changed: body?.changed === true,
     identity: body?.identity || null,
+    interactionEvidence: {adminUiUsed:true, moveControlVisible:true, nativeConfirmationVisible:true,
+      confirmationButtonVisible:true, recordedDwellApplied:recording},
   };
 }
 
@@ -411,10 +567,10 @@ async function main() {
   const password = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   if (!email || !password) throw new Error('Missing beta operator credentials');
 
+  const externalTransit = externalTransitPrerequisites();
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
   const artifactDir = createArtifactDir(ROOT, `beta-issuer-provider-switch-${stamp}`);
   const issuerDid = `did:web:${new URL(BETA_ORIGIN).host}:orgs:d02-provider-switch-${stamp}`;
-  const seedDid = `did:web:${new URL(BETA_ORIGIN).host}:orgs:d02-provider-seed-${stamp}`;
   const providerBId = `d02-provider-b-${stamp}`;
   const providerCId = `d02-provider-unpublished-${stamp}`;
   const report = {
@@ -422,6 +578,8 @@ async function main() {
     organizationId: ORG_ID,
     issuerDid,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
+    custodyScope: 'Two provider configurations and distinct keys on one beta OpenBao backend; not two independent KMS products.',
+    externalAuthentication: { mode: 'token', explicitCa: true, scopedFixtureKey: true },
     pageErrors: [],
     unexpectedResponses: [],
   };
@@ -460,11 +618,16 @@ async function main() {
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     originalConfig = await loadSigningConfig(page);
+    report.protectedStateBefore = await protectedFixtureState(page);
+    report.originalWritableConfigSha256 = stateHash(writableConfig(originalConfig));
+    const transitEndpoint = managedTransitEndpoint(originalConfig);
+    if (transitEndpoint !== externalTransit.endpoint) throw new Error('Beta backend differs from the provisioned fixture');
 
     let templateId = null;
     let governance = null;
     let qualificationError = null;
     const createdIdentityDids = [];
+    const createdManagedKeys = [];
     try {
       const managedConfig = await saveSigningConfig(page, writableConfig(originalConfig, {
         defaultServiceId: MANAGED_SERVICE_ID,
@@ -477,12 +640,10 @@ async function main() {
 
       report.identityCreation = await createIdentity(page, issuerDid, `d02-identity-${stamp}`);
       if (!report.identityCreation.ok) throw new Error(`Issuer identity creation failed (HTTP ${report.identityCreation.status})`);
-      if (report.identityCreation.created) createdIdentityDids.push(issuerDid);
-      report.seedIdentityCreation = await createIdentity(page, seedDid, `d02-seed-${stamp}`);
-      if (!report.seedIdentityCreation.ok) {
-        throw new Error(`Provider-B seed identity creation failed (HTTP ${report.seedIdentityCreation.status})`);
+      if (report.identityCreation.created) {
+        createdIdentityDids.push(issuerDid);
+        createdManagedKeys.push(await signingKeyForIdentity(page, issuerDid));
       }
-      if (report.seedIdentityCreation.created) createdIdentityDids.push(seedDid);
 
       const sourceTemplate = await browserJson(
         page,
@@ -526,9 +687,9 @@ async function main() {
       report.providerA = { issuance: providerA.issuance, credential: providerA.credential };
       await showProviderStep(page, 'Credential signed by provider A', 'The first credential verifies against the DID method published by managed custody.');
 
-      const providerBKey = await signingKeyForIdentity(page, seedDid);
+      const providerBKey = externalTransit.keyReference;
       const latestConfig = await loadSigningConfig(page);
-      const providerB = transitService(providerBId, `D-02 Provider B ${stamp}`, providerBKey);
+      const providerB = transitService(providerBId, `D-02 Provider B ${stamp}`, providerBKey, transitEndpoint, externalTransit);
       const providerBConfig = await saveSigningConfig(page, writableConfig(latestConfig, {
         extraServices: [providerB],
         defaultServiceId: providerBId,
@@ -543,7 +704,7 @@ async function main() {
       if (!report.rebind.ok || !report.rebind.changed) {
         throw new Error(`Provider switch failed (HTTP ${report.rebind.status})`);
       }
-      await showProviderStep(page, 'Custody moved to provider B', 'The replacement public key was published before the active provider changed.');
+      await showProviderStep(page, 'Signing moved to configuration B', 'This beta fixture uses a distinct key and scoped token on the same OpenBao backend. The replacement public key was published before the active configuration changed.');
 
       const providerBResult = await issueAndVerify(page, template);
       report.providerB = {
@@ -553,13 +714,16 @@ async function main() {
       const oldReverification = await reverifyIssuedCredential(providerA.issued);
       report.providerA.reverifiedAfterSwitch = oldReverification.verified;
       report.didAfterSwitch = { assertionMethodIds: oldReverification.assertionMethodIds };
+      await showProviderVerification(page, report, 'after-switch');
       await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
       const beforeFailureConfig = await loadSigningConfig(page);
       const unavailable = transitService(
         providerCId,
         `D-02 Unpublished Provider ${stamp}`,
-        `d02-unpublished-key-${stamp}`,
+        externalTransit.unavailableKey,
+        transitEndpoint,
+        externalTransit,
       );
       await saveSigningConfig(page, writableConfig(beforeFailureConfig, {
         extraServices: [providerB, unavailable],
@@ -574,6 +738,7 @@ async function main() {
         issueAfterDenial: afterDenial.issuance,
         credentialAfterDenial: afterDenial.credential,
       };
+      await showProviderVerification(page, report, 'denied-switch');
       await showProviderStep(page, 'Unpublished replacement denied', 'An unavailable replacement key cannot cut over custody; issuance continues on the last published provider-B method.');
 
       report.behaviorAssertions = providerSwitchBehaviorAssertions(report);
@@ -590,9 +755,7 @@ async function main() {
         try {
           const restored = await saveSigningConfig(page, writableConfig(originalConfig));
           report.configRestored = {
-            ok: restored.default_service_id === originalConfig.default_service_id
-              && JSON.stringify(restored.format_defaults || {}) === JSON.stringify(originalConfig.format_defaults || {})
-              && JSON.stringify(restored.type_defaults || {}) === JSON.stringify(originalConfig.type_defaults || {}),
+            ...restoredConfigurationEvidence(originalConfig, restored, createdManagedKeys),
             defaultServiceId: restored.default_service_id,
           };
         } catch (error) {
@@ -601,14 +764,17 @@ async function main() {
       }
     }
 
+    report.protectedStateAfter = await protectedFixtureState(page);
+    report.protectedStateUnchanged = stateHash(report.protectedStateBefore) === stateHash(report.protectedStateAfter);
     report.releaseReady = Boolean(
-      !qualificationError
+      report.protectedStateUnchanged
+      && !qualificationError
       && Object.values(report.behaviorAssertions || {}).every((passed) => passed === true)
       && report.cleanup?.retiredTemplate
       && report.cleanup?.revokedCredentials >= 3
       && report.cleanup?.removedGovernanceRelationships === 1
       && report.cleanup?.removedGovernedIssuers === 1
-      && report.cleanup?.retiredIdentities === 2
+      && report.cleanup?.retiredIdentities === 1
       && report.configRestored?.ok
       && report.loginTheme?.ok
       && report.pageErrors.length === 0
@@ -626,6 +792,12 @@ async function main() {
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
+  } catch (error) {
+    report.error = redact(error.stack || error.message || String(error));
+    report.releaseReady = false;
+    report.finishedAt = new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    throw error;
   } finally {
     if (context) await context.close().catch(() => {});
     await browser.close();
@@ -640,10 +812,16 @@ if (require.main === module) {
 }
 
 module.exports = {
+  renderProviderEvidence,
+  rebindThroughConsole,
+  providerVerificationDisplay,
   cleanup,
   credentialEvidence,
   governedIssuerRequest,
   identityRequest,
+  managedTransitEndpoint,
   transitService,
+  externalTransitPrerequisites,
+  restoredConfigurationEvidence,
   writableConfig,
 };
