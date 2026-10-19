@@ -2,8 +2,12 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
+  providerRunInputs,
   cleanup,
   governedIssuerRequest,
   identityRequest,
@@ -14,6 +18,23 @@ const {
   writableConfig,
   rebindThroughConsole,
 } = require('./audit-beta-issuer-provider-switch');
+
+test('actual provider action inputs are read and acknowledged before sealing without persisting transit credentials', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-input-proof-'));
+  t.after(() => fs.rmSync(directory, {recursive: true, force: true}));
+  const calls = [];
+  const proof = {readFixture: async name => {calls.push('read'); return fs.readFileSync(path.join(directory, name));}, seal: async () => calls.push('seal')};
+  const input = await providerRunInputs(directory, 'synthetic-stamp', {
+    keyReference: 'd02-external-key', unavailableKey: 'd02-external-key-unpublished',
+    token: 'never-persist-this-transit-token', caCertFile: '/private/ca',
+  }, proof);
+  assert.deepEqual(calls, ['read', 'seal']);
+  assert.equal(input.providerBId, 'd02-provider-b-synthetic-stamp');
+  assert.equal(input.externalKeyReference, 'd02-external-key');
+  const bytes = fs.readFileSync(path.join(directory, 'provider-runtime-inputs.json'), 'utf8');
+  assert.equal(bytes.includes('never-persist'), false); assert.equal(bytes.includes('/private/ca'), false);
+  assert.equal(Object.isFrozen(input), true);
+});
 
 test('recorded custody switch shows actual move control and confirmation before changing identity',async()=>{
  const calls=[];
