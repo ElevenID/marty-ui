@@ -10,11 +10,13 @@ use std::{
     fs::OpenOptions,
     io::Write,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
 use marty_openbao_http::OpenBaoHttp;
+use mmf_platform::OpenBaoTlsIdentityFiles;
 use reqwest::{Method, StatusCode};
 use serde_json::{json, Value};
 
@@ -492,6 +494,8 @@ async fn provision(
     output: &Path,
     project: &str,
     profile: Profile,
+    endpoint: &str,
+    ca_file: &Path,
 ) -> Result<(), Box<dyn Error>> {
     let pki_mount = match profile {
         Profile::Passport => {
@@ -658,7 +662,7 @@ async fn provision(
                 .cert_file
                 .to_owned(),
         };
-        write_new(&output.join(cert_file), cert)?;
+        write_new(&output.join(&cert_file), cert)?;
         let policy_name = match profile {
             Profile::Passport => key.clone(),
             Profile::Selfhost | Profile::SelfhostRenew => format!("{project}-{key}"),
@@ -713,7 +717,54 @@ async fn provision(
                 .token_file
                 .to_owned(),
         };
-        write_new(&output.join(token_file), token)?;
+        write_new(&output.join(&token_file), token)?;
+        if profile == Profile::SelfhostRenew {
+            let lookup = bao
+                .checked(
+                    Method::POST,
+                    "auth/token/lookup",
+                    Some(json!({"token": token})),
+                    None,
+                )
+                .await?;
+            let scopes = data(&lookup, "policies")?
+                .as_array()
+                .ok_or("renewed TLS token policies are invalid")?;
+            let remaining = data(&lookup, "ttl")?
+                .as_u64()
+                .ok_or("renewed TLS token TTL is invalid")?;
+            if scopes.len() != 1
+                || scopes[0] != policy_name
+                || remaining < 3600
+                || remaining > 28800
+            {
+                return Err("renewed TLS token has unexpected authority or lifetime".into());
+            }
+            let proof = bao
+                .checked(
+                    Method::POST,
+                    &format!("transit/sign/{key}"),
+                    Some(json!({"input": STANDARD.encode(b"renewal-key-scope"),
+                                "key_version": 1})),
+                    Some(token),
+                )
+                .await?;
+            if !value(&proof, "signature")?.starts_with("vault:v1:") {
+                return Err("renewed TLS token used a different signer version".into());
+            }
+            OpenBaoTlsIdentityFiles {
+                certificate_chain_file: output.join(&cert_file),
+                kms_ca_cert_file: ca_file.to_owned(),
+                kms_endpoint: endpoint.to_owned(),
+                kms_token_file: output.join(&token_file),
+                kms_key_name: key.clone(),
+                kms_key_version: 1,
+                request_timeout: Duration::from_secs(5),
+                max_concurrent_signs: 1,
+            }
+            .connect()
+            .await?;
+        }
         if first_token.is_none() {
             first_token = Some(token.to_owned());
         }
@@ -820,7 +871,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
         )?,
         root_token,
     };
-    provision(&bao, &output, &project, profile).await?;
+    provision(
+        &bao,
+        &output,
+        &project,
+        profile,
+        &endpoint,
+        Path::new(&ca_file),
+    )
+    .await?;
     Ok(())
 }
 
