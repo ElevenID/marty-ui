@@ -330,6 +330,15 @@ The preceding final-head CI was cancelled because its source is superseded.
 Repeat recovery on exact signed `v1.1.258` artifacts after protected merge
 and terminally successful bundle production.
 
+Next-release input preflight (2026-10-18): The candidate #1427 source lock
+selects `marty-ui@1.1.258`; the four independent nginx/PostgreSQL/Redis
+OCI digests from the prior release were rechecked against a complete
+`docker compose config --format json` render of the candidate self-host source
+using `scripts/check_selfhost_external_images.py`. That source-shape preflight
+passed. Re-run on the eventual protected-main SHA and verify live registry
+digests before dispatch; the current candidate result is neither a claim nor
+a signed prepared-bundle qualification.
+
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
 Canvas shard. Because `CI-main` concurrency held fresh run 39172145237
