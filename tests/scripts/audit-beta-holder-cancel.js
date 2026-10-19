@@ -250,7 +250,15 @@ async function main(env=process.env) {
     const received=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/receive`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^receive$/i}).click();
     report.recovery.receive=await observeRecoveryResponse(await received);assert.ok(report.recovery.receive.httpOk,'Recovery credential receipt rejected');
     report.substage='navigate_fresh_recovery_auth';
+    const recoveryPrefetch=authPage.waitForResponse(response=>{
+      const url=new URL(response.url());
+      return url.origin===BASE&&/^\/v1\/flows\/instances\/[a-f0-9-]{36}\/request$/.test(url.pathname)
+        && response.request().method()==='GET';
+    },{timeout:30000});
     const authNavigation=await authPage.goto(`${BASE}/v1/auth/credential-login`);report.recovery.authNavigationStatus=authNavigation?.status()??null;assert.ok(authNavigation?.ok());
+    const prefetchResponse=await recoveryPrefetch;await prefetchResponse.finished();
+    report.recovery.requestPrefetch={httpStatus:prefetchResponse.status(),finished:true};
+    assert.ok(prefetchResponse.ok(),'Fresh recovery request prefetch rejected');
     report.substage='validate_fresh_recovery_request';
     const recovery=await authPage.evaluate(()=>({nonce:document.body.dataset.nonce,href:document.querySelector('#wallet-link').href}));
     const recoveryUri=validateRecoveryRequest(recovery,details.nonce);report.recovery.freshCanonicalRequest=true;
