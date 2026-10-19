@@ -113,6 +113,20 @@ describe('publicSite.selfhost', () => {
     expect(getSelfhostPublicTabs('beta.elevenidllc.com')).toEqual(publicTabs);
   });
 
+  it('keeps the full surface available but omits tester-only navigation and pricing actions', () => {
+    expect(getSelfhostPublicUiFlags('tester.example', 'tester')).toMatchObject({
+      showPublicLoginButton: true,
+      showPublicGetStartedButtons: false,
+      showPublicPricingButtons: false,
+    });
+    expect(getSelfhostPublicTabs('tester.example', 'tester').map((tab) => tab.path)).toEqual([
+      '/', '/product', '/solutions', '/standards', '/resources',
+    ]);
+    expect(getSelfhostPublicTabs('tester.example', 'full').map((tab) => tab.path)).toEqual(
+      publicTabs.map((tab) => tab.path),
+    );
+  });
+
   it('renders the original landing page when unauthenticated', () => {
     renderSelfhostRoot({
       isAuthenticated: false,

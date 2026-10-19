@@ -118,7 +118,7 @@ def test_stages_exact_archive_and_private_credentials(
         assert stat.S_IMODE(password_file.stat().st_mode) == 0o600
         assert password not in json.dumps(result)
         assert password not in str(capsys.readouterr())
-    with pytest.raises(ValueError, match="fresh private root"):
+    with pytest.raises(ValueError, match="private root already exists"):
         stage.stage(assets, source, private, with_operator_password=with_operator_password)
 
 
@@ -213,7 +213,21 @@ def test_cli_forwards_only_opt_in_and_sanitizes_failure(
     assert calls == [(tuple(paths), {"with_operator_password": enabled})]
     captured = capsys.readouterr()
     assert not captured.out
-    assert captured.err == "disposable preview staging failed: ValueError\n"
+    assert captured.err == (
+        "disposable preview staging failed [UNEXPECTED_VALUEERROR]: "
+        "review the runbook and retry with a fresh private root\n"
+    )
+
+
+@pytest.mark.parametrize(("error", "code"), [
+    (ValueError("preview asset checksum differs from inventory"), "CHECKSUM_MISMATCH"),
+    (ValueError("source checkout is not clean or pinned"), "SOURCE_NOT_CLEAN"),
+    (ValueError("private root already exists"), "PRIVATE_ROOT_EXISTS"),
+])
+def test_known_staging_failures_explain_safe_next_step(error: ValueError, code: str) -> None:
+    message = stage.safe_failure(error)
+    assert f"[{code}]" in message
+    assert str(error) not in message
 
 
 def test_unsafe_parent_is_rejected_before_staging(

@@ -2,6 +2,7 @@ import { Box, Button, Chip, Divider, Grid, Paper, Typography } from '@mui/materi
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import { Link as RouterLink } from 'react-router';
+import { SHOW_PUBLIC_CTA } from '@ui-public-config';
 import { SEOHead } from '../seo';
 import {
   DEVELOPER_QUICKSTART,
@@ -167,7 +168,7 @@ export function SolutionsPage() {
       canonicalPath="/solutions"
       keywords={['verification solutions', 'enterprise access', 'travel verification', 'age assurance', 'portable credentials']}
       eyebrow="Solutions"
-      actions={defaultActions}
+      actions={SHOW_PUBLIC_CTA ? defaultActions : defaultActions.slice(1)}
     >
       <Section
         title="Deployment playbooks"

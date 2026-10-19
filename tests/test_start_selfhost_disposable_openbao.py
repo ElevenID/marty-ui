@@ -31,6 +31,18 @@ def staged(tmp_path: Path) -> tuple[Path, Path]:
     return root, bundle
 
 
+def test_cli_identifies_missing_docker_without_echoing_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys,
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["starter", "--private-root", str(tmp_path)])
+    monkeypatch.setattr(starter, "start", lambda *_args: (_ for _ in ()).throw(
+        FileNotFoundError(2, "private-path-and-token", "docker")))
+    assert starter.main() == 2
+    captured = capsys.readouterr()
+    assert "[DOCKER_MISSING]" in captured.err
+    assert "private-path-and-token" not in captured.err
+
+
 def model(root: Path, bundle: Path, port: int = 18200,
           project: str = "marty-preview-1234567890abcdef") -> dict:
     state = root / "openbao-state"

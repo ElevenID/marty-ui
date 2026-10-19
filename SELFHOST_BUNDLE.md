@@ -19,18 +19,23 @@ This bundle is the image-based distribution for the open-source self-host stack.
 
 The bundle is an image-only packaging format. Its image roles must be published
 and qualified together before a customer installation; the packager does not
-produce them. The v1.1.250 Stack release prepared an exact image-locked bundle
-in an opt-in job. The same unqualified bytes are publicly available as the
-[experimental tester prerelease](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1),
-with a separate [tester guide](https://github.com/ElevenID/marty-ui/releases/download/v1.1.250-selfhost-preview.1/SELFHOST-PREVIEW-README.md). Do not
-treat the stable Stack release or this preview as a qualified self-host product.
+produce them. Experimental tester bundles, when published on the
+[releases page](https://github.com/ElevenID/marty-ui/releases), carry their own
+source-bound tester guide and checksums. Use the guide attached to the **same**
+preview as the ZIP; do not substitute a newer stable Stack release or another
+preview's source. No preview is a qualified self-host product.
 
 - `SELFHOST_IMAGE_PREFIX=ghcr.io/elevenid/marty-ui`
 - `SELFHOST_IMAGE_TAG=<released-version>`
 
-The intended UI role is `ui-selfhost`, excluding the public marketing and blog
-surface. An image reference in an internal prepared lock does not qualify the
-role for customer installation.
+The distinct `ui-selfhost` image has a build-time public profile: `tester`
+(the opt-in preparation default) hides Pricing, developer/documentation and
+Demo navigation plus the public start-verifying CTA; `full` retains them for a
+future release with those destinations qualified. Both profiles retain the
+home/product informational pages and their translation files. The selected
+profile is recorded on the image label and its digest is bound by the lock.
+Neither profile changes authenticated product features. An image reference in
+an internal prepared lock does not qualify the role for customer installation.
 
 Set `SELFHOST_IMAGE_TAG` to the released immutable version you want to run. Do not use `latest` or `--build` with the bundle.
 For a digest-pinned bundle produced with `--image-lock`, the rendered Compose
@@ -140,14 +145,18 @@ remain external; packaging does not load their values.
    On Linux, the disposable workload TLS helper can stage 31 public
    certificates and scoped tokens from the same running OpenBao project. It
    requires `sudo` to read the project's private root token and uses the
-   services image digest from `.marty-selfhost-images.json`; preview .2 lacks
-   this binary, so wait for a newer tested bundle. Provide the OpenBao Compose
-   project's state directory (which contains `root.token` and `tls/ca.crt`):
+   services image digest from `.marty-selfhost-images.json`. Provide the exact
+   OpenBao Compose project created by the preview starter and its state
+   directory (which contains `root.token` and `tls/ca.crt`):
 
 ```bash
+private_root=/path/to/operator-private/new-run
+openbao_project=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["project"])' \
+  "$private_root/openbao.json")
 sudo python3 scripts/provision_selfhost_disposable_tls.py \
   --secret-root /path/to/selfhost-secrets \
-  --openbao-state-root /path/to/openbao-state
+  --openbao-state-root /path/to/openbao-state \
+  --openbao-project "$openbao_project"
 ```
 
    The helper verifies the project's running OpenBao container, locked plugin

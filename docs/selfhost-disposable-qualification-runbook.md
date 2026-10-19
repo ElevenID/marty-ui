@@ -51,12 +51,24 @@ pull alone does not establish a smaller supported minimum.
 
 ## Experimental preview installer path
 
-The [v1.1.250 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+An [experimental tester preview](https://github.com/ElevenID/marty-ui/releases)
 has a Linux-only staging helper that verifies all downloaded checksums,
 the exact source/receipt lineage and the extracted ZIP, then creates a new
 operator-private root with disposable scalar credentials. From a **clean,
 matching source checkout**, use an operator-owned `0700` parent and a fresh
 child path:
+
+Before staging, install the checkout's direct verifier dependencies in a
+disposable Python 3.12 environment **outside** the source checkout. These are
+separate from the pinned integration-test dependencies; the release workflow
+installs the same direct versions. For example, after activating that environment:
+
+```bash
+python3 -m pip install --requirement scripts/selfhost-preview-tools.requirements.txt
+```
+
+Use the preview's own attached tester guide and exact source commit. A newer
+stable Stack tag is not interchangeable with an older preview's assets.
 
 If you already ran staging from the preview's tester guide, do **not** repeat
 that command against the same private root. Continue with the OpenBao,

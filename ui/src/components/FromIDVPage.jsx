@@ -9,6 +9,7 @@ import { Box, Typography, Paper, Card, CardContent, Grid, List, ListItem, ListIt
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import { useNavigate } from 'react-router';
+import { SHOW_PUBLIC_CTA } from '@ui-public-config';
 import { SEOHead } from './seo';
 import { articleSchema, breadcrumbListSchema } from './seo/structuredData';
 import { useBranding } from '../hooks/useBranding';
@@ -326,7 +327,7 @@ function FromIDVPage() {
           Start with the verification surface, then go deeper into the API and docs when you&apos;re ready to implement.
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
+          {SHOW_PUBLIC_CTA && <Button
             variant="contained"
             size="large"
             onClick={() => navigate('/developers')}
@@ -334,7 +335,7 @@ function FromIDVPage() {
             sx={{ px: 4 }}
           >
             Start Verifying Credentials
-          </Button>
+          </Button>}
           <Button
             variant="outlined"
             size="large"
