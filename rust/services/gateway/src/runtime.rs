@@ -5107,7 +5107,13 @@ fn trusted_identity(
         api_key_scopes: identity.api_key_scopes.clone(),
         organization_permissions: membership
             .map(|item| item.permissions.iter().cloned().collect())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| {
+                if identity.source == AuthenticationSource::ApiKey {
+                    vec![required_permission.to_owned()]
+                } else {
+                    Vec::new()
+                }
+            }),
         organization_roles: membership
             .map(|item| item.role_names.iter().cloned().collect())
             .unwrap_or_default(),
@@ -7863,6 +7869,49 @@ mod tests {
             ),
             Err((403, _))
         ));
+    }
+
+    #[test]
+    fn scoped_api_key_forwards_only_the_authorized_permission() {
+        let identity = GatewayIdentity {
+            source: AuthenticationSource::ApiKey,
+            user_id: "key-owner".into(),
+            authentication_time_unix: None,
+            user_email: None,
+            user_domain: None,
+            session_organization_id: Some("org-1".into()),
+            api_key_id: Some("key-1".into()),
+            api_key_prefix: None,
+            api_key_scopes: vec!["applications:read".into()],
+        };
+        assert!(authorize_api_key(
+            "application:view",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_ok());
+        let trusted = trusted_identity(&identity, "org-1", "application:view", None);
+        assert_eq!(trusted.organization_permissions, vec!["application:view"]);
+        assert_eq!(
+            trusted.required_permission.as_deref(),
+            Some("application:view")
+        );
+        assert_eq!(trusted.organization_id.as_deref(), Some("org-1"));
+        assert!(authorize_api_key(
+            "application:approve",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            "application:view",
+            "foreign-org",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
     }
 
     #[test]
