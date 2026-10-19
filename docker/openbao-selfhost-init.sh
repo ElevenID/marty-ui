@@ -210,8 +210,8 @@ else
     echo "Reusing credential-service token at ${BAO_SERVICE_TOKEN_FILE}"
 fi
 
-# This one-shot token is mounted into db-migrate only. Reissue on each stack
-# initialization so an expired token cannot prevent a later schema upgrade.
+# This short-lived token is mounted only by the opt-in kms-initialize role.
+# Ordinary database migrations and application restarts do not use it.
 bootstrap_token_json="$(bao token create -address="${BAO_ADDR}" -policy=kms-bootstrap -no-default-policy -orphan -ttl=2h -renewable=false -format=json)"
 bootstrap_token="$(json_field "${bootstrap_token_json}" client_token)"
 if [ -z "${bootstrap_token}" ]; then

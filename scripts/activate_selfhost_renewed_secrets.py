@@ -39,7 +39,8 @@ COMPLETED_SERVICES = frozenset({
     "db-migrate", "issuance-migrations", "revocation-profile-migrate",
     "keycloak-configurator",
 })
-OPTIONAL_EDGE_SERVICES = frozenset({"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"})
+OPTIONAL_EDGE_SERVICES = frozenset({"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy",
+                                    "kms-initialize"})
 TLS_CERT_BY_ROLE = {
     "signing-keys-server": "signing_keys_workload_server_cert",
     "gateway-client": "gateway_workload_client_cert",
@@ -73,9 +74,6 @@ def checked_env(path: Path, secret_root: Path) -> list[str]:
     matches = [line for line in lines if line.startswith("SELFHOST_SECRET_DIR=")]
     if len(matches) != 1 or matches[0] != f"SELFHOST_SECRET_DIR={secret_root}":
         raise ValueError("Compose env does not bind the expected secret generation")
-    bootstrap = [line for line in lines if line.startswith("MARTY_KMS_BOOTSTRAP_ENABLED=")]
-    if bootstrap != ["MARTY_KMS_BOOTSTRAP_ENABLED=false"]:
-        raise ValueError("renewal requires KMS bootstrap disabled for db-migrate")
     return [line for line in lines if not line.startswith("SELFHOST_SECRET_DIR=")]
 
 
@@ -85,11 +83,19 @@ def compose_args(project: str, env_file: Path, compose_file: Path) -> list[str]:
 
 
 def require_rootless_migration(model: dict) -> None:
-    migrate = model.get("services", {}).get("db-migrate", {})
+    services = model.get("services", {})
+    migrate = services.get("db-migrate", {})
     environment = migrate.get("environment", {}) if isinstance(migrate, dict) else {}
     if not isinstance(environment, dict) or str(environment.get(
             "MARTY_KMS_BOOTSTRAP_ENABLED", "")).lower() != "false":
         raise ValueError("owned db-migrate must not rerun KMS bootstrap")
+    if any(secret == "openbao_bootstrap_token" or isinstance(secret, dict) and
+           secret.get("source") == "openbao_bootstrap_token"
+           for secret in migrate.get("secrets", [])):
+        raise ValueError("owned db-migrate must not mount bootstrap token")
+    initializer = services.get("kms-initialize", {})
+    if not isinstance(initializer, dict) or initializer.get("profiles") != ["kms-init"]:
+        raise ValueError("privileged KMS initializer must be opt-in")
 
 
 def run_json(command: list[str], *, cwd: Path) -> object:
@@ -136,7 +142,8 @@ def healthy(items: list[dict], services: set[str]) -> bool:
 
 
 def owned_service_closure(declared: set[str], running: set[str]) -> bool:
-    return running <= declared and declared - running <= OPTIONAL_EDGE_SERVICES
+    return ("kms-initialize" not in running and running <= declared
+            and declared - running <= OPTIONAL_EDGE_SERVICES)
 
 
 def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:

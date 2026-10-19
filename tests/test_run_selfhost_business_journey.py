@@ -20,7 +20,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import run_selfhost_business_journey as runner  # noqa: E402
 from run_selfhost_business_journey import (  # noqa: E402
-    BETA_SERVICES,
     COMPLETED,
     LOCAL_SECRET_NAMES,
     LOCAL_SERVICES,
@@ -486,7 +485,33 @@ def disabled_optional_model() -> dict:
 def test_exact_local_service_closure_passes_without_tunnel() -> None:
     raw, model = status_fixture()
     states = live_services(raw, model)
-    assert set(states) == EXPECTED_SERVICES - BETA_SERVICES - {"cloudflared"}
+    assert set(states) == EXPECTED_SERVICES - NOT_LOCAL
+
+
+def test_fresh_install_initializes_kms_only_after_rootless_migration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import run_selfhost_business_journey as runner
+
+    secret_root = tmp_path / "secrets"
+    secret_root.mkdir(mode=0o700)
+    (secret_root / "openbao_bootstrap_token").write_text("disposable-bootstrap-token")
+    (secret_root / "openbao_bootstrap_token").chmod(0o600)
+    calls = []
+
+    def fake_command(argv, **_kwargs):
+        calls.append(argv)
+        if "ps" in argv:
+            return json.dumps([{"Service": "db-migrate", "State": "exited", "ExitCode": 0}])
+        return ""
+
+    monkeypatch.setattr(runner, "command", fake_command)
+    runner.initialize_kms(["docker", "compose"], tmp_path, secret_root, {})
+    assert [argv[2] for argv in calls] == ["up", "ps", "run"]
+    assert calls[-1][-1] == "kms-initialize"
+    (secret_root / "openbao_bootstrap_token").unlink()
+    with pytest.raises(ValueError, match="bootstrap token is absent"):
+        runner.initialize_kms(["docker", "compose"], tmp_path, secret_root, {})
 
 
 def test_explicitly_disabled_worker_healthcheck_does_not_block_closure() -> None:
@@ -518,6 +543,7 @@ def test_local_secret_closure_excludes_only_unstarted_tunnels(tmp_path: Path) ->
     )
     assert EXPECTED_SECRET_NAMES - LOCAL_SECRET_NAMES == {
         "cloudflare_tunnel_token", "cloudflare_beta_tunnel_token",
+        "openbao_bootstrap_token",
     }
     for name in LOCAL_SECRET_NAMES:
         (tmp_path / name).write_text("disposable-test-material", encoding="utf-8")
@@ -649,6 +675,7 @@ def test_custody_failure_tears_down_owned_project(
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
+    monkeypatch.setattr(runner, "initialize_kms", lambda *_args: None)
     diagnostics = RunDiagnostics(tmp_path)
     monkeypatch.setattr(runner, "live_custody_signer", lambda *_args: (1, "public"))
     error = ("KMS custody output exists before fresh fixture setup" if stale_name
@@ -669,7 +696,7 @@ def test_custody_failure_tears_down_owned_project(
     report = diagnostics.report(checks_result="failed")
     expected_phase = "fixture_setup" if stale_name else "custody_verification"
     assert report["first_failure_phase"] == expected_phase
-    expected_names = ["fresh_project", "image_pull", "startup", "readiness",
+    expected_names = ["fresh_project", "image_pull", "kms_initialize", "startup", "readiness",
                       "fixture_setup"]
     if stale_name is None:
         expected_names.append("custody_verification")
@@ -716,6 +743,7 @@ def test_startup_retries_share_one_deadline_and_clean_up(monkeypatch, tmp_path: 
         return ""
 
     monkeypatch.setattr(runner, "command", fake_command)
+    monkeypatch.setattr(runner, "initialize_kms", lambda *_args: None)
     monkeypatch.setattr(runner.time, "monotonic", lambda: clock[0])
     monkeypatch.setattr(runner.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + seconds))
     with pytest.raises(ValueError, match="installed journey command returned failure"):

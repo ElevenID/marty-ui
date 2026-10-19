@@ -46,6 +46,10 @@ the named `selfhost-renew-leaf` role. Retire root only after the active and
 rollback generations have been replaced by independently qualified orphan
 tokens, the public journey and custody scans pass, and a separate rootless
 restore/recovery rehearsal passes. The current command does not retire root.
+The separate OpenBao `openbao-bootstrap` service also still uses the initial
+root token to unseal and re-provision on restart. Split its unseal/restart path
+from one-time provisioning and prove a rootless cold restart before root
+revocation; isolating `db-migrate` alone does not close that dependency.
 
 Stage the workload TLS set with the Rust `selfhost-renew` profile against the
 existing Raft OpenBao issuer and version-one Transit signers. Stage the
@@ -57,12 +61,11 @@ same file inventory and modes, unchanged static inputs and public CA, and
 changed certificates and scoped tokens. It refuses CA rollover; that needs
 a separate trust-overlap procedure.
 
-After initial KMS/DID provisioning has completed, set
-`MARTY_KMS_BOOTSTRAP_ENABLED=false` in the installed private Compose env and
-verify that `db-migrate` renders with this value. Its default is `true` and
-reruns privileged KMS provisioning on a restart; that fails after bootstrap
-root retirement. This flag is a required precondition for both current and
-renewed generations. Make a private copy of that env file, changing only
+Use a self-host Compose release whose ordinary `db-migrate` renders with
+`MARTY_KMS_BOOTSTRAP_ENABLED=false`, without a bootstrap-token mount, and
+whose separate `kms-initialize` role is confined to the `kms-init` profile.
+Activation checks those properties in both rendered models. Make a private
+copy of the installed env file, changing only
 `SELFHOST_SECRET_DIR` to the assembled generation. Keep the current env file,
 Compose file, and old secret root unchanged. On a Linux host with Docker and
 access to the same isolated project, invoke

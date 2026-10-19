@@ -114,7 +114,7 @@ remain external; packaging does not load their values.
    required certificates, scoped tokens, and integration values separately;
    this helper does not make a bundle qualified or ready to start. Never use
    its disposable credentials for a production install.
-5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write separate `openbao_service_token`, HAIP workload, and short-lived `openbao_bootstrap_token` secrets, or provision equivalent scoped tokens in `SELFHOST_SECRET_DIR` yourself. The helper keeps the host secret directory private (0700) and makes individual file-backed secrets readable by the stack's different non-root container UIDs (0444). Re-run the helper to renew the migration token before a later schema upgrade:
+5. Run `scripts/bootstrap-selfhost-vault.sh` with a bootstrap `BAO_TOKEN` or `BAO_TOKEN_FILE` to configure the external Vault/OpenBao instance and write separate `openbao_service_token`, HAIP workload, and short-lived `openbao_bootstrap_token` secrets, or provision equivalent scoped tokens in `SELFHOST_SECRET_DIR` yourself. The helper keeps the host secret directory private (0700) and makes individual file-backed secrets readable by the stack's different non-root container UIDs (0444). The bootstrap token is used only by the explicit one-time `kms-initialize` role, never by ordinary database migrations or restarts:
 
    For a disposable tester install, provision the seven Keycloak remote-key
    inputs into the **same** private `SELFHOST_SECRET_DIR` after the DIDComm
@@ -172,7 +172,19 @@ SELFHOST_SECRET_DIR=/path/to/selfhost-secrets \
 docker compose --env-file .env.selfhost.production.local pull
 ```
 
-7. Start the stack:
+7. On a fresh installation, run the rootless database migration, verify that
+   `db-migrate` exited zero, and explicitly provision KMS/DID keys once. The
+   privileged initializer is confined to the `kms-init` profile and is not
+   part of an ordinary `up -d`:
+
+```bash
+docker compose --env-file .env.selfhost.production.local up -d db-migrate
+docker compose --env-file .env.selfhost.production.local ps --all db-migrate
+docker compose --env-file .env.selfhost.production.local run --rm --no-deps kms-initialize
+```
+
+8. Start the stack. Later restarts use this command without re-running the
+   privileged initializer:
 
 ```bash
 docker compose --env-file .env.selfhost.production.local up -d

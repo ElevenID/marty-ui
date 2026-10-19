@@ -67,7 +67,6 @@
     "flow_application_event_hmac_key",
     "token_hmac_key",
     "openbao_service_token",
-    "openbao_bootstrap_token",
     "signing_keys_openbao_token",
     "didcomm_issuance_openbao_token",
     "notification_openbao_token",

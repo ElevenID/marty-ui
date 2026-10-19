@@ -31,7 +31,8 @@ def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
 
 def test_owned_service_closure_only_omits_named_optional_edge_roles() -> None:
     running = {"keycloak", "gateway", "postgres"}
-    declared = running | {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}
+    declared = running | {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy",
+                          "kms-initialize"}
     assert activation.owned_service_closure(declared, running)
     assert not activation.owned_service_closure(declared | {"signing-keys"}, running)
     assert not activation.owned_service_closure(declared, running | {"foreign-service"})
@@ -39,8 +40,13 @@ def test_owned_service_closure_only_omits_named_optional_edge_roles() -> None:
 
 def test_activation_requires_rootless_db_migration_model() -> None:
     model = {"services": {"db-migrate": {
-        "environment": {"MARTY_KMS_BOOTSTRAP_ENABLED": "false"}}}}
+        "environment": {"MARTY_KMS_BOOTSTRAP_ENABLED": "false"}, "secrets": []},
+        "kms-initialize": {"profiles": ["kms-init"]}}}
     activation.require_rootless_migration(model)
+    model["services"]["db-migrate"]["secrets"] = ["openbao_bootstrap_token"]
+    with pytest.raises(ValueError, match="must not mount bootstrap token"):
+        activation.require_rootless_migration(model)
+    model["services"]["db-migrate"]["secrets"] = []
     model["services"]["db-migrate"]["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] = "true"
     with pytest.raises(ValueError, match="must not rerun KMS bootstrap"):
         activation.require_rootless_migration(model)
@@ -82,16 +88,13 @@ def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
     for root in (old, new):
         root.mkdir()
     old_env, new_env = tmp_path / "old.env", tmp_path / "new.env"
-    old_env.write_text(f"SELFHOST_SECRET_DIR={old}\nMARTY_KMS_BOOTSTRAP_ENABLED=false\nKEY_NAME=version-one\n")
-    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nMARTY_KMS_BOOTSTRAP_ENABLED=false\nKEY_NAME=version-one\n")
+    old_env.write_text(f"SELFHOST_SECRET_DIR={old}\nKEY_NAME=version-one\n")
+    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-one\n")
     old_env.chmod(0o600)
     new_env.chmod(0o600)
     assert activation.checked_env(old_env, old) == activation.checked_env(new_env, new)
-    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nMARTY_KMS_BOOTSTRAP_ENABLED=false\nKEY_NAME=version-two\n")
+    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-two\n")
     assert activation.checked_env(old_env, old) != activation.checked_env(new_env, new)
-    new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-one\n")
-    with pytest.raises(ValueError, match="bootstrap disabled"):
-        activation.checked_env(new_env, new)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
@@ -125,13 +128,14 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
                             ("keycloak", "gateway", "signing-keys", "postgres")},
                  "secrets": {"sample": {"file": str(old / "sample")}}}
     old_model["services"]["db-migrate"] = {
-        "environment": {"MARTY_KMS_BOOTSTRAP_ENABLED": "false"}}
+        "environment": {"MARTY_KMS_BOOTSTRAP_ENABLED": "false"}, "secrets": []}
+    old_model["services"]["kms-initialize"] = {"profiles": ["kms-init"]}
     new_model = json.loads(json.dumps(old_model))
     new_model["secrets"]["sample"]["file"] = str(new / "sample")
     monkeypatch.setattr(activation, "run_json", lambda cmd, **_: (
         new_model if str(args.renewed_env) in cmd else old_model))
     states = [{"Service": name, "State": "running", "Health": "healthy"}
-              for name in old_model["services"] if name != "db-migrate"]
+              for name in old_model["services"] if name not in {"db-migrate", "kms-initialize"}]
     states.append({"Service": "db-migrate", "State": "exited", "ExitCode": 0})
     monkeypatch.setattr(activation, "statuses", lambda *_cmd, **_kw: states)
     monkeypatch.setattr(activation, "secret_mounts", lambda *_: 184)
