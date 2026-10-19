@@ -27,8 +27,10 @@ verified helper pushed the annotated `v1.1.257` tag; [resumed publication
 39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
 passed and published the signed release. An exact-source
 [self-host producer run 39178041071](https://github.com/ElevenID/marty-ui/actions/runs/39178041071)
-is queued to satisfy the prepared-bundle consumer binding. Verify that artifact,
-then run a fresh disposable Raft-backed install plus coordinated cold restore and
+finished with a publication byte-comparison failure while its bundle preflight
+passed. The released producer binding therefore still rejects it; use it only
+for an explicitly unqualified local diagnostic and repair the binding design
+before final acceptance. Run a fresh disposable Raft-backed install plus coordinated cold restore and
 business/custody journey on this 16 GiB Docker host. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
 migration. Real AWS/Azure/GCP credentials and a physical wallet remain
@@ -177,6 +179,29 @@ verify the existing immutable release before producing a new unqualified
 bundle from a successful run. Require terminal success and before/after
 artifact binding before installed use. The public release is not installed
 acceptance.
+
+Successful-producer attempt outcome (2026-10-18): [run 39178041071](https://github.com/ElevenID/marty-ui/actions/runs/39178041071)
+ended `failure`. All jobs except `publish-manifest` passed, including the
+prepared-bundle build and consumer preflight. The publisher verified the
+existing release assets and then failed at its exact regenerated manifest or
+transaction comparison; the publisher step logs do not distinguish which
+silent `cmp` failed. Its qualified transaction SHA-256 is
+`2d0a1a67a64f8052dd5340cdfc5f878a94e23a32035febd56f48a1539392a78d`,
+identical to the public release transaction and the prepared receipt's
+`transaction_sha256`. The first promotion run's qualified transaction has
+different bytes (`6c4eb40ee25bd8881ce6aa2afa0194754263f19c10a23d891bf194244d334044`).
+The third run's four-file bundle artifact was downloaded unchanged and the
+released `check_prepared_selfhost_consumer.py --verify-archive-only` passed
+against the exact clean tagged source and run ID. However, the released
+`check_selfhost_preparation_artifacts.py` correctly rejects its producer
+because the run ended `failure`; no successful producer binding or installed
+acceptance is claimed. Preserve both failed runs and their artifacts. Fix
+the post-publication self-host preparation path or add a dedicated successful
+producer with immutable public-release binding before final qualification.
+For local diagnostic progress only, the bundle may be used with its failed
+producer explicitly labeled unqualified; verify public release attestations,
+qualified transaction hash, source SHA, archive, images, and artifacts
+independently, and do not report it as final custody acceptance.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
