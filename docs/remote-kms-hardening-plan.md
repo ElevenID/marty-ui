@@ -67,6 +67,24 @@ expiry-crossing service/session tests, KMS-loss refusal, coordinated recovery,
 and exact released-source installation. The feature branch stays local while
 these related changes are batched for one large PR.
 
+Renewal generation assembly (2026-10-19 UTC): local-only feature commit
+`fa1180f18` adds a bundle-shipped, owner-private assembly step. It validates
+the Rust workload-role metadata and exact TLS/Keycloak candidate file sets,
+rejects symlinks, private PEM, unchanged renewed inputs, duplicate tokens,
+and an uncoordinated CA change. It preserves static secrets and modes while
+writing a separate complete generation. Against the isolated v1.1.258 install
+state, assembly produced 81 files; exactly 39 renewed values changed while
+the current 81-file directory, static values, CA and file modes stayed
+unchanged. Linux toolbox unit checks passed 3 POSIX cases; Keycloak POSIX
+checks passed 11 with 1 platform skip and 1 catalog test run separately on
+Windows. Windows bundle/TLS checks passed 13 with 11 POSIX skips; Ruff and
+diff checks passed. The isolated OpenBao is stopped and production loopback
+still returns HTTP 200. No running service has consumed the new generation.
+Next qualify atomic Compose recreation with fresh token/certificate checks,
+session continuity, KMS-loss refusal and rollback; then implement CA trust
+overlap and a stable limited renewal identity. The released v1.1.258 source
+does not include either local feature commit.
+
 Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
 `codex/managed-evidence-cleanup-20261018` worktree without changing its
 uncommitted files. Carried its useful evidence-chain fix and Python software
