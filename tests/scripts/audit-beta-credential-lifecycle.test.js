@@ -6,6 +6,14 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+test('owned template ID is retained before later setup can fail',async()=>{
+  const {ensureLifecycleTemplate}=require('./audit-beta-credential-lifecycle');
+  const calls=[];let evaluations=0,owned;
+  const page={evaluate:async()=>{if(++evaluations===1)return {id:'owned-version'};calls.push('patch');throw Error('patch transport failed');}};
+  await assert.rejects(ensureLifecycleTemplate(page,'profile','unique',id=>{owned=id;calls.push('own');}),/patch transport failed/);
+  assert.equal(owned,'owned-version');assert.deepEqual(calls,['own','patch']);
+});
+
 test('issuance selection waits for a new exact-template record and rejects ambiguity',()=>{
   const {selectFreshCredential}=require('./audit-beta-credential-lifecycle');
   const old={id:'old',credential_template_id:'owned',issued_at:'2099-01-01'};

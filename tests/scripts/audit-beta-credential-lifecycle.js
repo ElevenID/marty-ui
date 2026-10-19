@@ -314,8 +314,15 @@ async function ensureActiveRevocationProfile(page, stamp) {
   };
 }
 
-async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
-  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId, stamp }) => {
+async function ensureLifecycleTemplate(page, revocationProfileId, stamp, onCreated) {
+  const version=await page.evaluate(async sourceId=>{
+    const response=await fetch(`/v1/credential-templates/${encodeURIComponent(sourceId)}/new-version`,{method:'POST',credentials:'include'});
+    const body=await response.json().catch(()=>null);
+    if(!response.ok||!body?.id)throw Error('Owned template version creation failed');
+    return {id:body.id};
+  },SOURCE_TEMPLATE_ID);
+  onCreated(version.id);
+  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId, stamp, version }) => {
     const listResponse = await fetch(
       `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`,
       { credentials: 'include' },
@@ -340,14 +347,6 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     ));
     if (existing) throw new Error('Fresh lifecycle template name already exists');
 
-    const versionResponse = await fetch(
-      `/v1/credential-templates/${encodeURIComponent(sourceTemplateId)}/new-version`,
-      { method: 'POST', credentials: 'include' },
-    );
-    const version = await versionResponse.json().catch(() => null);
-    if (!versionResponse.ok || !version?.id) {
-      return { ok: false, status: versionResponse.status, error: version?.detail || 'Template version creation failed' };
-    }
     const patchResponse = await fetch(`/v1/credential-templates/${encodeURIComponent(version.id)}`, {
       method: 'PATCH',
       credentials: 'include',
@@ -388,7 +387,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
     organizationId: ORG_ID,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     profileId: revocationProfileId,
-    stamp,
+    stamp,version,
   });
 }
 
@@ -535,7 +534,14 @@ async function findIssuedCredential(page,templateId,priorIds) {
 async function cleanupOwnedLifecycle(page,templateId) {
   const result=await cleanupActiveLifecycleCredentials(page,templateId);
   assert.ok(result.ok,'Owned lifecycle credential cleanup failed');
-  const retired=await page.evaluate(async id=>{const r=await fetch(`/v1/credential-templates/${encodeURIComponent(id)}/deprecate`,{method:'POST',credentials:'include'});return r.ok;},templateId);
+  const retired=await page.evaluate(async id=>{
+    const url=`/v1/credential-templates/${encodeURIComponent(id)}`;
+    const current=await fetch(url,{credentials:'include'});if(!current.ok)return false;
+    const template=await current.json();
+    if(String(template.status).toUpperCase()==='DEPRECATED')return true;
+    const draft=String(template.status).toUpperCase()==='DRAFT';
+    const r=await fetch(draft?url:url+'/deprecate',{method:draft?'DELETE':'POST',credentials:'include'});return r.ok;
+  },templateId);
   assert.ok(retired,'Owned lifecycle template retirement failed');
   return {...result,templateRetired:true};
 }
@@ -910,7 +916,7 @@ async function main() {
     if (!report.revocationProfile.ok) {
       throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
     }
-    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id,input.stamp);
+    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id,input.stamp,id=>{ownedTemplate=id;report.createdTemplateId=id;});
     if (!report.credentialTemplate.ok) {
       throw new Error(`Credential Template setup failed: ${report.credentialTemplate.error}`);
     }
@@ -1121,6 +1127,7 @@ module.exports = {
   dismissLifecycleUpdatedNotification,
   requireDismissedLifecycleNotification,
   ensureActiveRevocationProfile,
+  ensureLifecycleTemplate,
   findCredentialRow,
   findIssuedCredential,
   getCredentialStatus,
