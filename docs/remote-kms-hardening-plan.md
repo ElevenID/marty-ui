@@ -271,7 +271,7 @@ run's public transaction bytes matched the release, but
 `build_stack_manifest.py` generated a new wall-clock `generated_at` for every
 publisher run. The publisher's required byte equality against the already
 signed public manifest therefore rejected the same-source replay. In isolated
-branch `fix/kms-release-producer-20261018`, commit `1a1513ed6`,
+branch `fix/kms-release-producer-20261018`, final local head `386ecea2f`,
 [UI PR #1427](https://github.com/ElevenID/marty-ui/pull/1427) anchors the
 manifest timestamp to the immutable source commit, keeps strict manifest and
 transaction byte comparisons with explicit errors, advances the eligible
@@ -279,8 +279,11 @@ source lock to `v1.1.258`, and documents that the late-tag publication resume
 must also prepare the bundle with the same four external image digests. That
 single terminally successful publication run should then own the prepared
 bundle, avoiding a separate expensive replay. Local release/manifest/tag
-tests passed 164/164; workflow YAML, Ruff and diff checks passed. PR checks
-are pending. Do not claim this design landed or `v1.1.258` published until
+tests passed 164/164 (55 selected tests after the runbook follow-up); workflow
+YAML, Ruff and diff checks passed. Superseded PR CI was cancelled after a
+documentation-only follow-up; final-head [CI 39182024171](https://github.com/ElevenID/marty-ui/actions/runs/39182024171)
+and protected review are pending, with auto-merge armed. Do not claim this
+design landed or `v1.1.258` published until
 protected merge, exact-main qualification, signed release, and a fresh
 installed/restored journey pass. The `v1.1.257` failed-producer artifacts
 remain preserved and unqualified.
