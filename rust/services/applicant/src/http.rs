@@ -763,7 +763,7 @@ async fn organization_queue(
     Path(organization_id): Path<String>,
     Query(page): Query<Page>,
 ) -> Result<Json<Value>, ApiError> {
-    organization_identity(&headers, &organization_id, "application:review")?;
+    organization_identity(&headers, &organization_id, "application:view")?;
     let mut values = state
         .service
         .applications_for_organization(&organization_id)
@@ -787,7 +787,7 @@ async fn organization_application(
     headers: HeaderMap,
     Path((organization_id, application_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, ApiError> {
-    organization_identity(&headers, &organization_id, "application:review")?;
+    organization_identity(&headers, &organization_id, "application:view")?;
     let (application, applicant) = state
         .service
         .organization_application(&organization_id, &application_id)
