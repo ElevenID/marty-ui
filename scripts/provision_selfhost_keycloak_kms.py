@@ -20,7 +20,9 @@ import subprocess
 import sys
 from urllib.error import HTTPError, URLError
 
-from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der
+from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE,
+                                    certificate_public_key_der, public_key_der,
+                                    require_renewal_authority)
 
 
 REALMS = ("master", "11id")
@@ -37,10 +39,12 @@ MIN_VALIDITY_SECONDS = 7 * 60 * 60
 
 class KeycloakBao(Bao):
     def request(
-        self, method: str, path: str, body: dict | None = None, *, token: str | None = None
+        self, method: str, path: str, body: dict | None = None, *, token: str | None = None,
+        authenticate: bool = True,
     ) -> dict:
         try:
-            return super().request(method, path, body, token=token)
+            return super().request(method, path, body, token=token,
+                                   authenticate=authenticate)
         except HTTPError as error:
             if token is not None:
                 raise
@@ -61,8 +65,9 @@ def scoped_token(bao: Bao, policy: str, name: str) -> str:
     return mint_token(bao, name)
 
 
-def mint_token(bao: Bao, name: str) -> str:
-    result = bao.request("POST", "auth/token/create", {
+def mint_token(bao: Bao, name: str, *, renew: bool = False) -> str:
+    endpoint = f"auth/token/create/{RENEWAL_LEAF_ROLE}" if renew else "auth/token/create"
+    result = bao.request("POST", endpoint, {
         "policies": [name], "no_default_policy": True, "ttl": SESSION_TTL,
     }).get("auth", {})
     token = result.get("client_token") if isinstance(result, dict) else None
@@ -87,7 +92,7 @@ def renewed_token(bao: Bao, policy: str, prefix: str) -> str:
                 matching.append(name)
     if len(matching) != 1:
         raise RuntimeError("Keycloak renewal requires one exact existing scoped policy")
-    token = mint_token(bao, matching[0])
+    token = mint_token(bao, matching[0], renew=True)
     lookup = require_data(bao.request("POST", "auth/token/lookup", {"token": token}), "policies")
     if (lookup["policies"] != [matching[0]] or type(lookup.get("ttl")) is not int
             or not MIN_VALIDITY_SECONDS <= lookup["ttl"] <= 8 * 60 * 60):
@@ -138,6 +143,8 @@ def require_mounts(bao: Bao, *, renew: bool = False) -> None:
 
 def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
     """Return exactly seven public certificates/scoped tokens, not private keys."""
+    if renew:
+        require_renewal_authority(bao)
     require_mounts(bao, renew=renew)
     if renew:
         role = require_data(bao.request("GET", "keycloak-pki/roles/rs256"), "key_type")
@@ -284,18 +291,20 @@ def main() -> int:
     try:
         endpoint = os.environ["BAO_ADDR"]
         ca = Path(os.environ["BAO_CACERT"])
-        token_file = Path(os.environ["BAO_ROOT_TOKEN_FILE"])
-        root = Path(os.environ["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
         mode = os.environ.get("SELFHOST_KEYCLOAK_MODE", "initial")
         if mode not in ("initial", "renew"):
             raise RuntimeError("Keycloak provisioning mode is invalid")
+        token_file = Path(os.environ[
+            "BAO_RENEWAL_TOKEN_FILE" if mode == "renew" else "BAO_ROOT_TOKEN_FILE"
+        ])
+        root = Path(os.environ["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
         if (not endpoint.startswith("https://") or not ca.is_absolute()
                 or not ca.is_file() or ca.is_symlink() or not token_file.is_absolute()
                 or not token_file.is_file() or token_file.is_symlink()):
             raise RuntimeError("disposable Keycloak OpenBao inputs are invalid")
         token = token_file.read_text(encoding="ascii").strip()
         if len(token) < 20:
-            raise RuntimeError("disposable Keycloak root token is absent")
+            raise RuntimeError("Keycloak OpenBao authority token is absent")
         require_available_private_root(root)
         renewing = mode == "renew"
         write_outputs(root, provision(KeycloakBao(endpoint, ca, token), renew=renewing),

@@ -208,7 +208,7 @@ def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> Non
                 return {"data": {"keys": ["selfhost-keycloak-sign-old", "unrelated"]}}
             if (method, path) == ("GET", "sys/policies/acl/selfhost-keycloak-sign-old"):
                 return {"data": {"policy": self.policy}}
-            if (method, path) == ("POST", "auth/token/create"):
+            if (method, path) == ("POST", "auth/token/create/selfhost-renew-leaf"):
                 self.created = True
                 assert body == {"policies": ["selfhost-keycloak-sign-old"],
                                 "no_default_policy": True, "ttl": SESSION_TTL}

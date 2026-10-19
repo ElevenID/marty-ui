@@ -29,6 +29,14 @@ def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
     assert not activation.healthy(states, {"keycloak", "db-migrate"})
 
 
+def test_owned_service_closure_only_omits_named_optional_edge_roles() -> None:
+    running = {"keycloak", "gateway", "postgres"}
+    declared = running | {"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"}
+    assert activation.owned_service_closure(declared, running)
+    assert not activation.owned_service_closure(declared | {"signing-keys"}, running)
+    assert not activation.owned_service_closure(declared, running | {"foreign-service"})
+
+
 def test_certificate_overlap_rejects_invalid_public_certificate() -> None:
     fixture = json.loads((Path(__file__).parent / "fixtures/passport_beta_chain_public.json")
                          .read_text(encoding="utf-8"))
@@ -78,6 +86,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     monkeypatch.setattr(activation, "checked_env", lambda *_: ["KEY_NAME=version-one"])
     monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
     monkeypatch.setattr(activation, "Bao", lambda *_: object())
+    monkeypatch.setattr(activation, "require_renewal_authority", lambda *_: None)
     monkeypatch.setattr(activation, "checked_tokens", lambda *_: None)
     monkeypatch.setattr(activation, "checked_certificates", lambda *_: None)
     old_model = {"services": {name: {} for name in

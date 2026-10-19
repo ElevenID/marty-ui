@@ -6,6 +6,24 @@ continuous-runtime or public cutover procedure. Keep the old generation until
 the renewed installation passes its business and custody journeys. Neither
 generation may contain local private keys.
 
+After the initial KMS-only installation, use
+`scripts/provision_selfhost_renewal_identity.py --mode bootstrap` once with
+the existing private generation, HTTPS OpenBao CA, and the bootstrap root
+token. Its separate empty 0700 output directory holds a RoleID, SecretID,
+and the exact 21-policy receipt. The script requires the current keys,
+certificates, and scoped tokens to pass live custody checks before creating
+the AppRole and token role. Protect and back up these operator-only identity
+files with the coordinated Raft/applicant/database state. Root-token
+retirement and recovery still need their own rehearsed procedure.
+
+Before each renewal, use `--mode login` with that identity and a new empty
+0700 output directory. It writes an eight-hour-or-shorter scoped operator
+token after checking the token role and forbidden OpenBao operations. Give
+that token file to the Rust and Python stages via `BAO_RENEWAL_TOKEN_FILE`;
+give it to activation via `--bao-token-file`. The stages reject a root token
+presented under the renewal variable. The AppRole SecretID itself stays out
+of the application Compose secret generation.
+
 Stage the workload TLS set with the Rust `selfhost-renew` profile against the
 existing Raft OpenBao issuer and version-one Transit signers. Stage the
 Keycloak set with `scripts/provision_selfhost_keycloak_kms.py` using

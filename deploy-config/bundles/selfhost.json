@@ -30,6 +30,7 @@
     "scripts/provision_selfhost_disposable_tls.py",
     "scripts/stage_selfhost_renewed_secrets.py",
     "scripts/activate_selfhost_renewed_secrets.py",
+    "scripts/provision_selfhost_renewal_identity.py",
     "scripts/start_selfhost_disposable_openbao.py",
     "scripts/stage_selfhost_keycloak_inputs.py",
     "scripts/cloudflared-selfhost.sh",

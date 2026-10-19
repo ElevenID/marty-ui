@@ -436,7 +436,7 @@ fn write_new(path: &Path, contents: &str) -> Result<(), Box<dyn Error>> {
 
 struct Bao {
     transport: OpenBaoHttp,
-    root_token: String,
+    authority_token: String,
 }
 
 impl Bao {
@@ -451,7 +451,7 @@ impl Bao {
             .transport
             .client()
             .request(method, format!("{}/v1/{path}", self.transport.origin()))
-            .header("X-Vault-Token", token.unwrap_or(&self.root_token));
+            .header("X-Vault-Token", token.unwrap_or(&self.authority_token));
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -497,6 +497,29 @@ async fn provision(
     endpoint: &str,
     ca_file: &Path,
 ) -> Result<(), Box<dyn Error>> {
+    if profile == Profile::SelfhostRenew {
+        let lookup = bao
+            .checked(
+                Method::POST,
+                "auth/token/lookup",
+                Some(json!({"token": bao.authority_token})),
+                None,
+            )
+            .await?;
+        let policies = data(&lookup, "policies")?
+            .as_array()
+            .ok_or("renewal authority policies are invalid")?;
+        let remaining = data(&lookup, "ttl")?
+            .as_u64()
+            .ok_or("renewal authority TTL is invalid")?;
+        if policies.len() != 1
+            || policies[0] != "selfhost-kms-renewal"
+            || value(&lookup, "path")? != "auth/selfhost-renew/login"
+            || !(3600..=28800).contains(&remaining)
+        {
+            return Err("renewal authority is not the scoped AppRole token".into());
+        }
+    }
     let pki_mount = match profile {
         Profile::Passport => {
             bao.checked(
@@ -692,10 +715,15 @@ async fn provision(
             )
             .await?;
         }
+        let create_path = if profile == Profile::SelfhostRenew {
+            "auth/token/create/selfhost-renew-leaf"
+        } else {
+            "auth/token/create"
+        };
         let issued = bao
             .checked(
                 Method::POST,
-                "auth/token/create",
+                create_path,
                 Some(json!({
                     "policies":[policy_name], "no_default_policy":true, "ttl":ttl,
                 })),
@@ -707,7 +735,7 @@ async fn provision(
             .and_then(|auth| auth.get("client_token"))
             .and_then(Value::as_str)
             .ok_or("OpenBao scoped token is missing")?;
-        if token == bao.root_token || token.len() < 20 {
+        if token == bao.authority_token || token.len() < 20 {
             return Err("OpenBao scoped token is invalid".into());
         }
         let token_file = match profile {
@@ -848,16 +876,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let ca_file = required("BAO_CACERT")?;
-    let root_token = fs::read_to_string(required("BAO_ROOT_TOKEN_FILE")?)?;
-    let root_token = root_token.trim().to_owned();
+    let token_variable = if profile == Profile::SelfhostRenew {
+        "BAO_RENEWAL_TOKEN_FILE"
+    } else {
+        "BAO_ROOT_TOKEN_FILE"
+    };
+    let authority_token = fs::read_to_string(required(token_variable)?)?;
+    let authority_token = authority_token.trim().to_owned();
     let valid_token = match profile {
         Profile::Passport => {
-            root_token.len() == 64 && root_token.bytes().all(|byte| byte.is_ascii_hexdigit())
+            authority_token.len() == 64
+                && authority_token.bytes().all(|byte| byte.is_ascii_hexdigit())
         }
         Profile::Selfhost | Profile::SelfhostRenew => {
-            root_token.len() >= 20
-                && root_token.len() <= 256
-                && root_token.bytes().all(|byte| byte.is_ascii_graphic())
+            authority_token.len() >= 20
+                && authority_token.len() <= 256
+                && authority_token.bytes().all(|byte| byte.is_ascii_graphic())
         }
     };
     if !valid_token {
@@ -869,7 +903,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Some(Path::new(&ca_file)),
             std::time::Duration::from_secs(10),
         )?,
-        root_token,
+        authority_token,
     };
     provision(
         &bao,

@@ -18,6 +18,8 @@ from urllib.request import (
 
 CUSTODY_SIGNER = "selfhost-qualification-custody-v1"
 CUSTODY_SIGNER_POLICY = "selfhost-qualification-custody-signer"
+RENEWAL_LEAF_ROLE = "selfhost-renew-leaf"
+RENEWAL_OPERATOR_POLICY = "selfhost-kms-renewal"
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -90,15 +92,27 @@ class Bao:
         )
 
     def request(
-        self, method: str, path: str, body: dict | None = None, *, token: str | None = None
+        self, method: str, path: str, body: dict | None = None, *, token: str | None = None,
+        authenticate: bool = True,
     ) -> dict:
         data = None if body is None else json.dumps(body).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if authenticate:
+            headers["X-Vault-Token"] = token or self.token
         request = Request(
             f"{self.endpoint}/v1/{path}", data=data, method=method,
-            headers={"X-Vault-Token": token or self.token, "Content-Type": "application/json"},
+            headers=headers,
         )
         with self.opener.open(request, timeout=10) as response:
             content = response.read(1024 * 1024 + 1)
         if len(content) > 1024 * 1024:
             raise RuntimeError("disposable OpenBao response exceeded size bound")
         return json.loads(content) if content else {}
+
+
+def require_renewal_authority(bao: Bao) -> None:
+    data = bao.request("POST", "auth/token/lookup", {"token": bao.token}).get("data", {})
+    if (not isinstance(data, dict) or data.get("policies") != [RENEWAL_OPERATOR_POLICY]
+            or data.get("path") != "auth/selfhost-renew/login"
+            or type(data.get("ttl")) is not int or not 3600 <= data["ttl"] <= 8 * 60 * 60):
+        raise ValueError("OpenBao renewal authority is not the scoped AppRole token")

@@ -25,7 +25,9 @@ if os.name == "posix":
 
 sys.dont_write_bytecode = True
 from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
-from selfhost_openbao_client import Bao, certificate_public_key_der, public_key_der  # noqa: E402
+from selfhost_openbao_client import (  # noqa: E402
+    Bao, certificate_public_key_der, public_key_der, require_renewal_authority,
+)
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import PURPOSES, REALMS, jwe_policy, signing_policy  # noqa: E402
 from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, verify_generations  # noqa: E402
@@ -37,6 +39,7 @@ COMPLETED_SERVICES = frozenset({
     "db-migrate", "issuance-migrations", "revocation-profile-migrate",
     "keycloak-configurator",
 })
+OPTIONAL_EDGE_SERVICES = frozenset({"cloudflared", "cloudflared-beta", "tunnel-nginx-proxy"})
 TLS_CERT_BY_ROLE = {
     "signing-keys-server": "signing_keys_workload_server_cert",
     "gateway-client": "gateway_workload_client_cert",
@@ -119,6 +122,10 @@ def healthy(items: list[dict], services: set[str]) -> bool:
         elif state != "running" or health not in ("", "healthy"):
             return False
     return True
+
+
+def owned_service_closure(declared: set[str], running: set[str]) -> bool:
+    return running <= declared and declared - running <= OPTIONAL_EDGE_SERVICES
 
 
 def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
@@ -316,6 +323,7 @@ def activate(args: argparse.Namespace) -> dict:
     if len(operator_token) < 20:
         raise ValueError("OpenBao renewal operator token is invalid")
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
+    require_renewal_authority(bao)
     checked_tokens(bao, args.current_secrets, args.renewed_secrets,
                    args.minimum_token_ttl)
     checked_certificates(bao, args.current_secrets, args.renewed_secrets,
@@ -338,8 +346,9 @@ def activate(args: argparse.Namespace) -> dict:
         raise ValueError("Compose model changed beyond the secret generation")
     baseline = statuses(old, cwd=cwd)
     services = {item.get("Service") for item in baseline}
+    declared = set(old_model.get("services", {}))
     if (not all(isinstance(name, str) for name in services)
-            or services != set(old_model.get("services", {}))
+            or not owned_service_closure(declared, services)
             or not {"keycloak", "gateway", "signing-keys", "postgres"} <= services
             or not healthy(baseline, services)):
         raise ValueError("owned KMS-only project is not healthy before renewal")
