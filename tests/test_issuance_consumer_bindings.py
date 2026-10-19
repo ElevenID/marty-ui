@@ -347,10 +347,10 @@ def assert_compose_owner_split(compose, *, production=False):
     }
     assert {name: values for name, values in actual.items() if values} == expected
     if production:
-        for name in ("auth", "applicant", "presentation-policy", "flow"):
+        for name in ("auth", "applicant", "presentation-policy"):
             assert "issuance" not in services[name]["depends_on"]
             assert "issuance-native" not in services[name]["depends_on"]
-        dependency_owners = ("gateway",)
+        dependency_owners = ("gateway", "flow")
     else:
         for name in ("auth", "applicant", "presentation-policy"):
             assert services[name]["depends_on"].get("issuance-native") == {
@@ -678,7 +678,7 @@ def test_production_rejects_native_http_consumer_reintroduction(service, setting
     ("service", "dependency"),
     [
         (service, dependency)
-        for service in ("auth", "applicant", "presentation-policy", "flow")
+        for service in ("auth", "applicant", "presentation-policy")
         for dependency in ("issuance", "issuance-native")
     ],
 )
@@ -689,6 +689,14 @@ def test_production_rejects_issuance_dependency_reintroduction(
     selfhost["services"][service]["depends_on"][dependency] = {
         "condition": "service_healthy"
     }
+    with pytest.raises(AssertionError):
+        assert_compose_owner_split(selfhost, production=True)
+
+
+@pytest.mark.parametrize("dependency", ["issuance", "issuance-native"])
+def test_production_rejects_flow_issuance_readiness_loss(dependency):
+    _, _, _, selfhost = source_models()
+    del selfhost["services"]["flow"]["depends_on"][dependency]
     with pytest.raises(AssertionError):
         assert_compose_owner_split(selfhost, production=True)
 

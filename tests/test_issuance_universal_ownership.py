@@ -177,9 +177,12 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     )
     for service_name in ("auth", "applicant", "presentation-policy"):
         assert "issuance-native" not in services[service_name].get("depends_on", {})
-    assert {"issuance", "issuance-native"}.isdisjoint(
-        services["flow"].get("depends_on", {})
-    )
+    assert services["flow"]["depends_on"]["issuance"] == {
+        "condition": "service_healthy"
+    }
+    assert services["flow"]["depends_on"]["issuance-native"] == {
+        "condition": "service_healthy"
+    }
 
     assert CONTRACT["production_unchanged"] is False
     assert CONTRACT["production_http_owner"] == {
