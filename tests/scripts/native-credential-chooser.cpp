@@ -23,9 +23,10 @@ static bool allowedCandidate(bool owned,bool document,bool dialog,bool context,i
 }
 static bool credentialText(const std::wstring& input) {
   std::wstring text=input;std::transform(text.begin(),text.end(),text.begin(),towlower);
-  for(auto word:{L"credential",L"identity",L"bluetooth",L"phone",L"qr code",L"another device",L"wallet"})
-    if(text.find(word)!=std::wstring::npos)return true;
-  return false;
+  auto has=[&](const wchar_t* word){return text.find(word)!=std::wstring::npos;};
+  return has(L"credential")||has(L"wallet")||
+    (has(L"identity")&&(has(L"qr code")||has(L"phone")||has(L"bluetooth")||has(L"another device")));
+
 }
 struct Counters {int windows=0,buttons=0,visible=0,documents=0,dialogs=0,contexts=0,unsupported=0;};
 class Observer {
@@ -59,15 +60,17 @@ class Observer {
   }
   bool hasContext(IUIAutomationElement* dialog) {
     std::vector<ComPtr<IUIAutomationElement>> queue;ComPtr<IUIAutomationElement> root=dialog;queue.push_back(root);
-    bool found=false;
+    std::wstring context;
     for(size_t index=0;index<queue.size();index++) {
       if(queue.size()>512)throw std::runtime_error("Native subtree bound exceeded");
       auto current=queue[index];if(!owned(current.Get()))return false;
       if(integer(current.Get(),UIA_ControlTypePropertyId)==UIA_DocumentControlTypeId)continue;
-      found=found||credentialText(text(current.Get(),UIA_NamePropertyId));
+      const auto name=text(current.Get(),UIA_NamePropertyId);
+      if(context.size()+name.size()>65536)throw std::runtime_error("Native context bound exceeded");
+      context+=L" ";context+=name;
       ComPtr<IUIAutomationElement> child;check(walker->GetFirstChildElement(current.Get(),&child));
       while(child){if(queue.size()>=512)throw std::runtime_error("Native subtree bound exceeded");queue.push_back(child);ComPtr<IUIAutomationElement> next;check(walker->GetNextSiblingElement(child.Get(),&next));child=next;}
-    }return found;
+    }return credentialText(context);
   }
   bool eligible(IUIAutomationElement* button,IUIAutomationElement* window) {
     if(!owned(button)||integer(button,UIA_ControlTypePropertyId)!=UIA_ButtonControlTypeId||text(button,UIA_NamePropertyId)!=L"Cancel")return false;
@@ -84,7 +87,11 @@ class Observer {
     if(!hasContext(dialog.Get()))return false;counts.contexts++;return allowedCandidate(true,false,true,true,1);
   }
 };
+static bool sameSoleCandidate(size_t count,bool same){return count==1&&same;}
 static bool selfTest() {
+  if(credentialText(L"Confirm identity")||credentialText(L"Phone settings")||credentialText(L"QR code"))return false;
+  if(!credentialText(L"Digital credential")||!credentialText(L"Verify identity using another device"))return false;
+  if(!sameSoleCandidate(1,true)||sameSoleCandidate(2,true)||sameSoleCandidate(1,false)||sameSoleCandidate(0,false))return false;
   Value value;value.v.vt=VT_BOOL;value.v.boolVal=VARIANT_TRUE;if(!dialogBoolean(value.v))return false;
   value.v.boolVal=VARIANT_FALSE;if(dialogBoolean(value.v))return false;
   value.v.vt=VT_I4;value.v.lVal=-1;if(dialogBoolean(value.v)||dialogRole(value.v))return false;
@@ -117,11 +124,14 @@ int wmain(int argc,wchar_t** argv) {
     ULARGE_INTEGER creation;creation.LowPart=created.dwLowDateTime;creation.HighPart=created.dwHighDateTime;
     auto milliseconds=creation.QuadPart/10000-11644473600000ULL;
     if(milliseconds+2000<notBefore||milliseconds>notBefore+10000||WaitForSingleObject(process,0)!=WAIT_TIMEOUT)throw std::runtime_error("Owned process generation mismatch");
-    Observer observer(pid);ComPtr<IUIAutomationElement> root;check(observer.uia->GetRootElement(&root));
+    Observer observer(pid);
+    struct Candidate{ComPtr<IUIAutomationElement> button,window;};
+    auto scan=[&](){
+    ComPtr<IUIAutomationElement> root;check(observer.uia->GetRootElement(&root));
     Value pidValue;pidValue.v.vt=VT_I4;pidValue.v.lVal=pid;ComPtr<IUIAutomationCondition> condition;
     check(observer.uia->CreatePropertyCondition(UIA_ProcessIdPropertyId,pidValue.v,&condition));
     ComPtr<IUIAutomationElementArray> windows;check(root->FindAll(TreeScope_Children,condition.Get(),&windows));int size=0;check(windows->get_Length(&size));if(size>16)throw std::runtime_error("Owned window bound exceeded");
-    struct Candidate{ComPtr<IUIAutomationElement> button,window;};std::vector<Candidate> candidates;
+    std::vector<Candidate> candidates;
     for(int i=0;i<size;i++) {
       ComPtr<IUIAutomationElement> window;check(windows->GetElement(i,&window));
       if(observer.text(window.Get(),UIA_ClassNamePropertyId)!=L"Chrome_WidgetWin_1")continue;observer.counts.windows++;
@@ -130,8 +140,13 @@ int wmain(int argc,wchar_t** argv) {
       ComPtr<IUIAutomationElementArray> buttons;check(window->FindAll(TreeScope_Descendants,buttonsCondition.Get(),&buttons));int count=0;check(buttons->get_Length(&count));if(count>512)throw std::runtime_error("Owned button bound exceeded");
       for(int j=0;j<count;j++){ComPtr<IUIAutomationElement> button;check(buttons->GetElement(j,&button));if(observer.text(button.Get(),UIA_NamePropertyId)!=L"Cancel")continue;observer.counts.buttons++;if(observer.eligible(button.Get(),window.Get()))candidates.push_back({button,window});}
     }
+      return candidates;
+    };
+    auto candidates=scan();
     if(candidates.size()!=1){auto c=observer.counts;std::cout<<"{\"state\":\"NO_UNAMBIGUOUS_NATIVE_CHOOSER\",\"native_cancel_candidates\":"<<candidates.size()<<",\"owned_class_windows\":"<<c.windows<<",\"cancel_buttons\":"<<c.buttons<<",\"enabled_onscreen\":"<<c.visible<<",\"document_rejections\":"<<c.documents<<",\"native_dialog_matches\":"<<c.dialogs<<",\"credential_context_matches\":"<<c.contexts<<",\"unsupported_dialog_properties\":"<<c.unsupported<<"}";return 2;}
-    if(WaitForSingleObject(process,0)!=WAIT_TIMEOUT||!observer.eligible(candidates[0].button.Get(),candidates[0].window.Get()))throw std::runtime_error("Native chooser changed before invocation");
+    auto finalCandidates=scan();
+    const bool same=finalCandidates.size()==1&&observer.same(candidates[0].button.Get(),finalCandidates[0].button.Get())&&observer.same(candidates[0].window.Get(),finalCandidates[0].window.Get());
+    if(WaitForSingleObject(process,0)!=WAIT_TIMEOUT||!sameSoleCandidate(finalCandidates.size(),same))throw std::runtime_error("Native chooser uniqueness changed before invocation");
     ComPtr<IUIAutomationInvokePattern> invoke;check(candidates[0].button->GetCurrentPatternAs(UIA_InvokePatternId,IID_PPV_ARGS(&invoke)));check(invoke->Invoke());
     std::cout<<"{\"state\":\"NATIVE_CANCEL_INVOKED\",\"mechanism\":\"Native UIA InvokePattern with proven dialog ancestry\"}";
     return 0;
