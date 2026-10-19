@@ -5,6 +5,23 @@ const path=require('node:path');
 const {guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql}=require('./audit-beta-holder-cancel');
 const validEnv=()=>({BETA_ORIGIN:'https://beta.elevenidllc.com',MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8787',D05_SYNTHETIC_FIXTURE:'1',D05_NATIVE_CHOOSER_CANCEL:'1',RECORD_VIDEO:'0',TEST_ADMIN_EMAIL:'unit@example.test',TEST_ADMIN_PASSWORD:'unit-only',MARTY_TEST_WALLET_HOLDER_KID:'did:example:unit',CHROME_BINARY:'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
 
+test('actual native SDK ABI self-test is hash bound and never enumerates application UI',{skip:process.platform!=='win32'},()=>{
+  const {nativeChooserBuild}=require('./audit-beta-holder-cancel');
+  const {execFileSync}=require('node:child_process');const native=nativeChooserBuild();
+  assert.deepEqual(JSON.parse(execFileSync(native.binary,['--self-test'],{encoding:'utf8'})),{state:'NATIVE_ABI_SELF_TEST_PASS',windows_enumerated:false,controls_invoked:false});
+});
+
+test('native helper rejects binary replacement before execution',()=>{
+  const fs=require('node:fs'),os=require('node:os'),crypto=require('node:crypto');const {nativeChooserBuild}=require('./audit-beta-holder-cancel');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'native-binding-'));const dir=path.join(root,'tests/artifacts/native-credential-chooser');fs.mkdirSync(dir,{recursive:true});fs.mkdirSync(path.join(root,'tests/scripts'));
+  try {
+    const hash=value=>crypto.createHash('sha256').update(value).digest('hex');
+    fs.writeFileSync(path.join(root,'tests/scripts/native-credential-chooser.cpp'),'source');fs.writeFileSync(path.join(dir,'native-credential-chooser.exe'),'changed');
+    fs.writeFileSync(path.join(dir,'build.json'),JSON.stringify({source_sha256:hash('source'),binary_sha256:hash('original')}));
+    assert.throws(()=>nativeChooserBuild(root),/binary binding changed/);
+  }finally{fs.rmSync(root,{recursive:true,force:true});}
+});
+
 test('installed Windows UIAutomation properties support the helper without invoking controls',{skip:process.platform!=='win32'},()=>{
   const {execFileSync}=require('node:child_process');
   const actual=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-File',path.join(__dirname,'cancel-native-credential-dialog.ps1'),'-ProbeRuntimeProperties'],{encoding:'utf8'}));

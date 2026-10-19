@@ -29,6 +29,18 @@ const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function canonical(value) { return Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,canonical(value[k])])):value; }
 const hash=value=>crypto.createHash('sha256').update(JSON.stringify(canonical(value))).digest('hex');
 const fileHash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+function nativeChooserBuild(root=ROOT) {
+  const directory=path.join(root,'tests/artifacts/native-credential-chooser');
+  const binary=path.join(directory,'native-credential-chooser.exe');
+  const source=path.join(root,'tests/scripts/native-credential-chooser.cpp');
+  const metadata=path.join(directory,'build.json');
+  for(const file of [directory,binary,source,metadata])assert.equal(fs.lstatSync(file).isSymbolicLink(),false,'Native helper cannot use symlinks');
+  const proof=JSON.parse(fs.readFileSync(metadata,'utf8').replace(/^\uFEFF/,''));
+  assert.equal(proof.source_sha256,fileHash(source),'Native helper source binding changed');
+  assert.equal(proof.binary_sha256,fileHash(binary),'Native helper binary binding changed');
+  assert.deepEqual(proof.self_test,{state:'NATIVE_ABI_SELF_TEST_PASS',windows_enumerated:false,controls_invoked:false});
+  return {binary,proof};
+}
 function guards(env) {
   assert.equal(env.BETA_ORIGIN,BASE);assert.equal(env.MARTY_TEST_WALLET_ORIGIN,WALLET);
   assert.equal(env.D05_SYNTHETIC_FIXTURE,'1');assert.equal(env.D05_NATIVE_CHOOSER_CANCEL,'1');
@@ -137,6 +149,7 @@ async function main(env=process.env) {
       signingDefaults:hash(Object.fromEntries(['default_service_id','format_defaults','type_defaults'].map(k=>[k,config[k]]))),discovery:hash(discovery)};
   };
   try {
+    report.nativeHelperBuild=nativeChooserBuild().proof;
     profile=fs.mkdtempSync(path.join(privateRoot,'profile-'));realProfile=fs.realpathSync(profile);
     report.deployment=await fetchPublicJson(`${BASE}/.well-known/marty-release`);
     assertProductBinding(report.deployment);
@@ -189,7 +202,8 @@ async function main(env=process.env) {
     assert.equal(nativeBefore.nativeImplementation,true);assert.equal(nativeBefore.calls[0].settled,false,'Browser rejected before a real holder cancellation');
     report.stage='cancel_browser_owned_dialog';
     report.facts.nativeCancel=await until(()=>{
-      const result=spawnSync('powershell',['-NoProfile','-NonInteractive','-File',path.join(__dirname,'cancel-native-credential-dialog.ps1'),'-BrowserProcessId',String(child.pid),'-BrowserExecutable',CHROME],{encoding:'utf8',windowsHide:true,timeout:15000});
+      const native=nativeChooserBuild();report.nativeHelperBuild=native.proof;
+      const result=spawnSync(native.binary,[String(child.pid),CHROME,String(spawnedAt)],{encoding:'utf8',windowsHide:true,timeout:15000});
       if(result.status===2){(report.nativeDialogObservations||=[]).push(JSON.parse(result.stdout));return null;}
       if(result.status!==0)fs.writeFileSync(path.join(privateRoot,path.basename(dir)+'-native-helper-error.log'),String(result.stderr||result.error?.name||'Unknown native helper failure'));
       assert.equal(result.status,0,'Native browser chooser observation/cancellation failed');return JSON.parse(result.stdout);
@@ -260,4 +274,4 @@ async function main(env=process.env) {
   assert.equal(report.holderCancelNoSession,true,'Actual browser cancellation/recovery evidence incomplete');
 }
 if(require.main===module)main().catch(error=>{console.error(`D05 cancellation failed: ${error.name}`);process.exitCode=1;});
-module.exports={assertProductBinding,classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
+module.exports={nativeChooserBuild,assertProductBinding,classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
