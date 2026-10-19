@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Add disposable Keycloak remote-key inputs to an operator-owned secret root.
+"""Create or stage Keycloak remote-key inputs in an operator-owned secret root.
 
 Run against the same HTTPS OpenBao used by the self-host workload bootstrap.
 The DIDComm plugin must already be mounted. This script never exports a private
-key and refuses to overwrite any existing Keycloak input.
+key and refuses to overwrite any existing Keycloak input. Renewal reuses the
+same remote key versions, PKI issuer, and exact scoped policies; it does not
+activate the staged credentials or roll the short-lived CA.
 """
 
 from __future__ import annotations
@@ -56,6 +58,10 @@ def require_data(response: dict, field: str) -> dict:
 
 def scoped_token(bao: Bao, policy: str, name: str) -> str:
     bao.request("PUT", f"sys/policies/acl/{name}", {"policy": policy})
+    return mint_token(bao, name)
+
+
+def mint_token(bao: Bao, name: str) -> str:
     result = bao.request("POST", "auth/token/create", {
         "policies": [name], "no_default_policy": True, "ttl": SESSION_TTL,
     }).get("auth", {})
@@ -65,6 +71,27 @@ def scoped_token(bao: Bao, policy: str, name: str) -> str:
     if (type(result.get("lease_duration")) is not int
             or result["lease_duration"] < MIN_VALIDITY_SECONDS):
         raise RuntimeError("disposable Keycloak token expires before tester session")
+    return token
+
+
+def renewed_token(bao: Bao, policy: str, prefix: str) -> str:
+    """Reuse an exactly scoped existing policy; never widen it during renewal."""
+    names = require_data(bao.request("LIST", "sys/policies/acl"), "keys")["keys"]
+    if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+        raise RuntimeError("Keycloak renewal policy inventory is invalid")
+    matching = []
+    for name in names:
+        if name.startswith(prefix) and VERSION.fullmatch(name):
+            current = require_data(bao.request("GET", f"sys/policies/acl/{name}"), "policy")
+            if current["policy"] == policy:
+                matching.append(name)
+    if len(matching) != 1:
+        raise RuntimeError("Keycloak renewal requires one exact existing scoped policy")
+    token = mint_token(bao, matching[0])
+    lookup = require_data(bao.request("POST", "auth/token/lookup", {"token": token}), "policies")
+    if (lookup["policies"] != [matching[0]] or type(lookup.get("ttl")) is not int
+            or not MIN_VALIDITY_SECONDS <= lookup["ttl"] <= 8 * 60 * 60):
+        raise RuntimeError("Keycloak renewed token has unexpected scope or lifetime")
     return token
 
 
@@ -78,28 +105,38 @@ def require_cert_lifetime(certificate: str) -> None:
         raise RuntimeError("disposable Keycloak certificate expires before tester session")
 
 
-def require_mounts(bao: Bao) -> None:
+def require_mounts(bao: Bao, *, renew: bool = False) -> None:
     mounts = require_data(bao.request("GET", "sys/mounts"), "transit/")
     if (mounts["transit/"].get("type") != "transit"
             or mounts.get("didcomm/", {}).get("type") != "openbao-didcomm-authcrypt"
-            or "keycloak-pki/" in mounts):
+            or ("keycloak-pki/" in mounts) == (not renew)
+            or (renew and mounts.get("keycloak-pki/", {}).get("type") != "pki")):
         raise RuntimeError("disposable OpenBao lacks the reviewed Keycloak mounts")
 
 
-def provision(bao: Bao) -> dict[str, str]:
+def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
     """Return exactly seven public certificates/scoped tokens, not private keys."""
-    require_mounts(bao)
-    bao.request("POST", "sys/mounts/keycloak-pki", {"type": "pki"})
-    ca = require_data(bao.request("POST", "keycloak-pki/root/generate/internal", {
-        "common_name": "Marty disposable Keycloak CA", "ttl": "24h",
-        "key_type": "ec", "key_bits": 256,
-    }), "certificate")
-    if "private_key" in ca:
-        raise RuntimeError("disposable Keycloak PKI exported its CA key")
-    bao.request("POST", "keycloak-pki/roles/rs256", {
-        "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
-        "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
-    })
+    require_mounts(bao, renew=renew)
+    if renew:
+        role = require_data(bao.request("GET", "keycloak-pki/roles/rs256"), "key_type")
+        if (role["key_type"] != "rsa" or role.get("key_bits") != 2048
+                or role.get("allow_any_name") is not True
+                or role.get("max_ttl") != 8 * 60 * 60):
+            raise RuntimeError("Keycloak renewal PKI role changed")
+        ca = require_data(bao.request("GET", "keycloak-pki/cert/ca"), "certificate")
+        require_cert_lifetime(ca["certificate"])
+    else:
+        bao.request("POST", "sys/mounts/keycloak-pki", {"type": "pki"})
+        ca = require_data(bao.request("POST", "keycloak-pki/root/generate/internal", {
+            "common_name": "Marty disposable Keycloak CA", "ttl": "24h",
+            "key_type": "ec", "key_bits": 256,
+        }), "certificate")
+        if "private_key" in ca:
+            raise RuntimeError("disposable Keycloak PKI exported its CA key")
+        bao.request("POST", "keycloak-pki/roles/rs256", {
+            "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
+            "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
+        })
     outputs: dict[str, str] = {}
     rsa_policy = ""
     for realm in REALMS:
@@ -107,10 +144,11 @@ def provision(bao: Bao) -> dict[str, str]:
         hmac_key = f"keycloak-{realm}-hs512"
         for name, kind, extra in ((rsa_key, "rsa-2048", {}),
                                   (hmac_key, "hmac", {"key_size": 64})):
-            bao.request("POST", f"transit/keys/{name}", {
-                "type": kind, "exportable": False,
-                "allow_plaintext_backup": False, **extra,
-            })
+            if not renew:
+                bao.request("POST", f"transit/keys/{name}", {
+                    "type": kind, "exportable": False,
+                    "allow_plaintext_backup": False, **extra,
+                })
             metadata = require_data(bao.request("GET", f"transit/keys/{name}"), "type")
             if (metadata["type"] != kind or metadata.get("exportable") is not False
                     or metadata.get("allow_plaintext_backup") is not False
@@ -147,7 +185,8 @@ def provision(bao: Bao) -> dict[str, str]:
             f'path "transit/verify/{hmac_key}/sha2-512" {{ capabilities = ["update"] }}\n'
         )
     nonce = secrets.token_hex(6)
-    signing_token = scoped_token(bao, rsa_policy, f"selfhost-keycloak-sign-{nonce}")
+    signing_token = (renewed_token(bao, rsa_policy, "selfhost-keycloak-sign-") if renew
+                     else scoped_token(bao, rsa_policy, f"selfhost-keycloak-sign-{nonce}"))
     for realm in REALMS:
         signed = bao.request("POST", f"transit/sign/keycloak-{realm}-rs256", {
             "input": base64.b64encode(b"selfhost-keycloak-probe").decode("ascii"),
@@ -156,13 +195,15 @@ def provision(bao: Bao) -> dict[str, str]:
         if not require_data(signed, "signature").get("signature"):
             raise RuntimeError("disposable Keycloak RS256 token cannot sign")
     outputs["keycloak_signing_kms_token"] = signing_token
-    bao.request("POST", "transit/keys/foreign-keycloak-selfhost", {
-        "type": "rsa-2048", "exportable": False, "allow_plaintext_backup": False,
-    })
+    if not renew:
+        bao.request("POST", "transit/keys/foreign-keycloak-selfhost", {
+            "type": "rsa-2048", "exportable": False, "allow_plaintext_backup": False,
+        })
     for realm in REALMS:
         for purpose in PURPOSES:
             key_path = f"didcomm/keycloak/keys/{realm}/{purpose}"
-            bao.request("POST", key_path, {})
+            if not renew:
+                bao.request("POST", key_path, {})
             current = require_data(bao.request("GET", key_path), "version")
             version = current["version"]
             if not isinstance(version, str) or not VERSION.fullmatch(version):
@@ -172,7 +213,9 @@ def provision(bao: Bao) -> dict[str, str]:
             policy = (f'path "{key_path}" {{ capabilities = ["read"] }}\n'
                       f'path "{encode}" {{ capabilities = ["update"] }}\n'
                       f'path "{decode}" {{ capabilities = ["update"] }}\n')
-            token = scoped_token(bao, policy, f"selfhost-keycloak-{realm}-{purpose}-{nonce}")
+            prefix = f"selfhost-keycloak-{realm}-{purpose}-"
+            token = (renewed_token(bao, policy, prefix) if renew
+                     else scoped_token(bao, policy, f"{prefix}{nonce}"))
             if require_data(bao.request("GET", key_path, token=token), "version")["version"] != version:
                 raise RuntimeError("disposable Keycloak JWE token cannot read its key")
             outputs[f"keycloak_{realm}_{purpose}_token"] = token
@@ -203,7 +246,7 @@ def require_available_private_root(root: Path) -> None:
         raise RuntimeError("disposable Keycloak output would overwrite an existing secret")
 
 
-def write_outputs(root: Path, outputs: dict[str, str]) -> None:
+def write_outputs(root: Path, outputs: dict[str, str], *, staged: bool = False) -> None:
     require_available_private_root(root)
     if set(outputs) != OUTPUTS:
         raise RuntimeError("disposable Keycloak output would overwrite or omit a secret")
@@ -219,9 +262,10 @@ def write_outputs(root: Path, outputs: dict[str, str]) -> None:
             with os.fdopen(fd, "w", encoding="ascii") as stream:
                 stream.write(content)
                 stream.flush()
-                # Compose bind-mounts these files into non-root containers.
-                # The owner-private host directory protects their contents.
-                os.fchmod(stream.fileno(), 0o444)
+                # Initial Compose bind mounts need public-read mode inside an
+                # owner-private host root. Renewal stays owner-only until a
+                # separate activation flow validates and installs it.
+                os.fchmod(stream.fileno(), 0o600 if staged else 0o444)
     except (OSError, UnicodeError):
         for path in created:
             try:
@@ -237,6 +281,9 @@ def main() -> int:
         ca = Path(os.environ["BAO_CACERT"])
         token_file = Path(os.environ["BAO_ROOT_TOKEN_FILE"])
         root = Path(os.environ["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
+        mode = os.environ.get("SELFHOST_KEYCLOAK_MODE", "initial")
+        if mode not in ("initial", "renew"):
+            raise RuntimeError("Keycloak provisioning mode is invalid")
         if (not endpoint.startswith("https://") or not ca.is_absolute()
                 or not ca.is_file() or ca.is_symlink() or not token_file.is_absolute()
                 or not token_file.is_file() or token_file.is_symlink()):
@@ -245,7 +292,9 @@ def main() -> int:
         if len(token) < 20:
             raise RuntimeError("disposable Keycloak root token is absent")
         require_available_private_root(root)
-        write_outputs(root, provision(KeycloakBao(endpoint, ca, token)))
+        renewing = mode == "renew"
+        write_outputs(root, provision(KeycloakBao(endpoint, ca, token), renew=renewing),
+                      staged=renewing)
     except (KeyError, OSError, ValueError, RuntimeError, HTTPError, URLError,
             HTTPException) as error:
         detail = str(error) if isinstance(error, RuntimeError) else type(error).__name__
