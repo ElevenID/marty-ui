@@ -339,6 +339,22 @@ passed. Re-run on the eventual protected-main SHA and verify live registry
 digests before dispatch; the current candidate result is neither a claim nor
 a signed prepared-bundle qualification.
 
+16 GiB measurement preparation (2026-10-18): This tracker branch now has
+`scripts/observe_selfhost_resources.py`, a read-only Docker observer restricted
+to disposable `marty-selfhost-qual-*` and `marty-preview-*` project names. Run
+it before the next signed-artifact installation and stop it after owned
+teardown. It samples Linux-visible host RAM/swap and per-role container memory,
+inspects OOM state, and continuously captures project-labeled Docker OOM
+events into a redacted `0600` JSON report. The tool is supplemental and marks
+itself unqualified; sampled memory is not a cgroup high-water mark, and a
+supported 16 GiB minimum still needs complete installed/recovery behavior
+and review of the resulting headroom. A no-container smoke returned six host
+samples with complete event streams; an owned disposable container smoke
+recorded its `probe` role and memory; a separate 32 MiB-limited disposable
+container intentionally OOM-killed itself and the observer recorded one OOM
+event even though the container was removed. Ruff, Python compilation and diff
+checks passed. No production container or volume was changed by this tool.
+
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
 Canvas shard. Because `CI-main` concurrency held fresh run 39172145237
