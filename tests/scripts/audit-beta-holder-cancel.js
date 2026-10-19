@@ -257,7 +257,16 @@ async function main(env=process.env) {
     report.substage='present_recovery_credential';
     await walletPage.getByLabel('Presentation request URI').fill(recoveryUri);
     const presented=walletPage.waitForResponse(r=>r.url()===`${WALLET}/api/present`&&r.request().method()==='POST');await walletPage.getByRole('button',{name:/^present$/i}).click();
-    report.recovery.present=await observeRecoveryResponse(await presented);assert.ok(report.recovery.present.httpOk&&report.recovery.present.bodyOk===true,'Recovery presentation rejected');
+    const presentResponse=await presented;
+    report.recovery.present=await observeRecoveryResponse(presentResponse);
+    if(!report.recovery.present.httpOk||report.recovery.present.bodyOk!==true){
+      const privateBody=await presentResponse.body();assert.ok(privateBody.length<=8192,'Wallet error response exceeded private diagnostic bound');
+      const privateName=path.basename(dir)+'-wallet-present-error.json';
+      fs.writeFileSync(path.join(privateRoot,privateName),privateBody,{mode:0o600,flag:'wx'});
+      report.recovery.present.privateErrorSha256=crypto.createHash('sha256').update(privateBody).digest('hex');
+      report.recovery.present.privateErrorFile=privateName;
+    }
+    assert.ok(report.recovery.present.httpOk&&report.recovery.present.bodyOk===true,'Recovery presentation rejected');
     report.substage='await_recovered_authentication';
     await until(async()=>{const state=await me();report.recovery.authenticated=state.authenticated===true;return report.recovery.authenticated;},60000);report.facts.recovered=true;
     report.state='FUNCTIONAL_PASS';
