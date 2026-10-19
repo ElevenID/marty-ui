@@ -31,6 +31,7 @@ function guards(env, lane) {
   assert.equal(env.BETA_AUDIT_ORG_ID || ORG, ORG);
   assert.ok(env.MARTY_TEST_WALLET_HOLDER_KID?.startsWith('did:'), 'Synthetic wallet holder required');
   assert.ok(env.TEST_ADMIN_EMAIL && env.TEST_ADMIN_PASSWORD, 'Operator fixture credentials required');
+  assert.ok(env.D05_EXPECTED_RELEASE_MARKER && env.D05_EXPECTED_UI_REVISION && env.D05_EXPECTED_AUTH_REVISION && env.D05_EXPECTED_POLICY_REVISION, 'Pinned current beta release and components required');
 }
 function credentialPath(id) {
   assert.match(id.replace(/^urn:uuid:/, ''), UUID);
@@ -113,8 +114,10 @@ async function main(lane = process.argv[2], env = process.env) {
   };
   try {
     const live = await get(`${BASE}/.well-known/marty-release`);
-    assert.equal(live.component_revisions['marty-ui'], '7406b9d5a4c3a1d9b1f497c80039aef17292f3f9');
-    for (const component of ['marty-ui-auth', 'marty-ui-presentation-policy']) assert.equal(live.component_revisions[component], '04006bfbbc780ea172479d371ff77d4ead691755');
+    assert.equal(live.deployment_release_marker, env.D05_EXPECTED_RELEASE_MARKER);
+    assert.equal(live.component_revisions['marty-ui'], env.D05_EXPECTED_UI_REVISION);
+    assert.equal(live.component_revisions['marty-ui-auth'], env.D05_EXPECTED_AUTH_REVISION);
+    assert.equal(live.component_revisions['marty-ui-presentation-policy'], env.D05_EXPECTED_POLICY_REVISION);
     report.deployment = live;
     adminContext = await browser.newContext(); operator = await adminContext.newPage();
     await login(operator, env.TEST_ADMIN_EMAIL, env.TEST_ADMIN_PASSWORD);

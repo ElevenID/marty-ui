@@ -3,10 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { guards, credentialPath, expirySql, verifyForeignSignature, assertions } = require('./audit-beta-membership-support');
-const env = { BETA_ORIGIN:'https://beta.elevenidllc.com',MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8787',D05_SYNTHETIC_FIXTURE:'1',MARTY_TEST_WALLET_HOLDER_KID:'did:key:synthetic',TEST_ADMIN_EMAIL:'operator@example.test',TEST_ADMIN_PASSWORD:'test' };
+const env = { BETA_ORIGIN:'https://beta.elevenidllc.com',MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8787',D05_SYNTHETIC_FIXTURE:'1',MARTY_TEST_WALLET_HOLDER_KID:'did:key:synthetic',TEST_ADMIN_EMAIL:'operator@example.test',TEST_ADMIN_PASSWORD:'test',D05_EXPECTED_RELEASE_MARKER:'beta-v258-33330c2a0bec',D05_EXPECTED_UI_REVISION:'33330',D05_EXPECTED_AUTH_REVISION:'33330',D05_EXPECTED_POLICY_REVISION:'33330' };
 test('fixture guards reject production, remote wallet and unacknowledged synthetic work',()=>{
  guards(env,'expired-offer');
- for(const change of [{BETA_ORIGIN:'https://elevenidllc.com'},{MARTY_TEST_WALLET_ORIGIN:'https://wallet.example.test'},{D05_SYNTHETIC_FIXTURE:'0'}]) assert.throws(()=>guards({...env,...change},'expired-offer'));
+ for(const change of [{BETA_ORIGIN:'https://elevenidllc.com'},{MARTY_TEST_WALLET_ORIGIN:'https://wallet.example.test'},{D05_SYNTHETIC_FIXTURE:'0'},{D05_EXPECTED_RELEASE_MARKER:''}]) assert.throws(()=>guards({...env,...change},'expired-offer'));
  assert.throws(()=>guards(env,'primary-demo'));
 });
 test('expiry mutation accepts only UUID and scopes pending beta organization transaction',()=>{
