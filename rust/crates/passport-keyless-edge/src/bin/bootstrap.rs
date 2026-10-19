@@ -745,7 +745,6 @@ async fn provision(
                 .token_file
                 .to_owned(),
         };
-        write_new(&output.join(&token_file), token)?;
         if profile == Profile::SelfhostRenew {
             let lookup = bao
                 .checked(
@@ -765,6 +764,8 @@ async fn provision(
                 || scopes[0] != policy_name
                 || remaining < 3600
                 || remaining > 28800
+                || data(&lookup, "orphan")?.as_bool() != Some(true)
+                || value(&lookup, "path")? != "auth/token/create/selfhost-renew-leaf"
             {
                 return Err("renewed TLS token has unexpected authority or lifetime".into());
             }
@@ -780,6 +781,7 @@ async fn provision(
             if !value(&proof, "signature")?.starts_with("vault:v1:") {
                 return Err("renewed TLS token used a different signer version".into());
             }
+            write_new(&output.join(&token_file), token)?;
             OpenBaoTlsIdentityFiles {
                 certificate_chain_file: output.join(&cert_file),
                 kms_ca_cert_file: ca_file.to_owned(),
@@ -792,6 +794,8 @@ async fn provision(
             }
             .connect()
             .await?;
+        } else {
+            write_new(&output.join(&token_file), token)?;
         }
         if first_token.is_none() {
             first_token = Some(token.to_owned());

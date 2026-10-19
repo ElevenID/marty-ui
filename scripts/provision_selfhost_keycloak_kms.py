@@ -95,7 +95,9 @@ def renewed_token(bao: Bao, policy: str, prefix: str) -> str:
     token = mint_token(bao, matching[0], renew=True)
     lookup = require_data(bao.request("POST", "auth/token/lookup", {"token": token}), "policies")
     if (lookup["policies"] != [matching[0]] or type(lookup.get("ttl")) is not int
-            or not MIN_VALIDITY_SECONDS <= lookup["ttl"] <= 8 * 60 * 60):
+            or not MIN_VALIDITY_SECONDS <= lookup["ttl"] <= 8 * 60 * 60
+            or lookup.get("orphan") is not True
+            or lookup.get("path") != f"auth/token/create/{RENEWAL_LEAF_ROLE}"):
         raise RuntimeError("Keycloak renewed token has unexpected scope or lifetime")
     return token
 

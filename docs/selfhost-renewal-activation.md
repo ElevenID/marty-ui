@@ -37,6 +37,16 @@ the old identity must fail login and a fresh `--mode login` with the new one
 must pass. This rotates the AppRole credential only, not a Transit key or CA;
 coordinated Raft restore and lost-identity recovery still need rehearsal.
 
+Do not revoke the bootstrap root token while any installed or rollback
+generation still uses tokens minted beneath it. In a cold Raft-copy rehearsal,
+root revocation invalidated all 21 tokens in the initial generation; a fresh
+AppRole login and scoped Keycloak renewal still worked. The renewal producers
+and activation preflight require every **new** leaf token to be an orphan from
+the named `selfhost-renew-leaf` role. Retire root only after the active and
+rollback generations have been replaced by independently qualified orphan
+tokens, the public journey and custody scans pass, and a separate rootless
+restore/recovery rehearsal passes. The current command does not retire root.
+
 Stage the workload TLS set with the Rust `selfhost-renew` profile against the
 existing Raft OpenBao issuer and version-one Transit signers. Stage the
 Keycloak set with `scripts/provision_selfhost_keycloak_kms.py` using

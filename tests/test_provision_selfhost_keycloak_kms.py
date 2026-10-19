@@ -199,8 +199,9 @@ def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> Non
     class PolicyBao:
         token = "operator-token-long-enough"
 
-        def __init__(self, policy: str) -> None:
+        def __init__(self, policy: str, *, orphan: bool = True) -> None:
             self.policy = policy
+            self.orphan = orphan
             self.created = False
 
         def request(self, method: str, path: str, body: dict | None = None) -> dict:
@@ -217,7 +218,8 @@ def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> Non
             if (method, path) == ("POST", "auth/token/lookup"):
                 assert body == {"token": "scoped-token-long-enough"}
                 return {"data": {"policies": ["selfhost-keycloak-sign-old"],
-                                 "ttl": 8 * 60 * 60}}
+                                 "ttl": 8 * 60 * 60, "orphan": self.orphan,
+                                 "path": "auth/token/create/selfhost-renew-leaf"}}
             raise AssertionError((method, path))
 
     bao = PolicyBao("exact-scope")
@@ -227,6 +229,9 @@ def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> Non
     with pytest.raises(RuntimeError, match="one exact existing scoped policy"):
         renewed_token(changed, "exact-scope", "selfhost-keycloak-sign-")
     assert not changed.created
+    with pytest.raises(RuntimeError, match="unexpected scope"):
+        renewed_token(PolicyBao("exact-scope", orphan=False),
+                      "exact-scope", "selfhost-keycloak-sign-")
 
 
 def test_keycloak_certificate_requires_a_real_session_length(

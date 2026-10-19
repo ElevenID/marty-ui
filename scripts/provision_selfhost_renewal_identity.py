@@ -37,7 +37,7 @@ NAME = re.compile(r"[a-z0-9-]{1,160}\Z")
 def existing_policy_names(bao: Bao, current: Path) -> list[str]:
     if not RENEWED_TOKEN_FILES <= entries(current).keys():
         raise ValueError("current generation lacks a renewed token input")
-    checked_tokens(bao, current, current, 3600)
+    checked_tokens(bao, current, current, 3600, require_orphan_new=False)
     checked_certificates(bao, current, current, 3600)
     names = []
     for file_name in sorted(RENEWED_TOKEN_FILES):

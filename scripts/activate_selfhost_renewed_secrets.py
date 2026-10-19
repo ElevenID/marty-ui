@@ -213,7 +213,8 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
                 raise ValueError("Keycloak certificate differs from its remote signer")
 
 
-def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
+def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int,
+                   *, require_orphan_new: bool) -> None:
     for root in (old, new):
         for name in sorted(RENEWED_TOKEN_FILES):
             token = (root / name).read_text(encoding="ascii").strip()
@@ -224,6 +225,10 @@ def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
                     or type(data.get("ttl")) is not int or data["ttl"] < minimum_ttl
                     or data["ttl"] > 8 * 60 * 60):
                 raise ValueError("renewed OpenBao token has invalid scope or lifetime")
+            if (require_orphan_new and root == new
+                    and (data.get("orphan") is not True
+                         or data.get("path") != "auth/token/create/selfhost-renew-leaf")):
+                raise ValueError("renewed OpenBao token still depends on bootstrap root")
             policy_name = data["policies"][0]
             if not isinstance(policy_name, str) or not re.fullmatch(r"[a-z0-9-]{1,160}", policy_name):
                 raise ValueError("renewed OpenBao policy reference is invalid")
@@ -325,7 +330,7 @@ def activate(args: argparse.Namespace) -> dict:
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     require_renewal_authority(bao)
     checked_tokens(bao, args.current_secrets, args.renewed_secrets,
-                   args.minimum_token_ttl)
+                   args.minimum_token_ttl, require_orphan_new=True)
     checked_certificates(bao, args.current_secrets, args.renewed_secrets,
                          args.minimum_token_ttl)
     old = compose_args(args.project_name, args.current_env, args.compose_file)

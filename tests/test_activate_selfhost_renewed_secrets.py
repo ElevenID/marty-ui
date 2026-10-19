@@ -47,6 +47,24 @@ def test_certificate_overlap_rejects_invalid_public_certificate() -> None:
         activation.checked_certificate_lifetime("not a certificate", 3600)
 
 
+def test_activation_rejects_leaf_tokens_still_dependent_on_bootstrap_root(
+    tmp_path: Path,
+) -> None:
+    token_name = sorted(activation.RENEWED_TOKEN_FILES)[0]
+    (tmp_path / token_name).write_text("scoped-token")
+
+    class RootChildBao:
+        def request(self, method, path, body=None, *, token=None):
+            assert (method, path) == ("POST", "auth/token/lookup")
+            return {"data": {"policies": ["selfhost-exact-policy"],
+                             "ttl": 7200, "orphan": False,
+                             "path": "auth/token/create/selfhost-renew-leaf"}}
+
+    with pytest.raises(ValueError, match="depends on bootstrap root"):
+        activation.checked_tokens(RootChildBao(), tmp_path, tmp_path, 3600,
+                                  require_orphan_new=True)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
 def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
     old, new = tmp_path / "old", tmp_path / "new"
@@ -87,7 +105,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
     monkeypatch.setattr(activation, "Bao", lambda *_: object())
     monkeypatch.setattr(activation, "require_renewal_authority", lambda *_: None)
-    monkeypatch.setattr(activation, "checked_tokens", lambda *_: None)
+    monkeypatch.setattr(activation, "checked_tokens", lambda *_, **__: None)
     monkeypatch.setattr(activation, "checked_certificates", lambda *_: None)
     old_model = {"services": {name: {} for name in
                             ("keycloak", "gateway", "signing-keys", "postgres")},
