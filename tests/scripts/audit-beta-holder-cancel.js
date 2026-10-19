@@ -14,7 +14,15 @@ const WALLET='http://127.0.0.1:8787';
 const ORG='00000000-0000-0000-0000-000000000001';
 const TEMPLATE='50000000-0000-0000-0000-000000000040';
 const TRUST='60000000-0000-0000-0000-000000000001';
-const PRODUCT='4381c9cdec45263010f1386366b2a82647688507';
+const PRODUCT='33330c2a0bec50e30ca09cb9d61eb532e75361f2';
+const RELEASE='beta-v258-33330c2a0bec';
+function assertProductBinding(deployment) {
+  assert.equal(deployment.marty_ui_sha,PRODUCT,'Unexpected beta UI source');
+  assert.equal(deployment.deployment_release_marker,RELEASE,'Unexpected beta release marker');
+  for(const component of ['marty-ui','marty-ui-auth','marty-ui-presentation-policy']) {
+    assert.equal(deployment.component_revisions?.[component],PRODUCT,`Unexpected beta component ${component}`);
+  }
+}
 const CHROME='C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const UUID=/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i;
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -131,7 +139,7 @@ async function main(env=process.env) {
   try {
     profile=fs.mkdtempSync(path.join(privateRoot,'profile-'));realProfile=fs.realpathSync(profile);
     report.deployment=await fetchPublicJson(`${BASE}/.well-known/marty-release`);
-    for(const component of ['marty-ui','marty-ui-auth','marty-ui-presentation-policy'])assert.equal(report.deployment.component_revisions[component],PRODUCT);
+    assertProductBinding(report.deployment);
     report.stage='launch_owned_chrome';
     spawnedAt=Date.now();child=spawn(CHROME,chromeArguments(profile),{stdio:'ignore',windowsHide:false});
     assert.ok(child.pid);child.on('error',()=>{});
@@ -252,4 +260,4 @@ async function main(env=process.env) {
   assert.equal(report.holderCancelNoSession,true,'Actual browser cancellation/recovery evidence incomplete');
 }
 if(require.main===module)main().catch(error=>{console.error(`D05 cancellation failed: ${error.name}`);process.exitCode=1;});
-module.exports={classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};
+module.exports={assertProductBinding,classifyStatus,safeErrorName,fetchPublicJson,closeOwnedBrowser,guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql,main};

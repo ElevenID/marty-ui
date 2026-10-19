@@ -4,6 +4,16 @@ const vm=require('node:vm');
 const path=require('node:path');
 const {guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql}=require('./audit-beta-holder-cancel');
 const validEnv=()=>({BETA_ORIGIN:'https://beta.elevenidllc.com',MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8787',D05_SYNTHETIC_FIXTURE:'1',D05_NATIVE_CHOOSER_CANCEL:'1',RECORD_VIDEO:'0',TEST_ADMIN_EMAIL:'unit@example.test',TEST_ADMIN_PASSWORD:'unit-only',MARTY_TEST_WALLET_HOLDER_KID:'did:example:unit',CHROME_BINARY:'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
+
+test('actual release preflight accepts v258 and rejects stale or mixed product bindings',()=>{
+  const {assertProductBinding}=require('./audit-beta-holder-cancel');
+  const revision='33330c2a0bec50e30ca09cb9d61eb532e75361f2';
+  const release={marty_ui_sha:revision,deployment_release_marker:'beta-v258-33330c2a0bec',component_revisions:Object.fromEntries(['marty-ui','marty-ui-auth','marty-ui-presentation-policy'].map(name=>[name,revision]))};
+  assertProductBinding(release);
+  assert.throws(()=>assertProductBinding({...release,marty_ui_sha:'4381c9cdec45263010f1386366b2a82647688507'}));
+  assert.throws(()=>assertProductBinding({...release,deployment_release_marker:'beta-v257-4381c9cdec45'}));
+  for(const name of Object.keys(release.component_revisions))assert.throws(()=>assertProductBinding({...release,component_revisions:{...release.component_revisions,[name]:'4381c9cdec45263010f1386366b2a82647688507'}}));
+});
 test('cancellation driver fails closed outside exact beta/synthetic/unrecorded scope',()=>{
   guards(validEnv());
   for(const [key,value] of Object.entries({BETA_ORIGIN:'https://production.example',MARTY_TEST_WALLET_ORIGIN:'https://wallet.example',D05_SYNTHETIC_FIXTURE:'0',D05_NATIVE_CHOOSER_CANCEL:'0',RECORD_VIDEO:'1',NODE_TLS_REJECT_UNAUTHORIZED:'0',BETA_LOCAL_PROXY:'1',CHROME_BINARY:'other.exe'}))assert.throws(()=>guards({...validEnv(),[key]:value}));
