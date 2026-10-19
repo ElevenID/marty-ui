@@ -1,10 +1,26 @@
 param(
-  [Parameter(Mandatory=$true)][int]$BrowserProcessId,
-  [Parameter(Mandatory=$true)][string]$BrowserExecutable
+  [int]$BrowserProcessId,
+  [string]$BrowserExecutable,
+  [switch]$ProbeRuntimeProperties
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+$automationType = [System.Windows.Automation.AutomationElement]
+$ariaField = $automationType.GetField('AriaRoleProperty')
+$ariaProperty = $automationType.GetProperty('AriaRoleProperty')
+$ariaRole = $null
+if ($ariaField) { $ariaRole = $ariaField.GetValue($null) }
+elseif ($ariaProperty) { $ariaRole = $ariaProperty.GetValue($null, $null) }
+if ($ProbeRuntimeProperties) {
+  # Reflection only: never enumerate windows or invoke any control in this mode.
+  @{state='RUNTIME_PROPERTIES_CHECKED'; aria_role_available=($null -ne $ariaRole);
+    control_type_available=($null -ne $automationType.GetField('ControlTypeProperty'));
+    localized_control_type_available=($null -ne $automationType.GetField('LocalizedControlTypeProperty'));
+    class_name_available=($null -ne $automationType.GetField('ClassNameProperty'))} | ConvertTo-Json -Compress
+  exit 0
+}
+if ($BrowserProcessId -le 0 -or [string]::IsNullOrWhiteSpace($BrowserExecutable)) { throw 'Owned browser identity is required' }
 $process = Get-Process -Id $BrowserProcessId
 if ($process.ProcessName -ne 'chrome' -or $process.Path -ne $BrowserExecutable) { throw 'Owned Chrome process identity mismatch' }
 $root = [System.Windows.Automation.AutomationElement]::RootElement
@@ -23,8 +39,11 @@ foreach ($window in $windows) {
     $current = $walker.GetParent($button); $dialog = $null; $documentAncestor = $false
     for ($depth=0; $current -and $depth -lt 30; $depth++) {
       if ($current.Current.ControlType -eq [System.Windows.Automation.ControlType]::Document) { $documentAncestor=$true; break }
-      $role = $current.GetCurrentPropertyValue([System.Windows.Automation.AutomationElement]::AriaRoleProperty, $true)
-      if (-not $dialog -and ($role -match '^(alert)?dialog$' -or $current.Current.LocalizedControlType -match 'dialog')) { $dialog=$current }
+      $role = $null
+      if ($null -ne $ariaRole) { $role = $current.GetCurrentPropertyValue($ariaRole, $true) }
+      # Older installed .NET UIAutomationClient lacks AriaRoleProperty. Its
+      # supported native LocalizedControlType still identifies dialog controls.
+      if (-not $dialog -and ($role -match '^(alert)?dialog$' -or $current.Current.LocalizedControlType -match '^(alert )?dialog$')) { $dialog=$current }
       if ([System.Windows.Automation.Automation]::Compare($current,$window)) { break }
       $current=$walker.GetParent($current)
     }

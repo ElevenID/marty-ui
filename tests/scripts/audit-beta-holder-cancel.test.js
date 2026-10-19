@@ -5,6 +5,14 @@ const path=require('node:path');
 const {guards,chromeArguments,observeNativeCredentialApi,cancellationAssertions,flowSql}=require('./audit-beta-holder-cancel');
 const validEnv=()=>({BETA_ORIGIN:'https://beta.elevenidllc.com',MARTY_TEST_WALLET_ORIGIN:'http://127.0.0.1:8787',D05_SYNTHETIC_FIXTURE:'1',D05_NATIVE_CHOOSER_CANCEL:'1',RECORD_VIDEO:'0',TEST_ADMIN_EMAIL:'unit@example.test',TEST_ADMIN_PASSWORD:'unit-only',MARTY_TEST_WALLET_HOLDER_KID:'did:example:unit',CHROME_BINARY:'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'});
 
+test('installed Windows UIAutomation properties support the helper without invoking controls',{skip:process.platform!=='win32'},()=>{
+  const {execFileSync}=require('node:child_process');
+  const actual=JSON.parse(execFileSync('powershell.exe',['-NoProfile','-NonInteractive','-File',path.join(__dirname,'cancel-native-credential-dialog.ps1'),'-ProbeRuntimeProperties'],{encoding:'utf8'}));
+  assert.equal(actual.state,'RUNTIME_PROPERTIES_CHECKED');
+  assert.equal(typeof actual.aria_role_available,'boolean');
+  for(const field of ['control_type_available','localized_control_type_available','class_name_available'])assert.equal(actual[field],true);
+});
+
 test('actual release preflight accepts v258 and rejects stale or mixed product bindings',()=>{
   const {assertProductBinding}=require('./audit-beta-holder-cancel');
   const revision='33330c2a0bec50e30ca09cb9d61eb532e75361f2';
