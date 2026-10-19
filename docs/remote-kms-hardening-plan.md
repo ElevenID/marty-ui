@@ -35,8 +35,10 @@ has now passed service readiness, the public issue/present/verify/revoke journey
 Keycloak issuance/refresh, signed OpenBao custody evidence and both database
 custody scans, with owned teardown and the production website still online.
 This is exploratory, not final release qualification: the producer failed,
-the 32 GiB runbook target was not met, container OOM/peak measurements remain
-incomplete, and coordinated cold restore has not run. Keep production online
+the 32 GiB runbook target was not met, and container OOM/peak measurements
+remain incomplete. A coordinated cold-copy restore now also passed its
+released-source business/custody verifier, but retains the same producer and
+resource limits. Keep production online
 and measure coexistence; replace the two old installations fresh, with no
 migration. Real AWS/Azure/GCP credentials and a physical wallet remain
 unprovisioned; obtain access and complete those acceptance checks before
@@ -271,7 +273,7 @@ run's public transaction bytes matched the release, but
 `build_stack_manifest.py` generated a new wall-clock `generated_at` for every
 publisher run. The publisher's required byte equality against the already
 signed public manifest therefore rejected the same-source replay. In isolated
-branch `fix/kms-release-producer-20261018`, final local head `386ecea2f`,
+branch `fix/kms-release-producer-20261018`, current head `04d271c7c`,
 [UI PR #1427](https://github.com/ElevenID/marty-ui/pull/1427) anchors the
 manifest timestamp to the immutable source commit, keeps strict manifest and
 transaction byte comparisons with explicit errors, advances the eligible
@@ -281,12 +283,52 @@ single terminally successful publication run should then own the prepared
 bundle, avoiding a separate expensive replay. Local release/manifest/tag
 tests passed 164/164 (55 selected tests after the runbook follow-up); workflow
 YAML, Ruff and diff checks passed. Superseded PR CI was cancelled after a
-documentation-only follow-up; final-head [CI 39182024171](https://github.com/ElevenID/marty-ui/actions/runs/39182024171)
+documentation-only follow-up. A further restore-discovered Compose correction
+is described below; current-head [CI 39183217920](https://github.com/ElevenID/marty-ui/actions/runs/39183217920)
 and protected review are pending, with auto-merge armed. Do not claim this
 design landed or `v1.1.258` published until
 protected merge, exact-main qualification, signed release, and a fresh
 installed/restored journey pass. The `v1.1.257` failed-producer artifacts
 remain preserved and unqualified.
+
+Coordinated local cold restore and startup correction (2026-10-18): After the
+fresh `v1.1.257` installed runner stopped all 28 app containers and its Raft
+KMS, copied its quiesced PostgreSQL/Redis/Applicant state, OpenBao Raft state,
+operator secrets and environment into isolated recovery roots with ownership
+and modes preserved. A first restored OpenBao bootstrap reached healthy Raft;
+the 28-service Compose startup initially stopped with Flow unhealthy because
+Flow probes the `issuance` HTTP peer at startup but the self-host Compose
+graph omitted the `issuance`/`issuance-native` healthy dependencies that the
+base graph already has. Starting Issuance and then Flow allowed the exact
+released-source `verify_selfhost_restored_journey.py` to pass the public
+issue/present/verify/revoke journey, Keycloak issuance/refresh, both database
+custody scans, actual image/mount/Compose bindings and unsealed Raft. Its
+private report SHA-256 is
+`8e67ac7e70e7dda5fbaae485f0ff8fb8f919e570512c988a677de5ad718dd5a9`
+in volume `kms-v11257-diagnostic-20261018` at
+`operator-private/recovery-v11257-2/restored-journey.json`; it records
+`candidate_override_used=false` and 28 service states. The standalone
+restored application and OpenBao projects were torn down; production stayed
+HTTP 200. This proves local recovery behavior from the quiesced copy, not
+off-host backup provenance or a qualified bundle.
+
+The same branch now adds the missing healthy dependencies to self-host Compose
+and the independently reviewed KMS-only snapshot, with a regression test
+guarding against a transitive startup cycle. A fresh second recovery clone
+with a local override containing exactly those two dependencies reached all
+28 roles after one Compose retry for transient early Presentation Policy and
+Credential Template health, without manual Issuance/Flow sequencing. The
+candidate restored verifier again passed the public journey, Keycloak refresh
+and both database custody scans; it records `candidate_override_used=true`
+and report SHA-256
+`b3e7e19e181aa43e6a0f1a8062cb67917edff03f0c6ec76eafec53a4589d17a7`
+at `operator-private/recovery-v11257-3/restored-candidate-journey.json`.
+Both owned projects were torn down. Linux local selection passed 247 tests,
+the full self-host model gate passed three renders and 62 missing-input
+rejections, and Ruff/diff checks passed before updating [PR #1427](https://github.com/ElevenID/marty-ui/pull/1427).
+The preceding final-head CI was cancelled because its source is superseded.
+Repeat recovery on exact signed `v1.1.258` artifacts after protected merge
+and terminally successful bundle production.
 
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
