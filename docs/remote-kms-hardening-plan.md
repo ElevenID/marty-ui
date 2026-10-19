@@ -46,6 +46,27 @@ recovery; then reassess the 16 GiB resource envelope and perform fresh
 replacements on this machine. Provider and physical-device access remains
 unprovisioned.
 
+Continuous credential staging update (2026-10-19 UTC): local-only feature
+branch `feat/kms-continuous-credentials-20261019` now includes Rust workload
+TLS renewal commits `e1471d251` and `551389321`, plus Keycloak renewal commit
+`1b54d65d0`. The Keycloak stage reuses the existing Raft-backed PKI CA,
+RS256/HMAC Transit version-1 keys, DIDComm JWE key versions, and exact existing
+ACL policies. It issues fresh 8-hour leaf certificates and five single-policy
+tokens into a new owner-private directory as mode-0600 files; it does not
+write active service inputs, create replacement keys, or activate the stage.
+On the isolated v1.1.258 OpenBao state, a real renewal run succeeded: all
+seven staged files were mode 0600, both changed certificates matched their
+original non-exportable Transit v1 public keys, all five tokens changed and
+looked up with one policy and <=8-hour TTL, and no private PEM appeared.
+Windows unit checks passed 6 with 7 POSIX-only skips; Ruff and diff checks
+passed. The isolated OpenBao was stopped and the live production loopback
+still returned HTTP 200. This is candidate staging evidence, not a live
+renewal or release qualification. Remaining: stable limited renewal authority,
+CA rollover with trust overlap, atomic installation and controlled reload,
+expiry-crossing service/session tests, KMS-loss refusal, coordinated recovery,
+and exact released-source installation. The feature branch stays local while
+these related changes are batched for one large PR.
+
 Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
 `codex/managed-evidence-cleanup-20261018` worktree without changing its
 uncommitted files. Carried its useful evidence-chain fix and Python software
