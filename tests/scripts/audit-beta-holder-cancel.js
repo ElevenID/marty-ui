@@ -256,9 +256,9 @@ async function main(env=process.env) {
         && response.request().method()==='GET';
     },{timeout:30000});
     const authNavigation=await authPage.goto(`${BASE}/v1/auth/credential-login`);report.recovery.authNavigationStatus=authNavigation?.status()??null;assert.ok(authNavigation?.ok());
-    const prefetchResponse=await recoveryPrefetch;await prefetchResponse.finished();
-    report.recovery.requestPrefetch={httpStatus:prefetchResponse.status(),finished:true};
-    assert.ok(prefetchResponse.ok(),'Fresh recovery request prefetch rejected');
+    const recoveryPrefetchResponse=await recoveryPrefetch;await recoveryPrefetchResponse.finished();
+    report.recovery.requestPrefetch={httpStatus:recoveryPrefetchResponse.status(),finished:true};
+    assert.ok(recoveryPrefetchResponse.ok(),'Fresh recovery request prefetch rejected');
     report.substage='validate_fresh_recovery_request';
     const recovery=await authPage.evaluate(()=>({nonce:document.body.dataset.nonce,href:document.querySelector('#wallet-link').href}));
     const recoveryUri=validateRecoveryRequest(recovery,details.nonce);report.recovery.freshCanonicalRequest=true;
