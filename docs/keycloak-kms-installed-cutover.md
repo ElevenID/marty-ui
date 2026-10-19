@@ -40,8 +40,11 @@ test-user accounts as part of installed acceptance.
    tags, but its GitHub tag push was rejected before publication. No signed
    `v1.1.256` release or installed acceptance exists. Those image tags remain
    bound to the original source and must not be reassigned. Consider signed
-   `v1.1.257` only after its exact-main release and independent fresh installed
-   and restored-stack gates pass.
+   `v1.1.257` passed an exploratory fresh 16 GiB installed business/custody
+   journey, but its prepared bundle came from a failed producer and its
+   coordinated cold restore remains unrun. Consider `v1.1.258` only after
+   its exact-main release, terminally successful bundle producer, independent
+   fresh installed journey, and restored-stack gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full

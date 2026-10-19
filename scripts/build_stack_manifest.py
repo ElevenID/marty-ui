@@ -76,6 +76,10 @@ def verify_http_artifacts(lock: dict) -> None:
 
 def build_manifest(lock: dict, generated_at: str | None = None) -> dict:
     validate_lock(lock)
+    if generated_at is not None:
+        timestamp = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+        _require(timestamp.tzinfo is not None and timestamp.utcoffset() is not None,
+                 "generated_at must include a timezone")
     return {
         "schema": "marty.stack/v1",
         "release": lock["release"],
@@ -88,11 +92,12 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--lock", type=Path, required=True)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--generated-at", help="Stable ISO-8601 release timestamp for reproducible publication")
     parser.add_argument("--verify-http", action="store_true")
     args = parser.parse_args()
 
     lock = json.loads(args.lock.read_text(encoding="utf-8"))
-    manifest = build_manifest(lock)
+    manifest = build_manifest(lock, generated_at=args.generated_at)
     if args.verify_http:
         verify_http_artifacts(lock)
     if args.output:
