@@ -85,6 +85,33 @@ session continuity, KMS-loss refusal and rollback; then implement CA trust
 overlap and a stable limited renewal identity. The released v1.1.258 source
 does not include either local feature commit.
 
+Isolated renewal runtime rehearsal (2026-10-19 UTC): The previously staged
+81-file generation was rendered through the signed v1.1.258 prepared Compose
+source: 31 modeled services and 80 file-secret definitions pointed to the
+new isolated generation. With the same released images and isolated Raft
+OpenBao, the application project started on this 16 GiB Docker host; its
+normal dependency retry converged to all 28 expected role states. All 29
+checked runtime OpenBao tokens were accepted. The exact released-source
+public issue/present/verify/revoke journey, both-realm Keycloak issuance and
+refresh, and both read-only database private-key custody scans passed with
+the renewed inputs. A controlled full Compose recreation then selected the
+prior **KMS-only** generation and returned to 28 healthy roles after three
+startup attempts; refresh tokens issued in both realms before the switch
+remained usable afterward. A second full recreation selected the renewed
+generation, returned to 28 healthy roles on its first attempt, and again
+refreshed both pre-switch sessions. The released-source public journey,
+Keycloak issue/refresh and both DB scans passed again. Docker inspection
+found 184 live `/run/secrets` mounts across 28 containers, all from the
+renewed generation and none from the previous one. The isolated application
+project was torn down with its owned volume and network; its OpenBao was
+stopped. Production at `127.0.0.1:19080` remained HTTP 200 throughout.
+This proves an isolated stop/recreate KMS-only rollback and reactivation with
+session continuity while the old and new 8-hour credentials remain valid.
+It does **not** prove zero-downtime rolling renewal, expiry crossing, CA
+rotation, automated activation, limited renewal authority, production
+cutover or a 16 GiB support minimum. The source feature branch remains local
+and the released v1.1.258 image/source is unchanged.
+
 Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
 `codex/managed-evidence-cleanup-20261018` worktree without changing its
 uncommitted files. Carried its useful evidence-chain fix and Python software
