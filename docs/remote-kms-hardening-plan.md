@@ -203,6 +203,30 @@ producer explicitly labeled unqualified; verify public release attestations,
 qualified transaction hash, source SHA, archive, images, and artifacts
 independently, and do not report it as final custody acceptance.
 
+Isolated local diagnostic preparation (2026-10-18): the exact `v1.1.257`
+source and pinned integration revision `5b3ec6a802a5e13201be8883741889405a86d146`
+are clean detached checkouts inside a dedicated Docker volume,
+`kms-v11257-diagnostic-20261018`. A toolbox with Python 3.12, Compose 5.6,
+the integration suite's hashed dependency lock and Rust 1.95 accesses the
+existing Docker daemon through its socket and same host volume path; no Docker
+Desktop restart or WSL integration change was needed. A local test proved
+nested Compose can bind that volume's host path. The failed-producer bundle
+was explicitly staged as **unqualified** under a non-root operator. Its
+archive-only and full extracted Compose/runtime-plan gates passed; all 28
+selected service images were anonymously pulled by their exact digests. The
+isolated Raft-backed OpenBao project `marty-preview-3cf051aab08aac16` is
+healthy on loopback port `18257`; Keycloak's seven scoped inputs, 33 keyless
+workload TLS inputs and six proven-disabled optional secrets were staged.
+The exact source's Rust `public-kms-jwk` binary built locally under 1.95.0.
+The synthetic 31-service Compose model is rendered for project
+`marty-selfhost-qual-75b2a9c0e340f812`; the matching source and integration
+checkouts remain clean. The existing production website returned HTTP 200
+before and after OpenBao startup and Rust build. One-hour custody signer and
+audit tokens have deliberately **not** been minted yet; the installed journey,
+database scans and restore remain unrun, and the failed producer still blocks
+final bundle acceptance. Keep this trial isolated and do not promote its
+diagnostic result to qualified release evidence.
+
 CI concurrency correction (2026-10-18): a separate manual [run 39170552118](https://github.com/ElevenID/marty-ui/actions/runs/39170552118)
 had been dispatched at superseded main `35dc7400...` and remained in its
 Canvas shard. Because `CI-main` concurrency held fresh run 39172145237
