@@ -28,6 +28,7 @@
     "scripts/selfhost_openbao_client.py",
     "scripts/passport_remote_tls.py",
     "scripts/provision_selfhost_disposable_tls.py",
+    "scripts/stage_selfhost_renewed_secrets.py",
     "scripts/start_selfhost_disposable_openbao.py",
     "scripts/stage_selfhost_keycloak_inputs.py",
     "scripts/cloudflared-selfhost.sh",

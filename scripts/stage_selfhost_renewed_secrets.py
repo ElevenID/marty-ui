@@ -1,0 +1,144 @@
+#!/usr/bin/env python3
+"""Assemble one complete self-host secret generation without changing the live one.
+
+The Keycloak and workload TLS producers must have qualified their remote keys,
+certificates, and scoped tokens first. This step only assembles immutable file
+inputs for a later controlled Compose recreation; it never activates them.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import stat
+import sys
+
+# Keep a receipt-verified extracted bundle immutable while importing siblings.
+sys.dont_write_bytecode = True
+from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES
+from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata
+from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS
+
+
+MAX_SECRET_BYTES = 64 * 1024
+RENEWED_FILES = SELFHOST_TLS_FILES | KEYCLOAK_OUTPUTS
+CA_FILE = "workload_identity_ca_cert"
+
+
+def private_empty_or_source(path: Path, *, empty: bool) -> Path:
+    if os.name != "posix" or not path.is_absolute() or path.is_symlink() or not path.is_dir():
+        raise ValueError("secret generation requires an existing POSIX private directory")
+    info = path.stat()
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError("secret generation directory must be owner-private")
+    if empty and any(path.iterdir()):
+        raise ValueError("new secret generation directory must be empty")
+    return path.resolve()
+
+
+def bounded_file(path: Path, *, allow_empty: bool = False) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    if path.is_symlink():
+        raise ValueError("secret generation contains a symlink")
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_SECRET_BYTES:
+            raise ValueError("secret generation contains an invalid file")
+        value = os.read(fd, MAX_SECRET_BYTES + 1)
+        if (len(value) != info.st_size or len(value) > MAX_SECRET_BYTES
+                or (not value and not allow_empty)
+                or b"PRIVATE KEY" in value or b"\0" in value):
+            raise ValueError("secret generation contains private or invalid material")
+        return value
+    finally:
+        os.close(fd)
+
+
+def entries(root: Path) -> dict[str, Path]:
+    found = {entry.name: entry for entry in root.iterdir()}
+    if any(not name or name in (".", "..") or not path.is_file() or path.is_symlink()
+           for name, path in found.items()):
+        raise ValueError("secret generation contains a non-regular entry")
+    return found
+
+
+def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
+    roots = [private_empty_or_source(path, empty=(path == output))
+             for path in (current, tls, keycloak, output)]
+    if len(set(roots)) != 4:
+        raise ValueError("secret generation directories must be distinct")
+    current, tls, keycloak, output = roots
+    active_owner = current.stat().st_uid
+    if (output.stat().st_uid != os.getuid()
+            or any(path.stat().st_uid not in (active_owner, os.getuid())
+                   for path in (tls, keycloak))):
+        raise ValueError("secret generation directory has an unexpected owner")
+    active = entries(current)
+    tls_files = entries(tls)
+    keycloak_files = entries(keycloak)
+    if not RENEWED_FILES <= active.keys():
+        raise ValueError("active generation lacks a renewable input")
+    if tls_files.keys() != SELFHOST_TLS_FILES | {KEY_METADATA_FILE}:
+        raise ValueError("workload TLS candidate is incomplete")
+    if keycloak_files.keys() != KEYCLOAK_OUTPUTS:
+        raise ValueError("Keycloak candidate is incomplete")
+    verified_key_metadata(tls)
+
+    payloads = {name: bounded_file(path, allow_empty=name not in RENEWED_FILES)
+                for name, path in active.items()}
+    for source in (tls_files, keycloak_files):
+        for name, path in source.items():
+            if name != KEY_METADATA_FILE:
+                candidate = bounded_file(path)
+                if name == CA_FILE:
+                    if candidate != payloads[name]:
+                        raise ValueError("CA rollover needs a separate trust-overlap ceremony")
+                elif candidate == payloads[name]:
+                    raise ValueError("renewed input did not change")
+                payloads[name] = candidate
+
+    tokens = [payloads[name] for name in RENEWED_FILES
+              if name not in SELFHOST_CERT_FILES and not name.endswith("_cert")]
+    if len(set(tokens)) != len(tokens):
+        raise ValueError("renewed scopes share a token")
+
+    created: list[Path] = []
+    try:
+        for name, value in sorted(payloads.items()):
+            old_mode = stat.S_IMODE(active[name].stat().st_mode)
+            if old_mode not in (0o400, 0o440, 0o444, 0o600, 0o640, 0o644):
+                raise ValueError("active secret file has unsupported mode")
+            destination = output / name
+            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            created.append(destination)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(value)
+                stream.flush()
+                os.fchmod(stream.fileno(), old_mode)
+                os.fsync(stream.fileno())
+    except Exception:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
+    return len(payloads)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("current", "tls", "keycloak", "output"):
+        parser.add_argument(f"--{name}", required=True, type=Path)
+    args = parser.parse_args()
+    try:
+        count = stage(args.current, args.tls, args.keycloak, args.output)
+    except (OSError, ValueError) as error:
+        print(f"self-host secret generation failed: {error}", file=sys.stderr)
+        return 2
+    print(f"Staged {count} unchanged and renewed secret inputs for controlled recreation")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
