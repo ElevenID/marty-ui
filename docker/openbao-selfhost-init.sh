@@ -101,15 +101,17 @@ if ! cmp -s "${BAO_CACERT}" "${BAO_PUBLIC_CA_FILE}"; then
 fi
 
 initialized="$(json_bool "${current_status}" initialized)"
-if [ "${initialized}" != "true" ]; then
-    if [ -e "${BAO_INIT_FILE}" ]; then
-        echo "OpenBao is uninitialized but initialization material already exists; use a clean KMS-only state directory." >&2
-        exit 1
-    fi
-    echo "Initializing OpenBao..."
-    bao operator init -address="${BAO_ADDR}" -key-shares=1 -key-threshold=1 -format=json > "${BAO_INIT_FILE}"
-    chmod 0600 "${BAO_INIT_FILE}"
+if [ "${initialized}" != "false" ]; then
+    echo "OpenBao bootstrap requires fresh, uninitialized Raft state." >&2
+    exit 1
 fi
+if [ -e "${BAO_INIT_FILE}" ]; then
+    echo "OpenBao is uninitialized but initialization material already exists; use a clean KMS-only state directory." >&2
+    exit 1
+fi
+echo "Initializing OpenBao..."
+bao operator init -address="${BAO_ADDR}" -key-shares=1 -key-threshold=1 -format=json > "${BAO_INIT_FILE}"
+chmod 0600 "${BAO_INIT_FILE}"
 
 init_json="$(tr -d '\r' < "${BAO_INIT_FILE}")"
 unseal_key="$(json_first_array_entry "${init_json}" unseal_keys_b64)"

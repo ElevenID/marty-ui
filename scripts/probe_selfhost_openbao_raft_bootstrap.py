@@ -122,8 +122,7 @@ def run() -> None:
         base = start_node(server, state, ca_file)
         if request(base, "GET", "sys/health")[0] != 501:
             raise RuntimeError("Fresh self-host Raft state was initialized unexpectedly")
-        result = subprocess.run(
-            [
+        bootstrap_command = [
                 "docker",
                 "run",
                 "--rm",
@@ -149,7 +148,9 @@ def run() -> None:
                 "/bin/sh",
                 IMAGE,
                 "/scripts/openbao-selfhost-init.sh",
-            ],
+            ]
+        result = subprocess.run(
+            bootstrap_command,
             capture_output=True,
             text=True,
             timeout=300,
@@ -157,6 +158,12 @@ def run() -> None:
         )
         if result.returncode:
             raise RuntimeError("Disposable self-host Raft bootstrap failed")
+        repeated = subprocess.run(
+            bootstrap_command, capture_output=True, text=True,
+            timeout=60, check=False,
+        )
+        if repeated.returncode == 0 or "requires fresh, uninitialized Raft state" not in repeated.stderr:
+            raise RuntimeError("Initialized OpenBao accepted privileged bootstrap again")
         published_ca = docker(
             "run", "--rm", "-v", f"{runtime}:/bao/runtime:ro",
             "--entrypoint", "/bin/cat", IMAGE,
