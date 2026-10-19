@@ -57,7 +57,12 @@ same file inventory and modes, unchanged static inputs and public CA, and
 changed certificates and scoped tokens. It refuses CA rollover; that needs
 a separate trust-overlap procedure.
 
-Make a private copy of the installed Compose env file, changing only
+After initial KMS/DID provisioning has completed, set
+`MARTY_KMS_BOOTSTRAP_ENABLED=false` in the installed private Compose env and
+verify that `db-migrate` renders with this value. Its default is `true` and
+reruns privileged KMS provisioning on a restart; that fails after bootstrap
+root retirement. This flag is a required precondition for both current and
+renewed generations. Make a private copy of that env file, changing only
 `SELFHOST_SECRET_DIR` to the assembled generation. Keep the current env file,
 Compose file, and old secret root unchanged. On a Linux host with Docker and
 access to the same isolated project, invoke

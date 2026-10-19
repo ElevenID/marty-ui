@@ -73,12 +73,23 @@ def checked_env(path: Path, secret_root: Path) -> list[str]:
     matches = [line for line in lines if line.startswith("SELFHOST_SECRET_DIR=")]
     if len(matches) != 1 or matches[0] != f"SELFHOST_SECRET_DIR={secret_root}":
         raise ValueError("Compose env does not bind the expected secret generation")
+    bootstrap = [line for line in lines if line.startswith("MARTY_KMS_BOOTSTRAP_ENABLED=")]
+    if bootstrap != ["MARTY_KMS_BOOTSTRAP_ENABLED=false"]:
+        raise ValueError("renewal requires KMS bootstrap disabled for db-migrate")
     return [line for line in lines if not line.startswith("SELFHOST_SECRET_DIR=")]
 
 
 def compose_args(project: str, env_file: Path, compose_file: Path) -> list[str]:
     return ["docker", "compose", "--project-name", project,
             "--env-file", str(env_file), "-f", str(compose_file)]
+
+
+def require_rootless_migration(model: dict) -> None:
+    migrate = model.get("services", {}).get("db-migrate", {})
+    environment = migrate.get("environment", {}) if isinstance(migrate, dict) else {}
+    if not isinstance(environment, dict) or str(environment.get(
+            "MARTY_KMS_BOOTSTRAP_ENABLED", "")).lower() != "false":
+        raise ValueError("owned db-migrate must not rerun KMS bootstrap")
 
 
 def run_json(command: list[str], *, cwd: Path) -> object:
@@ -340,6 +351,8 @@ def activate(args: argparse.Namespace) -> dict:
     new_model = run_json([*new, "--profile", "*", "config", "--format", "json"], cwd=cwd)
     if not isinstance(old_model, dict) or not isinstance(new_model, dict):
         raise ValueError("owned Compose model is invalid")
+    for model in (old_model, new_model):
+        require_rootless_migration(model)
     for name, value in new_model.get("secrets", {}).items():
         if "file" in value and value["file"] != str(args.renewed_secrets / name):
             raise ValueError("renewed Compose secret binding is invalid")
