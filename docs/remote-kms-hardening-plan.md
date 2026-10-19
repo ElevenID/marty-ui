@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active. Updated: 2026-10-18 (America/Denver).
+Status: active. Updated: 2026-10-19 UTC.
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,52 +8,38 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current handoff gate (2026-10-18): Core #355, Credentials #313, grouped native
-UI hardening #1192, and subsequent custody, restore, signing-route and
-secretless publisher-source repairs and Canvas fixture correction #1423 are
-merged. Protected UI main is now
-`58e92ace7bd159cc71a4e0eed159cee80887751b`, after #1422, #1423,
-#1424 and #1426 passed protected merge. The earlier
-[exact-main CI 39160077947](https://github.com/ElevenID/marty-ui/actions/runs/39160077947)
-failed the Canvas mixed-roster signer fixture, fixed in #1423. The subsequent
-[full CI 39167241560](https://github.com/ElevenID/marty-ui/actions/runs/39167241560)
-passed at `35dc7400...` but was superseded by #1426. Fresh
-[full exact-main CI 39172145237](https://github.com/ElevenID/marty-ui/actions/runs/39172145237)
-passed at the verified new main SHA. [No-write claim 39175253725](https://github.com/ElevenID/marty-ui/actions/runs/39175253725)
-also passed with an exact-source artifact and absent public coordinates.
-[Stack promotion 39175345017](https://github.com/ElevenID/marty-ui/actions/runs/39175345017)
-completed the intended late-tag handoff after all other jobs passed. The
-verified helper pushed the annotated `v1.1.257` tag; [resumed publication
-39177395966](https://github.com/ElevenID/marty-ui/actions/runs/39177395966)
-passed and published the signed release. An exact-source
-[self-host producer run 39178041071](https://github.com/ElevenID/marty-ui/actions/runs/39178041071)
-finished with a publication byte-comparison failure while its bundle preflight
-passed. The released producer binding therefore still rejects it; use it only
-for an explicitly unqualified local diagnostic and repair the binding design
-before final acceptance. A fresh disposable Raft-backed 16 GiB local install
-has now passed service readiness, the public issue/present/verify/revoke journey,
-Keycloak issuance/refresh, signed OpenBao custody evidence and both database
-custody scans, with owned teardown and the production website still online.
-This is exploratory, not final release qualification: the producer failed,
-the 32 GiB runbook target was not met, and container OOM/peak measurements
-remain incomplete. A coordinated cold-copy restore now also passed its
-released-source business/custody verifier, but retains the same producer and
-resource limits. Keep production online
-and measure coexistence; replace the two old installations fresh, with no
-migration. Real AWS/Azure/GCP credentials and a physical wallet remain
-unprovisioned; obtain access and complete those acceptance checks before
-closing the KMS goal. The milestone table below contains historical status;
-use the dated evidence log and live run/PR states for the latest gate.
+Current handoff gate (2026-10-19 UTC): Core #355, Credentials #313, grouped
+native UI hardening #1192 and subsequent custody, restore, signing-route,
+publisher-source and Canvas repairs are merged. Protected UI main and the
+annotated `v1.1.258` tag identify source
+`2983a67bd48f74f262ab885d63e7e6f7d77898fa`. Full exact-main
+[CI 39187798412](https://github.com/ElevenID/marty-ui/actions/runs/39187798412),
+[claim 39190868378](https://github.com/ElevenID/marty-ui/actions/runs/39190868378),
+and resumed [Stack release 39193161779](https://github.com/ElevenID/marty-ui/actions/runs/39193161779)
+passed. The [public v1.1.258 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.258),
+its signed transaction, prepared self-host bundle and public helper passed
+exact-run/source binding, checksum and attestation checks. On this 16 GiB
+Docker Desktop host, one isolated fresh Raft-backed install passed 28-service
+readiness, public issue/present/verify/revoke, Keycloak issuance/refresh,
+Transit-signed custody evidence, both database custody scans and owned
+teardown. Its coordinated cold-copy restore in new projects passed the
+released-source restored-journey verifier and owned teardown. The production
+website remained online and returned HTTP 200. Local resource observers saw
+no OOM events during these tests; sampled peaks do not prove the 32 GiB
+runbook target or a general 16 GiB support minimum. These are passing local
+installed and restored diagnostic journeys against a signed release; both
+reports explicitly remain unqualified. They do not prove production cutover
+or cloud/device custody acceptance. Replace the two old installations
+fresh, with no migration; provision real AWS/Azure/GCP credentials and a
+physical wallet/device for the remaining acceptance checks. The milestone
+table below contains historical status; use the dated evidence log and live
+run/PR states for the latest gate.
 
-Current source repair: [UI PR #1427](https://github.com/ElevenID/marty-ui/pull/1427)
-anchors the release manifest to immutable source time and adds Flow's missing
-Issuance startup dependencies. Its exact final-head CI passed; protected
-merge-group CI is running on candidate `2983a67bd48f74f262ab885d63e7e6f7d77898fa`.
-The intended next release is `v1.1.258`, still untagged. After the protected
-merge, require one full exact-main CI, a fresh no-write claim, signed promotion,
-a terminally successful prepared-bundle producer, and fresh installed plus
-restored journeys before cutover. The 16 GiB host result remains exploratory;
-cloud-provider and physical-device acceptance remains unprovisioned.
+Current next gate: review the release/install/restore reports and observed
+resource envelope, then perform fresh beta and self-host installation cutovers
+on this machine without interrupting the production website. Validate each
+installed instance with its real workload and rollback plan before retiring
+the old installs. Provider and physical-device access remains unprovisioned.
 
 Retained Marty compatibility follow-up (2026-10-18): reviewed the stopped
 `codex/managed-evidence-cleanup-20261018` worktree without changing its
@@ -24558,3 +24544,9 @@ v1.1.258 exact-main gate (2026-10-18): All five protected workflows on merge-gro
 v1.1.258 claim and first promotion (2026-10-18): [Full exact-main CI 39187798412](https://github.com/ElevenID/marty-ui/actions/runs/39187798412) completed **success** at `2983a67bd48f74f262ab885d63e7e6f7d77898fa`, including the broader manual Canvas database matrix and aggregate CI Gate. Protected main still matched, the v1.1.258 tag was absent, and no open human PR had auto-merge enabled. [No-write claim 39190868378](https://github.com/ElevenID/marty-ui/actions/runs/39190868378) succeeded on that exact main; its downloaded transaction is `state=claimed`, binds `v1.1.258` and the source SHA, and records absent Git tag, GitHub release and all five versioned registry tags. Its evidence names the successful protected merge-group workflows and full manual CI. [First Stack release 39190953623](https://github.com/ElevenID/marty-ui/actions/runs/39190953623) was dispatched with `claim_run_id=39190868378` and `prepare_selfhost_lock=false`; metadata confirms `workflow_dispatch`, main and exact source SHA. It is queued, not a publication. Require successful image promotion and a verifiable promotion-complete artifact before running the local late-tag helper. Then resume from that exact artifact with the same claim, `prepare_selfhost_lock=true` and the four reviewed digest-pinned external images. Do not qualify a bundle or installed journey from the intentionally failing first run.
 
 Stopped-branch review and late-tag handoff (2026-10-18): A workspace-wide dirty-worktree review found no new KMS source change to import. The uncommitted `ssi-kms-hardening-20261008` worktree is an October 8 partial draft of the verification-only JWK/JWS/ION removal already merged in [SSI fork PR #9](https://github.com/ElevenID/ssi-elevenid/pull/9); several draft files differ from the reviewed merged source, so do not overlay them or disturb that worktree. The older `kms-release-qualification-fixes-20261013` edits are superseded: current main pins integration suite 1.2.90 and its public-stack smoke verifies permitted bootstrap exits have exit code zero. [First Stack release 39190953623](https://github.com/ElevenID/marty-ui/actions/runs/39190953623) passed image builds, KMS/crypto and public-stack qualification, uploaded immutable `stack-release-promotion-complete-39190953623`, then failed exactly at the designed late-tag gate. The source helper validated the checkpoint, current protected main and all five promoted registry digests and atomically pushed annotated `v1.1.258`; the tag peels to `2983a67bd48f74f262ab885d63e7e6f7d77898fa`. [Resume run 39193161779](https://github.com/ElevenID/marty-ui/actions/runs/39193161779) was dispatched from that exact main with the same claim and promotion artifact, `prepare_selfhost_lock=true`, and the four reviewed external image digests. It is queued; require terminal success, publication integrity, prepared bundle proof, then a fresh disposable Raft-backed install and coordinated restore before installed acceptance. Preserve the production website. AWS/Azure/GCP and physical wallet/device access remain unprovisioned.
+
+v1.1.258 signed publication and local installed recovery (2026-10-19 UTC): [Resumed Stack release 39193161779](https://github.com/ElevenID/marty-ui/actions/runs/39193161779) finished terminal **success** after the earlier intentional late-tag handoff. The public v1.1.258 transaction, stack manifest and SHA256SUMS matched the release, and `gh attestation verify` bound them to exact source `2983a67bd48f74f262ab885d63e7e6f7d77898fa` and the release workflow. The same-run prepared bundle, transaction and public KMS helper passed producer identity, checksum, attestation and archive-only consumer preflight. Stable preparation binding SHA-256: `bc4c148dee12144cd82df8e2e31f171e3357c79af740adc716470b5776b177c3`. A clean source checkout and exact integration SHA `5b3ec6a802a5e13201be8883741889405a86d146` ran in an isolated Docker volume, using distinct loopback ports and project names while production at `http://127.0.0.1:19080` kept returning HTTP 200. The fresh self-host runner completed in approximately 156 seconds with 28 observed roles, clean start and owned teardown, public issue/present/verify/revoke, Keycloak issuance/refresh, Transit-signed custody evidence and both Keycloak/Marty database custody scans. The installed report SHA-256 is `3846c48495fe0ebba5b37e90748163043b27f54f0d18495ae619132102172081`; diagnostic SHA-256 `cee18bc8f5b9bae939d1220e53b339ddca7b419858248574cb0187ae0d1adb8a`. Reports are local-only and explicitly `unqualified`.
+
+Coordinated cold-copy recovery (2026-10-19 UTC): After the fresh runner tore down its application project, the source Raft OpenBao was stopped and the state, OpenBao state, operator secrets, install bundle and operator password were copied into a distinct root. The local copy inventory matched 3,280 entries by bytes, UID, GID and mode; this is same-host diagnostic evidence, not independent backup provenance. A fresh recovery environment bound new projects `marty-preview-e3136b23634041b7` and `marty-selfhost-qual-01e0debdc2b07f52` to ports 38259/39059/38059/38159. The copied OpenBao reported initialized Shamir Raft, unsealed after recovery-key application, and its idempotent TLS/bootstrap jobs exited zero. The restored 28-service application reached healthy closure after one transient Compose dependency retry. The exact released-source `verify_selfhost_restored_journey.py` then passed with no candidate override: public issue/present/verify/revoke, Keycloak refresh, both database custody scans, exact running images/config/mounts, and Raft applied index 400. Restored report SHA-256 `bc47a708f6b13a8ce8fb5e0ef3ead7d51a4deb903ad5d7d293a640a272b98c47`; it explicitly marks qualification `unqualified` and says backup provenance/consistency are external inputs. Both restored Compose projects were removed with owned teardown, while the copied private roots remain isolated and the production website returned HTTP 200.
+
+Local resource envelope (2026-10-19 UTC): Docker Desktop exposed 16,265,662,464 bytes of Linux-visible RAM. The fresh-install resource observer ran 902.8 seconds, collected 159 samples, saw 26 roles and no OOM events or inspected OOM kills; it had one transient sample error and a maximum observed host memory use of 8,360,923,136 bytes with 1,828,757,504 bytes swap used. Its report SHA-256 is `6586875d6583b7df8f7bc06d0dbb7b4e531e85be52e1bdc3765126f857b83ecb`. The recovery observer ran 281.4 seconds, collected 36 samples, saw 27 roles, no OOM events or inspected OOM kills, no transient sample errors, maximum host memory use 7,113,334,784 bytes and the same maximum swap used; report SHA-256 `c35fe31872e2cc80023b66c06ddd8c136ab6b7d372ba9928d65247fde3e8e792`. Container memory peaks are sampled, not cgroup high-water marks. These observations support this local 16 GiB coexistence test only; they do not change the documented 32 GiB support target or prove that the two old installations can be cut over safely. Real AWS/Azure/GCP and physical wallet/device acceptance remain unprovisioned.
