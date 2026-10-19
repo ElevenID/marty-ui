@@ -46,6 +46,40 @@ recovery; then reassess the 16 GiB resource envelope and perform fresh
 replacements on this machine. Provider and physical-device access remains
 unprovisioned.
 
+Stopped-worker review (2026-10-19 UTC): A fresh inventory of the local KMS
+worktrees and repository roots found no recent uncommitted production KMS
+patch. The substantive preserved candidate is
+`ssi-kms-hardening-20261008` at old SSI upstream `d7593b9`, with uncommitted
+JWK/JWS/ION private-signing removal and two public-only tests. The maintained
+ElevenID SSI fork already contains the reviewed public-only boundary in
+`61ba3dc` and the passing feature-matrix/docs checkpoint in `584a0d1`.
+The old checkout remains untouched; cherry-picking its broad deletions would
+duplicate the fork and risk verification feature loss. Other dirty KMS
+worktrees showed generated Gradle/Eclipse files or stale release-fixture edits,
+not a new custody implementation.
+
+Root-token-independent restart candidate (2026-10-19 UTC): local-only feature
+commit `208f44299` adds a continuously running OpenBao unseal helper to the
+existing Go-built plugin image and a read-only-state sidecar. Initial
+`openbao-bootstrap` is opt-in and runs once after `openbao` starts; ordinary
+Compose startup and the reboot recovery script no longer invoke bootstrap or
+read the initial root token. The helper calls the OpenBao HTTPS API with the
+Raft state's CA, rejects redirects, and sends the unseal key in the request
+body instead of the process command line. It does not mount application
+secrets. The packager, image gates, strict disposable model, and recovery
+documentation now include the fourth service. Local Docker build ran the Go
+test and vet suite; 49 focused Python checks passed (4 platform skips), all
+33 Rust selfhost-bundle checks passed with Rust 1.95, 48 release-contract
+checks passed, and six Linux disposable-start tests passed. The rendered
+four-service model passed its strict validator. In an isolated local
+Raft-backed OpenBao project with no root-token file, the current helper
+unsealed a sealed node after a cold server restart using a read-only state
+mount; disposable test secrets and containers were removed. The production
+website still returned HTTP 200. This is local source validation, not an
+installed bundle or released-image acceptance. The unseal key remains in the
+OpenBao state directory under mode 0400; root-token retirement and stronger
+operational seal-key custody remain separate gates.
+
 Continuous credential staging update (2026-10-19 UTC): local-only feature
 branch `feat/kms-continuous-credentials-20261019` now includes Rust workload
 TLS renewal commits `e1471d251` and `551389321`, plus Keycloak renewal commit
