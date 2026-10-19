@@ -124,6 +124,11 @@ async function selectOrganization(page, { organizationId, consoleOrigin }) {
       last_active_org_id: organizationId,
     }),
   }, 'Persist demo organization selection');
+  // Console bootstrap prefers its local cache over server preferences. Synchronize
+  // only after the membership/access check and successful preference update.
+  await page.evaluate(({ selectedOrganizationId }) => {
+    localStorage.setItem('activeOrgId', selectedOrganizationId);
+  }, { selectedOrganizationId: organizationId });
   await page.goto(`${consoleOrigin}/console/org`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,

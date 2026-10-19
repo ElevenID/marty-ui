@@ -53,3 +53,51 @@ test('does not accept a metadata-only switch or a failed-cutover key change', ()
   failOpen.unpublishedReplacement.credentialAfterDenial.kid = 'did:web:beta.example:orgs:d02#missing';
   assert.equal(providerSwitchBehaviorAssertions(failOpen).unpublished_signing_key_denied, false);
 });
+
+test('visible verification evidence binds real credential keys, revalidation and denial response', () => {
+  const {providerVerificationDisplay}=require('./audit-beta-issuer-provider-switch');
+  const report=passingReport();
+  const shown=providerVerificationDisplay(report,'denied-switch');
+  assert(shown.rows.some(([,value])=>value===report.providerA.credential.kid));
+  assert(shown.rows.some(([,value])=>value===report.providerB.credential.kid));
+  assert(shown.rows.some(([,value])=>value==='HTTP 503; cutover accepted: false'));
+  assert.match(shown.boundary,/not an admin portal screen/);
+  assert.match(shown.custodyScope,/one beta OpenBao backend/);
+  const invalid=passingReport();invalid.providerA.reverifiedAfterSwitch=false;
+  assert.throws(()=>providerVerificationDisplay(invalid,'after-switch'),/actual passing verification/);
+  const failOpen=passingReport();failOpen.unpublishedReplacement.rebindStatus=200;
+  assert.throws(()=>providerVerificationDisplay(failOpen,'denied-switch'),/actual passing verification/);
+});
+
+test('actual provider panel wraps full issuer and key values inside the capture viewport', async () => {
+  const {chromium} = require('@playwright/test');
+  const {providerVerificationDisplay, renderProviderEvidence} = require('./audit-beta-issuer-provider-switch');
+  const original = passingReport();
+  const issuerDid = 'did:web:beta.elevenidllc.com:orgs:d02-provider-switch-20261018t232318';
+  const report = JSON.parse(JSON.stringify(original).replaceAll('did:web:beta.example:orgs:d02', issuerDid)
+    .replaceAll('#provider-a', '#managed-d4fc1acc38045cc1bc56').replaceAll('#provider-b', '#d02-external-20261018t232318'));
+  const browser = await chromium.launch({headless: true});
+  try {
+    const page = await browser.newPage({viewport: {width: 1920, height: 1080}});
+    for (const phase of ['after-switch', 'denied-switch']) {
+      const payload = providerVerificationDisplay(report, phase);
+      await page.evaluate(renderProviderEvidence, payload);
+      const geometry = await page.locator('#d02-verification-evidence').evaluate(panel => ({
+        bottom: panel.getBoundingClientRect().bottom,
+        rows: [...panel.querySelectorAll('[data-evidence-value]')].map(node => ({
+          text: node.textContent, width: node.clientWidth, height: node.clientHeight,
+          overflow: node.scrollWidth > node.clientWidth,
+          fontSize: Number.parseFloat(getComputedStyle(node).fontSize),
+        })),
+      }));
+      assert(geometry.bottom <= 1068);
+      assert.deepEqual(geometry.rows.map(row => row.text), payload.rows.map(([, value]) => value));
+      assert(geometry.rows.every(row => !row.overflow && row.fontSize >= 30));
+      assert(geometry.rows[0].height > 35, 'Full DID must wrap instead of clipping or shrinking');
+    }
+    await page.setViewportSize({width: 700, height: 400});
+    await assert.rejects(page.evaluate(renderProviderEvidence, providerVerificationDisplay(report, 'denied-switch')), /without clipping/);
+  } finally {
+    await browser.close();
+  }
+});
