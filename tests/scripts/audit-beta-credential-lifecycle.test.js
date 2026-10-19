@@ -6,6 +6,31 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+test('issuance selection waits for a new exact-template record and rejects ambiguity',()=>{
+  const {selectFreshCredential}=require('./audit-beta-credential-lifecycle');
+  const old={id:'old',credential_template_id:'owned',issued_at:'2099-01-01'};
+  assert.equal(selectFreshCredential([old],'owned',['old']),null);
+  const fresh={id:'new',credential_template_id:'owned',issued_at:'2000-01-01'};
+  assert.equal(selectFreshCredential([old,fresh,{id:'other',credential_template_id:'other'}],'owned',['old']),fresh);
+  assert.throws(()=>selectFreshCredential([fresh,{...fresh,id:'another'}],'owned',[]),/Ambiguous/);
+});
+
+test('COMPLETE follows cleanup, browser close and report write; failures cannot complete',async()=>{
+  const {finalizeLiveRun}=require('./audit-beta-credential-lifecycle');
+  for(const failing of [null,'cleanup','closeBrowser','writeReport']){
+    const calls=[];const operations=Object.fromEntries(['cleanup','closeBrowser','writeReport','complete','closeEvidence'].map(name=>[name,()=>{calls.push(name);if(name===failing)throw Error(name);} ]));
+    const pending=finalizeLiveRun({...operations,successful:true});
+    if(failing)await assert.rejects(pending,/finalization failed/);else await pending;
+    assert.deepEqual(calls,failing?['cleanup','closeBrowser','writeReport','closeEvidence']:['cleanup','closeBrowser','writeReport','complete','closeEvidence']);
+  }
+});
+
+test('wallet reset HTTP failure stops before credential receipt',async()=>{
+  const {receiveCredential}=require('./audit-beta-credential-lifecycle');let reloaded=false;
+  await assert.rejects(receiveCredential({goto:async()=>{},request:{post:async()=>({ok:()=>false})},reload:async()=>{reloaded=true;}},'unit-offer','unit-vct'),/Wallet reset failed/);
+  assert.equal(reloaded,false);
+});
+
 test('live fixture ACK and seal precede use of actual registered issuance inputs',async()=>{
   const {prepareLiveInputs,issueCredential}=require('./audit-beta-credential-lifecycle');
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'lifecycle-live-'));const events=[];

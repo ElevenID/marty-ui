@@ -42,7 +42,7 @@ const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const PRESENTATION_TEST_ID = 'LIFECYCLE-PRES-01';
 
 function lifecycleFixture(stamp) {
-  return {schemaVersion:1,organizationId:ORG_ID,sourceTemplateId:SOURCE_TEMPLATE_ID,policyId:POLICY_ID,stamp,
+  return {schemaVersion:1,organizationId:ORG_ID,sourceTemplateId:SOURCE_TEMPLATE_ID,policyId:POLICY_ID,presentationTestId:PRESENTATION_TEST_ID,stamp,
     holder:{email:'lifecycle-holder@example.test',given:'Grace',family:'Hopper',employeeId:`LIFECYCLE-${stamp}`,department:'Security',position:'Lifecycle Auditor',date:'2026-07-12',dateTime:'2026-07-12T12:00:00Z'}};
 }
 async function prepareLiveInputs(artifactDir,stamp,client) {
@@ -52,10 +52,21 @@ async function prepareLiveInputs(artifactDir,stamp,client) {
   assert.deepEqual(input,lifecycleFixture(stamp));
   await client.seal();return input;
 }
+async function finalizeLiveRun({cleanup,closeBrowser,writeReport,complete,closeEvidence,successful}) {
+  const failures=[];
+  try {
+    for(const operation of [cleanup,closeBrowser,writeReport]) {
+      try {await operation();}catch(error){failures.push(error);}
+    }
+    if(failures.length)throw new AggregateError(failures,'Lifecycle finalization failed');
+    if(successful)await complete();
+  }finally{closeEvidence();}
+}
 async function liveClient() {
   assert.equal(BETA_ORIGIN,'https://beta.elevenidllc.com');assert.equal(TEST_WALLET_ORIGIN,'http://127.0.0.1:8787');
   assert.equal(LOCAL_BETA_PROXY,false);assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED==='1');
   assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST,'Canonical evidence requires deployed UI');
+  assert.equal(VERIFIER_DID,'','Canonical verifier identity must come from issued credential');
   const helper=process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
   assert.ok(helper&&process.connected,'Recorder-owned live IPC required');
   assert.equal(crypto.createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256);
@@ -303,8 +314,8 @@ async function ensureActiveRevocationProfile(page, stamp) {
   };
 }
 
-async function ensureLifecycleTemplate(page, revocationProfileId) {
-  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId }) => {
+async function ensureLifecycleTemplate(page, revocationProfileId, stamp) {
+  return page.evaluate(async ({ organizationId, sourceTemplateId, profileId, stamp }) => {
     const listResponse = await fetch(
       `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`,
       { credentials: 'include' },
@@ -316,7 +327,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId) {
     if (!listResponse.ok || !source) {
       return { ok: false, status: listResponse.status, error: 'Source Credential Template unavailable' };
     }
-    const lifecycleTemplateName = `Lifecycle ${source.name}`;
+    const lifecycleTemplateName = `Lifecycle ${source.name} ${stamp}`;
     const existing = templates.find((template) => (
       template.id !== sourceTemplateId
       && template.vct === source.vct
@@ -327,7 +338,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId) {
       && Number(template.validity_rules?.reissue_within_seconds || 0)
         >= Number(template.validity_rules?.ttl_seconds || Number.MAX_SAFE_INTEGER)
     ));
-    if (existing) return { ok: true, id: existing.id, name: existing.name, reused: true };
+    if (existing) throw new Error('Fresh lifecycle template name already exists');
 
     const versionResponse = await fetch(
       `/v1/credential-templates/${encodeURIComponent(sourceTemplateId)}/new-version`,
@@ -377,6 +388,7 @@ async function ensureLifecycleTemplate(page, revocationProfileId) {
     organizationId: ORG_ID,
     sourceTemplateId: SOURCE_TEMPLATE_ID,
     profileId: revocationProfileId,
+    stamp,
   });
 }
 
@@ -480,7 +492,8 @@ async function issueCredential(page, templateId, holder = lifecycleFixture("stan
 
 async function receiveCredential(walletPage, offerUri, expectedVct) {
   await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  await walletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
+  const reset=await walletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
+  assert.ok(reset.ok(),'Wallet reset failed');
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
   await maskProtocolField(walletPage, 'Credential offer URI', RECORD_VIDEO);
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
@@ -502,20 +515,29 @@ async function receiveCredential(walletPage, offerUri, expectedVct) {
   };
 }
 
-async function findIssuedCredential(page, templateId) {
-  return waitFor(() => page.evaluate(async ({ organizationId, templateId }) => {
-    const response = await fetch(
-      `/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`,
-      { credentials: 'include' },
-    );
-    const records = await response.json().catch(() => []);
-    if (!response.ok || !Array.isArray(records)) return null;
-    return records
-      .filter((record) => record.credential_template_id === templateId)
-      .sort((left, right) => (
-        new Date(right.issued_at || 0).getTime() - new Date(left.issued_at || 0).getTime()
-      ))[0] || null;
-  }, { organizationId: ORG_ID, templateId }));
+function selectFreshCredential(records,templateId,priorIds) {
+  assert.ok(Array.isArray(records));assert.ok(Array.isArray(priorIds));
+  const matches=records.filter(record=>record.credential_template_id===templateId&&!priorIds.includes(record.id));
+  if(matches.length>1)throw Error('Ambiguous new lifecycle issuance records');
+  return matches[0]||null;
+}
+async function credentialInventory(page,templateId) {
+  return page.evaluate(async({organizationId,templateId})=>{
+    const response=await fetch(`/v1/issued-credentials?organization_id=${encodeURIComponent(organizationId)}`,{credentials:'include'});
+    if(!response.ok)throw Error('Credential inventory failed');
+    const records=await response.json();if(!Array.isArray(records))throw Error('Invalid credential inventory');
+    return records.filter(record=>record.credential_template_id===templateId);
+  },{organizationId:ORG_ID,templateId});
+}
+async function findIssuedCredential(page,templateId,priorIds) {
+  return waitFor(async()=>selectFreshCredential(await credentialInventory(page,templateId),templateId,priorIds));
+}
+async function cleanupOwnedLifecycle(page,templateId) {
+  const result=await cleanupActiveLifecycleCredentials(page,templateId);
+  assert.ok(result.ok,'Owned lifecycle credential cleanup failed');
+  const retired=await page.evaluate(async id=>{const r=await fetch(`/v1/credential-templates/${encodeURIComponent(id)}/deprecate`,{method:'POST',credentials:'include'});return r.ok;},templateId);
+  assert.ok(retired,'Owned lifecycle template retirement failed');
+  return {...result,templateRetired:true};
 }
 
 function selectRenewedCredential(records, templateId, sourceCredentialId) {
@@ -572,7 +594,7 @@ async function cleanupActiveLifecycleCredentials(page, templateId) {
 
     const active = records.filter((record) => (
       record.credential_template_id === templateId
-      && String(record.status || '').toUpperCase() === 'ACTIVE'
+      && ['ACTIVE','SUSPENDED'].includes(String(record.status || '').toUpperCase())
     ));
     const revoked = [];
     const failures = [];
@@ -809,13 +831,13 @@ async function main() {
   if (!email || !password) throw new Error('Missing beta operator credentials');
   const uiCandidate = resolveUiCandidateDist();
 
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
+  const stamp = crypto.randomUUID();
   const artifactDir = createArtifactDir(ROOT, `beta-credential-lifecycle-${stamp}`);
   const evidence=await liveClient();
-  let browser;
+  let browser,page,report,ownedTemplate,finished=false;
   try {
   const input=await prepareLiveInputs(artifactDir,stamp,evidence);
-  const report = {
+  report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
     policyId: POLICY_ID,
@@ -847,7 +869,7 @@ async function main() {
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
     await installUiCandidateRoute(context, uiCandidate);
-    const page = await context.newPage();
+    page = await context.newPage();
     const recording = createLifecycleRecording(page, {onEvent: (evidence) => {
       fs.writeFileSync(path.join(artifactDir, 'lifecycle-action-events.json'), JSON.stringify(evidence, null, 2));
     }});
@@ -888,20 +910,16 @@ async function main() {
     if (!report.revocationProfile.ok) {
       throw new Error(`Revocation Profile setup failed: ${report.revocationProfile.error}`);
     }
-    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id);
+    report.credentialTemplate = await ensureLifecycleTemplate(page, report.revocationProfile.id,input.stamp);
     if (!report.credentialTemplate.ok) {
       throw new Error(`Credential Template setup failed: ${report.credentialTemplate.error}`);
     }
-    report.templateId = report.credentialTemplate.id;
-    report.draftCleanup = await cleanupLifecycleDrafts(
-      page,
-      SOURCE_TEMPLATE_ID,
-      report.templateId,
-    );
-    report.credentialCleanup = await cleanupActiveLifecycleCredentials(page, report.templateId);
-    if (!report.credentialCleanup.ok) {
-      throw new Error(`Lifecycle credential cleanup failed: ${JSON.stringify(report.credentialCleanup.failures)}`);
-    }
+    report.templateId=report.credentialTemplate.id;ownedTemplate=report.templateId;
+    assert.equal(report.credentialTemplate.reused,false);
+    report.priorCredentialIds=(await credentialInventory(page,ownedTemplate)).map(record=>record.id);
+    assert.deepEqual(report.priorCredentialIds,[],'New owned template must have empty credential inventory');
+    report.draftCleanup={ok:true,scope:'Fresh owned template; no shared drafts modified'};
+    report.credentialCleanup={ok:true,scope:'Fresh owned template; no shared credentials modified'};
 
     report.issuance = await issueCredential(page, report.templateId, input.holder);
     if (!report.issuance.ok || !report.issuance.offerUri) {
@@ -916,7 +934,7 @@ async function main() {
     if (!report.walletReceipt.ok) throw new Error(`Wallet receipt failed: ${report.walletReceipt.error}`);
 
     recording.mark('setup', 'complete', {boundary: 'ISSUANCE_AND_WALLET_RECEIPT_PREPARED_BEFORE_ADMIN_ACTIONS'});
-    let credential = await findIssuedCredential(page, report.templateId);
+    let credential = await findIssuedCredential(page, report.templateId,report.priorCredentialIds);
     const sourceCredentialId = credential.id;
 
     await page.goto(`${BETA_ORIGIN}/console/org/operate/issuance`, {
@@ -1065,7 +1083,7 @@ async function main() {
     );
     report.releaseReady = Boolean(report.engineeringReady && !uiCandidate);
     report.finishedAt = new Date().toISOString();
-    await evidence.complete();
+    report.ownedCleanup=await cleanupOwnedLifecycle(page,ownedTemplate);ownedTemplate=null;
     await context.close();
     if (RECORD_VIDEO) {
       report.recordings = {
@@ -1073,12 +1091,15 @@ async function main() {
         wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'credential-lifecycle-wallet.webm')),
       };
     }
-    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
     if (uiCandidate ? !report.engineeringReady : !report.releaseReady) process.exitCode = 1;
+    finished=true;
   } finally {
-    evidence.close();
-    if(browser)await browser.close();
+    await finalizeLiveRun({
+      cleanup:async()=>{if(ownedTemplate&&page)report.ownedCleanup=await cleanupOwnedLifecycle(page,ownedTemplate);},
+      closeBrowser:async()=>{if(browser)await browser.close();},
+      writeReport:async()=>{if(report)fs.writeFileSync(path.join(artifactDir,'report.json'),JSON.stringify(report,null,2));},
+      complete:()=>evidence.complete(),closeEvidence:()=>evidence.close(),successful:finished&&!process.exitCode,
+    });
   }
 }
 
@@ -1090,7 +1111,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-  lifecycleFixture,prepareLiveInputs,
+  lifecycleFixture,prepareLiveInputs,selectFreshCredential,cleanupOwnedLifecycle,finalizeLiveRun,
   createLifecycleRecording,
   initialActiveVerificationPassed,
   showRenewalLineage,
