@@ -1,0 +1,12 @@
+✔ real FFmpeg overview preserves both complete portrait sources and produces a source-bound WebM accepted by the outer capture gate (1785.644107ms)
+✔ actual low-frame-rate portrait media is rejected before any overview encoding (280.531507ms)
+✔ substituted source bytes, a different run, or preexisting primary cannot acquire overview provenance (440.963644ms)
+✔ an encoder failure retains raw media and cannot write a successful overview provenance file (371.379923ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2889.98656

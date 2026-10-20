@@ -12,16 +12,21 @@ const BASE_PATH = '/v1/credentials';
 /**
  * Issue a credential
  * @param {Object} request - Credential issuance request
+ * @param {string} request.organization_id - Authorized organization
  * @param {string} request.credential_template_id - Template ID
- * @param {string} request.flow_execution_id - Optional flow execution ID
- * @param {Object} request.subject_claims - Claims for the credential subject
- * @param {string} request.holder_identifier - Holder DID or identifier
- * @param {Object} request.application_data - Optional application evidence
- * @returns {Promise<Object>} Issued credential response with credential and metadata
+ * @param {string} request.issuer_did - DID selected for signing
+ * @param {Object} request.credential - VC document to issue
+ * @returns {Promise<Object>} VC-API response with verifiableCredential
  */
 export const issueCredential = async (request) => {
   try {
-    const response = await apiClient.post(`${BASE_PATH}/issue`, request);
+    const { organization_id, credential_template_id, issuer_did, credential } = request;
+    if (![organization_id, credential_template_id, issuer_did].every(value => typeof value === 'string' && value.trim()) ||
+        !issuer_did.startsWith('did:') || !credential || typeof credential !== 'object' || Array.isArray(credential)) {
+      throw new Error('organization_id, credential_template_id, issuer_did, and credential are required');
+    }
+    const query = new URLSearchParams({ organization_id, credential_template_id, issuer_did });
+    const response = await apiClient.post(`/v1/vc-api/credentials/issue?${query}`, { credential });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -31,14 +36,24 @@ export const issueCredential = async (request) => {
 /**
  * Verify a credential
  * @param {Object} request - Verification request
- * @param {Object|string} request.credential - Credential to verify
- * @param {string} request.presentation_policy_id - Optional policy ID
- * @param {string} request.trust_profile_id - Optional trust profile ID
- * @returns {Promise<Object>} Verification result
+ * @param {string} request.organization_id - Authorized organization
+ * @param {string} request.presentation_policy_id - Required policy ID
+ * @param {Object|string} request.verifiableCredential - Signed credential to verify
+ * @param {Object} request.options - Optional challenge and domain
+ * @returns {Promise<Object>} VC-API result with verified and results
  */
 export const verifyCredential = async (request) => {
   try {
-    const response = await apiClient.post(`${BASE_PATH}/verify`, request);
+    const { organization_id, presentation_policy_id, verifiableCredential, options } = request;
+    if (![organization_id, presentation_policy_id].every(value => typeof value === 'string' && value.trim()) ||
+        !verifiableCredential || (options !== undefined && (typeof options !== 'object' || Array.isArray(options)))) {
+      throw new Error('organization_id, presentation_policy_id, and verifiableCredential are required');
+    }
+    const query = new URLSearchParams({ organization_id, presentation_policy_id });
+    const response = await apiClient.post(`/v1/vc-api/credentials/verify?${query}`, {
+      verifiableCredential,
+      ...(options ? { options } : {}),
+    });
     return response.data;
   } catch (error) {
     throw handleApiError(error);
@@ -220,10 +235,19 @@ export const getIssuanceSessionStatus = async (transactionId) => {
   }
 };
 
+/** Preserve the same invite fields for claim responses and read-only application refreshes. */
+export const normalizeApplicationOffer = (data) => ({
+  ...data,
+  offer_url: data.credential_offer_uri || data.offer_url || null,
+  expires_at: data.offer_expires_at || data.expires_at || null,
+  status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
+});
+
 /**
- * Generate (or refresh) the issuance offer for an application.
- * Uses the applicant issue endpoint, which now delegates issuance strictly
- * through flow orchestration (no direct issuance fallback).
+ * Acquire the server-governed issuance offer for an application.
+ * The native claim endpoint reuses an unexpired pending offer and delegates
+ * renewal through flow orchestration. It accepts an empty options object;
+ * holder destination and Canvas mirror selection are not implemented there.
  *
  * @param {string} applicationId
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
@@ -231,15 +255,7 @@ export const getIssuanceSessionStatus = async (transactionId) => {
 export const generateIssuanceOffer = async (applicationId, options = {}) => {
   try {
     const response = await apiClient.post(`/v1/me/applications/${applicationId}/claim`, options || {});
-    const data = response.data;
-    // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
-    return {
-      offer_url: data.credential_offer_uri || data.offer_url || null,
-      expires_at: data.offer_expires_at || data.expires_at || null,
-      status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
-      // Pass through in case callers want raw fields too
-      ...data,
-    };
+    return normalizeApplicationOffer(response.data);
   } catch (error) {
     throw handleApiError(error);
   }

@@ -155,6 +155,7 @@ function PolicySelectStep({ value, onChange, organizationId }) {
               <FormControl fullWidth disabled={Boolean(value?.flow_id)}>
                 <InputLabel>Presentation Policy</InputLabel>
                 <Select
+                  data-testid="verification-policy-select"
                   value={value?.policy_id || ''}
                   onChange={handlePolicyChange}
                   label="Presentation Policy"

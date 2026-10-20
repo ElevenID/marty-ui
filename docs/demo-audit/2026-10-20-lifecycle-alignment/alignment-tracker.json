@@ -1,0 +1,968 @@
+{
+  "schemaVersion": 1,
+  "audit": "2026-10-20-lifecycle-alignment",
+  "status": "LOCAL_REPAIRS_VERIFIED_CURRENT_RELEASE_QUALIFICATION_NOT_RUN",
+  "previousAudit": "../2026-10-20/README.md",
+  "catalog": {
+    "stackVersion": "2026.08.0",
+    "scenarioCount": 14,
+    "numberedScenarioCount": 12,
+    "states": {
+      "DRAFT": 14
+    },
+    "assertions": {
+      "NOT_RUN": 60
+    },
+    "releaseReady": false,
+    "publicDemoReady": false,
+    "deploymentBinding": "PENDING_DEPLOYMENT",
+    "modifiedByThisPass": false
+  },
+  "findings": [
+    {
+      "id": "LA-001",
+      "severity": "High",
+      "status": "OPEN_QUALIFICATION",
+      "title": "Current portfolio success is not established",
+      "observation": "The current manifest has 14 DRAFT scenarios and 60 NOT_RUN assertions, with no release-bound media.",
+      "resolutionOrNextStep": "Keep these states until each actual positive/negative journey and its exact reviewed recording are bound to the deployed release.",
+      "sources": [
+        "ui/public/demos/manifests/2026.08.0.json"
+      ]
+    },
+    {
+      "id": "LA-002",
+      "severity": "Medium",
+      "status": "FIXED_LOCALLY_FRESH_RENDERS_PENDING",
+      "title": "Lifecycle presentation was a campaign recipe rather than a reusable checked profile",
+      "observation": "Other demos had no common executable contract covering voice, spoken captions, crops, pointers, and ordered scenarios.",
+      "resolutionOrNextStep": "Add lifecycle-v1, exact input hashes, numbered roadmap stages, explicit camera and pointer evidence, and draft review classification.",
+      "sources": [
+        "recorder:src/guidedPresentationProfile.js",
+        "recorder:src/compose.js",
+        "recorder:src/openingRoadmap.js"
+      ]
+    },
+    {
+      "id": "LA-003",
+      "severity": "High",
+      "status": "FIXED_LOCALLY",
+      "title": "D01/D04 reviewer actions were performed through API helpers",
+      "observation": "Narrated review and issuance did not show the operator taking those actions in the product.",
+      "resolutionOrNextStep": "Main journeys click real Approve, Confirm Approval, and Display OID4VCI Invite controls; bind the response to the owned application and issuance transaction; retain API fixture labels.",
+      "sources": [
+        "tests/scripts/beta-demo-review-ui.js",
+        "tests/scripts/audit-beta-passport-clearance.js",
+        "tests/scripts/audit-beta-employee-access.js",
+        "tests/scripts/beta-demo-resource-helpers.js"
+      ]
+    },
+    {
+      "id": "LA-004",
+      "severity": "High",
+      "status": "FIXED_LOCALLY",
+      "title": "Narration could get ahead of observed stage evidence",
+      "observation": "Provider and lifecycle stories could reach success explanation before all required stage proof was checked.",
+      "resolutionOrNextStep": "Require the specific HTTP outcome, owned state, completed wallet flow, and expected decision before positive narration or a later mutation.",
+      "sources": [
+        "tests/scripts/audit-beta-issuer-provider-switch.js",
+        "tests/scripts/audit-beta-credential-lifecycle.js",
+        "tests/scripts/audit-beta-employee-access.js",
+        "tests/scripts/audit-beta-passport-clearance.js"
+      ]
+    },
+    {
+      "id": "LA-005",
+      "severity": "High",
+      "status": "FIXED_LOCALLY",
+      "title": "Lifecycle reference improvements needed to preserve earlier ownership fixes",
+      "observation": "Initial allowed access, visible renewal lineage, live fixture binding, and end-of-run finalization needed to coexist with exact ownership and failure cleanup.",
+      "resolutionOrNextStep": "Selectively adapt those reference changes; show predecessor/successor rows; require recorder-owned live transport; report completion only after finalization and cleanup.",
+      "sources": [
+        "tests/scripts/audit-beta-credential-lifecycle.js",
+        "tests/scripts/audit-beta-credential-lifecycle.test.js"
+      ]
+    },
+    {
+      "id": "LA-006",
+      "severity": "High",
+      "status": "FIXED_LOCALLY",
+      "title": "Reviewer issuance used the applicant self-claim route",
+      "observation": "The organization reviewer panel needed the organization issue endpoint, including invitation regeneration.",
+      "resolutionOrNextStep": "Pass organization identity into issuance and use the organization applicant issue route. Refuse missing organization identity.",
+      "sources": [
+        "ui/src/components/console/operate/IssuingSection.jsx",
+        "ui/src/components/console/operate/ApplicationReviewPage.jsx",
+        "ui/src/config/issuanceProtocols.js"
+      ]
+    },
+    {
+      "id": "LA-007",
+      "severity": "Medium",
+      "status": "FIXED_LOCALLY",
+      "title": "Reviewer locking read obsolete response fields",
+      "observation": "The active reviewer could be treated as holding no usable lock under the actual native lock DTO.",
+      "resolutionOrNextStep": "Use ACTIVE status and holder_user_id equality; other reviewers remain blocked.",
+      "sources": [
+        "ui/src/components/console/operate/ApplicationReviewPage.jsx"
+      ]
+    },
+    {
+      "id": "LA-008",
+      "severity": "Medium",
+      "status": "FIXED_LOCALLY",
+      "title": "Identity refresh could continue into logout",
+      "observation": "In-flight and periodic inventory refreshes could race the logout transition.",
+      "resolutionOrNextStep": "Signal logout before submission; cancel and abort identity refresh work.",
+      "sources": [
+        "ui/src/components/console/applicant/MyIdentityPage.jsx",
+        "ui/src/services/authApi.js",
+        "ui/src/services/applicantApi.jsx"
+      ]
+    },
+    {
+      "id": "LA-009",
+      "severity": "High",
+      "status": "FIXED_LOCALLY",
+      "title": "Valid wallet-specific invitations were rejected without a default URL",
+      "observation": "The native contract accepts a nonempty credential_offer_uris map, while the panel required offer_url.",
+      "resolutionOrNextStep": "Accept a default offer or a usable wallet-specific offer; preserve the map without inventing a default URL; add recording hooks for safe QR masking.",
+      "sources": [
+        "ui/src/components/console/operate/IssuingSection.jsx",
+        "ui/src/config/issuanceProtocols.js",
+        "ui/src/components/issuance/QRCodeDisplay.jsx"
+      ]
+    },
+    {
+      "id": "LA-010",
+      "severity": "Low",
+      "status": "FIXED_LOCALLY_FULL_CAPTIONS_PENDING",
+      "title": "Two membership denial captions exceeded the reading ceiling",
+      "observation": "Each five-second draft cue contained 17 words: 204 WPM.",
+      "resolutionOrNextStep": "Shorten both to 11 words: 132 WPM, preserving cue times and the untrusted-issuer/expired-offer reasons.",
+      "sources": [
+        "recorder:demos/transcripts/membership-expired-offer.en.vtt",
+        "recorder:demos/transcripts/membership-untrusted-issuer.en.vtt"
+      ]
+    },
+    {
+      "id": "LA-011",
+      "severity": "High",
+      "status": "OPEN_IMPLEMENTATION_AND_QUALIFICATION",
+      "title": "D03 has no dedicated current demo driver/configuration",
+      "observation": "Android age-proof infrastructure exists, but no dedicated current scenario wiring establishes the promised minimal-disclosure journey.",
+      "resolutionOrNextStep": "Implement a reviewed dedicated configuration and driver, then bind exact wallet builds, deployed contracts, and positive/negative device runs.",
+      "sources": [
+        "recorder:demos/lifecycle-alignment.json"
+      ]
+    },
+    {
+      "id": "LA-012",
+      "severity": "Medium",
+      "status": "FOLLOW_UP_BASELINE_COMPATIBILITY",
+      "title": "A retained media test reports a one-frame container-duration discrepancy",
+      "observation": "The exact 300-frame render reports 11.96 seconds where the test expects 12.00 seconds. The same failure occurs on the prior composer sources.",
+      "resolutionOrNextStep": "Track the inherited environment/container-duration behavior separately; do not claim the complete legacy compatibility suite passed.",
+      "sources": [
+        "evidence/baseline-compose-compatibility.txt"
+      ]
+    }
+  ],
+  "scenarioAlignmentPlan": "recorder:demos/lifecycle-alignment.json",
+  "scenarios": [
+    {
+      "demoId": "D-01",
+      "slug": "passport-pre-boarding-clearance",
+      "title": "Passport Pre-Boarding Clearance",
+      "actor": "Traveler, organization reviewer, and gate verifier",
+      "businessGoal": "Turn a cryptographically validated passport specimen into a clearance that grants the intended gate access.",
+      "driver": {
+        "status": "IMPLEMENTED_REQUIRES_NATIVE_AND_BETA",
+        "entrypoints": [
+          "demos/passport-pre-boarding-clearance.hooks.js",
+          "marty-ui:tests/scripts/audit-beta-passport-clearance.js"
+        ],
+        "localAlignmentStatus": "CONSOLE_APPROVAL_AND_ISSUANCE_IMPLEMENTED_FRESH_CAPTURE_NOT_RUN"
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Generated signed eMRTD specimens and synthetic traveler identity"
+        ],
+        "native": [
+          "Release-bound Windows Tauri verifier and approved fixture generator",
+          "Signed USB trust package"
+        ],
+        "external": [
+          "Deployed beta, administrator and applicant accounts, first-party wallet"
+        ],
+        "scope": [
+          "NFC and liveness are disabled in the current specimen-input lane; it does not demonstrate a physical passport read."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "native-dependency",
+          "detail": "The verifier checkout and executable are not present in the audited workspace.",
+          "repair": "Provide the approved release-bound native build and fixture generator; keep specimen/NFC boundaries visible.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "composition",
+          "detail": "Native and beta footage need one coherent actor and evidence handoff.",
+          "repair": "Bind measured native/beta source segments to the common profile and narrate the digest handoff without showing private payloads.",
+          "qualificationNeedsBackend": false
+        },
+        {
+          "id": "fresh-review-ui-qualification",
+          "status": "LOCAL_IMPLEMENTATION_COMPLETE_CAPTURE_PENDING",
+          "detail": "Approval, invitation creation, and pre-success presentation guards now use the local supported console implementation. A new deployed run and source-bound recording have not qualified those changes.",
+          "repair": "Capture the real reviewer and wallet sequence on the exact deployed revision, retain exact-ID cleanup, and bind its frames and report to lifecycle-v1.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-02",
+      "slug": "stable-issuer-identity-pluggable-kms",
+      "title": "Stable Issuer Identity with Pluggable KMS",
+      "actor": "Organization signing administrator",
+      "businessGoal": "Change signing custody while preserving the issuer DID and the validity of credentials already issued.",
+      "driver": {
+        "status": "IMPLEMENTED_REQUIRES_BETA_AND_KMS",
+        "entrypoints": [
+          "marty-ui:tests/scripts/audit-beta-issuer-provider-switch.js"
+        ],
+        "localAlignmentStatus": "REBIND_HOLDS_AND_CLICK_LANDMARKS_IMPLEMENTED_FRESH_CAPTURE_NOT_RUN"
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Run-scoped synthetic issuer names and holder claims"
+        ],
+        "native": [],
+        "external": [
+          "Managed signing service and reachable OpenBao transit configuration",
+          "Deployed beta and organization administrator"
+        ],
+        "scope": [
+          "The implemented provider-B lane is OpenBao transit; it does not prove every KMS vendor or HSM."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "kms-inputs",
+          "detail": "A reachable, governed provider-B service and published key are required.",
+          "repair": "Preflight actual configured provider/key inputs and describe the tested provider pair accurately.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "visible-evidence",
+          "detail": "Most issuance and cryptographic checks run outside visible product controls.",
+          "repair": "Present clearly labeled test evidence for API/crypto results, and record the genuine move action rather than depicting hidden setup as UI activity.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": "D-03",
+      "slug": "private-online-age-proof",
+      "title": "Private Online Age Proof",
+      "actor": "Age-restricted service visitor and verifier",
+      "businessGoal": "Prove that the visitor is over 21 without disclosing the rest of the identity document.",
+      "driver": {
+        "status": "MISSING_CURRENT_DEMO_DRIVER_AND_CONFIG",
+        "entrypoints": [],
+        "availableInfrastructure": [
+          "src/androidReleaseGateway.js",
+          "src/androidRecorder.js"
+        ],
+        "requiredLanes": [
+          "eudi-age-proof-interoperability",
+          "spruceid-age-proof-interoperability"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic adult mDL and untrusted issuer fixtures to be defined"
+        ],
+        "native": [
+          "Pinned EUDI and Spruce Android builds with measurable browser return behavior"
+        ],
+        "external": [
+          "Deployed mDL issuance, supported format, trust policy, verifier, and device environment"
+        ],
+        "scope": [
+          "Generic mDL tests and Android infrastructure do not establish an implemented D-03 demonstration."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "missing-driver",
+          "detail": "No current demos/private-online-age-proof.json or matching marty-ui demo qualification driver was found.",
+          "repair": "Implement a dedicated scenario from reviewed public contracts; keep this entry unimplemented until the executable config and driver exist.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "device-qualification",
+          "detail": "The required EUDI and Spruce lanes have no current release evidence.",
+          "repair": "Supply frozen wallet profiles, real mDL fixtures, routes, and complete both device runs.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-04",
+      "slug": "employee-onboarding-secure-access",
+      "title": "Employee Onboarding and Secure Access",
+      "actor": "New employee, organization reviewer, and facility verifier",
+      "businessGoal": "Approve an employee’s access and prove that a later suspension removes that access.",
+      "driver": {
+        "status": "IMPLEMENTED_REQUIRES_BETA",
+        "entrypoints": [
+          "marty-ui:tests/scripts/audit-beta-employee-access.js"
+        ],
+        "localAlignmentStatus": "CONSOLE_APPROVAL_AND_ISSUANCE_IMPLEMENTED_FRESH_CAPTURE_NOT_RUN"
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic employee claims and scripted temporary security review"
+        ],
+        "native": [],
+        "external": [
+          "Deployed beta, administrator/applicant identities, first-party wallet, trusted signing and verification profiles"
+        ],
+        "scope": [
+          "Application creation and submission are API fixture setup. The main qualification path uses the real administrator UI for approval, issuance invitation, and suspension; reviewer-lock acquisition and release remain scoped API operations.",
+          "These locally implemented UI actions still require a fresh deployed run and source-bound recording."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "action-pacing",
+          "detail": "Local action recording adds holds, click landmarks, business reasons, and explicit verification evidence. Source-specific camera, narration, and captions remain unbound.",
+          "repair": "Bind measured footage to the profile and review the active allow and later suspension denial in the same numbered story.",
+          "qualificationNeedsBackend": false
+        },
+        {
+          "id": "fresh-review-ui-qualification",
+          "status": "LOCAL_IMPLEMENTATION_COMPLETE_CAPTURE_PENDING",
+          "detail": "Approval, invitation creation, and pre-success presentation guards now use the local supported console implementation. A new deployed run and source-bound recording have not qualified those changes.",
+          "repair": "Capture the real reviewer and wallet sequence on the exact deployed revision, retain exact-ID cleanup, and bind its frames and report to lifecycle-v1.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-05",
+      "slug": "membership-badge-login",
+      "title": "Membership Badge and Login",
+      "actor": "Member choosing a wallet and signing in with the issued badge",
+      "businessGoal": "Replace a password-backed session with a new session authenticated by the member’s credential.",
+      "driver": {
+        "status": "PRIMARY_IMPLEMENTED_SUPPORT_DRIVER_EXTERNAL",
+        "entrypoints": [
+          "marty-ui:tests/scripts/verify-beta-credential-login.js"
+        ],
+        "externalDriver": {
+          "path": "tests/scripts/audit-beta-membership-support.js",
+          "revision": "4181ec0cee37e9262ae9533eeafcc8f43b014d7e",
+          "availability": "SEPARATE_PINNED_CHECKOUT_REQUIRED"
+        },
+        "requiredAndroidLanes": [
+          "spruceid-same-device-happy",
+          "spruceid-same-device-cancel",
+          "spruceid-same-device-untrusted-issuer",
+          "spruceid-same-device-expired-offer"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 5,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Existing approved synthetic membership application"
+        ],
+        "native": [
+          "Pinned Spruce Android profile for the required independent same-device lanes"
+        ],
+        "external": [
+          "Deployed membership and credential-login services",
+          "First-party wallet",
+          "Pinned external support-driver checkout"
+        ],
+        "scope": [
+          "The browser control disables the platform DigitalCredential handoff; its successful login is not independent Android evidence."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "support-driver",
+          "detail": "The two support configs reference a pinned driver absent from the current UI checkout.",
+          "repair": "Provide and review the exact pinned support checkout or port it with its source binding; do not silently skip the negative lanes.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "android-evidence",
+          "detail": "The control driver does not qualify the required Spruce device behavior.",
+          "repair": "Capture the four frozen Spruce lanes and verify real package transitions plus backend session state.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "draft-captions",
+          "detail": "Supporting transcripts are short draft summaries, not captions aligned to source footage.",
+          "repair": "After capture, replace the readable draft summaries with a complete narration-input VTT against the intended edit. Synthesize it and pass the exact same VTT to --spoken-captions; review the displayed timing derived from rendered cues.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": "D-06",
+      "slug": "credential-lifecycle",
+      "title": "Credential Lifecycle",
+      "actor": "Organization administrator managing one synthetic employee’s access",
+      "businessGoal": "Extend, pause, restore, and end employee access with visible controls and verified access consequences.",
+      "driver": {
+        "status": "AUDITED_DRIVER_EXISTS_REFERENCE_PRESENTATION_TO_PORT",
+        "entrypoints": [
+          "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js"
+        ],
+        "referenceUiRevision": "50f314f",
+        "localAlignmentStatus": "SELECTIVE_REFERENCE_PORT_IMPLEMENTED_FRESH_CAPTURE_NOT_RUN"
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "One synthetic employee and scripted business events"
+        ],
+        "native": [],
+        "external": [
+          "Deployed beta lifecycle and verification services",
+          "Governed source template and trust/status profiles",
+          "First-party wallet"
+        ],
+        "scope": [
+          "API calls prepare fixtures and request verification; they are not depicted as administrator UI actions.",
+          "Verifier result panels are labeled test evidence, not an unshown customer gate."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "fresh-reference-port-qualification",
+          "detail": "The local runner now combines live fixture/seal/bind/COMPLETE, initial active allow, renewal lineage, business action holds, and pre-success result guards with the audited exact-ID ownership fixes.",
+          "repair": "Run the exact deployed source and capture a new complete lifecycle story; preserve current ownership and uncertain-outcome cleanup and qualify only after successful finalization.",
+          "qualificationNeedsBackend": true,
+          "status": "LOCAL_IMPLEMENTATION_COMPLETE_CAPTURE_PENDING"
+        },
+        {
+          "id": "frame-binding",
+          "detail": "Reference action-event timestamps explicitly do not establish source-frame alignment.",
+          "repair": "Measure actual source frames before binding crops, pointers, captions, and narration.",
+          "qualificationNeedsBackend": false
+        },
+        {
+          "id": "reference-review",
+          "detail": "The retained campaign story remains pending human review.",
+          "repair": "Review the exact new render; do not inherit the reference master’s review or qualification state.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": "D-07",
+      "slug": "canvas-learning-achievement",
+      "title": "Portable Learning Achievement with Canvas",
+      "actor": "Learner claiming an achievement from a stock Canvas course",
+      "businessGoal": "Convert authoritative course evidence into a portable, governed Open Badge.",
+      "driver": {
+        "status": "IMPLEMENTED_REQUIRES_STOCK_CANVAS_AND_ATTESTATION",
+        "entrypoints": [
+          "demos/canvas-learning-achievement.hooks.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Seeded learner, course assignment, and controlled grades"
+        ],
+        "native": [],
+        "external": [
+          "Pinned unmodified stock Canvas deployment",
+          "Standard LTI and Canvas APIs",
+          "Matching beta integration",
+          "Fresh full portability attestation",
+          "Configured stable UI test IDs"
+        ],
+        "scope": [
+          "The existing hook records seeded stock Canvas UI, not a custom mock Canvas screen.",
+          "Hosted New Quizzes is a separate requirement; Canvas Credentials is outside this gate."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "portability-prerequisite",
+          "detail": "No current release-bound portability receipt is supplied by this plan.",
+          "repair": "Run the full stock-Canvas contract against the deployed source before recording.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "negative-on-screen",
+          "detail": "The negative beat currently asserts prerequisite cases while displaying narration.",
+          "repair": "Add separately captured real grade-correction/denial footage or clearly mark it as supporting evidence; never present an attestation as an unseen click.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-08",
+      "slug": "external-evidence-to-credential",
+      "title": "External Evidence to Credential",
+      "actor": "Evidence reviewer and credential holder",
+      "businessGoal": "Make credential eligibility follow the current evidence while preserving governed review after issuance.",
+      "driver": {
+        "status": "IMPLEMENTED_VIA_CANVAS_PORTABILITY_LANE",
+        "entrypoints": [
+          "demos/canvas-learning-achievement.hooks.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Controlled Canvas score revisions and synthetic holder"
+        ],
+        "native": [],
+        "external": [
+          "Stock Canvas, beta LTI/evidence integration, fresh full portability attestation"
+        ],
+        "scope": [
+          "This implementation demonstrates Canvas as the external evidence source, not every external system or arbitrary evidence ingestion."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "generic-title-boundary",
+          "detail": "The current executable source is Canvas-specific.",
+          "repair": "Name the source in the opening and narration; qualify another source before making a broader demonstration claim.",
+          "qualificationNeedsBackend": false
+        },
+        {
+          "id": "correction-footage",
+          "detail": "The central correction and conflict beats are imported attestation facts rather than visible actions.",
+          "repair": "Capture real correction and review transitions, retain their evidence revision links, and compose them as measured source segments.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-09",
+      "slug": "offline-facility-verification",
+      "title": "Offline Facility Verification",
+      "actor": "Facility checkpoint operator using Marty Verifier",
+      "businessGoal": "Verify against governed local trust when offline, retain the audit event, and fail closed when trust becomes stale.",
+      "driver": {
+        "status": "IMPLEMENTED_NATIVE_WITH_LOCAL_REPORTING_RECEIVER",
+        "entrypoints": [
+          "demos/offline-facility-verification.hooks.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 5,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Generated signed DTC specimen and USB trust package"
+        ],
+        "native": [
+          "Approved Windows Tauri verifier and fixture generator"
+        ],
+        "external": [
+          "Loopback reporting receiver created by the recorder"
+        ],
+        "scope": [
+          "Liveness is disabled in this specimen lane.",
+          "Reconnect currently proves native delivery and acknowledgment to a local test receiver, not durable ingestion by a deployed cloud audit service."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "native-runtime",
+          "detail": "The approved native checkout and executable are external to the audited workspace.",
+          "repair": "Supply the release-bound native build and keep each run’s native state isolated.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "cloud-sync-boundary",
+          "detail": "The reporting endpoint is a recorder-owned HTTP collector returning 204.",
+          "repair": "Label this as local receiver acknowledgment; add a distinct deployed audit-ingestion lane before claiming production cloud synchronization.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": "D-10",
+      "slug": "organization-primitives",
+      "title": "Organization and MIP Primitives",
+      "actor": "Organization administrator preparing an operational credential environment",
+      "businessGoal": "Configure the organization’s issuer, trust, templates, policies, flows, and scoped API access with verified dependencies.",
+      "driver": {
+        "status": "IMPLEMENTED_CONFIGURATION_AUDIT_WITH_KMS_INPUT_GAP",
+        "entrypoints": [
+          "marty-ui:scripts/beta_org_console_audit.py"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 5,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Run-scoped organization and resource names"
+        ],
+        "native": [],
+        "external": [
+          "Deployed beta administrative console and identity provider",
+          "Reachable signing service and governed trust configuration"
+        ],
+        "scope": [
+          "This scenario configures and checks resource relationships; it does not itself prove end-to-end issuance/presentation.",
+          "The current KMS form helper enters https://kms.audit.invalid/transit and synthetic key/secret references."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "placeholder-kms",
+          "detail": "The current form helper supplies an intentionally invalid KMS URL and synthetic connection references.",
+          "repair": "Accept reviewed real signing-service inputs, reject placeholders before claiming an operational signer, and verify discovery against the selected service.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "scope-of-success",
+          "detail": "Active configuration records alone do not demonstrate a successful credential transaction.",
+          "repair": "Keep the claim focused on linked configuration, or add a separately evidenced issue/present transaction using these exact resources.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "long-form-pacing",
+          "detail": "The broad audit visits many forms and snapshots without one short guided scenario.",
+          "repair": "Use the five numbered beats, keep real selection/save actions visible, and move repetitive setup into clearly identified supporting evidence.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": "D-11",
+      "slug": "external-admissions-gateway-webhooks",
+      "title": "External Admissions Gateway and Webhooks",
+      "actor": "Northstar admissions operator and integration developer",
+      "businessGoal": "Approve a learner through a least-privilege integration and complete enrollment only from an authentic, correlated event.",
+      "driver": {
+        "status": "IMPLEMENTED_REQUIRES_PARTNER_AND_PROTECTED_FIXTURE",
+        "entrypoints": [
+          "demos/external-admissions-gateway-webhooks.hooks.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 5,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic Northstar learner and fresh submitted application"
+        ],
+        "native": [],
+        "external": [
+          "Deployed Northstar partner app",
+          "Marty public gateway and real webhook pipeline",
+          "Protected run fixture and scoped API keys"
+        ],
+        "scope": [
+          "Northstar is the example partner, not a native Marty admissions screen.",
+          "Signature and duplicate probes use explicitly identified partner test endpoints."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "protected-fixture",
+          "detail": "Fresh owned application, subscription, webhook, and keys must be prepared outside visible partner actions.",
+          "repair": "Validate the protected fixture and label preparation separately from the recorded approval.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "lane-composition",
+          "detail": "The primary and supporting negative runs are separate configs.",
+          "repair": "Compose a clear main story and retain the individual uncut evidence lanes; bind all footage to the same release and reviewed fixture scopes.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": "D-12",
+      "slug": "physical-passport-issuance-evidence",
+      "title": "Passport Issuance Simulator Evidence",
+      "actor": "Passport software reviewer following one synthetic bureau job",
+      "businessGoal": "Inspect the software issuance chain and verify signed simulator callback handling without implying a physical booklet was produced.",
+      "driver": {
+        "status": "IMPLEMENTED_RECEIPT_BOUND_SIMULATOR_RECORDING",
+        "entrypoints": [
+          "marty-ui:tests/scripts/audit-beta-physical-passport-flow.js",
+          "marty-ui:tests/scripts/record-beta-passport-negative-callbacks.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 5,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic passport data and one Marty bureau simulator job"
+        ],
+        "native": [
+          "Native Rust issuance, managed CSCA/DSC signing, and simulator callback integration"
+        ],
+        "external": [
+          "Signed aggregate deployment receipt",
+          "Protected preliminary workflow artifact and private plan",
+          "Protected negative videos and scans",
+          "Beta operator access"
+        ],
+        "scope": [
+          "Simulator evidence only: no physical passport booklet, chip personalization, or physical bureau production is verified.",
+          "The main capture reviews an already executed flow; it is not live creation of a passport job."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "protected-artifacts",
+          "detail": "The recording requires the exact protected preliminary and negative artifacts; functional-rerun without media is unsupported.",
+          "repair": "Retain the existing fail-closed receipt/video contract and provide the reviewed source-bound artifacts.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "on-screen-evidence",
+          "detail": "The current primary capture largely holds one Flow Instance while changing explanatory notes.",
+          "repair": "Use measured footage of actual profile, step, and callback evidence surfaces; label prerequisite evidence and preserve the simulator boundary.",
+          "qualificationNeedsBackend": false
+        }
+      ]
+    },
+    {
+      "demoId": null,
+      "slug": "first-party-browser-wallet",
+      "title": "First-Party Browser Wallet",
+      "actor": "Holder using the internal first-party wallet control",
+      "businessGoal": "Demonstrate actual credential receipt, storage, presentation, and authentication while making the internal-control boundary clear.",
+      "driver": {
+        "status": "RETAINED_CAPABILITY_NO_DEDICATED_CURRENT_RELEASE_CONFIG",
+        "entrypoints": [
+          "marty-ui:tests/scripts/verify-beta-credential-login.js",
+          "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic holder claims only"
+        ],
+        "native": [],
+        "external": [
+          "Internal first-party wallet service and deployed beta"
+        ],
+        "scope": [
+          "Existing API reset behavior is shared-state control behavior; public per-session isolation is not established."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "retained-config",
+          "detail": "The current catalog preserves this case but has no dedicated current-release recording config.",
+          "repair": "Create a retained-case config with its own scope and source-bound assertions; do not reuse old media as new qualification.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "public-isolation",
+          "detail": "Historical public-wallet isolation and packaging remain unqualified.",
+          "repair": "Either present the internal control accurately or implement and qualify the separate public-wallet isolation/expiry requirements.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    },
+    {
+      "demoId": null,
+      "slug": "independent-wallet-interoperability",
+      "title": "Independent Wallet Interoperability",
+      "actor": "Holder using a pinned wallet built independently of ElevenID",
+      "businessGoal": "Prove a real independent wallet accepts the unchanged canonical issuance and presentation contracts.",
+      "driver": {
+        "status": "RETAINED_UNQUALIFIED_WITH_ANDROID_GATE_INFRASTRUCTURE",
+        "entrypoints": [
+          "src/androidReleaseGateway.js",
+          "src/androidRecorder.js",
+          "marty-ui:tests/scripts/verify-beta-waltid-acceptance.js"
+        ]
+      },
+      "captureBinding": "UNBOUND",
+      "storyBeatCount": 4,
+      "currentEvidence": {
+        "stackVersion": "2026.08.0",
+        "catalogState": "DRAFT",
+        "catalogAssertions": "NOT_RUN",
+        "currentReleaseMedia": "MISSING",
+        "functionalQualification": "NOT_ESTABLISHED",
+        "sourceBoundRender": "NOT_CREATED"
+      },
+      "dependencies": {
+        "synthetic": [
+          "Synthetic holders and governed test credentials"
+        ],
+        "native": [
+          "Pinned independent wallet APKs and Android browser/device profiles"
+        ],
+        "external": [
+          "Final-protocol deployed issuance and verifier",
+          "Frozen device fixtures and public callback routes"
+        ],
+        "scope": [
+          "walt.id issuance acceptance alone does not prove DCQL presentation.",
+          "Independent vendor support must be established per exact build, protocol, format, and scenario."
+        ]
+      },
+      "gaps": [
+        {
+          "id": "current-pass-missing",
+          "detail": "The retained current-release entry has no fresh independent-wallet evidence or dedicated demo config.",
+          "repair": "Add the dedicated retained-case config and qualify exact builds without downgrading requests.",
+          "qualificationNeedsBackend": true
+        },
+        {
+          "id": "historical-blocker",
+          "detail": "The historical independent lane is explicitly blocked for final DCQL support.",
+          "repair": "Retest a supported pinned candidate and keep incompatible builds blocked; do not promote issuance-only success.",
+          "qualificationNeedsBackend": true
+        }
+      ]
+    }
+  ],
+  "priorOpenBoundariesRetained": [
+    {
+      "id": "DA-014",
+      "status": "OPEN",
+      "boundary": "D12 recording-free qualification remains unsupported and is refused before setup."
+    },
+    {
+      "id": "DA-016",
+      "status": "FOLLOW_UP",
+      "boundary": "Shared wallet reset and revocation-profile ownership are not qualified for concurrent runs."
+    }
+  ],
+  "sourceReferences": "source-references.json",
+  "verification": "verification.json",
+  "productionQualificationPerformed": false,
+  "actualDemosRerendered": 0,
+  "qualificationUpgrades": 0
+}

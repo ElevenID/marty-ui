@@ -392,6 +392,18 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "application",
         ),
         rule(
+            r"^/v1/organizations/[^/]+/applicants(?:/[^/]+)?$",
+            &[
+                ("GET", "application:view"),
+                ("HEAD", "application:view"),
+                ("OPTIONS", "application:view"),
+                ("POST", "application:review"),
+                ("PATCH", "application:review"),
+                ("DELETE", "application:review"),
+            ],
+            "application",
+        ),
+        rule(
             r"^/v1/organizations/[^/]+/applicants(?:/.*)?$",
             &[
                 ("GET", "application:review"),
@@ -544,6 +556,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/audit-events/export$",
             &[("GET", "audit:export")],
+            "audit",
+        ),
+        rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/offline-verification-events(?:/[^/]+)?$",
+            &[("GET", "audit:ingest"), ("POST", "audit:ingest")],
             "audit",
         ),
         rule(
@@ -874,6 +891,11 @@ pub fn skips_tenant_authorization(path: &str) -> bool {
 
 pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    // Offline event ingestion is an explicitly granted reporting capability;
+    // broad legacy keys and audit readers do not gain a new write boundary.
+    if required_permission == "audit:ingest" {
+        return scopes.contains("audit:write");
+    }
     // DSC issuance requires a tenant-bound human operator grant. API keys,
     // including broad legacy scopes, must not mint document certificates.
     if matches!(
@@ -1148,5 +1170,28 @@ mod tests {
             ),
             Err(TenantAuthorizationFailure::ApiKeyOrganizationMismatch)
         );
+    }
+
+    #[test]
+    fn applicant_read_key_cannot_review_or_approve() {
+        let collection = "/v1/organizations/org-1/applicants";
+        let item = "/v1/organizations/org-1/applicants/app-1";
+        let read_scopes = ["applications:read".to_owned()];
+        for path in [collection, item] {
+            let permission = resolve_action("GET", path)
+                .expect("applicant read route")
+                .permission;
+            assert_eq!(permission, "application:view");
+            assert!(api_key_allowed(permission, &read_scopes));
+            for method in ["POST", "PATCH", "DELETE"] {
+                if let Some(write) = resolve_action(method, path) {
+                    assert!(!api_key_allowed(write.permission, &read_scopes));
+                }
+            }
+        }
+        let approve = resolve_action("POST", "/v1/organizations/org-1/applicants/app-1/approve")
+            .expect("approval route");
+        assert_eq!(approve.permission, "application:approve");
+        assert!(!api_key_allowed(approve.permission, &read_scopes));
     }
 }

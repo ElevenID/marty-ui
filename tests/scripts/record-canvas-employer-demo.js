@@ -79,8 +79,6 @@ const resolvedConsoleProvenanceUrl = resolveSeededDemoUrl(
   'console_provenance',
   DEFAULT_CONSOLE_PROVENANCE_URL,
 );
-requireIntentionalFallback('CANVAS_DEMO_CANVAS_DISPLAY_URL', resolvedCanvasDisplayUrl);
-requireIntentionalFallback('CANVAS_DEMO_CONSOLE_PROVENANCE_URL', resolvedConsoleProvenanceUrl);
 
 const canvasDisplayUrl = resolvedCanvasDisplayUrl.url;
 const consoleProvenanceUrl = toConsoleCanvasProvenanceUrl(resolvedConsoleProvenanceUrl.url);
@@ -108,8 +106,8 @@ const artifactsDir = path.resolve(__dirname, '..', 'artifacts', 'canvas-employer
 const finalVideoPath = path.join(artifactsDir, 'canvas-employer-demo.webm');
 const stepLogPath = path.join(artifactsDir, 'canvas-employer-demo-steps.json');
 const viewport = { width: 1600, height: 950 };
-const demoStartedAt = new Date().toISOString();
 const demoSteps = [];
+const badgeName = 'Interoperable Credentials Foundations Badge';
 
 function ensureCleanArtifactDir() {
   fs.rmSync(artifactsDir, { recursive: true, force: true });
@@ -182,19 +180,11 @@ async function isVisibleText(page, text, timeout = 8000) {
 }
 
 async function gotoFeaturePage(page, url, expectedText, unavailableTitle, unavailableDetail) {
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => undefined);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   if (await isVisibleText(page, expectedText, 12000)) {
     return true;
   }
   await showStep(page, unavailableTitle, unavailableDetail);
-  return false;
-}
-
-async function tryClickFirstVisible(locator) {
-  if (await locator.first().isVisible({ timeout: 5000 }).catch(() => false)) {
-    await locator.first().click();
-    return true;
-  }
   return false;
 }
 
@@ -224,6 +214,8 @@ async function tryContinueIntoElevenId(page, frame) {
     return false;
   }
 
+  await page.getByTestId('canvas-application-context').waitFor({ state: 'visible', timeout: 15000 });
+
   await showStep(
     page,
     'Normal credential application is preselected',
@@ -251,22 +243,34 @@ async function tryShowLearnerIdentity(page) {
   );
   if (!visible) return false;
 
+  const badge = page.getByText(badgeName, { exact: true }).first();
+  await badge.waitFor({ state: 'visible', timeout: 15000 });
+  await badge.scrollIntoViewIfNeeded();
+  // MyIdentityPage renders credential-specific accessible names. Application
+  // rows use a Details button, so scope that fallback to this badge's row.
+  const credentialDetails = page.getByRole('button', { name: `View ${badgeName} details`, exact: true });
+  if (await credentialDetails.count()) {
+    await credentialDetails.click();
+  } else {
+    const badgeRow = badge.locator('xpath=ancestor::*[.//button[normalize-space()="Details"]][1]');
+    await badgeRow.getByRole('button', { name: 'Details', exact: true }).click();
+  }
+  const details = page.getByRole('dialog');
+  await details.getByText(badgeName, { exact: true }).waitFor({ state: 'visible' });
+  await details.getByTestId('identity-canvas-source').waitFor({ state: 'visible' });
+  await details.getByTestId('identity-canvas-delivery').waitFor({ state: 'visible' });
   await showStep(
     page,
     'Learner sees the badge in My Identity',
     'The Canvas-earned badge appears as a normal learner credential/application, with badge artwork, claim state, source context, and mirror delivery metadata.',
   );
 
-  await page.getByText('Interoperable Credentials Foundations Badge', { exact: false }).first().scrollIntoViewIfNeeded().catch(() => undefined);
-  const detailsButtons = page.getByRole('button', { name: /details/i });
-  if (await tryClickFirstVisible(detailsButtons)) {
-    await showStep(
-      page,
-      'Credential details include Canvas source and delivery',
-      'The details modal separates application status from claim status and shows Canvas course source plus Canvas Credentials mirror delivery when present.',
-    );
-    await page.getByRole('button', { name: /close/i }).first().click().catch(() => undefined);
-  }
+  await showStep(
+    page,
+    'Credential details include Canvas source and delivery',
+    'The details modal shows this badge, its Canvas source, and its mirror delivery metadata. These displayed fields do not qualify a wallet or provider portability test.',
+  );
+  await details.getByRole('button', { name: /close/i }).click();
   return true;
 }
 
@@ -281,23 +285,22 @@ async function tryShowCredentialTemplateDestinations(page) {
   if (!visible) return false;
 
   const destinationsTab = page.getByRole('tab', { name: /destinations/i }).first();
-  if (await destinationsTab.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await destinationsTab.click();
-  }
+  await destinationsTab.waitFor({ state: 'visible', timeout: 10000 });
+  await destinationsTab.click();
+  await waitForVisibleText(page, 'Canvas Credentials');
   await showStep(
     page,
     'Credential template owns destinations',
     'Canvas Credentials is shown as an organization-managed destination for this badge, not a student wallet. Projection policy limits Canvas to the public badge view.',
   );
 
-  if (await isVisibleText(page, 'Mirror health', 5000)) {
-    await page.getByText('Mirror health', { exact: false }).first().scrollIntoViewIfNeeded().catch(() => undefined);
-    await showStep(
-      page,
-      'Mirror health is visible per badge',
-      'Admins can see pending, failed, delivered, lifecycle sync, and alert counts for the Canvas mirror tied to this credential template.',
-    );
-  }
+  await waitForVisibleText(page, 'Mirror health');
+  await page.getByText('Mirror health', { exact: false }).first().scrollIntoViewIfNeeded();
+  await showStep(
+    page,
+    'Mirror health is visible per badge',
+    'The template displays mirror health for its Canvas destination. Counts on this screen are not an assertion that a real external provider delivery occurred.',
+  );
   return true;
 }
 
@@ -310,6 +313,9 @@ async function tryShowCanvasAdmin(page) {
     'The recorder signs in as the Canvas demo admin for this section. Run Keycloak setup if canvas.admin@marty.demo is not available yet.',
   );
   if (!visible) return false;
+
+  await page.getByTestId('canvas-readiness').waitFor({ state: 'visible', timeout: 15000 });
+  await page.getByTestId('canvas-mirror-ops').waitFor({ state: 'visible', timeout: 15000 });
 
   await showStep(
     page,
@@ -363,15 +369,15 @@ async function tryShowConsoleVerification(page) {
   );
 
   const newVerification = page.getByRole('button', { name: /new verification/i }).first();
-  if (await newVerification.isVisible({ timeout: 5000 }).catch(() => false)) {
-    await newVerification.click();
-    await page.getByText('Select Policy', { exact: false }).first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => undefined);
-    await showStep(
-      page,
-      'OID4VP request starts from policy',
-      'The verifier can start from a saved verification flow, generate a wallet request, and see Open Badge trust, status, claims, and Canvas mirror metadata in the result.',
-    );
-  }
+  await newVerification.waitFor({ state: 'visible', timeout: 10000 });
+  await newVerification.click();
+  const dialog = page.getByRole('dialog', { name: 'New Verification Session', exact: true });
+  await dialog.getByText('Select Policy', { exact: true }).waitFor({ state: 'visible', timeout: 10000 });
+  await showStep(
+    page,
+    'Verification setup starts from policy',
+    'The policy selection dialog is open. This walkthrough does not generate a verification request or prove a wallet presentation result.',
+  );
 
   return true;
 }
@@ -452,8 +458,8 @@ async function waitForDemoAdminSession(page) {
 
 async function signIntoDemoAdmin(page, targetUrl) {
   if (useConsoleStorageState) {
-    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => undefined);
-    return true;
+    await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    return Boolean(await waitForDemoAdminSession(page));
   }
 
   await showStep(
@@ -541,142 +547,186 @@ async function waitForCanvasLtiFrame(page) {
   throw new Error('Timed out waiting for Canvas LTI experience frame.');
 }
 
-async function main() {
-  ensureCleanArtifactDir();
+const REQUIRED_CHECKPOINTS = [
+  'canvas_lti_launch', 'elevenid_application', 'learner_identity', 'admin_session',
+  'template_destinations', 'canvas_admin', 'sandbox_display', 'console_provenance',
+  'verification_setup',
+];
 
-  const browser = await chromium.launch({
-    headless: process.env.PLAYWRIGHT_HEADED !== '1',
-    slowMo: 140,
-  });
-  const contextOptions = {
-    ignoreHTTPSErrors: true,
-    recordVideo: { dir: artifactsDir, size: viewport },
-    userAgent:
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-    viewport,
+function createRunReport() {
+  return {
+    scope: 'LEGACY_CANVAS_SANDBOX_WALKTHROUGH',
+    qualifies_as_real_oss_portability: false,
+    status: 'RUNNING',
+    started_at: new Date().toISOString(),
+    completed_at: null,
+    finished_at: null,
+    video: null,
+    failure: null,
+    finalization_errors: [],
+    checkpoints: [],
+    urls: {
+      canvas_login: canvasLoginUrl,
+      canvas_assignment: canvasAssignmentUrl,
+      applicant_identity: applicantIdentityUrl,
+      credential_template: credentialTemplateUrl,
+      canvas_admin: canvasAdminUrl,
+      canvas_display: canvasDisplayUrl,
+      canvas_display_source: resolvedCanvasDisplayUrl.source,
+      console_canvas_provenance: consoleProvenanceUrl,
+      console_canvas_provenance_source: resolvedConsoleProvenanceUrl.source,
+      console_verify: consoleVerifyUrl,
+      console_auth: useConsoleStorageState ? 'storage_state' : 'canvas_demo_admin',
+      console_admin_email: canvasDemoAdminEmail,
+      console_storage_state: consoleStorageState || null,
+    },
+    // Overlay narration is retained separately from required checkpoint results.
+    steps: demoSteps,
   };
-  if (useConsoleStorageState) {
-    contextOptions.storageState = consoleStorageState;
-  }
-  const context = await browser.newContext(contextOptions);
-  const page = await context.newPage();
-
-  try {
-    await signIntoCanvas(page);
-    await showStep(
-      page,
-      'Canvas course context is active',
-      'The learner is enrolled in ElevenID LTI Test Course, which contains the launch assignment and quiz-backed badge scenario.',
-    );
-
-    await page.goto(canvasAssignmentUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await waitForVisibleText(page, 'Submitting an external tool', 60000);
-    await showStep(
-      page,
-      'Canvas launches ElevenID through LTI',
-      'The assignment is an external tool placement, so Canvas sends a signed LTI launch instead of a hand-built link.',
-    );
-
-    const ltiFrame = await waitForCanvasLtiFrame(page);
-    await showStep(
-      page,
-      'LTI launch is verified and bound',
-      'ElevenID validates the Canvas launch, resolves the Canvas Platform and Program Binding, and selects the correct credential application.',
-    );
-
-    await tryContinueIntoElevenId(page, ltiFrame);
-
-    await showStep(
-      page,
-      'AGS quiz score becomes policy input',
-      'The seeded demo submits a signed Canvas AGS score event. MIP normalizes it into an EvidenceFact and Cedar permits approval.',
-    );
-
-    await tryShowLearnerIdentity(page);
-    await signIntoDemoAdmin(page, credentialTemplateUrl);
-    await tryShowCredentialTemplateDestinations(page);
-    await tryShowCanvasAdmin(page);
-
-    await page.goto(canvasDisplayUrl, { waitUntil: 'networkidle', timeout: 45000 });
-    await waitForVisibleText(page, 'Canvas Credentials');
-    await showStep(
-      page,
-      'Canvas destination sandbox shows the badge',
-      'This beta page simulates the external Canvas Credentials destination while the canonical credential stays in ElevenID.',
-    );
-
-    await showStep(
-      page,
-      'Mirror is delivery metadata',
-      'The mirrored record carries the canonical credential ID, issuer DID, subject DID, and Canvas account context.',
-    );
-
-    await showConsoleCanvasProvenance(page);
-    await showStep(
-      page,
-      'Canvas mirror provenance is in the console',
-      'The support lookup now lives in the organization verification console, so Canvas mirror resolution is part of the normal admin workflow.',
-    );
-
-    await page.getByTestId('canvas-provenance-result').getByText('Issuer DID', { exact: false }).first().scrollIntoViewIfNeeded();
-    await showStep(
-      page,
-      'Issuer identity stays external',
-      'The issuer DID and remote-key-backed Marty identity remain outside Canvas while Canvas receives a useful badge mirror.',
-    );
-
-    await tryShowConsoleVerification(page);
-    await removeStepOverlay(page);
-    await pause(page, 1600);
-  } finally {
-    const video = page.video();
-    await page.close();
-    if (video) {
-      const rawVideoPath = await video.path();
-      await video.saveAs(finalVideoPath);
-      if (rawVideoPath !== finalVideoPath && fs.existsSync(rawVideoPath)) {
-        fs.rmSync(rawVideoPath);
-      }
-    }
-    await context.close();
-    await browser.close();
-  }
-
-  fs.writeFileSync(
-    stepLogPath,
-    JSON.stringify(
-      {
-        started_at: demoStartedAt,
-        completed_at: new Date().toISOString(),
-        video: finalVideoPath,
-        urls: {
-          canvas_login: canvasLoginUrl,
-          canvas_assignment: canvasAssignmentUrl,
-          applicant_identity: applicantIdentityUrl,
-          credential_template: credentialTemplateUrl,
-          canvas_admin: canvasAdminUrl,
-          canvas_display: canvasDisplayUrl,
-          canvas_display_source: resolvedCanvasDisplayUrl.source,
-          console_canvas_provenance: consoleProvenanceUrl,
-          console_canvas_provenance_source: resolvedConsoleProvenanceUrl.source,
-          console_verify: consoleVerifyUrl,
-          console_auth: useConsoleStorageState ? 'storage_state' : 'canvas_demo_admin',
-          console_admin_email: useConsoleStorageState ? null : canvasDemoAdminEmail,
-          console_storage_state: consoleStorageState || null,
-        },
-        steps: demoSteps,
-      },
-      null,
-      2,
-    ),
-    'utf8',
-  );
-
-  console.log(`VIDEO: ${finalVideoPath}`);
-  console.log(`STEPS: ${stepLogPath}`);
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exitCode = 1;
-});
+async function runCanvasJourney(page, report, overrides = {}) {
+  let ltiFrame;
+  const actions = {
+    canvas_lti_launch: async () => {
+      await signIntoCanvas(page);
+      await page.goto(canvasAssignmentUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await waitForVisibleText(page, 'Submitting an external tool', 60000);
+      await showStep(page, 'Canvas launches ElevenID through LTI',
+        'The configured Canvas assignment has loaded its external tool placement.');
+      ltiFrame = await waitForCanvasLtiFrame(page);
+      await showStep(page, 'LTI launch is verified and bound',
+        'The embedded ElevenID experience reports a verified Canvas launch.');
+      return true;
+    },
+    elevenid_application: () => tryContinueIntoElevenId(page, ltiFrame),
+    learner_identity: () => tryShowLearnerIdentity(page),
+    admin_session: () => signIntoDemoAdmin(page, credentialTemplateUrl),
+    template_destinations: () => tryShowCredentialTemplateDestinations(page),
+    canvas_admin: () => tryShowCanvasAdmin(page),
+    sandbox_display: async () => {
+      await page.goto(canvasDisplayUrl, { waitUntil: 'networkidle', timeout: 45000 });
+      await waitForVisibleText(page, 'Canvas Credentials');
+      await waitForVisibleText(page, badgeName);
+      await showStep(page, 'Canvas destination sandbox shows the badge',
+        'This page simulates the Canvas Credentials destination. It does not establish delivery to a real external provider.');
+      return true;
+    },
+    console_provenance: async () => {
+      await showConsoleCanvasProvenance(page);
+      await page.getByTestId('canvas-provenance-result').getByText('Issuer DID', { exact: false }).first().scrollIntoViewIfNeeded();
+      await showStep(page, 'Canvas mirror provenance is in the console',
+        'The console resolved the configured mirror lookup and displays its issuer DID. This lookup does not prove remote key custody or wallet presentation.');
+      return true;
+    },
+    verification_setup: () => tryShowConsoleVerification(page),
+    ...overrides,
+  };
+
+  for (const name of REQUIRED_CHECKPOINTS) {
+    const checkpoint = { name, status: 'RUNNING', started_at: new Date().toISOString() };
+    report.checkpoints.push(checkpoint);
+    try {
+      if (await actions[name]() !== true) {
+        throw new Error(`Required Canvas checkpoint did not complete: ${name}`);
+      }
+      checkpoint.status = 'PASSED';
+    } catch (error) {
+      checkpoint.status = 'FAILED';
+      checkpoint.error = error.message;
+      throw error;
+    } finally {
+      checkpoint.finished_at = new Date().toISOString();
+    }
+  }
+}
+
+function finishRunReport(report, error) {
+  const allPassed = report.checkpoints.length === REQUIRED_CHECKPOINTS.length
+    && report.checkpoints.every((checkpoint, index) => (
+      checkpoint.name === REQUIRED_CHECKPOINTS[index] && checkpoint.status === 'PASSED'
+    ));
+  report.finished_at = new Date().toISOString();
+  report.failure = error?.message || (allPassed ? null : 'Required Canvas checkpoints are incomplete');
+  report.status = report.failure ? 'FAILED' : 'COMPLETED';
+  report.completed_at = report.failure ? null : report.finished_at;
+  return report;
+}
+
+async function main() {
+  // Refused configuration must not erase an earlier recording.
+  requireIntentionalFallback('CANVAS_DEMO_CANVAS_DISPLAY_URL', resolvedCanvasDisplayUrl);
+  requireIntentionalFallback('CANVAS_DEMO_CONSOLE_PROVENANCE_URL', resolvedConsoleProvenanceUrl);
+  ensureCleanArtifactDir();
+  demoSteps.length = 0;
+  const report = createRunReport();
+  let browser;
+  let context;
+  let page;
+  let failure;
+  try {
+    browser = await chromium.launch({
+      headless: process.env.PLAYWRIGHT_HEADED !== '1',
+      slowMo: 140,
+    });
+    const contextOptions = {
+      ignoreHTTPSErrors: true,
+      recordVideo: { dir: artifactsDir, size: viewport },
+      userAgent:
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+      viewport,
+    };
+    if (useConsoleStorageState) contextOptions.storageState = consoleStorageState;
+    context = await browser.newContext(contextOptions);
+    page = await context.newPage();
+    await runCanvasJourney(page, report);
+    await removeStepOverlay(page);
+    await pause(page, 1600);
+  } catch (error) {
+    failure = error;
+  } finally {
+    // Preserve the first business/setup failure, attempt every close, and write
+    // a report even when recording finalization itself fails.
+    const finalize = async (name, operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        report.finalization_errors.push({ operation: name, error: error.message });
+        failure ||= error;
+      }
+    };
+    if (page) {
+      const video = page.video();
+      await finalize('page_close', () => page.close());
+      if (video) {
+        await finalize('video_save', async () => {
+          const rawVideoPath = await video.path();
+          await video.saveAs(finalVideoPath);
+          report.video = finalVideoPath;
+          if (rawVideoPath !== finalVideoPath && fs.existsSync(rawVideoPath)) fs.rmSync(rawVideoPath);
+        });
+      }
+    }
+    if (context) await finalize('context_close', () => context.close());
+    if (browser) await finalize('browser_close', () => browser.close());
+    finishRunReport(report, failure);
+    fs.writeFileSync(stepLogPath, JSON.stringify(report, null, 2), 'utf8');
+  }
+
+  console.log(`STEPS: ${stepLogPath}`);
+  if (failure || report.status !== 'COMPLETED') throw failure || new Error(report.failure);
+  console.log(`VIDEO: ${finalVideoPath}`);
+}
+
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
+}
+
+module.exports = {
+  REQUIRED_CHECKPOINTS, createRunReport, runCanvasJourney, finishRunReport, main,
+  tryContinueIntoElevenId, tryShowLearnerIdentity, tryShowCredentialTemplateDestinations,
+  tryShowCanvasAdmin, tryShowConsoleVerification, signIntoDemoAdmin,
+};

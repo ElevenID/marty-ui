@@ -1,0 +1,168 @@
+✔ requestedClaim emits the strict public presentation-policy DTO (1.792288ms)
+✔ compactObject removes only undefined values (0.199981ms)
+✔ requireJson reports bounded validation detail without leaking secret fields (0.97596ms)
+✔ safeErrorDetail bounds untrusted response strings (0.191809ms)
+✔ ensureActiveResource creates, validates, activates, and reloads one organization resource (0.603499ms)
+✔ ensureActiveResource fails closed for duplicate or inactive resources (0.319511ms)
+✔ governedIssuerTrustProfilePayload binds one exact SD-JWT issuer (0.29857ms)
+✔ resolveActiveIssuerDid selects one organization-owned issuance identity (1.329011ms)
+✔ resolveActiveIssuerDid fails closed for missing or ambiguous identities (0.468966ms)
+✔ ensureGovernedIssuer pins one public DID key and creates one trusted relationship (0.600133ms)
+✔ ensureGovernedIssuer fails closed without a pinned public key (0.238178ms)
+✔ conflict preflight blocks an existing application without withdrawing it (0.318329ms)
+✔ conflict preflight fails closed on malformed collections (0.124358ms)
+✔ conflict preflight checks later pages and permits only terminal or unrelated applications (0.575957ms)
+✔ existing draft configuration and foreign organization data never authorize activation (0.375255ms)
+✔ application issue response is correlated to its public transaction rather than its application id (0.505241ms)
+✔ console issuance retains exact transaction binding and uncertainty on mismatched responses (0.324159ms)
+✔ exact application and transaction selection ignores newer credentials from other runs (0.474734ms)
+✔ missing, ambiguous, cross-organization, or changed ownership is rejected before cleanup mutations (1.500159ms)
+✖ cleanup recovers an uncertain issuance and preserves its application after exact revocation readback (0.912634ms)
+✔ an outstanding offer, uncertain creation, or unconfirmed reviewer lock prevents complete cleanup (0.41892ms)
+✖ a successful HTTP status without confirmed mutation state is not successful cleanup (0.380933ms)
+✖ lost credential revoke response is resolved only by exact REVOKED readback (0.304829ms)
+✖ revoked unused offers retain exact application history without a withdrawal (0.256146ms)
+✖ credential retirement cannot hide a withdrawn, foreign, or unknown application readback (0.27225ms)
+✖ retirement readback rejects late transactions or credentials and unresolved terminal offers (3.623666ms)
+✖ an approved application with unknown issuance cannot turn a Rust withdrawal conflict into cleanup (0.233993ms)
+✔ pending offer cancellation proves application ownership and exact revoked transaction readback (0.336888ms)
+✔ pending cancellation refuses foreign bindings and existing credential records before mutations (0.503268ms)
+✔ lost cancellation response is reconciled only by the exact public revoked readback (0.403588ms)
+✔ HTTP success with a pending readback cannot clear transaction cancellation uncertainty (0.200081ms)
+✔ selectOrganization persists org mode before navigating and waits for UI restoration (0.454425ms)
+✔ selectOrganization fails closed without an eligible organization membership (0.183997ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 26
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 29.279989
+
+✖ failing tests:
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:541:1
+✖ cleanup recovers an uncertain issuance and preserves its application after exact revocation readback (0.912634ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:555:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:612:1
+✖ a successful HTTP status without confirmed mutation state is not successful cleanup (0.380933ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - true
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:627:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:631:1
+✖ lost credential revoke response is resolved only by exact REVOKED readback (0.304829ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:644:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:654:1
+✖ revoked unused offers retain exact application history without a withdrawal (0.256146ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  false !== true
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:666:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:674:1
+✖ credential retirement cannot hide a withdrawn, foreign, or unknown application readback (0.27225ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - false
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:690:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:697:1
+✖ retirement readback rejects late transactions or credentials and unresolved terminal offers (3.623666ms)
+  AssertionError [ERR_ASSERTION]: The expression evaluated to a falsy value:
+  
+    assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method))
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:713:12)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/scripts/beta-demo-resource-helpers.test.js:752:1
+✖ an approved application with unknown issuance cannot turn a Rust withdrawal conflict into cleanup (0.233993ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + undefined
+  - false
+  
+      at TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/runtime-integrity-evidence/owned-retirement-verified-baseline/tests/scripts/beta-demo-resource-helpers.test.js:763:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: false,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

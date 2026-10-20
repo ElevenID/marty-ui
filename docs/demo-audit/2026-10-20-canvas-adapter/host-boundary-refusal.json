@@ -1,0 +1,6 @@
+{
+  "scope": "EXPECTED_HOST_REFUSAL_BEFORE_BROWSER_OR_MUTATION",
+  "exit_code": 1,
+  "stderr": "Canvas capture initialization failed (container_boundary_missing).",
+  "runtime_qualification": false
+}

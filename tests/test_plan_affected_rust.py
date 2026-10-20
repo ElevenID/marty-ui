@@ -1744,6 +1744,7 @@ class AffectedRustPlannerTests(unittest.TestCase):
             )
 
         source_paths = {
+            "rust/services/trust-profile/src/issuer_keys.rs",
             "rust/services/gateway/src/runtime.rs",
             "contracts/gateway-routes.json",
             "docker-compose.base.yml",
@@ -1755,6 +1756,10 @@ class AffectedRustPlannerTests(unittest.TestCase):
             path: (ROOT / path).read_text(encoding="utf-8") for path in source_paths
         }
         witnesses = [
+            (
+                "rust/services/trust-profile/src/issuer_keys.rs",
+                "pub use marty_issuer_key_resolution::*;",
+            ),
             (
                 "rust/services/gateway/src/runtime.rs",
                 'request.uri().path() == "/.well-known/did.json"',

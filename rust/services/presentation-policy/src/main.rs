@@ -8,7 +8,7 @@ use marty_presentation_policy::{
     PolicyApplication, PolicyAuthorization, PolicyRepository, PostgresPolicyStore,
     PresentationGrpcSecurity, PresentationPolicyDependency, PresentationPolicyGrpcService,
     PresentationPolicyHttpState, PresentationPolicyRuntime, PresentationPolicyServiceConfig,
-    PresentationTrustResolver, RustCredentialKernel, VerifiedFactsOrchestrator,
+    PresentationTrustResolver, ResolvingCredentialKernel, VerifiedFactsOrchestrator,
 };
 use mmf_security::ServiceTokenAuthenticator;
 use sqlx::postgres::PgPoolOptions;
@@ -71,7 +71,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));
-    let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(RustCredentialKernel);
+    let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(ResolvingCredentialKernel::new(
+        Arc::new(marty_issuer_key_resolution::NativeIssuerKeyResolver::new(
+            config.did_resolution_base_urls.clone(),
+            config.did_web_allowed_hosts.clone(),
+        )),
+    ));
     let trust: Arc<dyn PresentationTrustResolver> = control.clone();
     let status: Arc<dyn CredentialStatusResolver> = control;
     let verification = Arc::new(VerifiedFactsOrchestrator::new(kernel, trust, status)?);

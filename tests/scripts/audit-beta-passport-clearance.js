@@ -4,7 +4,9 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { chromium } = require('@playwright/test');
+const { acquireWalletSession } = require('./demo-wallet-session');
 
 const {
   ensureActiveRevocationProfile,
@@ -23,16 +25,20 @@ const {
   browserJson,
   cleanupApplicationCredential,
   compactObject,
+  createOwnedApplication,
   ensureActiveResource,
   ensureApplicantProfile,
   ensureGovernedIssuer,
   findCurrentCredential,
   governedIssuerTrustProfilePayload,
+  issueOwnedApplication,
   listResources,
   requestedClaim,
   requireJson,
+  requireNoConflictingApplications,
+  requireOwnedApplication,
   resolveActiveIssuerDid,
-  withdrawConflictingApplications,
+  submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const {
   PASSPORT_EVIDENCE_SHA256,
@@ -41,11 +47,14 @@ const {
   validEvidenceDigest,
 } = require('./beta-passport-clearance-contract');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
+const { approveThroughConsole, issueThroughConsole, requireVerificationDecision } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
   createArtifactDir,
+  createActionRecording,
   finalizeVideo,
   showStep,
+  showVerificationResult,
 } = require('./demo-recording');
 
 const ROOT = path.resolve(__dirname, '..', '..');
@@ -53,12 +62,14 @@ loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
 loadEnvFile(path.join(ROOT, '.env'));
 
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
+const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID
   || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
 const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const ADMIN_API_FUNCTIONAL = process.env.D01_ADMIN_API_FUNCTIONAL === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const RESOURCE_NAMES = Object.freeze({
   trust: 'D-01 Pre-Boarding Issuer Trust',
@@ -417,7 +428,7 @@ async function ensureConfiguration(page, stamp) {
   return requireConfigurationBinding({ credential, application, policy, flow });
 }
 
-async function createAndSubmitApplication(page, applicationTemplateId, evidenceDigest, stamp) {
+async function createAndSubmitApplication(page, ownedResources, evidenceDigest, stamp) {
   const formData = {
     traveler_id: `TRAVELER-D01-${stamp}`,
     flight_number: 'MIP101',
@@ -427,49 +438,56 @@ async function createAndSubmitApplication(page, applicationTemplateId, evidenceD
     clearance_status: 'CLEARED',
     passport_evidence_sha256: evidenceDigest,
   };
-  const created = await requireJson(page, '/v1/me/applications', {
-    method: 'POST',
-    body: JSON.stringify({
-      organization_id: ORG_ID,
-      application_template_id: applicationTemplateId,
-      form_data: formData,
-      integration_context: {
-        evidence_type: 'marty_verifier_emrtd',
-        evidence_sha256: evidenceDigest,
-      },
-    }),
-  }, 'Create passport clearance application');
+  const created = await createOwnedApplication(page, ownedResources, {
+    formData,
+    integrationContext: {
+      evidence_type: 'marty_verifier_emrtd',
+      evidence_sha256: evidenceDigest,
+    },
+    label: 'Create passport clearance application',
+  });
   if (created.form_data?.passport_evidence_sha256 !== evidenceDigest) {
     throw new Error('Stored D-01 application is not bound to the supplied passport evidence');
   }
-  const submitted = await requireJson(
-    page,
-    `/v1/me/applications/${encodeURIComponent(created.id)}/submit`,
-    { method: 'POST' },
-    'Submit passport clearance application',
-  );
+  const submitted = await submitOwnedApplication(page, ownedResources, 'Submit passport clearance application');
   return { created, submitted, formData };
 }
 
-async function approveAndIssue(page, applicationId, evidenceDigest) {
+async function approveAndIssue(page, ownedResources, evidenceDigest, { recording } = {}) {
+  const applicationId = ownedResources.applicationId;
   const root = `/v1/organizations/${encodeURIComponent(ORG_ID)}/applicants/${encodeURIComponent(applicationId)}`;
-  const lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire passport reviewer lock');
-  const approved = await requireJson(page, `${root}/approve`, {
-    method: 'POST',
-    body: JSON.stringify({ notes: `D-01 passport evidence ${evidenceDigest} approved` }),
-  }, 'Approve passport clearance application');
-  await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release passport reviewer lock');
-  const issued = await requireJson(page, `${root}/issue`, { method: 'POST' }, 'Issue pre-boarding credential');
-  return { lock, approved, issued };
+  requireOwnedApplication(await requireJson(page, root), ownedResources);
+  let lock;
+  let approved;
+  ownedResources.uncertainMutations ||= [];
+  ownedResources.uncertainMutations.push({ operation: 'reviewer_lock' });
+  try {
+    lock = await requireJson(page, `${root}/lock`, { method: 'POST' }, 'Acquire passport reviewer lock');
+    if (!lock?.id || lock.organization_id !== ORG_ID || lock.applicant_id !== applicationId) {
+      throw new Error('Reviewer lock does not match the exact passport application');
+    }
+    approved = recording
+      ? await approveThroughConsole(page, ownedResources, recording,
+        `Synthetic scenario: approve pre-boarding clearance after reviewing passport evidence ${evidenceDigest}.`)
+      : requireOwnedApplication(await requireJson(page, `${root}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ notes: `D-01 passport evidence ${evidenceDigest} approved` }),
+      }, 'Approve passport clearance application'), ownedResources);
+    if (approved.status !== 'APPROVED') throw new Error('Passport application approval did not reach APPROVED');
+  } finally {
+    const released = await requireJson(page, `${root}/lock`, { method: 'DELETE' }, 'Release passport reviewer lock');
+    if (released?.released !== true) throw new Error('Passport reviewer lock release was not confirmed');
+    ownedResources.uncertainMutations = ownedResources.uncertainMutations
+      .filter(({ operation }) => operation !== 'reviewer_lock');
+  }
+  const { issued, transaction } = await issueOwnedApplication(page, ownedResources, 'Issue pre-boarding credential', {
+    requestIssue: recording ? (endpoint) => issueThroughConsole(page, recording, endpoint) : undefined,
+  });
+  return { lock, approved, issued, transaction };
 }
 
-async function cleanup(page, applicationId, credentialId) {
-  return cleanupApplicationCredential(page, {
-    organizationId: ORG_ID,
-    applicationId,
-    credentialId,
-    reason: 'D-01 release qualification cleanup',
-  });
+async function cleanup(page, ownedResources) {
+  return cleanupApplicationCredential(page, ownedResources, 'D-01 release qualification cleanup');
 }
 
 async function showClearanceStep(page, title, detail) {
@@ -506,16 +524,29 @@ async function main() {
   if (!validEvidenceDigest(evidenceDigest)) {
     throw new Error('D01_PASSPORT_EVIDENCE_SHA256 must be exactly 64 lower-case hexadecimal characters');
   }
+  if (ADMIN_API_FUNCTIONAL && RECORD_VIDEO) {
+    throw new Error('D01 admin-API functional mode cannot record video');
+  }
 
-  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase();
-  const startedAt = new Date(Date.now() - 5_000).toISOString();
+  const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
   const artifactDir = createArtifactDir(ROOT, `beta-passport-clearance-${stamp}`);
+  const ownedResources = {
+    organizationId: ORG_ID,
+    runId: stamp,
+    applicationId: null,
+    transactionId: null,
+    credentialId: null,
+    uncertainMutations: [],
+  };
   const report = {
     createdAt: new Date().toISOString(),
     organizationId: ORG_ID,
+    ownedResources,
     passportEvidenceSha256: evidenceDigest,
     pageErrors: [],
     unexpectedResponses: [],
+    finalizationFailures: [],
+    releaseReady: false,
   };
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -526,22 +557,42 @@ async function main() {
   let adminContext;
   let applicantContext;
   let adminPage;
+  let adminVideo;
+  let walletVideo;
+  let walletSession;
+  let walletAcquisitionAttempted = false;
   let applicationId;
   let credentialId;
   let cleanupComplete = false;
+  let journeyComplete = false;
+  let journeyReady = false;
   try {
     adminContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    // receiveCredential uses this exact context. Establish ownership before
+    // any configuration, application or issuance mutation can begin.
+    walletAcquisitionAttempted = true;
+    walletSession = await acquireWalletSession(adminContext, { origin: TEST_WALLET_ORIGIN, runId: stamp });
+    report.walletSession = walletSession.evidence;
     applicantContext = await browser.newContext({ viewport: VIDEO_SIZE, ignoreHTTPSErrors: LOCAL_BETA_PROXY });
     const page = await adminContext.newPage();
     adminPage = page;
+    const recording = createActionRecording({
+      enabled: RECORD_VIDEO, scenario: 'passport-pre-boarding-clearance', pageName: 'clearance',
+      onEvent: (events) => { report.recordingActions = events; },
+    });
+    report.demonstrationBoundary = {
+      data: 'SYNTHETIC_TRAVELER_WITH_NATIVE_PASSPORT_EVIDENCE', setup: 'AUTHENTICATED_PUBLIC_API',
+      applicationSubmission: 'AUTHENTICATED_PUBLIC_API', reviewerActions: 'REAL_ADMIN_UI',
+      verification: 'REAL_WALLET_PRESENTATION_WITH_API_RESULT',
+    };
     const walletPage = await adminContext.newPage();
     const applicantPage = await applicantContext.newPage();
-    const adminVideo = page.video();
-    const walletVideo = walletPage.video();
+    adminVideo = page.video();
+    walletVideo = walletPage.video();
     observePage(page, report);
     observePage(applicantPage, report);
     observePage(walletPage, report);
@@ -550,6 +601,8 @@ async function main() {
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
     const configuration = await ensureConfiguration(page, stamp);
+    ownedResources.applicationTemplateId = configuration.application.id;
+    ownedResources.credentialTemplateId = configuration.credential.id;
     report.configuration = {
       credentialTemplateId: configuration.credential.id,
       applicationTemplateId: configuration.application.id,
@@ -561,19 +614,19 @@ async function main() {
     };
 
     await login(applicantPage, applicantEmail, applicantPassword);
-    await ensureApplicantProfile(applicantPage, {
+    const applicantProfile = await ensureApplicantProfile(applicantPage, {
       email: applicantEmail,
       givenName: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
       familyName: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
     });
-    report.preflightCleanup = await withdrawConflictingApplications(applicantPage, page, {
+    ownedResources.applicantId = applicantProfile?.id;
+    report.applicationPreflight = await requireNoConflictingApplications(applicantPage, {
       organizationId: ORG_ID,
       credentialTemplateId: configuration.credential.id,
-      reason: 'D-01 interrupted release qualification cleanup',
     });
     const application = await createAndSubmitApplication(
       applicantPage,
-      configuration.application.id,
+      ownedResources,
       evidenceDigest,
       stamp,
     );
@@ -586,14 +639,23 @@ async function main() {
       passportEvidenceSha256: application.created.form_data.passport_evidence_sha256,
     };
 
-    await page.goto(`${BETA_ORIGIN}/console/org/operate/applications/${encodeURIComponent(applicationId)}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
-    await page.getByText(application.formData.traveler_id).first().waitFor({ state: 'visible', timeout: 30_000 });
+    if (ADMIN_API_FUNCTIONAL) {
+      // The detail page owns an automatic reviewer lock. Keep this API-only
+      // functional run on the list page so its explicit lock has one owner.
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      report.reviewSurface = 'ADMIN_APPLICATION_LIST_WITH_EXPLICIT_API_DECISION';
+    } else {
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications/${encodeURIComponent(applicationId)}`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      await page.getByText(application.formData.traveler_id).first().waitFor({ state: 'visible', timeout: 30_000 });
+      report.reviewSurface = 'ADMIN_APPLICATION_DETAIL';
+    }
     await showClearanceStep(page, 'Passport evidence submitted', 'The application carries the exact digest of the passport result already validated by the native Rust verifier.');
 
-    const approval = await approveAndIssue(page, applicationId, evidenceDigest);
+    const approval = await approveAndIssue(page, ownedResources, evidenceDigest, { recording });
     report.application.lockAcquired = Boolean(approval.lock?.id);
     report.application.approvedStatus = approval.approved?.status || null;
     const offerUri = approval.issued?.credential_offer_uri
@@ -601,14 +663,15 @@ async function main() {
       || null;
     report.issuance = {
       issueOk: Boolean(offerUri),
+      transactionId: approval.transaction.id,
       vct: configuration.credential.vct,
     };
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await showClearanceStep(page, 'Pre-boarding clearance approved', 'Manual review approved the evidence-bound application and the Rust issuance flow returned a real OpenID4VCI offer.');
     if (!offerUri) throw new Error('Pre-boarding issuance returned no credential offer');
+    await showClearanceStep(page, 'Pre-boarding clearance approved', 'The administrator reviewed the passport evidence, confirmed approval, and created the traveler wallet invitation.');
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
     report.issuance.walletReceived = walletReceipt.ok;
+    if (!walletReceipt.ok) throw new Error('Pre-boarding wallet did not accept the credential');
     const walletCredential = await walletPage.evaluate(async (expectedVct) => {
       const response = await fetch('/api/credentials');
       const credentials = await response.json().catch(() => []);
@@ -616,13 +679,12 @@ async function main() {
       return credentials.find(({ vct }) => vct === expectedVct) || null;
     }, configuration.credential.vct);
     const credential = await findCurrentCredential(page, {
-      organizationId: ORG_ID,
-      credentialTemplateId: configuration.credential.id,
-      startedAt,
+      ...ownedResources,
       waitFor,
     });
     if (!credential?.id) throw new Error('Issued pre-boarding credential was not discoverable');
     credentialId = credential.id;
+    ownedResources.credentialId = credentialId;
     report.issuance.credentialId = credentialId;
     report.issuance.walletEvidenceClaimPresent = Boolean(
       walletCredential?.claim_names?.includes('passport_evidence_sha256'),
@@ -639,7 +701,8 @@ async function main() {
     report.issuance.passportEvidenceSha256 = report.issuance.walletEvidenceBound
       ? evidenceDigest
       : null;
-    await showClearanceStep(page, 'Clearance credential received', 'The holder wallet accepted the credential and exposes the same passport evidence digest in its signed claims.');
+    if (!report.issuance.walletEvidenceBound) throw new Error('Clearance credential is not bound to the reviewed passport evidence');
+    await showClearanceStep(page, 'Clearance credential received', 'The wallet received the credential; the issuer record matches the reviewed passport evidence.');
 
     const verification = await verify(page, walletPage, 'D-01 rapid pre-boarding gate', {
       organizationId: ORG_ID,
@@ -650,47 +713,71 @@ async function main() {
       walletPresented: verification.wallet?.ok === true,
       result: verification.result,
     };
-    await showClearanceStep(page, 'Rapid gate clearance allowed', 'A real DCQL presentation disclosed only the CLEARED status and returned an explicit allow decision.');
+    requireVerificationDecision(verification, 'allow');
+    await showVerificationResult(page, verification.result, {
+      enabled: RECORD_VIDEO, actor: 'Marty pre-boarding verifier', testId: 'D01-PREBOARDING-ACCESS',
+    });
+    await showClearanceStep(page, 'Rapid gate clearance allowed', 'The gate policy requested clearance status and returned an explicit allow decision.');
 
     report.behaviorAssertions = passportClearanceBehaviorAssertions(report);
-    report.cleanup = await cleanup(page, applicationId, credentialId);
-    cleanupComplete = report.cleanup.credentialRevoked && report.cleanup.applicationWithdrawn;
-    report.releaseReady = Boolean(
+    report.cleanup = await cleanup(page, ownedResources);
+    cleanupComplete = report.cleanup.ok === true;
+    journeyReady = Boolean(
       report.configuration.allActive
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && cleanupComplete
+      && report.cleanup.credentialRevoked
+      && report.cleanup.applicationHistoryPreserved
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );
-    report.finishedAt = new Date().toISOString();
-    await applicantContext.close();
-    applicantContext = null;
-    await adminContext.close();
-    adminContext = null;
-    if (RECORD_VIDEO) {
-      report.recordings = {
-        clearance: path.relative(
-          ROOT,
-          await finalizeVideo(adminVideo, artifactDir, 'passport-pre-boarding-clearance-beta.webm'),
-        ),
-        wallet: path.relative(
-          ROOT,
-          await finalizeVideo(walletVideo, artifactDir, 'passport-pre-boarding-clearance-wallet.webm'),
-        ),
-      };
-    }
-    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
-    if (!report.releaseReady) process.exitCode = 1;
+    journeyComplete = true;
+  } catch (error) {
+    report.error = redact(error.stack || error.message || String(error));
+    report.releaseReady = false;
+    throw error;
   } finally {
-    if (!cleanupComplete && adminPage && (applicationId || credentialId)) {
-      await cleanup(adminPage, applicationId, credentialId)
+    if (!cleanupComplete && adminPage) {
+      await cleanup(adminPage, ownedResources)
         .then((result) => { report.cleanup = result; })
         .catch((error) => { report.cleanupError = redact(error.message || String(error)); });
     }
-    if (applicantContext) await applicantContext.close().catch(() => {});
-    if (adminContext) await adminContext.close().catch(() => {});
-    await browser.close();
+    let walletClosed = false;
+    if (walletSession) {
+      try { await walletSession.close(); walletClosed = walletSession.evidence.closed === true; }
+      catch (error) {
+        report.finalizationFailures.push({ operation: 'wallet_session_close', error: redact(error.message || String(error)) });
+      }
+    } else if (walletAcquisitionAttempted) {
+      report.finalizationFailures.push({ operation: 'wallet_session_acquisition', outcome: 'UNCONFIRMED' });
+    }
+    // Session deletion needs the live browser context's cookie and run guard.
+    // Always finish it before closing contexts or finalizing their videos.
+    for (const [operation, context] of [['applicant_context_close', applicantContext], ['admin_context_close', adminContext]]) {
+      if (!context) continue;
+      try { await context.close(); }
+      catch (error) { report.finalizationFailures.push({ operation, error: redact(error.message || String(error)) }); }
+    }
+    if (RECORD_VIDEO && journeyComplete) {
+      try {
+        report.recordings = {
+          clearance: path.relative(ROOT, await finalizeVideo(adminVideo, artifactDir, 'passport-pre-boarding-clearance-beta.webm')),
+          wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'passport-pre-boarding-clearance-wallet.webm')),
+        };
+      } catch (error) {
+        report.finalizationFailures.push({ operation: 'video_finalization', error: redact(error.message || String(error)) });
+      }
+    }
+    await browser.close().catch((error) => {
+      report.closeError = redact(error.message || String(error));
+      report.finalizationFailures.push({ operation: 'browser_close', error: report.closeError });
+    });
+    report.releaseReady = Boolean(journeyReady && walletClosed
+      && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
+    report.finishedAt = new Date().toISOString();
+    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
+    console.log(JSON.stringify(report, null, 2));
+    if (!report.releaseReady) process.exitCode = 1;
   }
 }
 
@@ -702,10 +789,13 @@ if (require.main === module) {
 }
 
 module.exports = {
+  approveAndIssue,
+  createAndSubmitApplication,
   clearanceApplicationTemplatePayload,
   clearanceCredentialPayload,
   clearanceFlowPayload,
   clearancePolicyPayload,
   clearanceTrustProfilePayload,
+  main,
   requireConfigurationBinding,
 };

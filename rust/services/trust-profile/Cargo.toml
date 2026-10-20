@@ -9,6 +9,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true

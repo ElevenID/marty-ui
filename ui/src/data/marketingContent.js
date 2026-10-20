@@ -238,33 +238,23 @@ export const END_USER_EXPERIENCES = {
 
 export const DEVELOPER_QUICKSTART = {
   title: 'Verify a credential in one request.',
-  description: 'Start with the stateless verification endpoint when you already have the credential payload. Move to wallet and QR flows when the holder needs to present interactively.',
-  snippet: `curl -X POST "$ELEVENID_API_BASE/v1/credentials/verify" \\
+  description: 'Use the VC-API endpoint with an authorized organization, a presentation policy, and a signed credential. Move to wallet and QR flows when the holder needs to present interactively.',
+  snippet: `curl -X POST "$ELEVENID_API_BASE/v1/vc-api/credentials/verify?organization_id=$ELEVENID_ORGANIZATION_ID&presentation_policy_id=$ELEVENID_PRESENTATION_POLICY_ID" \\
   -H "Authorization: Bearer $ELEVENID_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "credential": {
-      "id": "cred_employee_42",
-      "type": ["VerifiableCredential", "WorkforceAccessBadge"],
-      "issuer": "did:web:issuer.example.com"
-    },
-    "presentation_policy_id": "policy_building_access",
-    "trust_profile_id": "trust_workforce_v1"
+    "verifiableCredential": "<compact signed VC JWT>"
   }'`,
   response: `{
-  "valid": true,
-  "verification_result": {
-    "signature_valid": true,
-    "not_expired": true,
-    "not_revoked": true
-  }
+  "verified": true,
+  "results": { "decision": "allow" }
 }`,
   bullets: [
-    'POST /v1/credentials/verify for stateless backend validation.',
-    'Attach presentation_policy_id and trust_profile_id to enforce governed checks.',
+    'POST /v1/vc-api/credentials/verify with a signed credential for policy evaluation.',
+    'Select organization_id and presentation_policy_id in the query string.',
     'Use /flows/verify when the user needs a wallet, QR, or kiosk presentation step.',
   ],
-  note: 'The UI verifyCredential client uses this exact request shape against /v1/credentials/verify.',
+  note: 'Replace the signed-credential placeholder with a credential you are authorized to verify.',
 };
 
 export const INTERACTIVE_PROOF_LAB = {
@@ -315,7 +305,7 @@ export const INTERACTIVE_PROOF_LAB = {
       title: 'Employee access check',
       channel: 'Lobby kiosk and internal portal',
       summary: 'One workforce credential is reused at the door and again inside the application stack.',
-      requestPath: 'POST /v1/credentials/verify',
+      requestPath: 'POST /v1/vc-api/credentials/verify',
       requestSummary: 'Request employment_active and access_zone_hq_north from the existing badge.',
       holderSummary: 'The holder reuses the same credential instead of repeating onboarding or showing a different badge system.',
       disclosed: ['employment_active', 'access_zone_hq_north'],

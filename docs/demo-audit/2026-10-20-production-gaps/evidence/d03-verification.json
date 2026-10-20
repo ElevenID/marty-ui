@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-20T03:52:51.178997+00:00",
+  "scope": "D03 implementation and local source-fixture verification only",
+  "result": "PASS",
+  "liveBetaRun": "NOT_RUN",
+  "nativeWalletRun": "NOT_RUN",
+  "recordedDemo": "NOT_RUN",
+  "guidedComposition": "UNBOUND",
+  "humanVoiceReview": "NOT_RUN",
+  "publicationQualification": "NOT_EVALUATED",
+  "repositories": {
+    "marty-ui": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "baseHead": "ba34fcd5af792cf53fe290abb807b6f09ccac2e7",
+      "changesUncommitted": true,
+      "sourceSha256": {
+        "rust/crates/release-evidence/Cargo.toml": "96c4cb0cf9ff98258b00542b976b462c60bbf60623e5484761a5834ad4c95068",
+        "rust/crates/release-evidence/src/lib.rs": "cf592193348ca0349cfdb6206ebac7d6d819b505fc2d1a3e2c1596f7fe36dbda",
+        "rust/crates/release-evidence/src/age_proof.rs": "cdf580de9b3ba0be0cb4ea342f9b41ac06791df9d170e90b4ed4a3600681a2a4",
+        "rust/crates/release-evidence/src/age_proof_cli.rs": "646c5563cac8b618b0074e90476d6710fbe840f7a3f585d909a1461ffc065cd7",
+        "rust/crates/release-evidence/tests/age_proof.rs": "08235b58a7a31c949ebc291882a6a7e945e7290b4760833cbd6aff607035e71c",
+        "rust/services/presentation-policy/src/http_service.rs": "31b4ec8eea2539a67865b6a60aeb512b2c3c2ca957710bf83228f5a7b8701239",
+        "rust/services/presentation-policy/tests/http_service_behavior.rs": "125afb3640f7b6260bacba28d1aecb353dab7c7ca580fd9f60ea6ec502f78eb2",
+        "rust/services/gateway/src/flow_contract.rs": "e01e0d48deaf75578715d65c573fa1d79ca8f98e93fc187a61ef1f816d045d17",
+        "ui/src/services/zkVerificationApi.jsx": "09d2000d18cc58bcb23d4626e52cc9b3426ae8c9c975c248b1f0afb2d3ca6acc",
+        "ui/src/components/vendor/verification/VerificationResultSummary.jsx": "ce56825d6e4f07072240d47fab2bd400f5a9313bb77511c2e8be1b71aeae6a8f",
+        "ui/src/components/vendor/verification/VerificationResultSummary.test.tsx": "94d5b02fb3598b50dda237203c083a5ca2974de6d7c38ceb53f7db7fd98a2f4d",
+        "ui/src/components/vendor/verification/VerificationSessionManager.jsx": "5930aa7920c4d3b3380adc39e6a0b4ab80b8c76f795bbe18933ac9866631e864",
+        "ui/src/components/vendor/verification/VerificationSessionManager.test.tsx": "5f0f37cede73a2378cfc0420ae31438e88bd868ec2ed88e1d548d0b2e42b5959",
+        "tests/scripts/audit-beta-private-age-proof.js": "3346fae1da1810a23960f63dbd2d5bdb0b4563932a97862be3ce53e63897ad42",
+        "tests/scripts/audit-beta-private-age-proof.test.js": "77273710ccc025ba2816c379fffc0303bbc54eb2fbcabf82a89aabf837c1ab13",
+        "tests/scripts/beta-demo-resource-helpers.js": "f8955b3d2965093007f09bfb489936969d756970af125857f9e00a112899bf5a"
+      }
+    },
+    "marty-demo-recorder": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "baseHead": "d9e41aefdfd9b5fee5109b4d7d186929fa7106dc",
+      "changesUncommitted": true,
+      "sourceSha256": {
+        "src/privateAgeProofGateway.js": "fab9c43e0b76c1fcccd4fa249f74fe6e173748f9ee48c887b139c9835b864c35",
+        "test/privateAgeProofGateway.test.js": "d768ea844a499547c5175e8413e5599e33ca2d512d837fddf6bb2757cc57ae50",
+        "demos/private-online-age-proof.json": "77630d568b41e37c24f8c244b853fd441bb119607e2c793bd408114010cf944e",
+        "demos/transcripts/private-online-age-proof.en.vtt": "f83ac537aea7851d3c31691b81ef1656cb02a9579d5f9bca4b4ec29b1ebdf89e",
+        "android/d03-fixture.example.json": "a9f9222c6dbc7871aa399fba3a4185ab985e6bb73a521b673f7317b6989806a8",
+        "android/d03-release-gateway.example.json": "df93bce49350ed09d94f1c4d6b0f7924c5ea75ddb1e9cdf2fbb8e9fc6914e938",
+        "android/scenarios/private-online-age-proof.runtime.example.json": "6cd0b53bcf3bd901ab644c36ee79d3ecd25d94d14972f0be6a530b98321eaad9",
+        "docs/d03-private-online-age-proof.md": "af394ebe0d267ee391a9d575a36197b11fc4838a1aeb29a5adb2bc603d07c4a0"
+      }
+    }
+  },
+  "checks": [
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-release-evidence --test age_proof -j2",
+      "exitCode": 0,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Pure native API receipt checks: exact age/DCQL and authenticated names, extra disclosure rejection, issuer and tenant binding, explicit issuer-specific trust rejection with unknown typed backend reason, exact ownership and pending-offer cleanup. Final15-case rerun includes generic invalid_presentation/presentation failed and verifier-trust rejection refusal. The final pending-cancellation transport change leaves native planning behavior unchanged; only its receipt scope wording and test name changed after this 15-case run. The controller integration was rerun and the CLI rebuilt."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-presentation-policy --test http_service_behavior -j2",
+      "exitCode": 0,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Authenticated fact fixtures pass through the real HTTP policy evaluation. Additional disclosure remains visible by name without value leakage; unauthenticated and ambiguous mappings never publish an inventory. Existing ten-operation HTTP behavior case also passes."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --locked --manifest-path rust/Cargo.toml -p marty-gateway --lib flow_contract -j2",
+      "exitCode": 0,
+      "passed": 4,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Two existing language-neutral contracts and two names-only mdoc projection checks. Pinned dependency download required ordinary authorized network access.",
+      "filtered": 166
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --locked --offline --manifest-path rust/Cargo.toml -p marty-issuer-key-resolution --lib -j2",
+      "exitCode": 0,
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Includes configured internal DID resolution and denial of ambient DID-web egress. A temporary localhost-only fixture required authorized socket permission; no beta request.",
+      "sandboxPermission": "require_escalated"
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo run --quiet --locked --offline --manifest-path rust/Cargo.toml -p marty-release-evidence --bin validate-age-proof-demo -- --version",
+      "exitCode": 0,
+      "notes": "Rebuilt and executed after the final cleanup receipt wording update; version check is not an additional named test.",
+      "stdout": "marty-age-proof-demo/v1"
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "node tests/scripts/audit-beta-private-age-proof.test.js",
+      "exitCode": 0,
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Controlled browser/API adapters exercise dependency read failure, canonical mutation-ID retention, lost responses, exact cleanup only, known rejection, Rust cleanup refusal and explicit refusal to turn generic rejection diagnostics into the issuer-trust assertion. The new pending cleanup regression uses the real shared cancellation helper through controlled page transport: an expired captured transaction is cancelled only after exact revoked readback; an HTTP-success response with unconfirmed readback keeps transaction-scoped uncertainty and cleanup incomplete. No network or browser launched."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/vendor/verification/VerificationSessionManager.test.tsx src/components/vendor/verification/VerificationResultSummary.test.tsx",
+      "exitCode": 0,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Real React components with controlled service fixtures: authenticated names/trust display, exact terminal-result fetch, foreign/unavailable result rejection and stale-result closure."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "command": "node test/privateAgeProofGateway.test.js",
+      "exitCode": 0,
+      "passed": 7,
+      "failed": 0,
+      "skipped": 0,
+      "notes": "Config contract, all frozen controls before issuance, empty-wallet observation and distinct selection, exact runtime request destinations, blocked tool/lane gates, restoration after a lost recording response, and unchanged shared two-lane gate with synthetic unit-test media. Final check also refuses generic presentation rejection and verifier trust messages during control preflight, before issuance."
+    }
+  ],
+  "totalNamedTestsPassed": 61,
+  "dataChecks": [
+    "git diff --check passed in both repositories.",
+    "Dedicated recorder configuration passes existing validateConfig in the focused adapter test.",
+    "Only D03-related changed and new Rust files were formatted with rustfmt.",
+    "D03 readStackManifest binding passes against the current production-gaps draft with revision2 and [openid4vci-1.0,openid4vp-1.0,dcql-1.0]. assertionCoverage reports COMPLETE: exactly four catalog contractId mappings, no missing or unknown declarations. Both wallet gates remain mandatory outside the catalog assertion set."
+  ],
+  "limitations": [
+    "No live beta request, issuance, native wallet execution, deployment, publication or rendered guided master was performed.",
+    "Frozen source-specific EUDI and SpruceID profiles/APKs/AVD snapshots/control fixtures and active managed mDL/policy/trust resources are still required. Placeholders fail before issuance.",
+    "Actual issuer-signature, trust and holder authentication remains the existing native mdoc verifier responsibility. The new Rust CLI validates measured public replies and never grants independent-wallet qualification.",
+    "The signed native request is fetched over bound HTTPS and structurally inspected/bound; the CLI does not independently verify its request-object signature.",
+    "A successful negative observation is ISSUER_TRUST_REJECTION_OBSERVED with issuer_trust_denial_observed=true only when the pinned wallet explicitly identifies the issuer as untrusted or not trusted. Generic invalid_presentation, presentation failed, verifier-trust, unknown and pending messages cannot pass. backend_reason_code remains null; no typed native backend reason is inferred.",
+    "Issuance is explicit API fixture setup; holder consent and result inspection use actual wallet and administrator UI paths. No governed applicant UI or camera scan is claimed.",
+    "Only current-run resources can be cleaned. Exact captured unredeemed transactions now use the shared authenticated cancellation helper, including after natural expiry. Lost creation IDs, an issued-record race, ownership refusal or unconfirmed revoked readback keep cleanup incomplete; uncertain cancellation mutations retain their transaction IDs.",
+    "Android emulator recordings do not prove physical-device security. Both independent lanes, real media and privacy scans remain mandatory.",
+    "Draft transcript timings, voice choice, crops, pointers and source/report/secondary media hashes remain unbound until a real capture is inspected. The shared lifecycle-v1 profile does not grant human approval."
+  ],
+  "initialAttemptNotes": [
+    "Offline cache was missing public lockfile-pinned crates. Ordinary sandbox network retry could not reach its proxy; authorized require_escalated retry downloaded dependencies without changing Cargo.lock.",
+    "The issuer resolver localhost fixture initially failed with PermissionDenied in the restricted sandbox (4 passed, 1 environment failure). The identical command with authorized localhost permission passed all 5.",
+    "Node --test in this host reported the controller file as one aggregate. Direct node execution reported all 6 initial named cases (7 after the final denial regression and 8 after pending-cancellation integration); direct commands are retained above for both new Node test files.",
+    "An initial recorder test used an incorrect functional.supported property. It was corrected to the existing functionalRerunUnsupportedReason contract before the passing 7-case run.",
+    "Final review tightened the earlier generic rejected-fixture observation into an explicit issuer-specific trust observation. The15-case Rust validator suite,7-case driver suite and7-case recorder adapter suite were rerun and passed; CLI rebuilt.",
+    "The final pending-offer correction reused cancelOwnedIssuanceTransaction without editing the shared helper. The D03 controller suite passed 8 cases; native planning logic is unchanged, and only the receipt wording/test name changed. No broad Rust rerun was performed; the current CLI version build passed."
+  ],
+  "validatorExecutable": {
+    "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/validate-age-proof-demo",
+    "sha256": "a9ee59561c8d7815316a9813f048e5a205eaea99ae0d11696bb04e546332e828",
+    "scope": "LOCAL_EXECUTABLE_BYTES_NOT_DEPLOYED_BUILD_ATTESTATION"
+  },
+  "compatibilityFollowup": {
+    "recordedAt": "2026-10-20T04:21:41.722184+00:00",
+    "scope": "Strict Android public manifest projection compatibility",
+    "change": "Synthetic D03 unit report supplies explicit completedAt so the stricter existing public wallet projection can retain tested_at. No product behavior or qualification gate was relaxed.",
+    "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+    "command": "node test/privateAgeProofGateway.test.js",
+    "exitCode": 0,
+    "passed": 7,
+    "failed": 0,
+    "skipped": 0,
+    "sourceSha256": {
+      "test/privateAgeProofGateway.test.js": "d768ea844a499547c5175e8413e5599e33ca2d512d837fddf6bb2757cc57ae50",
+      "src/androidManifestEvidence.js": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96",
+      "src/androidReleaseGateway.js": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6"
+    },
+    "counting": "These are the same seven adapter tests already included in totalNamedTestsPassed=61; this rerun is not added again.",
+    "nativeDeviceRun": "NOT_RUN"
+  }
+}

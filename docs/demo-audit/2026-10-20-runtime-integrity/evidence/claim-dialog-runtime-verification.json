@@ -1,0 +1,177 @@
+{
+  "schemaVersion": 1,
+  "topic": "Applicant claim dialog and wallet receipt integration",
+  "status": "LOCAL_SOURCE_VERIFIED",
+  "sourceRepository": "ElevenID/marty-ui",
+  "baseRevision": "653cd9f5d5b8b4f079410d1eb02a94a6705d06ad",
+  "implementationCommit": "b02894b1809d3d09a6d7087ceccd8943d287707e",
+  "sharedWalletHookCommit": "0943e115b987be1208238c61dcb1437c16f23fe0",
+  "behavior": [
+    "The dialog submits one no-options claim request per application/organization/holder scope while pending; close/reopen shares the request, wallet choice only changes transport.",
+    "The Rust endpoint controls pending offer reuse and expiry renewal. Unsupported holder destination and Canvas mirror controls are removed from this dialog; there is no claim that those options are implemented.",
+    "Late catalogues, offers, errors, status reads and wallet-open results from an old application, organization, wallet or view are discarded.",
+    "Refresh hides old actionable QR content while pending and after failure. Retrying requires an explicit user action.",
+    "Read-only holder application status polls every two seconds while visible and nonterminal, coalesces return events, and never POSTs issuance. Confirmed CLAIMED, EXPIRED and BLOCKED projections replace active QR content.",
+    "Application and organization identity must match on readback. Failed or mismatched readback clears the actionable invite.",
+    "Claim POST and raw application GET use the same offer normalization, retaining offer URI, expiration and Rust status/capabilities.",
+    "Mobile and actual desktop child use one shared wallet opener. An asynchronous launch becomes invalid after close, scope change, wallet change, offer change or confirmed receipt.",
+    "Email opens a mailto draft and does not claim email delivery. The UI does not promise a fresh offer for every opening."
+  ],
+  "verification": [
+    {
+      "phase": "Original existing dialog tests at unchanged base",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ClaimCredentialDialog.test.tsx --maxWorkers=1",
+      "exitCode": 1,
+      "passed": 1,
+      "failed": 5,
+      "log": "claim-dialog-baseline.log",
+      "boundary": "Existing MUI focus-restoration teardown failures. Final test fixture opens from a real focused button; no production FocusTrap or test framework configuration was weakened."
+    },
+    {
+      "phase": "13-case contract regression input against unchanged base",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ClaimCredentialDialog.test.tsx --maxWorkers=1",
+      "workingDirectory": "marty-ui-claim-contract-baseline/ui",
+      "exitCode": 1,
+      "passed": 2,
+      "failed": 11,
+      "log": "claim-dialog-contract-before.log",
+      "testInput": {
+        "path": "claim-dialog-baseline-input.test.tsx",
+        "bytes": 14917,
+        "sha256": "b9053bd763cb00b8b1dca69d08f93a493c10de014f2ae1025301f1c2c24d99b5"
+      },
+      "boundary": "These 13 cases predate the six final read-only status/normalization/handoff integration cases. This is not a claim that all 19 final cases were run before the change."
+    },
+    {
+      "phase": "Final parent and real invite/QR child",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ClaimCredentialDialog.test.tsx src/components/issuance/OID4VCIInviteDisplay.test.tsx src/components/console/applicant/ApplicationForm.test.tsx --maxWorkers=1",
+      "workingDirectory": "marty-ui-runtime-integrity/ui",
+      "exitCode": 0,
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0,
+      "suites": {
+        "ClaimCredentialDialog": 19,
+        "OID4VCIInviteDisplay": 12
+      },
+      "log": "ui-claim-canvas-wallet-final.log",
+      "boundary": "The third pattern was an absent path and selected no tests. The log records two actual files, 31 cases. Canvas ApplicationForm is independently verified by the unchanged 15-case canvas-claim-return record, not counted as executed in this command. Child tests render the real invite and QR components; parent tests mock the child and controlled service responses."
+    },
+    {
+      "phase": "Production TypeScript configuration",
+      "command": "node node_modules/typescript/bin/tsc -p tsconfig.build.json --noEmit",
+      "workingDirectory": "marty-ui-runtime-integrity/ui",
+      "exitCode": 0,
+      "log": "ui-production-typecheck-final.log",
+      "boundary": "Production TypeScript only. No new full application build or broad test-source TypeScript pass is claimed."
+    }
+  ],
+  "finalParentNamedCases": [
+    "acquires one server-governed offer and loads organization-scoped wallet links",
+    "does not offer Canvas consent or destination selection that the Rust claim path cannot execute",
+    "explains when the issuer has not activated an OID4VCI issuance flow",
+    "changes browser wallet transport without starting another issuance",
+    "waits for a delayed wallet catalogue and applies the preference without duplicate claims",
+    "ignores the previous application response after switching applications",
+    "does not let a late organization registry replace the current wallet catalogue",
+    "shares a pending claim across close and reopen and restores focus to the opener",
+    "hides the previous invite while a refresh is pending and never restores it after failure",
+    "uses the selected Spruce wallet-specific URI for the mobile handoff",
+    "does not navigate when a delayed wallet link resolves after the dialog closes",
+    "uses the Rust expired claim state and offers a server retry",
+    "replaces the invite with confirmed receipt through read-only polling",
+    "retains the raw Rust offer URL and expiration when the application is refreshed",
+    "invalidates a pending mobile wallet handoff when readback confirms the credential was claimed",
+    "coalesces browser return reads and keeps blocked claims from displaying an active QR",
+    "discards a late return read after switching applications and removes its listeners on unmount",
+    "does not preserve an actionable invite after failed or mismatched status readback",
+    "describes mailto as an email draft without claiming the message was sent"
+  ],
+  "sourceFiles": [
+    {
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "bytes": 24792,
+      "sha256": "6f7e1752481baac9c77dd349b39cfbe0c21e42e3f7ea977f7cdb26087cbd2a8b",
+      "gitBlob": "6f1f49f4764bc1dc96d32750d448f2baafc74954"
+    },
+    {
+      "path": "ui/src/components/__tests__/ClaimCredentialDialog.test.tsx",
+      "bytes": 20818,
+      "sha256": "5f6cb37fb4cf13aecaad4323bb501dd459be26babd81d55041dcb2407f7c524e",
+      "gitBlob": "9344e7e6b26fc1f5ef2e5c1319dd30581dc7c338"
+    },
+    {
+      "path": "ui/src/services/credentialsApi.jsx",
+      "bytes": 9120,
+      "sha256": "9007415ae93a9d9c58527fb1b67aaa0e238e66b2da7ebc798def6a6189992e14",
+      "gitBlob": "b354cc74ade7035ba5903aa429289775341a652a"
+    },
+    {
+      "path": "ui/src/hooks/useWalletOpenLink.js",
+      "bytes": 2618,
+      "sha256": "3a556999ca80dade5adb6b365f095c094bb944f8acceb399377f65a3bf086293",
+      "gitBlob": "d275df25aa555f25dd88fa2bbc358248884688cc"
+    },
+    {
+      "path": "ui/src/components/issuance/OID4VCIInviteDisplay.jsx",
+      "bytes": 7413,
+      "sha256": "ad55f6af1490d1e2b19e713a0550eed198ca2b94735a6163e3036fb5c1497add",
+      "gitBlob": "717fa09e1e60d41ce858c48ab1f302e950f22d60"
+    },
+    {
+      "path": "ui/src/components/issuance/QRCodeDisplay.jsx",
+      "bytes": 13715,
+      "sha256": "49c77ffb4368b5ec96f575d13cfd3b3723e118048416a42a5e15c7bff1369bbf",
+      "gitBlob": "0ffc9a28085c5efa273f894fabafac86be81ab65"
+    },
+    {
+      "path": "ui/src/services/applicantApi.jsx",
+      "bytes": 7567,
+      "sha256": "24140d5bb61cb0a670caac2131bd9fdd3eed0a6869ca2507cd51fc102b493830",
+      "gitBlob": "7e92a7774180722ca1055a11d2ab8a07f6e28c49"
+    },
+    {
+      "path": "ui/src/services/walletTransportService.js",
+      "bytes": 4292,
+      "sha256": "8f72efe49f6ad19900b4a48f8b3d5b415253256074c200529dc9c12de21e74f7",
+      "gitBlob": "f7c5dd6c5075626c4c6d6e9f06af69db56039919"
+    },
+    {
+      "path": "ui/tsconfig.build.json",
+      "bytes": 253,
+      "sha256": "cbbd5c5c070eedbb816205a74d1f3d37eec4edea36d7521b836d8bb4e6a4ce29",
+      "gitBlob": "82337bbc5c44e21ba01b53197d663596b5a8908d"
+    }
+  ],
+  "sourceMatchesImplementationCommit": true,
+  "logFiles": [
+    {
+      "path": "claim-dialog-baseline.log",
+      "bytes": 2923,
+      "sha256": "8c98ae4ed57e53aa5e590f3a3a573fe639f1c155442aee67de879e0bb1f2fb4a"
+    },
+    {
+      "path": "claim-dialog-contract-before.log",
+      "bytes": 57208,
+      "sha256": "9d2c8f1a7adb18aaa8deeb4592a89d096890fcb9931f6d361f73232ccc5bc1a1"
+    },
+    {
+      "path": "ui-claim-canvas-wallet-final.log",
+      "bytes": 439,
+      "sha256": "90b45186bb90aff81116e2706aa46f1deadb0029810c11ba61b8d3250916fbd1"
+    },
+    {
+      "path": "ui-production-typecheck-final.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "independentReview": "ui-wallet-open-parent-review.json",
+  "boundaries": [
+    "Controlled service responses and jsdom browser surfaces do not prove a deployed Rust/wallet round trip, native application launch, credential storage or released master.",
+    "The actual native claim API and concurrency behavior have separate Rust HTTP/service regressions. The actual desktop invitation child has a separate 12-case record; those 12 executions overlap the final 31-case run and are not additive unique cases.",
+    "Canvas ApplicationForm return behavior is verified separately with 15 cases at c971c40. No test requires treating browser return or closing as receipt.",
+    "Earlier exploratory claim-dialog-first-fix/claim-dialog-regression logs modeled request options before the unsupported Rust contract was identified. They are superseded exploratory results and are not retained or cited as final production verification.",
+    "Automatic server retirement and fresh production video/audio qualification remain unperformed."
+  ]
+}

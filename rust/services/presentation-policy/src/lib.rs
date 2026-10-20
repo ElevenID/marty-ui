@@ -34,7 +34,7 @@ pub use http_service::{
     PresentationPolicyHttpState, PresentationVerificationError,
     PresentationVerificationOrchestrator,
 };
-pub use native_kernel::RustCredentialKernel;
+pub use native_kernel::{ResolvingCredentialKernel, RustCredentialKernel};
 pub use persistence::{PolicyRecord, PolicyRecordError, PRESENTATION_POLICY_MIGRATION};
 pub use postgres::{
     migrate_presentation_policy_schema, validate_presentation_policy_schema, PostgresPolicyStore,

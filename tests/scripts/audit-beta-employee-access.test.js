@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  approveAndIssue,
+  createAndSubmitApplication,
   employeeApplicationTemplatePayload,
   employeeCredentialPayload,
   employeeFlowPayload,
@@ -11,6 +13,50 @@ const {
   employeeTrustProfilePayload,
   requireConfigurationBinding,
 } = require('./audit-beta-employee-access');
+const { DEFAULT_BETA_ORGANIZATION_ID } = require('./beta-credential-contract');
+const { walletSessionDriverRegressions } = require('./demo-wallet-driver-test-helpers');
+
+walletSessionDriverRegressions('audit-beta-employee-access.js', 'D-04');
+
+function ownedRun(extra = {}) {
+  return {
+    organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
+    applicationTemplateId: 'employee-application-template',
+    credentialTemplateId: 'employee-credential-template',
+    applicantId: 'employee-applicant',
+    runId: 'employee-run',
+    applicationId: null,
+    uncertainMutations: [],
+    ...extra,
+  };
+}
+
+function application(owned, extra = {}) {
+  return {
+    id: owned.applicationId || 'employee-application/1',
+    organization_id: owned.organizationId,
+    application_template_id: owned.applicationTemplateId,
+    credential_template_id: owned.credentialTemplateId,
+    applicant_id: owned.applicantId,
+    integration_context: { demo_run_id: owned.runId },
+    status: 'DRAFT',
+    ...extra,
+  };
+}
+
+function fakePage(responses) {
+  const requests = [];
+  return {
+    requests,
+    async evaluate(_callback, request) {
+      requests.push(request);
+      assert.ok(responses.length, `Unexpected request to ${request.requestPath}`);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
+    },
+  };
+}
 
 const source = {
   issuer_did: 'did:web:beta.example:orgs:issuer',
@@ -162,4 +208,57 @@ test('D-04 configuration rejects semantic and approval-trigger drift', () => {
     },
     flow,
   }), /employee access contract/);
+});
+
+test('D-04 retains its created application ID when submission fails', async () => {
+  const owned = ownedRun();
+  const page = fakePage([
+    { ok: true, status: 201, body: application(owned) },
+    { ok: false, status: 503, body: { error: 'unavailable' } },
+  ]);
+
+  await assert.rejects(
+    () => createAndSubmitApplication(page, owned, 'EMP-current-run'),
+    /Submit employee application failed \(HTTP 503\)/,
+  );
+  assert.equal(owned.applicationId, 'employee-application/1');
+  assert.deepEqual(owned.uncertainMutations, []);
+  assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method]), [
+    ['/v1/me/applications', 'POST'],
+    ['/v1/me/applications/employee-application%2F1/submit', 'POST'],
+  ]);
+  const body = JSON.parse(page.requests[0].requestOptions.body);
+  assert.equal(body.integration_context.demo_run_id, owned.runId);
+  assert.equal(body.form_data.employee_id, 'EMP-current-run');
+});
+
+test('D-04 releases its exact reviewer lock after lost acquisition or approval failure without issuing', async () => {
+  for (const lostAcquisition of [true, false]) {
+    const owned = ownedRun({ applicationId: 'employee-application/1' });
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
+      ...(lostAcquisition ? [new Error('Lost reviewer lock response')] : [
+        {
+          ok: true,
+          status: 200,
+          body: { id: 'reviewer-lock', organization_id: owned.organizationId, applicant_id: owned.applicationId },
+        },
+        { ok: false, status: 403, body: { error: 'forbidden' } },
+      ]),
+      { ok: true, status: 200, body: { released: true } },
+    ]);
+
+    await assert.rejects(() => approveAndIssue(page, owned), lostAcquisition
+      ? /Lost reviewer lock response/
+      : /Approve employee application failed \(HTTP 403\)/);
+    const root = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/employee-application%2F1`;
+    assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method || 'GET']), [
+      [root, 'GET'],
+      [`${root}/lock`, 'POST'],
+      ...(lostAcquisition ? [] : [[`${root}/approve`, 'POST']]),
+      [`${root}/lock`, 'DELETE'],
+    ]);
+    assert.equal(owned.transactionId, undefined);
+    assert.deepEqual(owned.uncertainMutations, []);
+  }
 });

@@ -31,3 +31,18 @@ fn migration_has_one_explicit_compatible_head() {
     assert!(sql.contains("ux_webhook_outbox_logical_delivery"));
     assert!(sql.contains("ck_webhook_outbox_status"));
 }
+
+#[test]
+fn correlation_migration_is_applied_and_validated() {
+    let source = include_str!("../src/migration.rs");
+    let sql = include_str!("../migrations/0002_webhook_delivery_correlation.sql");
+    let compact_source: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    // Keep a source assertion from looking like another compiler include input.
+    let expected_include = format!(
+        "{}({})",
+        "include_str!", r#""../migrations/0002_webhook_delivery_correlation.sql""#
+    );
+    assert!(compact_source.contains(&expected_include));
+    assert!(source.contains("webhook delivery correlation column is missing"));
+    assert!(sql.contains("ADD COLUMN IF NOT EXISTS correlation_id varchar(64)"));
+}

@@ -81,7 +81,10 @@ impl SigningOrigin {
                         .issuer_did
                         .as_deref()
                         .is_some_and(|did| did.starts_with("did:"))
-                    && matches!(claims.key_purpose.as_str(), "csca" | "x509_doc_signer")
+                    && matches!(
+                        claims.key_purpose.as_str(),
+                        "csca" | "x509_doc_signer" | "mdoc_dsc"
+                    )
                     && matches!(claims.algorithm.as_str(), "ES256" | "ES384" | "ES512")
             }
             Self::IssuanceCredential => {
@@ -661,6 +664,21 @@ mod tests {
             payload: b"exact.payload",
         };
         assert!(bound_input(&claims, &csr_binding, 1_700_000_001).is_ok());
+
+        claims.key_purpose = "mdoc_dsc".into();
+        let mdoc_csr_binding = GrantBinding {
+            origin: SigningOrigin::GatewayIssuerDid,
+            operation_id: &claims.operation_id,
+            organization_id: &claims.organization_id,
+            route: &claims.route,
+            service_id: None,
+            issuer_did: claims.issuer_did.as_deref(),
+            key_reference: None,
+            key_purpose: &claims.key_purpose,
+            algorithm: &claims.algorithm,
+            payload: b"exact.payload",
+        };
+        assert!(bound_input(&claims, &mdoc_csr_binding, 1_700_000_001).is_ok());
     }
 
     #[test]

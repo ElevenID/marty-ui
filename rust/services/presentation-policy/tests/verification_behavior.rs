@@ -689,3 +689,213 @@ async fn exact_mdoc_direct_pin_relationship_supplies_governed_lifecycle_status()
     assert_eq!(facts["external_authorization"]["allowed"], true);
     assert!(status.calls.lock().unwrap().is_empty());
 }
+
+struct ForeignPublicKeyResolver {
+    keys: Vec<Value>,
+}
+#[async_trait]
+impl marty_issuer_key_resolution::IssuerKeyResolver for ForeignPublicKeyResolver {
+    async fn resolve(
+        &self,
+        _: &str,
+    ) -> Result<
+        marty_issuer_key_resolution::IssuerKeyResolution,
+        marty_issuer_key_resolution::IssuerKeyResolutionError,
+    > {
+        Ok(marty_issuer_key_resolution::IssuerKeyResolution {
+            verification_keys: self.keys.clone(),
+            source: "test-resolver".into(),
+            retrieved_at: "2026-01-01T00:00:00Z".into(),
+            content_sha256: "test".into(),
+        })
+    }
+}
+
+struct NativeForeignTrust {
+    issuer: String,
+}
+#[async_trait]
+impl PresentationTrustResolver for NativeForeignTrust {
+    async fn load_profile(
+        &self,
+        profile_id: Uuid,
+        organization_id: Uuid,
+    ) -> Result<ResolvedTrustProfile, PresentationVerificationError> {
+        Ok(ResolvedTrustProfile {
+            id: profile_id,
+            organization_id,
+            document: json!({"status":"ACTIVE","allowed_issuers":[self.issuer],"issuer_relationships":[]}),
+        })
+    }
+    async fn evaluate_issuer(
+        &self,
+        profile: &ResolvedTrustProfile,
+        issuer: &str,
+        format: DetectedCredentialFormat,
+    ) -> Result<IssuerTrustEvidence, PresentationVerificationError> {
+        let control = marty_presentation_policy::NativePresentationControlPlane::connect_lazy(
+            "http://127.0.0.1:9",
+            "http://127.0.0.1:9",
+            "http://127.0.0.1:9/{credential_id}",
+            None,
+            None,
+            std::time::Duration::from_secs(1),
+        )?;
+        control.evaluate_issuer(profile, issuer, format).await
+    }
+}
+
+#[tokio::test]
+async fn resolved_foreign_signature_does_not_establish_policy_trust() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
+    let raw = marty_verification::vcdm::verify_open_badge_v3_jwt_json_async(
+        &json!({"token":fixture["token"],"issuer_public_jwk":fixture["public_jwk"]}).to_string(),
+    )
+    .await;
+    let result: Value = serde_json::from_str(&raw).unwrap();
+    assert_eq!(result["valid"], true, "{}", result["errors"]);
+    for trusted in [false, true] {
+        let trust = Arc::new(NativeForeignTrust {
+            issuer: if trusted {
+                fixture["issuer"].as_str().unwrap().into()
+            } else {
+                "did:web:trusted.example".into()
+            },
+        });
+        let status = Arc::new(Status {
+            evidence: CredentialStatusEvidence::default(),
+            calls: Mutex::new(Vec::new()),
+        });
+        let kernel = marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(
+            ForeignPublicKeyResolver {
+                keys: vec![fixture["public_jwk"].clone()],
+            },
+        ));
+        let orchestrator = VerifiedFactsOrchestrator::with_clock(
+            Arc::new(kernel),
+            trust,
+            status,
+            Arc::new(|| 1_787_240_300),
+        )
+        .unwrap();
+        let mut policy = policy();
+        policy.credential_requirements[0].credential_payload_format = "openbadge-v3".into();
+        let request = marty_presentation_policy::EvaluatePresentationRequest {
+            vp_token: fixture["token"].clone(),
+            trust_profile_id: None,
+            nonce: None,
+            audience: None,
+            context: serde_json::Map::new(),
+            oid4vp_transport: None,
+            trusted_internal_context: false,
+        };
+        let facts = orchestrator.verify(&policy, &request).await.unwrap();
+        assert_eq!(
+            facts["credentials"][0]["signature_verified"], true,
+            "{facts}"
+        );
+        assert_eq!(
+            facts["credentials"][0]["trust_profile_verified"], trusted,
+            "{facts}"
+        );
+        assert_eq!(facts["credentials"][0]["issuer_id"], fixture["issuer"]);
+        if !trusted {
+            assert_eq!(
+                facts["credentials"][0]["trust_failure_reason"],
+                "Issuer is not in Trust Profile allowed_issuers"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn foreign_key_resolution_rejects_tampering_private_and_ambiguous_keys() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
+    let mut private = fixture["public_jwk"].clone();
+    private["d"] = json!("prohibited");
+    let mut wrong_kid = fixture["public_jwk"].clone();
+    wrong_kid["kid"] = json!("did:web:other.example#key");
+    let key = fixture["public_jwk"].clone();
+    for keys in [
+        vec![private],
+        vec![wrong_kid],
+        vec![key.clone(), key.clone()],
+    ] {
+        let kernel = marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(
+            ForeignPublicKeyResolver { keys },
+        ));
+        let context = CredentialVerificationContext {
+            resolved_issuer_public_jwk: Some(key.clone()),
+            format: DetectedCredentialFormat::OpenbadgeV3,
+            token: fixture["token"].clone(),
+            nonce: None,
+            audience: None,
+            verifier_context: serde_json::Map::new(),
+            trust_profile: None,
+        };
+        assert!(!kernel.verify(&context).await.unwrap().verified);
+    }
+    let kernel = marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(
+        ForeignPublicKeyResolver { keys: vec![key] },
+    ));
+    let mut token = fixture["token"].as_str().unwrap().to_owned();
+    let start = token.rfind('.').unwrap() + 1;
+    token.replace_range(
+        start..start + 1,
+        if &token[start..start + 1] == "A" {
+            "B"
+        } else {
+            "A"
+        },
+    );
+    let context = CredentialVerificationContext {
+        resolved_issuer_public_jwk: None,
+        format: DetectedCredentialFormat::OpenbadgeV3,
+        token: json!(token),
+        nonce: None,
+        audience: None,
+        verifier_context: serde_json::Map::new(),
+        trust_profile: None,
+    };
+    assert!(!kernel.verify(&context).await.unwrap().verified);
+}
+
+struct MustNotResolve;
+#[async_trait]
+impl marty_issuer_key_resolution::IssuerKeyResolver for MustNotResolve {
+    async fn resolve(
+        &self,
+        _: &str,
+    ) -> Result<
+        marty_issuer_key_resolution::IssuerKeyResolution,
+        marty_issuer_key_resolution::IssuerKeyResolutionError,
+    > {
+        panic!("governed issuer must not trigger network key discovery")
+    }
+}
+
+#[tokio::test]
+async fn existing_governed_key_remains_authoritative_without_resolution() {
+    let fixture: Value =
+        serde_json::from_str(include_str!("fixtures/foreign_ob3_jwt.json")).unwrap();
+    let context = CredentialVerificationContext {
+        resolved_issuer_public_jwk: None,
+        format: DetectedCredentialFormat::OpenbadgeV3,
+        token: fixture["token"].clone(),
+        nonce: None,
+        audience: None,
+        verifier_context: serde_json::Map::new(),
+        trust_profile: Some(ResolvedTrustProfile {
+            id: POLICY_PROFILE_ID,
+            organization_id: ORGANIZATION_ID,
+            document: json!({"status":"ACTIVE","issuer_relationships":[{
+                "issuer_id":fixture["issuer"],"relationship_status":"TRUSTED","compliance_status":"COMPLIANT",
+                "verification_keys":[fixture["public_jwk"]]}]}),
+        }),
+    };
+    let kernel =
+        marty_presentation_policy::ResolvingCredentialKernel::new(Arc::new(MustNotResolve));
+    assert!(kernel.verify(&context).await.unwrap().verified);
+}

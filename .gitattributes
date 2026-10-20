@@ -13,3 +13,10 @@ scripts/sql/passport-beta-db-maintenance-start.sql text eol=lf
 scripts/sql/passport-beta-db-enable-app-login.sql text eol=lf
 scripts/sql/passport-beta-rust-owner-transition.sql text eol=lf
 scripts/sql/passport-beta-rust-owner-verify.sql text eol=lf
+tests/scripts/audit-beta-canvas-capture.js text eol=lf
+tests/scripts/audit-beta-credential-lifecycle.js text eol=lf
+tests/scripts/audit-beta-first-party-browser-wallet.js text eol=lf
+tests/scripts/audit-beta-independent-wallet-interoperability.js text eol=lf
+tests/scripts/audit-beta-direct-vc-api.js text eol=lf
+docs/demo-audit/2026-10-20-canvas-adapter/focused-source-tests.log -text
+docs/demo-audit/2026-10-20-vc-api-auth/*.json -text
