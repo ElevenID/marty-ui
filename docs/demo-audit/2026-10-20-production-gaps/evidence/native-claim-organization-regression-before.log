@@ -1,0 +1,72 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui
+
+stderr | src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the Canvas issuer organization
+Received `true` for a non-boolean attribute `item`.
+
+If you want to write it to the DOM, pass a string instead: item="true" or item={value.toString()}.
+
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > explains Canvas-only credential applications with launch context and completion checks
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > renders only server-verified Canvas evidence and a real unsigned pending claim
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the Canvas issuer organization 495ms
+ × src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the authenticated organization fallback 151ms
+   → expect(element).toHaveAttribute("data-organization-id", "org-1") // element.getAttribute("data-organization-id") === "org-1"
+
+Expected the element to have attribute:
+  data-organization-id="org-1"
+Received:
+  data-organization-id=""
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > does not load org-scoped templates for Canvas LTI learners
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > runs the one-click credential issuance flow for member credentials
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > submits the application but waits for wallet selection before generating an offer
+ × src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > keeps one-click membership wallet selection in the application organization before an offer exists 100ms
+   → expect(element).toHaveAttribute("data-organization-id", "org-membership") // element.getAttribute("data-organization-id") === "org-membership"
+
+Expected the element to have attribute:
+  data-organization-id="org-membership"
+Received:
+  null
+ ↓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > uploads required evidence through the same public API before browser submission
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the authenticated organization fallback
+Error: expect(element).toHaveAttribute("data-organization-id", "org-1") // element.getAttribute("data-organization-id") === "org-1"
+
+Expected the element to have attribute:
+  data-organization-id="org-1"
+Received:
+  data-organization-id=""
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:407:59
+    405|     await user.click(screen.getByTestId('canvas-claim-action'));
+    406|     expect(screen.getByTestId('claim-credential-dialog')).toHaveTextCo…
+    407|     expect(screen.getByTestId('claim-credential-dialog')).toHaveAttrib…
+       |                                                           ^
+    408|   });
+    409|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > keeps one-click membership wallet selection in the application organization before an offer exists
+Error: expect(element).toHaveAttribute("data-organization-id", "org-membership") // element.getAttribute("data-organization-id") === "org-membership"
+
+Expected the element to have attribute:
+  data-organization-id="org-membership"
+Received:
+  null
+ ❯ src/components/__tests__/ApplicationForm.test.tsx:525:20
+    523|     expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+    524|     expect(dialog).toHaveTextContent('application-1:');
+    525|     expect(dialog).toHaveAttribute('data-organization-id', 'org-member…
+       |                    ^
+    526|   });
+    527|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  2 failed | 1 passed | 6 skipped (9)
+   Start at  00:56:28
+   Duration  2.69s (import 31%, tests 29%, environment 21%, transform 11%, setup 7%)
+
