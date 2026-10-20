@@ -20,6 +20,12 @@ on:
         required: false
         default: false
         type: boolean
+      selfhost_public_profile:
+        description: Public UI surface included in the separately built self-host image
+        required: false
+        default: tester
+        type: choice
+        options: [tester, full]
       selfhost_external_images_json:
         description: Exact service-to-digest JSON for independent infrastructure images
         required: false
@@ -1527,6 +1533,7 @@ jobs:
           outputs: type=image,name=${{ env.SELFHOST_UI_IMAGE }},push-by-digest=true,name-canonical=true,push=true
           build-args: |
             UI_VARIANT=selfhost
+            SELFHOST_PUBLIC_PROFILE=${{ inputs.selfhost_public_profile }}
             NGINX_CONFIG=nginx.spa.conf
             MARTY_RELEASE_VERSION=${{ needs.validate-stack.outputs.version }}
             MARTY_UI_SHA=${{ needs.resolve-transaction.outputs.source_sha }}

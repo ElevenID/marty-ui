@@ -315,8 +315,13 @@ def main() -> int:
         result = start(args.private_root, args.host_port)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError,
             json.JSONDecodeError) as error:
-        print(f"disposable OpenBao startup failed: {type(error).__name__}",
-              file=sys.stderr)
+        if isinstance(error, FileNotFoundError) and error.filename == "docker":
+            print("disposable OpenBao startup failed [DOCKER_MISSING]: install "
+                  "rootful Docker Engine and Compose, then retry with the "
+                  "same daemon for operator and sudo", file=sys.stderr)
+        else:
+            print(f"disposable OpenBao startup failed [UNEXPECTED_{type(error).__name__.upper()}]: "
+                  "check the runbook and owned-project cleanup marker", file=sys.stderr)
         return 2
     print(f"Started unqualified OpenBao project {result['project']} on loopback port {result['host_port']}")
     return 0

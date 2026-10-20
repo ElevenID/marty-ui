@@ -4,6 +4,13 @@ import userEvent from '@testing-library/user-event';
 
 import LandingPage from '../LandingPage';
 
+const publicProfile = vi.hoisted(() => ({ showPublicCta: true }));
+
+vi.mock('@ui-public-config', async () => {
+  const actual = await vi.importActual<typeof import('@ui-public-config')>('@ui-public-config');
+  return { ...actual, get SHOW_PUBLIC_CTA() { return publicProfile.showPublicCta; } };
+});
+
 const { mockNavigate, mockSearchParams, mockSetSearchParams, mockUseAuth, mockUseBranding, mockTrackEvent } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockSearchParams: vi.fn(),
@@ -60,6 +67,7 @@ vi.mock('../diagrams', () => ({
 describe('LandingPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    publicProfile.showPublicCta = true;
     mockSearchParams.mockReturnValue(new URLSearchParams(''));
     mockUseAuth.mockReturnValue({
       isAuthenticated: false,
@@ -69,6 +77,15 @@ describe('LandingPage', () => {
     mockUseBranding.mockReturnValue({
       branding: { appName: 'ElevenID LLC' },
     });
+  });
+
+  it('omits the developer start-verifying card in the tester profile', () => {
+    publicProfile.showPublicCta = false;
+    render(<LandingPage />);
+
+    expect(screen.queryByText('Start Verifying')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('get-started-btn')).not.toBeInTheDocument();
+    expect(screen.getByText('Enterprise')).toBeInTheDocument();
   });
 
   it('redirects authenticated users to the applicant console', async () => {

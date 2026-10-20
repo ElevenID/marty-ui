@@ -9,6 +9,7 @@ import { Suspense, lazy, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
 import {
   DISABLE_PUBLIC_PRICING_BUTTONS,
+  SHOW_PUBLIC_CTA,
   SHOW_PUBLIC_PRICING_BUTTONS,
 } from '@ui-public-config';
 import FutureFeatureButton from './FutureFeatureButton';
@@ -818,7 +819,7 @@ function LandingPage() {
                 </Typography>
               </Box>
               <Box sx={{ display: 'flex', gap: 2, justifyContent: { xs: 'center', lg: 'flex-start' }, flexWrap: 'wrap' }}>
-                <Button
+                {SHOW_PUBLIC_CTA && <Button
                   component={Link}
                   to="/developers"
                   onClick={() => handleLandingCtaClick({
@@ -843,7 +844,7 @@ function LandingPage() {
                   }}
                 >
                   {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
-                </Button>
+                </Button>}
                 <Button
                   component={Link}
                   to={VALUE_PROPOSITION.secondaryCTA.path}
@@ -1027,7 +1028,9 @@ function LandingPage() {
                     endIcon={<ArrowForwardIcon />}
                     sx={{ mt: 'auto', alignSelf: 'flex-start', px: 0, fontWeight: 700 }}
                   >
-                    {destination.cta}
+                    {destination.id === 'verify-credentials' && !SHOW_PUBLIC_CTA
+                      ? 'Explore Verification'
+                      : destination.cta}
                   </Button>
                 </CardContent>
               </CardActionArea>
@@ -1457,7 +1460,7 @@ function LandingPage() {
           {t('audienceRouting.title', AUDIENCE_ROUTING.title)}
         </SectionHeading>
         <Grid container spacing={3} sx={{ maxWidth: 960, mx: 'auto' }}>
-          {AUDIENCE_ROUTING.paths.map((path) => (
+          {AUDIENCE_ROUTING.paths.filter((path) => SHOW_PUBLIC_CTA || path.id !== 'developers').map((path) => (
             <Grid item xs={12} md={4} key={path.id}>
               <Card
                 elevation={2}
@@ -1889,7 +1892,7 @@ function LandingPage() {
             : t('landingPage.footer.descriptionComingSoon', 'Start with the verification surface today. Pricing and onboarding stay gated on production deployments, but the docs, product paths, and API flows are live.')}
         </Typography>
         <Box sx={{ display: 'flex', gap: 2, justifyContent: 'center', flexWrap: 'wrap' }}>
-          <Button
+          {SHOW_PUBLIC_CTA && <Button
             component={Link}
             to="/developers"
             onClick={() => handleLandingCtaClick({
@@ -1913,7 +1916,7 @@ function LandingPage() {
             }}
           >
             {t('valueProposition.primaryCTA', VALUE_PROPOSITION.primaryCTA)}
-          </Button>
+          </Button>}
           <Button
             component={Link}
             to={VALUE_PROPOSITION.secondaryCTA.path}

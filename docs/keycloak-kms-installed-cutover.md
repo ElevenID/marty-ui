@@ -44,11 +44,13 @@ test-user accounts as part of installed acceptance.
    journey, but its prepared bundle came from a failed producer and its
    coordinated cold restore remains unrun. Signed `v1.1.258` passed its
    exact-main release, terminally successful bundle producer, independent
-   fresh installed journey, and coordinated cold-copy restored-stack checks.
-   Its installed reports are explicitly unqualified and its current Keycloak
-   and workload TLS credentials expire within hours. It is not eligible for
-   a continuously running beta or self-host cutover until a production
-   renewal and controlled reload path crosses an actual expiry boundary.
+   fresh installed journey, and coordinated cold-copy restored-stack checks;
+   its installed reports remain unqualified. `v1.1.259` has an experimental
+   tester preview but no installed qualification. Consider `v1.1.260` only
+   after its exact-main release, terminally successful bundle producer,
+   independent fresh installed journey, and restored-stack gates pass. A
+   continuously running beta or self-host cutover also needs a production
+   renewal and controlled reload path that crosses an actual expiry boundary.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a
    private secret root. Choose the final Compose project names and loopback
    ports. Render the full

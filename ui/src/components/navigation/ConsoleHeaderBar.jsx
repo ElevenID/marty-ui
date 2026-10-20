@@ -40,6 +40,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import SearchIcon from '@mui/icons-material/Search';
 
 import { useAuth } from '../../hooks/useAuth';
+import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 import { useBranding } from '../../hooks/useBranding';
 import { useConsole } from '../../contexts/ConsoleContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
@@ -584,12 +585,14 @@ export function ConsoleHeaderBar({ onMobileMenuToggle }) {
             </ListItemIcon>
             <ListItemText>Settings</ListItemText>
           </MenuItem>
-          <MenuItem component={RouterLink} to="/docs">
-            <ListItemIcon>
-              <HelpOutlineIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText>Help & Docs</ListItemText>
-          </MenuItem>
+          {SHOW_PUBLIC_DOCUMENTATION_NAV && (
+            <MenuItem component={RouterLink} to="/docs">
+              <ListItemIcon>
+                <HelpOutlineIcon fontSize="small" />
+              </ListItemIcon>
+              <ListItemText>Help & Docs</ListItemText>
+            </MenuItem>
+          )}
           <Divider />
           <MenuItem onClick={handleLogout}>
             <ListItemIcon>

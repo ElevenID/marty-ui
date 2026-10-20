@@ -5123,20 +5123,26 @@ def test_ephemeral_ci_reads_only_shared_python_and_browser_caches() -> None:
     assert "rust/**" not in warm[True]["push"]["paths"]
 
 
-def test_closed_pull_request_cache_cleanup_is_rate_limit_safe() -> None:
-    source, document = _workflow(
-        ROOT / ".github" / "workflows" / "cleanup-ci-caches.yml"
-    )
+def test_closed_pull_request_cache_cleanup_uses_reviewed_shared_owner() -> None:
+    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
     cleanup = document["jobs"]["cleanup"]
-    script = cleanup["steps"][0]["with"]["script"]
-
-    assert "Promise.all" not in script
-    assert "await delay(500)" in script
-    assert "error.status === 429 || error.status === 403" in script
-    assert "const maxAttempts = 7" in script
-    assert "retry-after" in script
-    assert "2_000 * (2 ** attempt)" in script
-    assert "maxDeletions = 2000" in source
+    # Runtime queue/reopened/rate-limit cases are owned by the shared action's
+    # actions/cleanup-ci-caches/cleanup.test.cjs in ElevenID/.github.
+    assert len(cleanup["steps"]) == 1
+    step = cleanup["steps"][0]
+    assert step["uses"] == (
+        "ElevenID/.github/actions/cleanup-ci-caches@"
+        "38ba2bdada295672765bf600203604884323f14a"
+    )
+    assert step["with"] == {
+        "max-deletions": "2000",
+        "include-queue-on-close": "true",
+    }
+    assert cleanup["permissions"] == {
+        "actions": "write", "contents": "read", "pull-requests": "read"
+    }
+    assert document[True]["pull_request"]["types"] == ["closed"]
+    assert document["concurrency"]["cancel-in-progress"] is False
 
 
 def test_compiler_cache_writes_are_reserved_for_trusted_main() -> None:
@@ -5761,54 +5767,6 @@ def test_passport_webhook_boundary_has_one_acceptance_owner_and_a_real_db_gate()
     assert '"marty_passport_gateway_test"' in source
     assert 'sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")' in source
     assert "migration::migrate_passport(&pool).await.unwrap();" in source
-
-
-@pytest.mark.parametrize("event", ["pull_request", "workflow_dispatch"])
-@pytest.mark.parametrize("reopened", [False, True])
-def test_cache_cleanup_includes_queue_refs_but_preserves_active_and_main(
-    event: str, reopened: bool
-) -> None:
-    _, document = _workflow(ROOT / ".github/workflows/cleanup-ci-caches.yml")
-    script = document["jobs"]["cleanup"]["steps"][0]["with"]["script"]
-    harness = (
-        r"""
-      const deleted = [];
-      const entries = [
-        {id: 1, ref: 'refs/pull/23/merge'},
-        {id: 2, ref: 'refs/heads/gh-readonly-queue/main/pr-23-abcdef'},
-        {id: 3, ref: 'refs/heads/main'},
-        {id: 4, ref: 'refs/pull/24/merge'},
-        {id: 5, ref: 'refs/heads/gh-readonly-queue/main/pr-24-abcdef'},
-        {id: 6, ref: 'refs/heads/feature'},
-      ];
-      const github = {
-        request: async (_, params) => {
-          if (params.ref) throw new Error('ref filter hides queue caches');
-          return {data: {actions_caches: entries}};
-        },
-        rest: {
-          pulls: {get: async ({pull_number}) => ({data: {state: pull_number === 23 && !REOPENED ? 'closed' : 'open'}})},
-          actions: {deleteActionsCacheById: async ({cache_id}) => { deleted.push(cache_id); }},
-        },
-      };
-      const summary = {addHeading() {return this}, addRaw() {return this}, async write() {}};
-      const core = {info() {}, warning() {}, summary};
-      const context = {repo: {owner: 'test', repo: 'test'}, eventName: EVENT,
-        payload: {pull_request: {number: 23}}};
-      const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
-      await new AsyncFunction('github', 'context', 'core', 'setTimeout', SCRIPT)(
-        github, context, core, callback => callback());
-      if (JSON.stringify(deleted) !== (REOPENED ? '[]' : '[1,2]')) throw new Error(JSON.stringify(deleted));
-    """.replace("EVENT", json.dumps(event))
-        .replace("REOPENED", json.dumps(reopened))
-        .replace("SCRIPT", json.dumps(script))
-    )
-    result = subprocess.run(
-        ["node", "--input-type=module", "--eval", harness],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(

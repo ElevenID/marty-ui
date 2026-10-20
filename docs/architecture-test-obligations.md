@@ -117,6 +117,17 @@ complete source/mount/fixture closure, and authorizes no additional skipped
 tests or historical qualification reuse. Any timing cost or later CI speedup
 must be measured rather than inferred from the new records.
 
+The next A0 input slice records the published PostgreSQL and probe image
+references from the existing pinned consumer-range contract with every Canvas
+composition/worker result. It records the contract's byte hash and whether the
+runner exported the canonical PostgreSQL digest or its digest-preserving public
+mirror. CI refuses an unapproved or missing selection before running the test;
+local synthetic harnesses are marked `unverified_local` without retaining an
+arbitrary environment value. The published probe is pulled by the unchanged
+runner. This is image-input identity, not proof of a complete source/import,
+runtime fixture or assertion graph; it grants no new selection or evidence
+reuse authority.
+
 Before a release affecting Canvas integration, confirm a successful weekly/manual full-qualification run on the current main revision; if none exists, dispatch `ci.yml` on main and await its result. A PR's fast Canvas result alone does not qualify historical compatibility.
 
 ### A4 fast scoped-timeout policy matrix
