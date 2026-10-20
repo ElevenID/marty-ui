@@ -1,10 +1,10 @@
-#[path = "../../../services/issuance/tests/support/base_runtime_redis.rs"]
+#[path = "../../../acceptance/support/base_runtime_redis.rs"]
 #[allow(
     dead_code,
     reason = "shared fixture also serves Canvas acceptance cases"
 )]
 mod base_runtime_redis;
-#[path = "../../../services/issuance/tests/support/didcomm_gateway_replay.rs"]
+#[path = "../../../acceptance/support/didcomm_gateway_replay.rs"]
 #[allow(
     dead_code,
     reason = "shared fixture also serves Canvas acceptance cases"
