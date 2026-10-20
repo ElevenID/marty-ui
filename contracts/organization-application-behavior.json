@@ -17,7 +17,8 @@
       "plan": "free",
       "is_discoverable": true,
       "owner_status": "active",
-      "permission_count": 106
+      "permission_count": 107,
+      "required_permission_keys": ["audit:ingest"]
     }
   },
   "update": {
