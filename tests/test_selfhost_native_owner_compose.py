@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import hashlib
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -54,6 +55,7 @@ def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
         assert "flow" not in visited
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell is required")
 def test_keycloak_preserves_scoped_openbao_token_file(tmp_path):
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     env = model["services"]["keycloak"]["environment"]

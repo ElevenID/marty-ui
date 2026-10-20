@@ -1,6 +1,7 @@
 """The disposable signer helper keeps operator secret material out of source."""
 
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,6 +191,7 @@ def test_pending_refresh_rejected_before_new_token_created(
                          refresh_token=True, identity_root=private_root / "evidence-identity")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are required")
 def test_operator_root_must_be_private_and_outside_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
