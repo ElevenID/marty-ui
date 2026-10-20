@@ -498,6 +498,15 @@ these inputs broad even if a witness disappears. This corrects shadow evidence
 only; live CI selection and its required checks are unchanged. No speedup is
 claimed until the full non-Cargo graph is qualified.
 
+The October 20 packaged-runtime audit also found that Cargo reverse edges
+alone returned narrow results for the `marty-keyless-grpc-bridge` and
+`marty-passport-keyless-edge` crates. The service-image build copies their
+executables, while Compose runs the Envoy-to-Issuance bridge and the Passport
+and OIDF keyless edges. The shadow planner now records the source-backed
+build, image and runtime witnesses, including the packaged passport TLS
+bootstrap binary, and keeps these changes broad if a witness disappears.
+This is input evidence, not a live CI selector change or measured speedup.
+
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
 full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
