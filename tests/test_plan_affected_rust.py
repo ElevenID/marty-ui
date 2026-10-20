@@ -788,6 +788,83 @@ class AffectedRustPlannerTests(unittest.TestCase):
                     [edge] = result["observed_packaged_runtime_consumers"]
                     self.assertFalse(all(item["present"] for item in edge["witnesses"]))
 
+    def test_keyless_crates_keep_packaged_runtime_consumers_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        cases = (
+            (
+                "marty-keyless-grpc-bridge",
+                "rust/crates/keyless-grpc-bridge/src/main.rs",
+                "envoy-issuance-bridge",
+                3,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/main.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/bin/oidf_edge.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/bin/bootstrap.rs",
+                "passport/oidf-keyless-edges",
+                8,
+            ),
+        )
+        for producer, changed, consumer, count in cases:
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                [edge] = result["observed_packaged_runtime_consumers"]
+                self.assertEqual(edge["producer"], producer)
+                self.assertEqual(edge["consumer"], consumer)
+                self.assertEqual(len(edge["witnesses"]), count)
+                self.assertTrue(all(item["present"] for item in edge["witnesses"]))
+
+    def test_keyless_packaging_witness_drift_stays_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        cases = (
+            ("marty-keyless-grpc-bridge", "rust/crates/keyless-grpc-bridge/src/main.rs"),
+            (
+                "marty-passport-keyless-edge",
+                "rust/crates/passport-keyless-edge/src/main.rs",
+            ),
+        )
+        original_read = planner._read_packaged_witness
+        for producer, changed in cases:
+            witnesses = planner.PACKAGED_RUNTIME_PRODUCERS[producer]["witnesses"]
+            for relative, marker in witnesses:
+                for missing_file in (False, True):
+
+                    def changed_read(path):
+                        if path == ROOT / relative:
+                            if missing_file:
+                                return ""
+                            return original_read(path).replace(marker, "removed-witness")
+                        return original_read(path)
+
+                    with self.subTest(
+                        producer=producer,
+                        relative=relative,
+                        marker=marker,
+                        missing=missing_file,
+                    ):
+                        with patch.object(
+                            planner, "_read_packaged_witness", changed_read
+                        ):
+                            result = planner.plan([changed], metadata, ROOT)
+                        self.assertTrue(result["all"])
+                        [edge] = result["observed_packaged_runtime_consumers"]
+                        self.assertFalse(
+                            all(item["present"] for item in edge["witnesses"])
+                        )
+
     def test_packaged_witness_reader_is_bounded_and_closes_owned_descriptor(
         self,
     ) -> None:
