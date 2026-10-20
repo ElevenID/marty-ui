@@ -47,7 +47,8 @@ def test_rollback_root_child_stops_retirement_audit(
     ca.write_text("public CA", encoding="ascii")
     args = argparse.Namespace(
         project_name="marty-selfhost-retirement-probe", minimum_token_ttl=3600,
-        compose_file=compose, bao_ca=ca, bao_addr="https://127.0.0.1:8200",
+        compose_file=compose, compose_override=None,
+        bao_ca=ca, bao_addr="https://127.0.0.1:8200",
         rollback_secrets=tmp_path / "rollback", active_secrets=tmp_path / "active",
         rollback_env=tmp_path / "rollback.env", active_env=tmp_path / "active.env",
         renewal_identity=tmp_path / "renewal", snapshot_identity=tmp_path / "snapshot",

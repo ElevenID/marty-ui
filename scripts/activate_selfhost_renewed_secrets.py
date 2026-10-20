@@ -77,9 +77,13 @@ def checked_env(path: Path, secret_root: Path) -> list[str]:
     return [line for line in lines if not line.startswith("SELFHOST_SECRET_DIR=")]
 
 
-def compose_args(project: str, env_file: Path, compose_file: Path) -> list[str]:
-    return ["docker", "compose", "--project-name", project,
-            "--env-file", str(env_file), "-f", str(compose_file)]
+def compose_args(project: str, env_file: Path, compose_file: Path,
+                 override: Path | None = None) -> list[str]:
+    command = ["docker", "compose", "--project-name", project,
+               "--env-file", str(env_file), "-f", str(compose_file)]
+    if override is not None:
+        command.extend(("-f", str(override)))
+    return command
 
 
 def require_rootless_migration(model: dict) -> None:
@@ -352,6 +356,12 @@ def activate(args: argparse.Namespace) -> dict:
     if (not args.compose_file.is_absolute() or args.compose_file.is_symlink()
             or not args.compose_file.is_file()):
         raise ValueError("owned Compose file is invalid")
+    if (args.compose_override is not None
+            and (not args.compose_override.is_absolute()
+                 or args.compose_override.is_symlink()
+                 or not args.compose_override.is_file()
+                 or args.compose_override == args.compose_file)):
+        raise ValueError("owned Compose override is invalid")
     if (args.report.exists() or args.report.is_symlink()
             or args.report.parent != args.log_dir
             or args.report.name in ("renewed-compose.log", "rollback-compose.log")):
@@ -371,8 +381,10 @@ def activate(args: argparse.Namespace) -> dict:
                    args.minimum_token_ttl, require_orphan_new=True)
     checked_certificates(bao, args.current_secrets, args.renewed_secrets,
                          args.minimum_token_ttl)
-    old = compose_args(args.project_name, args.current_env, args.compose_file)
-    new = compose_args(args.project_name, args.renewed_env, args.compose_file)
+    old = compose_args(args.project_name, args.current_env, args.compose_file,
+                       args.compose_override)
+    new = compose_args(args.project_name, args.renewed_env, args.compose_file,
+                       args.compose_override)
     cwd = args.compose_file.parent
     old_model = run_json([*old, "--profile", "*", "config", "--format", "json"], cwd=cwd)
     new_model = run_json([*new, "--profile", "*", "config", "--format", "json"], cwd=cwd)
@@ -423,6 +435,7 @@ def main() -> int:
     for name in ("compose_file", "current_env", "renewed_env", "current_secrets",
                  "renewed_secrets", "bao_ca", "bao_token_file", "log_dir", "report"):
         parser.add_argument("--" + name.replace("_", "-"), required=True, type=Path)
+    parser.add_argument("--compose-override", type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--bao-addr", required=True)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)

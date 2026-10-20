@@ -17,6 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import activate_selfhost_renewed_secrets as activation  # noqa: E402
 
 
+def test_compose_override_is_part_of_both_generation_commands(tmp_path: Path) -> None:
+    compose = tmp_path / "compose.yml"
+    override = tmp_path / "network.yml"
+    env = tmp_path / "generation.env"
+    command = activation.compose_args("owned-project", env, compose, override)
+    assert command[-4:] == ["-f", str(compose), "-f", str(override)]
+    assert activation.compose_args("owned-project", env, compose) == command[:-2]
+
+
 def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
     states = [
         {"Service": "keycloak", "State": "running", "Health": "healthy"},
@@ -171,7 +180,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     log_dir = tmp_path / "logs"
     log_dir.mkdir(mode=0o700)
     args = argparse.Namespace(
-        project_name=project, compose_file=compose,
+        project_name=project, compose_file=compose, compose_override=None,
         current_env=tmp_path / "old.env", renewed_env=tmp_path / "new.env",
         current_secrets=old, renewed_secrets=new, bao_addr="https://127.0.0.1:8200",
         bao_ca=ca, bao_token_file=tmp_path / "operator.token",

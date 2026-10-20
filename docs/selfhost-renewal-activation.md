@@ -80,6 +80,7 @@ access to the same isolated project, invoke
 ```text
 --project-name <owned marty-selfhost-* project>
 --compose-file <absolute rendered Compose file>
+--compose-override <optional absolute operator Compose override used by the live project>
 --current-env <absolute private original env file>
 --renewed-env <absolute private candidate env file>
 --current-secrets <absolute original secret directory>
@@ -103,3 +104,5 @@ requires operator recovery. The command is not a zero-downtime switch and
 does not itself run the issue/present/verify/revoke, session, database custody,
 or expiry-crossing checks. Run those independently before accepting the
 generation. Do not use an old local-key installation as the rollback target.
+Pass the same `--compose-override` to the root-retirement audit when the
+installed project uses one; both checks render it with each secret generation.

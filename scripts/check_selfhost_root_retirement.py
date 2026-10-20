@@ -129,7 +129,13 @@ def audit(args: argparse.Namespace) -> Path:
     if (os.name != "posix" or PROJECT.fullmatch(args.project_name) is None
             or args.minimum_token_ttl < 3600 or args.minimum_token_ttl > 8 * 60 * 60
             or not args.compose_file.is_absolute() or args.compose_file.is_symlink()
-            or not args.compose_file.is_file() or not args.bao_ca.is_absolute()
+            or not args.compose_file.is_file()
+            or (args.compose_override is not None
+                and (not args.compose_override.is_absolute()
+                     or args.compose_override.is_symlink()
+                     or not args.compose_override.is_file()
+                     or args.compose_override == args.compose_file))
+            or not args.bao_ca.is_absolute()
             or args.bao_ca.is_symlink() or not args.bao_ca.is_file()
             or args.bao_ca.stat().st_size > 64 * 1024
             or not args.openbao_state_dir.is_absolute()
@@ -165,8 +171,10 @@ def audit(args: argparse.Namespace) -> Path:
                 audit_policy)
 
     cwd = args.compose_file.parent
-    old = compose_args(args.project_name, args.rollback_env, args.compose_file)
-    new = compose_args(args.project_name, args.active_env, args.compose_file)
+    old = compose_args(args.project_name, args.rollback_env, args.compose_file,
+                       args.compose_override)
+    new = compose_args(args.project_name, args.active_env, args.compose_file,
+                       args.compose_override)
     old_model = checked_model(old, cwd, rollback)
     new_model = checked_model(new, cwd, active)
     normalized = json.loads(json.dumps(new_model))
@@ -195,6 +203,7 @@ def main() -> int:
                  "openbao_state_dir",
                  "snapshot_export_dir", "openbao_config"):
         parser.add_argument("--" + name.replace("_", "-"), required=True, type=Path)
+    parser.add_argument("--compose-override", type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--bao-addr", required=True)
     parser.add_argument("--audit-org-id", required=True)

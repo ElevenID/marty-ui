@@ -96,8 +96,8 @@ if ! grep -q '^-----BEGIN CERTIFICATE-----$' "${BAO_CACERT}" || grep -q 'PRIVATE
 fi
 if ! cmp -s "${BAO_CACERT}" "${BAO_PUBLIC_CA_FILE}"; then
     ca_tmp="$(mktemp "${BAO_PUBLIC_CA_FILE}.XXXXXX")"
-    chmod 0644 "${ca_tmp}"
     cp "${BAO_CACERT}" "${ca_tmp}"
+    chmod 0644 "${ca_tmp}"
     mv -f "${ca_tmp}" "${BAO_PUBLIC_CA_FILE}"
 fi
 
