@@ -1,4 +1,4 @@
-include!("../../../../services/issuance/tests/support/base_runtime_redis.rs");
+include!("../../../../acceptance/support/base_runtime_redis.rs");
 
 #[cfg(test)]
 mod tests {

@@ -353,6 +353,16 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
 
     for ignore_path in set(DOCKER_CONTEXTS.values()):
         lines = (ROOT / ignore_path).read_text(encoding="utf-8").splitlines()
+        for shared_fixture in (
+            "rust/acceptance/support/base_runtime_redis.rs",
+            "rust/acceptance/support/didcomm_gateway_replay.rs",
+        ):
+            assert lines.count(shared_fixture) == 1, (
+                f"Shared acceptance fixture exclusion missing: {ignore_path}"
+            )
+            assert _is_ignored(shared_fixture, lines), (
+                f"Shared acceptance fixture re-included: {ignore_path}"
+            )
         for leaf in TEST_LEAVES:
             path = ISSUANCE_SRC + leaf
             assert lines.count(path) == 1, (

@@ -22,6 +22,8 @@ contracts/canvas-renewal-profile-obligations.json
 # Integration tests are checked from the full checkout, not built into images.
 rust/services/*/tests
 rust/crates/*/tests
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
 rust/**/target
 rust/**/.git
 rust/**/*.log
