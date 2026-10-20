@@ -54,7 +54,7 @@ def existing_policy_names(bao: Bao, current: Path) -> list[str]:
 
 
 def operator_acl(policy_names: list[str]) -> str:
-    """Only current read, CSR, certificate sign, lookup, and named mint paths."""
+    """Only reviewed read, CSR, sign, lookup, capability, and named mint paths."""
     if len(policy_names) != 21 or len(set(policy_names)) != 21:
         raise ValueError("renewal leaf policy inventory is incomplete")
     paths = {
@@ -62,11 +62,13 @@ def operator_acl(policy_names: list[str]) -> str:
         "sys/mounts/transit": ("read",),
         "sys/mounts/workload-pki": ("read",),
         "auth/token/lookup": ("update",),
+        "sys/capabilities": ("update",),
         f"auth/token/create/{LEAF_ROLE}": ("update",),
         f"auth/token/roles/{LEAF_ROLE}": ("read",),
         f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id": ("update",),
         f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy": ("update",),
         "sys/policies/acl": ("list",),
+        f"sys/policies/acl/{OPERATOR_POLICY}": ("read",),
         "workload-pki/cert/ca": ("read",),
         "keycloak-pki/cert/ca": ("read",),
         "keycloak-pki/roles/rs256": ("read",),
@@ -189,6 +191,13 @@ def verify_denials(bao: Bao, token: str) -> None:
         raise ValueError("renewal operator exceeded its reviewed authority")
 
 
+def verified_operator_policy(bao: Bao, token: str, names: list[str]) -> None:
+    actual = bao.request("GET", f"sys/policies/acl/{OPERATOR_POLICY}",
+                         token=token).get("data", {}).get("policy")
+    if actual != operator_acl(names):
+        raise ValueError("renewal operator policy drifted from reviewed authority")
+
+
 def checked_login(bao: Bao, identity: Path) -> tuple[str, str, list[str], str]:
     identity = private_empty_or_source(identity, empty=False)
     role_id = private_file(identity / ROLE_ID_FILE).strip()
@@ -214,6 +223,7 @@ def checked_login(bao: Bao, identity: Path) -> tuple[str, str, list[str], str]:
             or role.get("token_no_default_policy") is not True
             or role.get("token_explicit_max_ttl") != 8 * 60 * 60):
         raise ValueError("renewal leaf role drifted from the reviewed policy set")
+    verified_operator_policy(bao, token, names)
     verify_denials(bao, token)
     return role_id, secret_id, names, token
 

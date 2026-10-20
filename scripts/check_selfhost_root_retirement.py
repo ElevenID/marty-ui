@@ -54,6 +54,22 @@ STATIC_KMS_TOKENS = {
     },
 }
 
+FORBIDDEN_STATIC_CAPABILITIES = (
+    "auth/token/create",
+    "auth/token/create-orphan",
+    "auth/token/revoke",
+    "auth/token/roles/selfhost-renew-leaf",
+    "sys/auth/selfhost-renew",
+    "sys/mounts/transit",
+    "sys/policies/acl/credential-service",
+    "sys/seal",
+    "sys/step-down",
+    "transit/export/signing-key/cred-issuer-canary",
+    "transit/export/decryption-key/integration-secret-envelope-marty-aes256",
+    "transit/backup/cred-issuer-canary",
+    "transit/restore/cred-issuer-canary",
+)
+
 
 def checked_static_tokens(bao: Bao, root: Path, minimum_ttl: int) -> None:
     for name, policies in STATIC_KMS_TOKENS.items():
@@ -70,6 +86,14 @@ def checked_static_tokens(bao: Bao, root: Path, minimum_ttl: int) -> None:
                 or type(data.get("ttl")) is not int
                 or data["ttl"] < minimum_ttl):
             raise ValueError("static KMS token still depends on root or has invalid scope")
+        capabilities = bao.request(
+            "POST", "sys/capabilities",
+            {"token": token, "paths": list(FORBIDDEN_STATIC_CAPABILITIES)},
+        ).get("data", {})
+        if (not isinstance(capabilities, dict)
+                or any(capabilities.get(path) != ["deny"]
+                       for path in FORBIDDEN_STATIC_CAPABILITIES)):
+            raise ValueError("static KMS token has privileged or private-key authority")
 
 
 def checked_model(command: list[str], cwd: Path, secrets: Path) -> dict:

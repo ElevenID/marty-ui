@@ -90,6 +90,28 @@ def test_static_service_token_must_be_orphaned(tmp_path: Path) -> None:
         retirement.checked_static_tokens(RootChildBao(), tmp_path, 3600)
 
 
+def test_static_service_token_cannot_gain_root_or_private_key_authority(
+    tmp_path: Path,
+) -> None:
+    for name in retirement.STATIC_KMS_TOKENS:
+        (tmp_path / name).write_text(f"synthetic-{name}-token-value", encoding="ascii")
+
+    class PrivilegedBao:
+        def request(self, method, path, body=None, *, token=None):
+            if path == "auth/token/lookup":
+                name = next(name for name in retirement.STATIC_KMS_TOKENS
+                            if body["token"] == f"synthetic-{name}-token-value")
+                return {"data": {"policies": sorted(retirement.STATIC_KMS_TOKENS[name]),
+                                 "ttl": 7200, "orphan": True}}
+            assert (method, path) == ("POST", "sys/capabilities")
+            assert body["token"] == f"synthetic-{next(iter(retirement.STATIC_KMS_TOKENS))}-token-value"
+            return {"data": {name: (["update"] if name == "auth/token/create"
+                                    else ["deny"]) for name in body["paths"]}}
+
+    with pytest.raises(ValueError, match="privileged or private-key authority"):
+        retirement.checked_static_tokens(PrivilegedBao(), tmp_path, 3600)
+
+
 @pytest.mark.parametrize("include_recovery", [False, True])
 def test_snapshot_preflight_accepts_only_secret_free_archive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, include_recovery: bool,

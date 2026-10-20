@@ -24,6 +24,9 @@ def test_operator_acl_has_exact_signers_and_only_named_leaf_issuance() -> None:
     acl = operator_acl(policies)
     assert 'path "auth/token/create/selfhost-renew-leaf"' in acl
     assert 'path "auth/token/roles/selfhost-renew-leaf"' in acl
+    assert 'path "sys/capabilities" { capabilities = ["update"] }' in acl
+    assert 'path "sys/policies/acl/selfhost-kms-renewal" { capabilities = ["read"] }' in acl
+    assert 'path "sys/capabilities-self"' not in acl
     assert 'path "auth/selfhost-renew/role/kms-renewer/secret-id"' in acl
     assert 'path "auth/selfhost-renew/role/kms-renewer/secret-id/destroy"' in acl
     assert 'path "auth/token/create"' not in acl
@@ -34,6 +37,25 @@ def test_operator_acl_has_exact_signers_and_only_named_leaf_issuance() -> None:
     bundle = json.loads((Path(__file__).resolve().parents[1] /
                          "deploy-config/bundles/selfhost.json").read_text(encoding="utf-8"))
     assert "scripts/provision_selfhost_renewal_identity.py" in bundle["assets"]
+
+
+def test_renewal_operator_policy_must_match_reviewed_acl() -> None:
+    names = [f"selfhost-test-policy-{index}" for index in range(21)]
+
+    class PolicyBao:
+        def __init__(self, policy: str) -> None:
+            self.policy = policy
+
+        def request(self, method, path, body=None, *, token=None):
+            assert (method, path, token) == (
+                "GET", "sys/policies/acl/selfhost-kms-renewal", "scoped-token")
+            return {"data": {"policy": self.policy}}
+
+    acl = operator_acl(names)
+    identity.verified_operator_policy(PolicyBao(acl), "scoped-token", names)
+    with pytest.raises(ValueError, match="drifted"):
+        identity.verified_operator_policy(PolicyBao(acl + "\npath \"sys/*\" {}"),
+                                          "scoped-token", names)
 
 
 class FakeBao:
