@@ -203,6 +203,46 @@ def test_ci_requires_executable_powershell():
     ), "CI must run executable PowerShell image-plan controls"
 
 
+def test_prepared_local_images_are_pinned_complete_and_never_official(tmp_path):
+    powershell = shutil.which("pwsh") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell is required for image-plan controls")
+    helper = str(ROOT / "scripts/beta-application-image-plan.ps1").replace("'", "''")
+    harness = tmp_path / "prepared.ps1"
+    harness.write_text(f". '{helper}'\n" + r'''
+$ErrorActionPreference='Stop'
+function docker { throw 'Docker is forbidden in a pure projection' }
+$id='sha256:'+('a'*64)
+$common=@{Services=@('issuance','canvas-sync-worker'); ReleaseVersion='developer'; OfficialStackRelease=$false}
+$valid=@{'issuance'=$id; 'canvas-sync-worker'=$id}
+$plan=@(New-BetaApplicationImagePlan @common -PreparedImages $valid)
+if ($plan.Count -ne 2) { throw 'missing service' }
+foreach ($entry in $plan) {
+    if ($entry.image_expression -ne $id -or $entry.known_digest -ne $id -or
+        $entry.build_eligible -or -not $entry.selector_present -or $entry.artifact_role -ne 'local') {
+        throw 'prepared images were not pinned as local non-build inputs'
+    }
+}
+$lines=@(ConvertTo-BetaApplicationImageLines -Plan $plan)
+if ('      SERVICE_NAME: canvas_sync_worker' -notin $lines -or
+    '      SERVICE_NAME: issuance_native' -notin $lines) { throw 'shared selectors lost' }
+$rejected=0
+foreach ($bad in @(@{'issuance'=$id}, @{'issuance'=$id; 'canvas-sync-worker'='mutable:tag'})) {
+    try { $null=New-BetaApplicationImagePlan @common -PreparedImages $bad }
+    catch { $rejected++ }
+}
+$common.OfficialStackRelease=$true
+try { $null=New-BetaApplicationImagePlan @common -PreparedImages $valid }
+catch { $rejected++ }
+if ($rejected -ne 3) { throw 'invalid or official inputs were admitted' }
+Write-Output 'PREPARED_LOCAL_PLAN_OK'
+''', encoding="utf8")
+    result = subprocess.run([powershell, "-NoProfile", "-NonInteractive", "-File", str(harness)],
+                            capture_output=True, text=True, timeout=10, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PREPARED_LOCAL_PLAN_OK" in result.stdout
+
+
 @pytest.fixture
 def exercise(gate, tmp_path):
     if not (

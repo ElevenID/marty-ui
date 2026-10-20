@@ -8,6 +8,8 @@ param(
 
     [switch]$OfficialStackRelease,
 
+    [switch]$UsePreparedLocalImages,
+
     [string]$RecorderRevision,
 
     [switch]$EnablePassportNative,
@@ -113,6 +115,7 @@ function New-BetaDeployArguments {
     param(
         [string]$ArtifactDir,
         [switch]$OfficialStackRelease,
+        [switch]$UsePreparedLocalImages,
         [string]$RecorderRevision,
         [switch]$EnablePassportNative,
         [switch]$EnableDidcommAuthcrypt,
@@ -132,6 +135,7 @@ function New-BetaDeployArguments {
         $arguments.RecorderRevision = $RecorderRevision
     }
     if ($EnablePassportNative) { $arguments.EnablePassportNative = $true }
+    if ($UsePreparedLocalImages) { $arguments.UsePreparedLocalImages = $true }
     if ($EnableDidcommAuthcrypt) { $arguments.EnableDidcommAuthcrypt = $true }
     if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
         $arguments.TunnelEnvFile = $TunnelEnvFile
@@ -202,6 +206,7 @@ try {
     $deployArguments = New-BetaDeployArguments `
         -ArtifactDir $resolvedArtifacts `
         -OfficialStackRelease:$OfficialStackRelease `
+        -UsePreparedLocalImages:$UsePreparedLocalImages `
         -RecorderRevision $RecorderRevision `
         -EnablePassportNative:$EnablePassportNative `
         -EnableDidcommAuthcrypt:$EnableDidcommAuthcrypt `

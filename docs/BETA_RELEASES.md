@@ -26,6 +26,14 @@ Its recorded `origin/main` revision is informational; verification does not wait
 for those branch commits to merge. Dirty or changed sources and any claim that
 the local snapshot is promotion-eligible or release-ready remain rejected.
 
+For separately prepared developer runtime images, `-UsePreparedLocalImages`
+accepts the local `elevenid-local/services`, `db-migrate`, and `ui` tags for the
+snapshot's release label. The runner resolves each tag to an immutable image ID,
+checks Linux/amd64 and exact source/version labels through that ID, and reuses
+the shared service selectors. It skips image builds while retaining source
+verification, rehearsal, backups, maintenance fencing, and recovery. This option
+cannot be combined with `-OfficialStackRelease`.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and

@@ -25,6 +25,8 @@ param(
 
     [switch]$OfficialStackRelease,
 
+    [switch]$UsePreparedLocalImages,
+
     [string]$RecorderRevision,
 
     [switch]$PlanOnly
@@ -32,6 +34,9 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+if ($OfficialStackRelease -and $UsePreparedLocalImages) {
+    throw "Prepared local images cannot be used with OfficialStackRelease"
+}
 if ($EnablePassportPhysicalProvider -and -not $EnablePassportNative) {
     throw "Physical provider beta mode requires -EnablePassportNative"
 }
@@ -525,16 +530,32 @@ function Assert-OfficialImageLabels(
     [string]$Reference,
     [string]$Role,
     [string]$ExpectedVersion,
-    [string]$ExpectedRevision
+    [string]$ExpectedRevision,
+    [string]$InputKind = "Official"
 ) {
     $version = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
     if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
-        throw "Official $Role image version label does not match the stack release"
+        throw "$InputKind $Role image version label does not match the stack release"
     }
     $revision = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
     if ($LASTEXITCODE -ne 0 -or $revision -ne $ExpectedRevision) {
-        throw "Official $Role image revision label does not match the stack release"
+        throw "$InputKind $Role image revision label does not match the stack release"
     }
+}
+
+function Get-PreparedLocalBetaImage([string]$Reference, [string]$Role) {
+    # Freeze the tag first, then validate metadata through that immutable ID.
+    $id = & docker image inspect $Reference --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $id -cnotmatch '^sha256:[0-9a-f]{64}$') {
+        throw "Prepared local $Role image is unavailable"
+    }
+    Assert-OfficialImageLabels -Reference $id -Role $Role -ExpectedVersion $releaseVersion `
+        -ExpectedRevision $sourceId -InputKind "Prepared local"
+    $platform = & docker image inspect $id --format '{{.Os}}/{{.Architecture}}'
+    if ($LASTEXITCODE -ne 0 -or $platform -cne "linux/amd64") {
+        throw "Prepared local $Role image must be Linux/amd64"
+    }
+    return [string]$id
 }
 
 function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
@@ -1128,6 +1149,7 @@ if ($PlanOnly) {
         source_kind = $sourceKind
         release_input = $releaseInput
         promotion_eligible = $promotionEligible
+        prepared_local_images = [bool]$UsePreparedLocalImages
         beta_origin = $BetaOrigin
         portable_canvas_enabled = [bool]$EnablePortableCanvas
         didcomm_authcrypt_enabled = [bool]$EnableDidcommAuthcrypt
@@ -1192,6 +1214,14 @@ $applicationImageArguments = @{
 if ($OfficialStackRelease) {
     $applicationImageArguments.ServicesReference = [string]$officialPlan.images.services.reference
     $applicationImageArguments.ServicesDigest = [string]$officialPlan.images.services.digest
+}
+if ($UsePreparedLocalImages) {
+    $preparedServices = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    $migrationImage = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
+    $uiImage = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
+    $prepared = @{}
+    foreach ($service in $script:SelectedApplicationServices) { $prepared[$service] = $preparedServices }
+    $applicationImageArguments.PreparedImages = $prepared
 }
 $applicationImagePlan = @(New-BetaApplicationImagePlan @applicationImageArguments)
 $releaseCompose = @(ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan)
@@ -1357,7 +1387,7 @@ New-BetaStateBackup `
     -WritersStopped $false `
     -RedisPassword $redisPassword
 
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build immutable migration image"
     $migrationImage = "elevenid-local/db-migrate:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
@@ -1370,7 +1400,7 @@ if (-not $OfficialStackRelease) {
 
 $env:MARTY_RELEASE_VERSION = $releaseVersion
 $env:MARTY_UI_SHA = $sourceId
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build marker-bearing application images"
     $applicationBuildArguments = @(
         "build", "--build-arg", "MARTY_RELEASE_VERSION=$releaseVersion", "--build-arg", "MARTY_UI_SHA=$sourceId"
@@ -1512,7 +1542,7 @@ finally {
     }
 }
 
-if (-not $OfficialStackRelease) {
+if (-not $OfficialStackRelease -and -not $UsePreparedLocalImages) {
     Write-Step "Build marker-bearing public UI image"
     $uiImage = "elevenid-local/ui:$releaseVersion"
     Invoke-Checked -FilePath docker -Arguments @(
