@@ -378,7 +378,7 @@ def start_bao(name: str, volume: str, ca_file: Path) -> str:
     return base
 
 
-def bootstrap_bao(name: str, state: str, runtime: str) -> None:
+def bootstrap_bao(name: str, state: str, runtime: str, *, expect_refusal: bool = False) -> None:
     result = subprocess.run(
         [
             "docker",
@@ -411,6 +411,11 @@ def bootstrap_bao(name: str, state: str, runtime: str) -> None:
         timeout=300,
         check=False,
     )
+    if expect_refusal:
+        if (result.returncode == 0 or
+                b"requires fresh, uninitialized Raft state" not in result.stderr):
+            raise RuntimeError("Initialized OpenBao did not refuse privileged rebootstrap")
+        return
     if result.returncode:
         raise RuntimeError("Disposable OpenBao bootstrap failed")
 
@@ -799,9 +804,9 @@ def run() -> None:
             unseal = read_volume_file(state, "unseal.key")
             token = read_volume_file(runtime, "signing_keys_openbao_token")
             didcomm_token = read_volume_file(runtime, "didcomm_issuance_openbao_token")
-            bootstrap_bao(bao_name, state, runtime)
+            bootstrap_bao(bao_name, state, runtime, expect_refusal=True)
             if read_volume_file(runtime, "didcomm_issuance_openbao_token") != didcomm_token:
-                raise RuntimeError("Idempotent OpenBao bootstrap replaced the DIDComm Issuance token")
+                raise RuntimeError("Refused rebootstrap changed the DIDComm Issuance token")
             version = "0" * 32
             expected_capabilities = {
                 f"didcomm/keys/synthetic/issuer/versions/{version}": ["read"],
