@@ -307,6 +307,17 @@ def test_ca_overlap_certificate_preflight_binds_each_generation_to_its_issuer(
         activation.checked_certificates(primary, old, new, 3600,
                                         replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"))
 
+    class ReusedKeycloakIssuer(FakeBao):
+        def request(self, method, path):
+            if path == "keycloak-pki-v5/cert/ca":
+                return {"data": {"certificate": old_keycloak}}
+            return super().request(method, path)
+
+    with pytest.raises(ValueError, match="Keycloak issuer did not change"):
+        activation.checked_certificates(primary, old, new, 3600,
+                                        replacement=(ReusedKeycloakIssuer(replacement=True),
+                                                     "workload-pki-v5", "keycloak-pki-v5"))
+
 
 @pytest.mark.parametrize("workload,keycloak", [
     ("workload-pki-v1", "keycloak-pki-v2"),

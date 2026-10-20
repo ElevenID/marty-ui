@@ -289,6 +289,8 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
             "keycloak": ca_bao.request(
                 "GET", f"{keycloak_mount}/cert/ca").get("data", {}).get("certificate"),
         }
+        if new_issuers["keycloak"] == issuers["keycloak"]:
+            raise ValueError("replacement Keycloak issuer did not change")
     for issuer in (*issuers.values(), *new_issuers.values()):
         if not isinstance(issuer, str):
             raise ValueError("renewed OpenBao issuer is absent")

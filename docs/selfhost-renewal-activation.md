@@ -107,7 +107,7 @@ access to the same isolated project, invoke
 --bao-addr <HTTPS OpenBao address>
 --bao-ca <absolute OpenBao CA file>
 --bao-token-file <absolute private renewal-operator token file>
---ca-overlap <only for a replacement issuer generation>
+--ca-overlap (flag; only for a replacement issuer generation)
 --workload-pki-mount <workload-pki-v2 through workload-pki-v8; overlap only>
 --keycloak-pki-mount <keycloak-pki-v2 through keycloak-pki-v8; overlap only>
 --ca-rotation-token-file <private scoped CA-rotation token; overlap only>
