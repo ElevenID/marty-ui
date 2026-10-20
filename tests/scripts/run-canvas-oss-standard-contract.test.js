@@ -152,7 +152,7 @@ test('observation ledger emits the fixed schema and never invents optional cover
     secret_transport: 'compose_secret_files',
     image_id: `sha256:${'a'.repeat(64)}`,
     source_sha: 'b'.repeat(40),
-    base_image: `mcr.microsoft.com/playwright:v1.56.0-jammy@sha256:${'c'.repeat(64)}`,
+    base_image: `mcr.microsoft.com/playwright:v1.63.0-noble@sha256:${'c'.repeat(64)}`,
   };
   const ledger = new ObservationLedger(NOW, execution);
   ledger.pass('standard_lti_13_install', 'Installed with token=secret-value and an intentionally long suffix '.repeat(8));
