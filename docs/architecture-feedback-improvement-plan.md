@@ -546,6 +546,12 @@ build, image and runtime witnesses, including the packaged passport TLS
 bootstrap binary, and keeps these changes broad if a witness disappears.
 This is input evidence, not a live CI selector change or measured speedup.
 
+The next A3 shadow audit records the direct `marty-demo-vendor-seed` binary
+consumer as well as its Cargo-dependent Canvas seed: the migrations image builds
+and copies the binary, and the explicit `seed-demo-vendor-fixtures` Make target
+invokes it through `db-migrate`. The existing full fallback remains in place
+even if a packaging witness disappears; no live check is skipped.
+
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
 full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner

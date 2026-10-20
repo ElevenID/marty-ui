@@ -689,7 +689,6 @@ class AffectedRustPlannerTests(unittest.TestCase):
             "rust/crates/canvas-demo-seed/src/run.rs",
             "rust/crates/canvas-demo-seed/assets/canvas_lti_setup.rb",
             "rust/crates/canvas-demo-seed/assets/mint_canvas_admin_token.rb",
-            "rust/crates/demo-vendor-seed/src/lib.rs",
         ):
             with self.subTest(changed=changed):
                 result = planner.plan([changed], metadata, ROOT)
@@ -700,6 +699,59 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 self.assertEqual(edge["consumer"], "db-migrate")
                 self.assertTrue(all(item["present"] for item in edge["witnesses"]))
                 self.assertEqual(len(edge["witnesses"]), 5)
+
+    def test_demo_vendor_seed_records_direct_and_cargo_packaged_consumers(self) -> None:
+        metadata = planner.cargo_metadata()
+        for changed in (
+            "rust/crates/demo-vendor-seed/src/main.rs",
+            "rust/crates/demo-vendor-seed/src/lib.rs",
+        ):
+            with self.subTest(changed=changed):
+                result = planner.plan([changed], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                edges = {
+                    edge["producer"]: edge
+                    for edge in result["observed_packaged_runtime_consumers"]
+                }
+                self.assertEqual(
+                    set(edges), {"marty-demo-vendor-seed", "marty-canvas-demo-seed"}
+                )
+                direct = edges["marty-demo-vendor-seed"]
+                self.assertEqual(direct["consumer"], "explicit-demo-fixture-seed")
+                self.assertEqual(len(direct["witnesses"]), 4)
+                self.assertTrue(all(item["present"] for item in direct["witnesses"]))
+
+    def test_demo_vendor_seed_missing_packaging_witness_stays_broad(self) -> None:
+        metadata = planner.cargo_metadata()
+        original_read = planner._read_packaged_witness
+        witnesses = planner.PACKAGED_RUNTIME_PRODUCERS["marty-demo-vendor-seed"][
+            "witnesses"
+        ]
+        for relative, marker in witnesses:
+            for missing_file in (False, True):
+
+                def changed_read(path):
+                    if path == ROOT / relative:
+                        if missing_file:
+                            return ""
+                        return original_read(path).replace(marker, "removed-witness")
+                    return original_read(path)
+
+                with self.subTest(
+                    relative=relative, marker=marker, missing=missing_file
+                ):
+                    with patch.object(planner, "_read_packaged_witness", changed_read):
+                        result = planner.plan(
+                            ["rust/crates/demo-vendor-seed/src/main.rs"], metadata, ROOT
+                        )
+                    self.assertTrue(result["all"])
+                    direct = next(
+                        edge
+                        for edge in result["observed_packaged_runtime_consumers"]
+                        if edge["producer"] == "marty-demo-vendor-seed"
+                    )
+                    self.assertFalse(all(item["present"] for item in direct["witnesses"]))
 
     def test_canvas_seed_mixed_service_change_retains_existing_runtime_edges(
         self,
