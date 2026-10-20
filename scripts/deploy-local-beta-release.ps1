@@ -19,6 +19,8 @@ param(
 
     [string]$TunnelEnvFile,
 
+    [string]$TunnelTokenEnvFile,
+
     [string]$GeneratedEnvFile,
 
     [switch]$OfficialStackRelease,
@@ -47,6 +49,7 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
+. (Join-Path $PSScriptRoot "beta-tunnel-configuration.ps1")
 $script:WorkspaceRoot = (Resolve-Path (Join-Path $script:RepoRoot "..")).Path
 $script:ArtifactRoot = (Resolve-Path (Join-Path $script:RepoRoot "tests\artifacts")).Path
 $script:ArtifactDir = (Resolve-Path $ArtifactDir).Path
@@ -65,6 +68,11 @@ $script:EnvFiles = @($TunnelEnvFile, $GeneratedEnvFile)
 foreach ($envFile in $script:EnvFiles) {
     if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { throw "Required beta environment file is missing: $envFile" }
 }
+if ([string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
+    throw "TunnelTokenEnvFile must name the active protected beta connector environment file"
+}
+$betaTunnelBinding = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+    -CredentialEnvFile $TunnelTokenEnvFile
 $script:ComposeFiles = @(
     (Join-Path $script:RepoRoot "docker-compose.base.yml"),
     (Join-Path $script:RepoRoot "docker-compose.beta.yml"),
@@ -1162,6 +1170,11 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+$betaTunnelOverride = Join-Path $script:ArtifactDir "beta-tunnel.private-input.yml"
+$null = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+    -CredentialEnvFile $TunnelTokenEnvFile -Expected $betaTunnelBinding `
+    -OverrideOutput $betaTunnelOverride
+$script:ComposeFiles += $betaTunnelOverride
 . (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
 $legacyPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $legacyPostgres) { throw "Beta PostgreSQL container is unavailable" }
@@ -1591,6 +1604,8 @@ $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and
 $liveMutationStarted = $false
 $maintenanceStarted = $false
 try {
+    $null = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
+        -CredentialEnvFile $TunnelTokenEnvFile -Expected $betaTunnelBinding
     Start-BetaMutation
     $maintenanceStarted = $true
     if ($maintenanceContainers.Count -gt 0) {

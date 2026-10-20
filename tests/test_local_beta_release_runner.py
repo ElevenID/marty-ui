@@ -432,7 +432,7 @@ $default = New-BetaDeployArguments -ArtifactDir 'C:\synthetic'
 $passport = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative
 $didcomm = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnableDidcommAuthcrypt
 $both = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative -EnableDidcommAuthcrypt
-$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -GeneratedEnvFile 'C:\generated.env'
+$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -TunnelTokenEnvFile 'C:\private\connector.env' -GeneratedEnvFile 'C:\generated.env'
 @{ default=$default; passport=$passport; didcomm=$didcomm; both=$both; official=$official } | ConvertTo-Json -Compress -Depth 4
 """,
         encoding="utf-8",
@@ -459,6 +459,7 @@ $official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRe
     assert cases["official"]["OfficialStackRelease"] is True
     assert cases["official"]["RecorderRevision"] == "a" * 40
     assert cases["official"]["TunnelEnvFile"] == r"C:\tunnel.env"
+    assert cases["official"]["TunnelTokenEnvFile"] == r"C:\private\connector.env"
     assert cases["official"]["GeneratedEnvFile"] == r"C:\generated.env"
 
 

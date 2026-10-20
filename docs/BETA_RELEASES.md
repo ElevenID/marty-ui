@@ -4,6 +4,23 @@ Marty beta delivery is an aggregate, immutable Rust stack release. The former
 per-repository Python-wheel beta process is retired. Do not publish or install
 Python MMF beta packages and do not recreate `release-beta.yml` workflows.
 
+## Developer validation
+
+Use isolated working branches and local builds for developer testing. Do not
+wait for hosted CI, an aggregate release tag, or published images to exercise
+a candidate feature. Combine related repairs into larger reviewable commits.
+Run a focused behavioral check for the concrete change; broaden testing when a
+failure or an affected boundary warrants it. Full release qualification remains
+part of publication and promotion, rather than a prerequisite for each experiment.
+
+For UI work, reuse installed dependencies and run `npm run build` from `ui` with
+`DISABLE_PRERENDER=1` when testing application behavior. This checks TypeScript
+and bundles the application without the unrelated marketing prerender step.
+Record the exact source and distinguish local results from deployed-beta results.
+Use beta-only guarded local build/overlay paths for runtime experiments, preserving
+backup, recovery, credential custody, and production isolation. A local candidate
+does not acquire official release status from a successful developer run.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and
@@ -121,8 +138,21 @@ gh release download $releaseTag --repo ElevenID/marty-ui --dir $releaseArtifacts
   -OfficialStackRelease `
   -RecorderRevision $recorderRevision `
   -TunnelEnvFile "C:\beta-runtime\.env.tunnel.beta.local" `
+  -TunnelTokenEnvFile "C:\beta-runtime\private\connector-token.env" `
   -GeneratedEnvFile "C:\beta-runtime\.env.beta.generated.local"
 ```
+
+`TunnelTokenEnvFile` must contain only `TUNNEL_TOKEN=<active token>` and stay in a
+private, unlinked file outside OneDrive. Use the existing protected connector
+input from the last completed rotation; never copy an old token from a repository
+environment file. The runner verifies its access controls and exact match to the
+running beta connector, then binds the file fingerprint and container identity
+through the final pre-maintenance check. Missing, stale, changed or foreign
+credentials fail before maintenance. Planning reads these inputs but writes no
+override. Actual deployment adds a public-path-only Compose override that removes
+the old inline value and resolves the protected input file. Connector commands
+use the token environment rather than a secret argument. This does not rotate a
+token or restart the existing connector.
 
 The runner validates every release and source input twice, with the final check
 immediately before the maintenance window. It retains the existing preflight
