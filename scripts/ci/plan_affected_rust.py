@@ -31,6 +31,36 @@ SELFHOST_CLEANUP_RELATIVE = "../../canvas-acceptance/tests/support/owned_cleanup
 # Cargo reverse edges cannot represent that artifact/runtime relationship.
 # These witnesses explain a full shadow fallback; they never authorize a skip.
 PACKAGED_RUNTIME_PRODUCERS = {
+    "marty-canvas-sandbox": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "canvas-sandbox",
+        "witnesses": (
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "cargo build --locked --release -p marty-canvas-sandbox",
+            ),
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "COPY --from=builder /tmp/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "docker-compose.profile.canvas-sandbox.yml",
+                "  canvas-sandbox:\n    build:\n      context: .\n      dockerfile: docker/canvas-sandbox/Dockerfile",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "rust/services/Dockerfile.ci",
+                "COPY --from=builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "scripts/qualify-canvas-seed-disposable.sh",
+                "up --build -d gateway issuance signing-keys canvas-real canvas-sandbox issuance-canvas-localhost-bridge",
+            ),
+        ),
+    },
     "marty-canvas-demo-seed": {
         "consumer_kind": "packaged-executable/runtime",
         "consumer": "db-migrate",
