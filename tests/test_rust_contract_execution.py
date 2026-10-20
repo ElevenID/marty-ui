@@ -1545,6 +1545,7 @@ def test_acceptance_rust_first_hop_inputs_record_exact_source_hashes(name, fixtu
     (
         '#[path = concat!("private-", "fixture.rs")]\nmod fixture;\n',
         'include!(concat!("private-", "fixture.rs"));\n',
+        "mod untracked;\n",
     ),
 )
 def test_acceptance_rust_first_hop_inputs_reject_unrecognized_import(

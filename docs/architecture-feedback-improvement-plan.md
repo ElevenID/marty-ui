@@ -443,6 +443,7 @@ The follow-up reuses that bounded Rust first-hop collector for the Flow and
 self-host acceptance targets (9 and 10 source inputs in the reviewed tree).
 Their run-bound records now name direct `#[path]`/`include!` Rust modules and
 literal embedded fixtures alongside the existing renderer/runner evidence.
+An added count guard rejects new unannotated `mod name;` source imports.
 This does not establish nested-module or runtime-input closure and does not
 change acceptance selection or the required CI lanes.
 

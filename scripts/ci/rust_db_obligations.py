@@ -202,6 +202,8 @@ def acceptance_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
         )
         if (
             len(module_paths) != len(re.findall(r"#\s*\[\s*path\b", content))
+            or len(module_paths)
+            != len(re.findall(r"(?m)^\s*(?:pub\s+)?mod\s+[A-Za-z_]\w*\s*;", content))
             or len(included_source_paths) != len(re.findall(r"\binclude!\s*\(", content))
             or len(literal_paths) != len(re.findall(r"\binclude_(?:str|bytes)!\s*\(", content))
         ):
