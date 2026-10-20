@@ -43,7 +43,17 @@ def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
                 try:
                     bao.request("POST", "auth/token/lookup", {"token": old_token})
                 except HTTPError as lookup_error:
-                    if lookup_error.code not in (400, 404):
+                    if lookup_error.code == 403:
+                        # OpenBao can return 403 for an expired token. Prove
+                        # this operator can still look up the new live leaf,
+                        # so the old 403 is not an operator ACL or TTL failure.
+                        current = bao.request("POST", "auth/token/lookup",
+                                              {"token": token}).get("data", {})
+                        if (not isinstance(current, dict)
+                                or type(current.get("ttl")) is not int
+                                or current["ttl"] <= 0):
+                            raise RuntimeError("new custody token lookup is invalid")
+                    elif lookup_error.code not in (400, 404):
                         raise
                 else:
                     raise RuntimeError("old custody token is still active") from error

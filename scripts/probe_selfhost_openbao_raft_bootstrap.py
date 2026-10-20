@@ -23,6 +23,7 @@ from provision_selfhost_audit_identity import rotate as rotate_audit_identity
 from provision_selfhost_audit_identity import require_revoked as audit_revoked
 from provision_selfhost_audit_identity import ROLE_ID_FILE as AUDIT_ROLE_ID_FILE
 from provision_selfhost_audit_identity import SECRET_ID_FILE as AUDIT_SECRET_ID_FILE
+from provision_selfhost_audit_identity import LEAF_ROLE as AUDIT_LEAF_ROLE
 from provision_selfhost_audit_token import POLICY as AUDIT_POLICY
 from provision_selfhost_audit_token import policy_for as audit_policy_for
 from provision_selfhost_custody_signer import refresh_scoped_token
@@ -33,6 +34,7 @@ from provision_selfhost_evidence_identity import rotate as rotate_evidence_ident
 from provision_selfhost_evidence_identity import require_revoked as evidence_revoked
 from provision_selfhost_evidence_identity import ROLE_ID_FILE as EVIDENCE_ROLE_ID_FILE
 from provision_selfhost_evidence_identity import SECRET_ID_FILE as EVIDENCE_SECRET_ID_FILE
+from provision_selfhost_evidence_identity import LEAF_ROLE as EVIDENCE_LEAF_ROLE
 from provision_selfhost_snapshot_rotator import bootstrap as bootstrap_snapshot_rotator
 from provision_selfhost_snapshot_rotator import rotate_reader as rotate_snapshot_reader
 from provision_selfhost_snapshot_rotator import rotate_rotator as rotate_snapshot_rotator
@@ -466,6 +468,63 @@ def run() -> None:
                 or http_request(cold_base, "GET", audit_paths[0],
                                 token=renewed_audit, ca_file=ca_file)[0] != 200):
             raise RuntimeError("Rootless audit refresh lost scoped read authority")
+        # Mint short-lived orphan leaves only after root revocation, prove they
+        # work before expiry, then exercise the expired-token refresh branch.
+        short_evidence = Bao(cold_base, ca_file, operator).request(
+            "POST", f"auth/token/create/{EVIDENCE_LEAF_ROLE}", {
+                "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+                "renewable": False, "ttl": "3s", "explicit_max_ttl": "3s",
+            },
+        ).get("auth", {}).get("client_token")
+        short_audit = Bao(cold_base, ca_file, audit_operator).request(
+            "POST", f"auth/token/create/{AUDIT_LEAF_ROLE}", {
+                "policies": [AUDIT_POLICY], "no_default_policy": True,
+                "renewable": False, "ttl": "3s", "explicit_max_ttl": "3s",
+            },
+        ).get("auth", {}).get("client_token")
+        if (not isinstance(short_evidence, str) or len(short_evidence) < 20
+                or not isinstance(short_audit, str) or len(short_audit) < 20
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=short_evidence, ca_file=ca_file)[0] != 200
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=short_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Short-lived rootless custody leaves are invalid")
+        wait_for(
+            "short-lived evidence and audit leaves to expire",
+            lambda: (
+                http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                             token=short_evidence, ca_file=ca_file)[0] == 403
+                and http_request(cold_base, "GET", audit_paths[0],
+                                 token=short_audit, ca_file=ca_file)[0] == 403
+            ),
+            seconds=20,
+        )
+        expired_evidence_file = Path(public_ca_dir.name) / "expired-evidence.token"
+        expired_evidence_file.write_text(short_evidence, encoding="ascii")
+        after_expiry_evidence = mint_evidence_token(Bao(cold_base, ca_file, ""),
+                                                    evidence_identity)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, operator), expired_evidence_file,
+            after_expiry_evidence,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        expired_audit_file = Path(public_ca_dir.name) / "expired-audit.token"
+        expired_audit_file.write_text(short_audit, encoding="ascii")
+        after_expiry_audit = mint_audit_token(Bao(cold_base, ca_file, ""),
+                                              audit_identity, audit_policy,
+                                              audit_paths)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, audit_operator), expired_audit_file,
+            after_expiry_audit,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (expired_evidence_file.read_text(encoding="ascii") != after_expiry_evidence
+                or expired_audit_file.read_text(encoding="ascii") != after_expiry_audit
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=after_expiry_evidence, ca_file=ca_file)[0] != 200
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=after_expiry_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Rootless custody token recovery failed after expiry")
         rootless_exports = Path(public_ca_dir.name) / "rootless-exports"
         rootless_exports.mkdir(mode=0o700)
         rootless = subprocess.run(
@@ -510,6 +569,16 @@ def run() -> None:
             lambda: http_request(snapshot_base, "GET", "sys/seal-status",
                                  ca_file=snapshot_ca)[1].get("sealed") is True,
         )
+        original_unseal_key = volume_file(state, "unseal.key")
+        wait_for(
+            "force-restored Raft node to accept original unseal key",
+            lambda: http_request(snapshot_base, "POST", "sys/unseal",
+                                 {"key": original_unseal_key},
+                                 ca_file=snapshot_ca)[0] == 200,
+        )
+        if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
+                 {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
+            raise RuntimeError("Force-restored Raft node lost Transit ciphertext")
         docker("stop", snapshot_name)
         docker("rm", snapshot_name)
         started.remove(snapshot_name)
@@ -518,7 +587,7 @@ def run() -> None:
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
         if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
             fresh(snapshot_base, "POST", "sys/unseal", "",
-                  {"key": volume_file(state, "unseal.key")})
+                  {"key": original_unseal_key})
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")

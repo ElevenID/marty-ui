@@ -98,6 +98,53 @@ def test_rootless_refresh_uses_old_leaf_self_revocation(tmp_path: Path,
     assert token_file.read_text(encoding="ascii") == "new"
 
 
+@pytest.mark.parametrize("new_lookup_valid", [False, True])
+def test_expired_leaf_403_requires_live_operator_lookup_of_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_lookup_valid: bool,
+) -> None:
+    token_file = tmp_path / "selfhost_custody_signer_token"
+    token_file.write_text("expired", encoding="ascii")
+
+    class Operator:
+        endpoint = "https://127.0.0.1:18200"
+        ca = tmp_path / "ca.crt"
+
+        def request(self, method, path, body):
+            assert (method, path) == ("POST", "auth/token/lookup")
+            if body["token"] == "expired":
+                raise HTTPError(self.endpoint, 403, "denied", {}, None)
+            assert body["token"] == "replacement"
+            return {"data": {"ttl": 3599 if new_lookup_valid else 0}}
+
+    class Leaf:
+        def __init__(self, endpoint, ca, token):
+            assert (endpoint, ca, token) == (Operator.endpoint, Operator.ca,
+                                             "expired")
+
+        def request(self, method, path):
+            assert (method, path) == ("POST", "auth/token/revoke-self")
+            raise HTTPError(Operator.endpoint, 403, "expired", {}, None)
+
+    monkeypatch.setattr(signer, "Bao", Leaf)
+    if new_lookup_valid:
+        signer.refresh_scoped_token(
+            Operator(), token_file, "replacement",
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        assert token_file.read_text(encoding="ascii") == "replacement"
+        assert not token_file.with_name(token_file.name + ".new").exists()
+    else:
+        with pytest.raises(RuntimeError, match="operator recovery"):
+            signer.refresh_scoped_token(
+                Operator(), token_file, "replacement",
+                lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+            )
+        assert token_file.read_text(encoding="ascii") == "expired"
+        assert token_file.with_name(token_file.name + ".new").read_text() == (
+            "replacement"
+        )
+
+
 def test_rootless_identity_cannot_share_runtime_secret_directory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
