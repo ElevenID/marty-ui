@@ -109,9 +109,9 @@ access to the same isolated project, invoke
 --bao-token-file <absolute private renewal-operator token file>
 --ca-overlap (flag; only for a replacement issuer generation)
 --ca-retire (flag; only for the later public trust-retirement generation)
---workload-pki-mount <workload-pki-v2 through workload-pki-v8; overlap only>
---keycloak-pki-mount <keycloak-pki-v2 through keycloak-pki-v8; overlap only>
---ca-rotation-token-file <private scoped CA-rotation token; overlap only>
+--workload-pki-mount <workload-pki-v2 through workload-pki-v8; CA change only>
+--keycloak-pki-mount <keycloak-pki-v2 through keycloak-pki-v8; CA change only>
+--ca-rotation-token-file <private scoped CA-rotation token; CA change only>
 --log-dir <absolute empty private 0700 directory>
 --report <absolute new file inside log-dir>
 ```
