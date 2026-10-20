@@ -1090,6 +1090,7 @@ async function launchLearnerResource(page, learnerCanvas, fixtures, externalAssi
   await launchedPage.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   const bootstrapPromise = launchedPage.waitForResponse((response) => (
     response.request().method() === 'POST'
+      && new URL(response.url()).origin === martyOrigin
       && new URL(response.url()).pathname.endsWith('/lti/experience-sessions/current/bootstrap')
   ), { timeout: DEFAULT_TIMEOUT_MS });
   await launchedPage.getByTestId('canvas-lti-continue').click();
@@ -1108,6 +1109,7 @@ async function reloadLearnerExperience(page) {
 async function triggerLearnerSync(page, marty) {
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
+      && new URL(response.url()).origin === new URL(page.url()).origin
       && new URL(response.url()).pathname.endsWith('/lti/experience-sessions/current/evidence-sync')
   ), { timeout: DEFAULT_TIMEOUT_MS });
   await page.getByTestId('canvas-evidence-sync-action').click();
@@ -1464,40 +1466,11 @@ async function finishRecordedVideo(context, page, destination) {
   if (path.resolve(source) !== path.resolve(destination)) fs.unlinkSync(source);
 }
 
-async function main() {
-  let args;
-  try {
-    args = parseArgs(process.argv);
-  } catch (error) {
-    process.stderr.write(`Canvas OSS contract arguments failed: ${sanitizeEvidence(error.code || error.message)}\n`);
-    return 2;
-  }
-
-  let execution;
-  try {
-    execution = requireComposeExecutionBoundary();
-  } catch (error) {
-    process.stderr.write(`Canvas OSS contract boundary failed: ${sanitizeEvidence(error.code || error.message)}\n`);
-    return 2;
-  }
-
-  const ledger = new ObservationLedger(new Date().toISOString(), execution);
-  let activeCase = 'upstream_source_and_image_provenance';
-  let browser = null;
-  let adminContext = null;
-  let learnerContext = null;
-  let recordedContext = null;
-  let recordedPage = null;
-  let marty = null;
-  let platformId = null;
-  let integrationSecretId = null;
-  let videoWritten = false;
-  let failure = null;
-
-  const markActive = (id) => { activeCase = id; };
-  const pass = (id, evidence) => { ledger.pass(id, evidence); };
-
-  try {
+async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () => {},
+  pass = () => {}, runSuffix, state = {} }) {
+  requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
+    'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
+  let marty, adminContext, learnerContext, platformId, integrationSecretId;
     const canvasOrigin = normalizePinnedOrigin(
       process.env.CANVAS_OSS_ORIGIN || DEFAULT_CANVAS_ORIGIN,
       DEFAULT_CANVAS_ORIGIN,
@@ -1513,14 +1486,14 @@ async function main() {
     const learnerEmail = requireSecretFile('CANVAS_OSS_LEARNER_EMAIL');
     const learnerPassword = requireSecretFile('CANVAS_OSS_LEARNER_PASSWORD');
     const organizationId = requireEnv('CANVAS_OSS_ORGANIZATION_ID');
+    state.organizationId = organizationId;
     const martyApiKey = requireSecretFile('CANVAS_OSS_MARTY_API_KEY');
-    marty = new MartyClient(martyOrigin, martyApiKey);
-    const runSuffix = `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+    state.marty = marty = new MartyClient(martyOrigin, martyApiKey);
+
 
     await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive);
 
-    browser = await chromium.launch({ headless: true });
-    adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const adminPage = await adminContext.newPage();
     await loginCanvas(adminPage, canvasOrigin, adminEmail, adminPassword);
     const adminBearer = await createPersonalAccessToken(adminPage, canvasOrigin, `OSS contract admin ${runSuffix}`);
@@ -1532,6 +1505,7 @@ async function main() {
     requireCondition(adminProfile?.id, 'canvas_admin_profile_missing', 'Canvas Users API did not return the root administrator profile.');
 
     const templates = await selectProductionBadgeTemplates(marty, organizationId);
+    state.templates = templates;
 
     markActive('standard_lti_13_install');
     const platform = await marty.post('/v1/integrations/canvas/platforms', {
@@ -1539,7 +1513,7 @@ async function main() {
       canvas_base_url: canvasOrigin,
       enabled: true,
     }, [200]);
-    platformId = String(platform?.id || '');
+    state.platformId = platformId = String(platform?.id || '');
     requireCondition(platformId, 'marty_canvas_platform_missing', 'Marty did not create the organization-owned Canvas draft.');
     requireCondition(String(platform.organization_id) === organizationId, 'marty_canvas_platform_tenant_mismatch', 'Marty created the Canvas draft outside the API key organization.');
     const registration = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/registration-config`);
@@ -1575,7 +1549,7 @@ async function main() {
       runSuffix,
     );
 
-    learnerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    state.learnerContext = learnerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const learnerSetupPage = await learnerContext.newPage();
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
     const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`);
@@ -1592,7 +1566,7 @@ async function main() {
       name: `Marty OAuth ${runSuffix}`,
       redirectUri: `${martyOrigin}/v1/integrations/canvas/oauth/callback`,
     });
-    integrationSecretId = String((await marty.post('/v1/integrations/canvas/integration-secrets', {
+    state.integrationSecretId = integrationSecretId = String((await marty.post('/v1/integrations/canvas/integration-secrets', {
       organization_id: organizationId,
       name: `Canvas OAuth ${runSuffix}`,
       provider: 'canvas',
@@ -1615,6 +1589,7 @@ async function main() {
     await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.get('outcome') === 'success', { timeout: DEFAULT_TIMEOUT_MS });
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
     requireCondition(connectedPlatform?.connection_config?.oauth_status === 'connected', 'canvas_oauth_not_connected', 'Canvas OAuth callback did not publish a connected organization-scoped connection.');
+    state.oauthConnected = true;
     pass('canvas_oauth_authorization', 'A stock scoped Canvas API Developer Key completed the capability-derived OAuth flow.');
 
     const binding = await createProgramBinding(marty, platformId, templates, fixtures, runSuffix);
@@ -1659,6 +1634,53 @@ async function main() {
     }, DEFAULT_TIMEOUT_MS, 1_000, 'course_completion_not_observed');
     pass('course_completion', 'Canvas CourseProgress reported all non-empty module requirements completed.');
 
+  return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
+    adminContext, learnerContext, adminCanvas, learnerCanvas, fixtures, templates,
+    platformId, integrationSecretId, binding, pinnedBinding, externalAssignment, activityResults });
+}
+
+async function main() {
+  let args;
+  try {
+    args = parseArgs(process.argv);
+  } catch (error) {
+    process.stderr.write(`Canvas OSS contract arguments failed: ${sanitizeEvidence(error.code || error.message)}\n`);
+    return 2;
+  }
+
+  let execution;
+  try {
+    execution = requireComposeExecutionBoundary();
+  } catch (error) {
+    process.stderr.write(`Canvas OSS contract boundary failed: ${sanitizeEvidence(error.code || error.message)}\n`);
+    return 2;
+  }
+
+  const ledger = new ObservationLedger(new Date().toISOString(), execution);
+  let activeCase = 'upstream_source_and_image_provenance';
+  let browser = null;
+  let adminContext = null;
+  let learnerContext = null;
+  let recordedContext = null;
+  let recordedPage = null;
+  let marty = null;
+  let platformId = null;
+  let integrationSecretId = null;
+  let videoWritten = false;
+  let failure = null;
+
+  const preparationState = {};
+  const markActive = (id) => { activeCase = id; };
+  const pass = (id, evidence) => { ledger.pass(id, evidence); };
+
+  try {
+    const setup = await prepareCanvasCaptureFixtures({
+      browser: browser = await chromium.launch({ headless: true }), ledger, markActive, pass, state: preparationState,
+      runSuffix: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+    });
+    ({ marty, adminContext, learnerContext, platformId, integrationSecretId } = setup);
+    const { canvasOrigin, martyOrigin, organizationId, martyApiKey, learnerCanvas, adminCanvas,
+      fixtures, templates, binding, pinnedBinding, externalAssignment, activityResults } = setup;
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
       recordVideo: { dir: path.dirname(args.video), size: { width: 1440, height: 900 } },
@@ -1854,6 +1876,11 @@ async function main() {
       recordedContext = null;
     }
 
+    marty ||= preparationState.marty;
+    platformId ||= preparationState.platformId;
+    integrationSecretId ||= preparationState.integrationSecretId;
+    adminContext ||= preparationState.adminContext;
+    learnerContext ||= preparationState.learnerContext;
     if (marty && platformId) {
       await marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`, [204]).catch(() => {});
     }
@@ -1878,6 +1905,12 @@ async function main() {
 }
 
 module.exports = {
+  prepareCanvasCaptureFixtures,
+  launchLearnerResource,
+  triggerLearnerSync,
+  reloadLearnerExperience,
+  waitFor,
+  waitForJob,
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   CANVAS_OAUTH_SCOPES,
