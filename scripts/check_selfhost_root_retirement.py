@@ -20,7 +20,8 @@ import zipfile
 
 sys.dont_write_bytecode = True
 from activate_selfhost_renewed_secrets import (  # noqa: E402
-    PROJECT, checked_certificates, checked_env, checked_tokens, compose_args,
+    PROJECT, checked_certificates, checked_env, checked_overlap_mounts,
+    checked_tokens, compose_args,
     healthy, owned_service_closure, require_rootless_migration, run_json,
     secret_mounts, statuses,
 )
@@ -33,7 +34,9 @@ from provision_selfhost_snapshot_identity import (  # noqa: E402
     checked_login as snapshot_login, snapshot_origin,
 )
 from provision_selfhost_snapshot_rotator import checked_login as rotator_login  # noqa: E402
-from selfhost_openbao_client import Bao, require_renewal_authority  # noqa: E402
+from selfhost_openbao_client import (  # noqa: E402
+    Bao, require_ca_rotation_authority, require_renewal_authority,
+)
 from stage_selfhost_renewed_secrets import bounded_file, verify_generations  # noqa: E402
 
 
@@ -179,21 +182,30 @@ def audit(args: argparse.Namespace) -> Path:
     snapshot_origin(args.bao_addr)
     rollback = args.rollback_secrets
     active = args.active_secrets
-    verify_generations(rollback, active)
+    checked_overlap_mounts(args.ca_overlap, args.workload_pki_mount,
+                           args.keycloak_pki_mount)
+    verify_generations(rollback, active, ca_overlap=args.ca_overlap)
     if checked_env(args.rollback_env, rollback) != checked_env(args.active_env, active):
         raise ValueError("active and rollback Compose env differ beyond secret generation")
 
     renewal = Bao(args.bao_addr, args.bao_ca, "")
     _, _, _, operator_token = renewal_login(renewal, args.renewal_identity)
-    ca_rotation_login(Bao(args.bao_addr, args.bao_ca, ""),
-                      args.ca_rotation_identity)
+    ca_token = ca_rotation_login(Bao(args.bao_addr, args.bao_ca, ""),
+                                 args.ca_rotation_identity)
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     require_renewal_authority(bao)
     checked_tokens(bao, rollback, active, args.minimum_token_ttl,
                    require_orphan_old=True, require_orphan_new=True)
     checked_static_tokens(bao, rollback, args.minimum_token_ttl)
     checked_static_tokens(bao, active, args.minimum_token_ttl)
-    checked_certificates(bao, rollback, active, args.minimum_token_ttl)
+    if args.ca_overlap:
+        ca_bao = Bao(args.bao_addr, args.bao_ca, ca_token)
+        require_ca_rotation_authority(ca_bao)
+        checked_certificates(bao, rollback, active, args.minimum_token_ttl,
+                             replacement=(ca_bao, args.workload_pki_mount,
+                                          args.keycloak_pki_mount))
+    else:
+        checked_certificates(bao, rollback, active, args.minimum_token_ttl)
     snapshot_login(Bao(args.bao_addr, args.bao_ca, ""), args.snapshot_identity)
     rotator_login(Bao(args.bao_addr, args.bao_ca, ""),
                   args.snapshot_rotator_identity)
@@ -244,6 +256,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audit-org-slug", required=True)
     parser.add_argument("--audit-did", required=True)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)
+    parser.add_argument("--ca-overlap", action="store_true")
+    parser.add_argument("--workload-pki-mount")
+    parser.add_argument("--keycloak-pki-mount")
     return parser
 
 

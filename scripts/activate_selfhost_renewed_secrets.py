@@ -3,7 +3,7 @@
 
 This operator command keeps the old generation available for a bounded
 rollback. A successful return proves readiness and file mounts, not business
-journeys, CA rollover, or zero-downtime service continuity.
+journeys, trust retirement, or zero-downtime service continuity.
 """
 
 from __future__ import annotations
@@ -26,11 +26,14 @@ if os.name == "posix":
 sys.dont_write_bytecode = True
 from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
 from selfhost_openbao_client import (  # noqa: E402
-    Bao, certificate_public_key_der, public_key_der, require_renewal_authority,
+    Bao, certificate_public_key_der, public_key_der, require_ca_rotation_authority,
+    require_renewal_authority,
 )
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import PURPOSES, REALMS, jwe_policy, signing_policy  # noqa: E402
-from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, verify_generations  # noqa: E402
+from stage_selfhost_renewed_secrets import (  # noqa: E402
+    RENEWED_TOKEN_FILES, public_trust_overlap, verify_generations,
+)
 
 
 PROJECT = re.compile(r"marty-selfhost-[a-z0-9-]{1,60}\Z")
@@ -59,6 +62,15 @@ TLS_CERT_BY_ROLE = {
     "pp-server": "pp_workload_server_cert",
     "verification-client": "verification_workload_client_cert",
 }
+
+
+def checked_overlap_mounts(enabled: bool, workload: str | None,
+                           keycloak: str | None) -> None:
+    if enabled != bool(workload and keycloak) or (not enabled and (workload or keycloak)):
+        raise ValueError("CA overlap requires both replacement mounts")
+    if enabled and (re.fullmatch(r"workload-pki-v[2-8]", workload) is None
+                    or re.fullmatch(r"keycloak-pki-v[2-8]", keycloak) is None):
+        raise ValueError("CA replacement mounts are outside reviewed versions")
 
 
 def private_file(path: Path) -> str:
@@ -257,7 +269,8 @@ def checked_certificate_chain(path: Path, issuer: str) -> None:
         raise ValueError("renewed certificate is not signed by its OpenBao issuer")
 
 
-def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
+def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
+                         *, replacement: tuple[Bao, str, str] | None = None) -> None:
     if (set(TLS_CERT_BY_ROLE) != set(KEY_NAMES)
             or set(TLS_CERT_BY_ROLE.values()) != SELFHOST_CERT_FILES - {"workload_identity_ca_cert"}):
         raise ValueError("self-host TLS role and certificate inventory drifted")
@@ -267,13 +280,27 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
         "keycloak": bao.request("GET", "keycloak-pki/cert/ca")
         .get("data", {}).get("certificate"),
     }
-    for issuer in issuers.values():
+    new_issuers = issuers
+    if replacement is not None:
+        ca_bao, workload_mount, keycloak_mount = replacement
+        new_issuers = {
+            "workload_identity_ca_cert": ca_bao.request(
+                "GET", f"{workload_mount}/cert/ca").get("data", {}).get("certificate"),
+            "keycloak": ca_bao.request(
+                "GET", f"{keycloak_mount}/cert/ca").get("data", {}).get("certificate"),
+        }
+    for issuer in (*issuers.values(), *new_issuers.values()):
         if not isinstance(issuer, str):
             raise ValueError("renewed OpenBao issuer is absent")
         checked_certificate_lifetime(issuer, minimum_ttl)
-    for root in (old, new):
+    for root, active_issuers in ((old, issuers), (new, new_issuers)):
         workload_ca = (root / "workload_identity_ca_cert").read_text(encoding="ascii")
-        if workload_ca != issuers["workload_identity_ca_cert"]:
+        expected_ca = (public_trust_overlap(
+            issuers["workload_identity_ca_cert"].encode("ascii"),
+            new_issuers["workload_identity_ca_cert"].encode("ascii")).decode("ascii")
+            if replacement is not None and root == new
+            else issuers["workload_identity_ca_cert"])
+        if workload_ca != expected_ca:
             raise ValueError("workload issuer differs from the mounted trust anchor")
         for role, cert_name in TLS_CERT_BY_ROLE.items():
             key_name = KEY_NAMES[role]
@@ -289,7 +316,7 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
             certificate_path = root / cert_name
             certificate = certificate_path.read_text(encoding="ascii")
             checked_certificate_lifetime(certificate, minimum_ttl)
-            checked_certificate_chain(certificate_path, issuers["workload_identity_ca_cert"])
+            checked_certificate_chain(certificate_path, active_issuers["workload_identity_ca_cert"])
             if certificate_public_key_der(certificate) != public_key_der(public_key):
                 raise ValueError("workload certificate differs from its remote signer")
         for realm in REALMS:
@@ -306,7 +333,7 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
             certificate_path = root / f"keycloak_{realm}_rs256_cert"
             certificate = certificate_path.read_text(encoding="ascii")
             checked_certificate_lifetime(certificate, minimum_ttl)
-            checked_certificate_chain(certificate_path, issuers["keycloak"])
+            checked_certificate_chain(certificate_path, active_issuers["keycloak"])
             if certificate_public_key_der(certificate) != public_key_der(public_key):
                 raise ValueError("Keycloak certificate differs from its remote signer")
 
@@ -425,7 +452,15 @@ def activate(args: argparse.Namespace) -> dict:
             or args.report.parent != args.log_dir
             or args.report.name in ("renewed-compose.log", "rollback-compose.log")):
         raise ValueError("activation report destination is invalid")
-    count, changed = verify_generations(args.current_secrets, args.renewed_secrets)
+    ca_overlap = getattr(args, "ca_overlap", False)
+    workload_mount = getattr(args, "workload_pki_mount", None)
+    keycloak_mount = getattr(args, "keycloak_pki_mount", None)
+    ca_token_file = getattr(args, "ca_rotation_token_file", None)
+    checked_overlap_mounts(ca_overlap, workload_mount, keycloak_mount)
+    if ca_overlap != bool(ca_token_file):
+        raise ValueError("CA overlap requires CA authority")
+    count, changed = verify_generations(args.current_secrets, args.renewed_secrets,
+                                        ca_overlap=ca_overlap)
     if checked_env(args.current_env, args.current_secrets) != checked_env(
             args.renewed_env, args.renewed_secrets):
         raise ValueError("renewed Compose env changed non-secret configuration")
@@ -436,10 +471,20 @@ def activate(args: argparse.Namespace) -> dict:
         raise ValueError("OpenBao renewal operator token is invalid")
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     require_renewal_authority(bao)
+    replacement = None
+    if ca_overlap:
+        ca_token = private_file(ca_token_file).strip()
+        ca_bao = Bao(args.bao_addr, args.bao_ca, ca_token)
+        require_ca_rotation_authority(ca_bao)
+        replacement = (ca_bao, workload_mount, keycloak_mount)
     checked_tokens(bao, args.current_secrets, args.renewed_secrets,
                    args.minimum_token_ttl, require_orphan_new=True)
-    checked_certificates(bao, args.current_secrets, args.renewed_secrets,
-                         args.minimum_token_ttl)
+    if replacement is None:
+        checked_certificates(bao, args.current_secrets, args.renewed_secrets,
+                             args.minimum_token_ttl)
+    else:
+        checked_certificates(bao, args.current_secrets, args.renewed_secrets,
+                             args.minimum_token_ttl, replacement=replacement)
     old = compose_args(args.project_name, args.current_env, args.compose_file,
                        args.compose_override)
     new = compose_args(args.project_name, args.renewed_env, args.compose_file,
@@ -500,6 +545,10 @@ def main() -> int:
     parser.add_argument("--compose-override", type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--bao-addr", required=True)
+    parser.add_argument("--ca-overlap", action="store_true")
+    parser.add_argument("--workload-pki-mount")
+    parser.add_argument("--keycloak-pki-mount")
+    parser.add_argument("--ca-rotation-token-file", type=Path)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)
     args = parser.parse_args()
     try:

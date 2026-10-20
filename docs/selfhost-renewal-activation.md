@@ -64,8 +64,7 @@ Keycloak set with `scripts/provision_selfhost_keycloak_kms.py` using
 complete generation with `scripts/stage_selfhost_renewed_secrets.py`. Each
 candidate directory must be empty and private. The assembly verifies the
 same file inventory and modes, unchanged static inputs and public CA, and
-changed certificates and scoped tokens. It refuses CA rollover; that needs
-a separate trust-overlap procedure.
+changed certificates and scoped tokens. Its default mode refuses CA rollover.
 
 Replacement-issuer preparation is a separate rootless source stage, not an
 activation shortcut. After provisioning the CA-rotation AppRole while the
@@ -79,11 +78,13 @@ certificate. `--mode login` writes a short-lived token for
 corresponding `MARTY_SELFHOST_WORKLOAD_PKI_MOUNT=workload-pki-vN`; the Keycloak
 producer can select `SELFHOST_KEYCLOAK_PKI_MOUNT=keycloak-pki-vN`. Both retain
 the existing non-exportable Transit key versions. These source stages do not
-make the new issuers trusted by an installed app: the ordinary generation
-assembler and activation deliberately reject that change until the public
-dual-trust, old/new leaf, session and retirement gates are implemented and
-qualified. Do not substitute the new leaf files into a live generation by
-hand.
+make the new issuers trusted by an installed app. To stage the explicit
+trust-overlap generation, supply both replacement producer directories to
+`stage_selfhost_renewed_secrets.py` and add `--ca-overlap`. The assembler
+requires a single old public CA and a distinct single new public CA, then
+creates the exact old-plus-new PEM bundle in `workload_identity_ca_cert`.
+Every other static input and mode stays fixed. Do not substitute leaf files
+into a live generation by hand.
 
 Use a self-host Compose release whose ordinary `db-migrate` renders with
 `MARTY_KMS_BOOTSTRAP_ENABLED=false`, without a bootstrap-token mount, and
@@ -106,6 +107,10 @@ access to the same isolated project, invoke
 --bao-addr <HTTPS OpenBao address>
 --bao-ca <absolute OpenBao CA file>
 --bao-token-file <absolute private renewal-operator token file>
+--ca-overlap <only for a replacement issuer generation>
+--workload-pki-mount <workload-pki-v2 through workload-pki-v8; overlap only>
+--keycloak-pki-mount <keycloak-pki-v2 through keycloak-pki-v8; overlap only>
+--ca-rotation-token-file <private scoped CA-rotation token; overlap only>
 --log-dir <absolute empty private 0700 directory>
 --report <absolute new file inside log-dir>
 ```
@@ -124,3 +129,10 @@ or expiry-crossing checks. Run those independently before accepting the
 generation. Do not use an old local-key installation as the rollback target.
 Pass the same `--compose-override` to the root-retirement audit when the
 installed project uses one; both checks render it with each secret generation.
+For an overlap generation, pass `--ca-overlap` and both exact replacement mount
+names to the root-retirement audit as well. The audit logs into the already
+provisioned CA-rotation AppRole and verifies the old and new live issuers,
+each generation's leaf chain, and unchanged version-one Transit signers.
+The overlap keeps the old public CA trusted for a bounded rollback. It is not
+trust retirement: remove old trust only through a later separately tested
+generation after sessions and rollback obligations are discharged.

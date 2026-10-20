@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import re
 import stat
 import sys
 
@@ -24,6 +25,7 @@ from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa:
 MAX_SECRET_BYTES = 64 * 1024
 RENEWED_FILES = SELFHOST_TLS_FILES | KEYCLOAK_OUTPUTS
 CA_FILE = "workload_identity_ca_cert"
+PEM_CERT = re.compile(rb"-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]+\n)+-----END CERTIFICATE-----\n?\Z")
 RENEWED_CERT_FILES = SELFHOST_CERT_FILES | {
     "keycloak_master_rs256_cert", "keycloak_11id_rs256_cert",
 }
@@ -68,7 +70,15 @@ def entries(root: Path) -> dict[str, Path]:
     return found
 
 
-def verify_generations(current: Path, candidate: Path) -> tuple[int, int]:
+def public_trust_overlap(old_ca: bytes, new_ca: bytes) -> bytes:
+    """Make the sole supported two-issuer trust bundle from public certificates."""
+    if (PEM_CERT.fullmatch(old_ca) is None or PEM_CERT.fullmatch(new_ca) is None
+            or old_ca.rstrip(b"\n") == new_ca.rstrip(b"\n")):
+        raise ValueError("CA overlap requires two distinct single public certificates")
+    return old_ca.rstrip(b"\n") + b"\n" + new_ca.rstrip(b"\n") + b"\n"
+
+
+def verify_generations(current: Path, candidate: Path, *, ca_overlap: bool = False) -> tuple[int, int]:
     """Require a complete KMS-only successor with identical static inputs."""
     current = private_empty_or_source(current, empty=False)
     candidate = private_empty_or_source(candidate, empty=False)
@@ -84,9 +94,14 @@ def verify_generations(current: Path, candidate: Path) -> tuple[int, int]:
         after = bounded_file(new[name], allow_empty=name not in RENEWED_FILES)
         if stat.S_IMODE(old[name].stat().st_mode) != stat.S_IMODE(new[name].stat().st_mode):
             raise ValueError("secret generation file mode changed")
-        should_change = name in RENEWED_FILES and name != CA_FILE
+        should_change = name in RENEWED_FILES and (name != CA_FILE or ca_overlap)
         if (before != after) != should_change:
             raise ValueError("secret generation changed the wrong input")
+        if name == CA_FILE and ca_overlap:
+            prefix = before.rstrip(b"\n") + b"\n"
+            if (PEM_CERT.fullmatch(before) is None or not after.startswith(prefix)
+                    or after != public_trust_overlap(before, after[len(prefix):])):
+                raise ValueError("CA overlap bundle is not the exact old and new public issuers")
         changed += should_change
         if name in RENEWED_TOKEN_FILES:
             token_values.append(after)
@@ -95,7 +110,7 @@ def verify_generations(current: Path, candidate: Path) -> tuple[int, int]:
     return len(old), changed
 
 
-def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
+def stage(current: Path, tls: Path, keycloak: Path, output: Path, *, ca_overlap: bool = False) -> int:
     roots = [private_empty_or_source(path, empty=(path == output))
              for path in (current, tls, keycloak, output)]
     if len(set(roots)) != 4:
@@ -124,7 +139,9 @@ def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
             if name != KEY_METADATA_FILE:
                 candidate = bounded_file(path)
                 if name == CA_FILE:
-                    if candidate != payloads[name]:
+                    if ca_overlap:
+                        candidate = public_trust_overlap(payloads[name], candidate)
+                    elif candidate != payloads[name]:
                         raise ValueError("CA rollover needs a separate trust-overlap ceremony")
                 elif candidate == payloads[name]:
                     raise ValueError("renewed input did not change")
@@ -150,7 +167,7 @@ def stage(current: Path, tls: Path, keycloak: Path, output: Path) -> int:
                 stream.flush()
                 os.fchmod(stream.fileno(), old_mode)
                 os.fsync(stream.fileno())
-        verify_generations(current, output)
+        verify_generations(current, output, ca_overlap=ca_overlap)
     except Exception:
         for path in reversed(created):
             path.unlink(missing_ok=True)
@@ -162,9 +179,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("current", "tls", "keycloak", "output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
+    parser.add_argument("--ca-overlap", action="store_true")
     args = parser.parse_args()
     try:
-        count = stage(args.current, args.tls, args.keycloak, args.output)
+        count = stage(args.current, args.tls, args.keycloak, args.output,
+                      ca_overlap=args.ca_overlap)
     except (OSError, ValueError) as error:
         print(f"self-host secret generation failed: {error}", file=sys.stderr)
         return 2

@@ -47,6 +47,7 @@ def test_rollback_root_child_stops_retirement_audit(
     ca.write_text("public CA", encoding="ascii")
     args = argparse.Namespace(
         project_name="marty-selfhost-retirement-probe", minimum_token_ttl=3600,
+        ca_overlap=False, workload_pki_mount=None, keycloak_pki_mount=None,
         compose_file=compose, compose_override=None,
         bao_ca=ca, bao_addr="https://127.0.0.1:8200",
         rollback_secrets=tmp_path / "rollback", active_secrets=tmp_path / "active",
@@ -61,7 +62,7 @@ def test_rollback_root_child_stops_retirement_audit(
         openbao_state_dir=tmp_path / "state", snapshot_export_dir=tmp_path / "exports",
         openbao_config=tmp_path / "openbao.hcl",
     )
-    monkeypatch.setattr(retirement, "verify_generations", lambda *_args: (81, 39))
+    monkeypatch.setattr(retirement, "verify_generations", lambda *_args, **_kwargs: (81, 39))
     monkeypatch.setattr(retirement, "checked_env", lambda *_args: ["KEY=value"])
     monkeypatch.setattr(retirement, "Bao", lambda *_args: object())
     monkeypatch.setattr(retirement, "renewal_login",

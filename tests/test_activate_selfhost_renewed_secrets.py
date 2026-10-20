@@ -215,7 +215,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
         bao_ca=ca, bao_token_file=tmp_path / "operator.token",
         minimum_token_ttl=3600, log_dir=log_dir, report=log_dir / "result.json",
     )
-    monkeypatch.setattr(activation, "verify_generations", lambda *_: (81, 39))
+    monkeypatch.setattr(activation, "verify_generations", lambda *_, **__: (81, 39))
     monkeypatch.setattr(activation, "checked_env", lambda *_: ["KEY_NAME=version-one"])
     monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
     monkeypatch.setattr(activation, "Bao", lambda *_: object())
@@ -252,3 +252,69 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     assert str(args.renewed_env) in calls[0]
     assert str(args.current_env) in calls[1]
     assert json.loads(args.report.read_text())["result"] == "rolled_back"
+
+
+def test_ca_overlap_certificate_preflight_binds_each_generation_to_its_issuer(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    old_workload = "-----BEGIN CERTIFICATE-----\nT0xE\n-----END CERTIFICATE-----\n"
+    new_workload = "-----BEGIN CERTIFICATE-----\nTkVX\n-----END CERTIFICATE-----\n"
+    old_keycloak, new_keycloak = "old-keycloak-issuer", "new-keycloak-issuer"
+    (old / "workload_identity_ca_cert").write_text(old_workload)
+    (new / "workload_identity_ca_cert").write_text(old_workload + new_workload)
+    for root in (old, new):
+        for cert_name in activation.TLS_CERT_BY_ROLE.values():
+            (root / cert_name).write_text(f"{root.name}-{cert_name}")
+        for realm in activation.REALMS:
+            (root / f"keycloak_{realm}_rs256_cert").write_text(f"{root.name}-{realm}")
+
+    class FakeBao:
+        def __init__(self, *, replacement: bool = False):
+            self.replacement = replacement
+
+        def request(self, method, path):
+            assert method == "GET"
+            if path.endswith("/cert/ca"):
+                assert path in ({"workload-pki-v5/cert/ca", "keycloak-pki-v5/cert/ca"}
+                                if self.replacement else
+                                {"workload-pki/cert/ca", "keycloak-pki/cert/ca"})
+                return {"data": {"certificate": (
+                    new_workload if "workload" in path else new_keycloak)
+                    if self.replacement else (
+                    old_workload if "workload" in path else old_keycloak)}}
+            assert not self.replacement and path.startswith("transit/keys/")
+            return {"data": {"type": "rsa-2048" if "keycloak-" in path else "ecdsa-p256",
+                             "exportable": False, "allow_plaintext_backup": False,
+                             "latest_version": 1, "keys": {"1": {"public_key": "public"}}}}
+
+    chains = []
+    monkeypatch.setattr(activation, "checked_certificate_lifetime", lambda *_: None)
+    monkeypatch.setattr(activation, "checked_certificate_chain",
+                        lambda path, issuer: chains.append((path.parent.name, issuer)))
+    monkeypatch.setattr(activation, "certificate_public_key_der", lambda *_: b"public")
+    monkeypatch.setattr(activation, "public_key_der", lambda *_: b"public")
+    primary, ca = FakeBao(), FakeBao(replacement=True)
+    activation.checked_certificates(primary, old, new, 3600,
+                                    replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"))
+    assert chains.count(("old", old_workload)) == len(activation.TLS_CERT_BY_ROLE)
+    assert chains.count(("new", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
+    assert chains.count(("old", old_keycloak)) == len(activation.REALMS)
+    assert chains.count(("new", new_keycloak)) == len(activation.REALMS)
+    (new / "workload_identity_ca_cert").write_text(new_workload + old_workload)
+    with pytest.raises(ValueError, match="mounted trust anchor"):
+        activation.checked_certificates(primary, old, new, 3600,
+                                        replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"))
+
+
+@pytest.mark.parametrize("workload,keycloak", [
+    ("workload-pki-v1", "keycloak-pki-v2"),
+    ("workload-pki-v02", "keycloak-pki-v2"),
+    ("workload-pki-v9", "keycloak-pki-v2"),
+    ("workload-pki-v2/roles/admin", "keycloak-pki-v2"),
+    ("workload-pki-v2", "keycloak-pki-v9"),
+])
+def test_overlap_mounts_reject_out_of_scope_paths(workload: str, keycloak: str) -> None:
+    with pytest.raises(ValueError, match="outside reviewed versions"):
+        activation.checked_overlap_mounts(True, workload, keycloak)
