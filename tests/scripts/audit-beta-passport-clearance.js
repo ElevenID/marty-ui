@@ -69,6 +69,7 @@ const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID
 const VERIFIER_DID = process.env.BETA_AUDIT_VERIFIER_DID || '';
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
+const ADMIN_API_FUNCTIONAL = process.env.D01_ADMIN_API_FUNCTIONAL === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
 const RESOURCE_NAMES = Object.freeze({
   trust: 'D-01 Pre-Boarding Issuer Trust',
@@ -523,6 +524,9 @@ async function main() {
   if (!validEvidenceDigest(evidenceDigest)) {
     throw new Error('D01_PASSPORT_EVIDENCE_SHA256 must be exactly 64 lower-case hexadecimal characters');
   }
+  if (ADMIN_API_FUNCTIONAL && RECORD_VIDEO) {
+    throw new Error('D01 admin-API functional mode cannot record video');
+  }
 
   const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
   const artifactDir = createArtifactDir(ROOT, `beta-passport-clearance-${stamp}`);
@@ -635,11 +639,20 @@ async function main() {
       passportEvidenceSha256: application.created.form_data.passport_evidence_sha256,
     };
 
-    await page.goto(`${BETA_ORIGIN}/console/org/operate/applications/${encodeURIComponent(applicationId)}`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 60_000,
-    });
-    await page.getByText(application.formData.traveler_id).first().waitFor({ state: 'visible', timeout: 30_000 });
+    if (ADMIN_API_FUNCTIONAL) {
+      // The detail page owns an automatic reviewer lock. Keep this API-only
+      // functional run on the list page so its explicit lock has one owner.
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      report.reviewSurface = 'ADMIN_APPLICATION_LIST_WITH_EXPLICIT_API_DECISION';
+    } else {
+      await page.goto(`${BETA_ORIGIN}/console/org/operate/applications/${encodeURIComponent(applicationId)}`, {
+        waitUntil: 'domcontentloaded', timeout: 60_000,
+      });
+      await page.getByText(application.formData.traveler_id).first().waitFor({ state: 'visible', timeout: 30_000 });
+      report.reviewSurface = 'ADMIN_APPLICATION_DETAIL';
+    }
     await showClearanceStep(page, 'Passport evidence submitted', 'The application carries the exact digest of the passport result already validated by the native Rust verifier.');
 
     const approval = await approveAndIssue(page, ownedResources, evidenceDigest, { recording });

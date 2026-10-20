@@ -31,3 +31,12 @@ fn migration_has_one_explicit_compatible_head() {
     assert!(sql.contains("ux_webhook_outbox_logical_delivery"));
     assert!(sql.contains("ck_webhook_outbox_status"));
 }
+
+#[test]
+fn correlation_migration_is_applied_and_validated() {
+    let source = include_str!("../src/migration.rs");
+    let sql = include_str!("../migrations/0002_webhook_delivery_correlation.sql");
+    assert!(source.contains("include_str!(\"../migrations/0002_webhook_delivery_correlation.sql\")"));
+    assert!(source.contains("webhook delivery correlation column is missing"));
+    assert!(sql.contains("ADD COLUMN IF NOT EXISTS correlation_id varchar(64)"));
+}

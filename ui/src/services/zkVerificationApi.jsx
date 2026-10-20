@@ -73,6 +73,9 @@ export const getVerificationFlowResult = async (instanceId) => {
   }
 };
 
+// The QR polling and history views share the same correlated result reader.
+export const getVerificationResult = getVerificationFlowResult;
+
 /**
  * Submit a VP token to complete verification flow
  *
@@ -134,6 +137,7 @@ export default {
   submitVerification,
   getVerificationFlowInstance,
   getVerificationFlowResult,
+  getVerificationResult,
   evaluatePresentation,
   evaluateInline,
   // Legacy

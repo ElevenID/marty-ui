@@ -630,6 +630,41 @@ async fn organization_withdrawal_still_accepts_an_unissued_application_under_rev
     assert_eq!(state.applicants[0].status, LifecycleStatus::Draft);
 }
 
+#[tokio::test]
+async fn applicant_reads_accept_view_permission_without_review_permission() {
+    let app = app();
+    let queue = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/organizations/issuer-org/applicants")
+                .header("x-user-id", "reader-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:view")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(queue.status(), StatusCode::OK);
+
+    let denied = app
+        .oneshot(
+            Request::builder()
+                .method(Method::GET)
+                .uri("/v1/organizations/issuer-org/applicants")
+                .header("x-user-id", "reader-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+}
+
 #[derive(Deserialize)]
 struct Contract {
     http_operations: Vec<Operation>,

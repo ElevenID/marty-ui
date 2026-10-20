@@ -342,10 +342,7 @@ impl CredentialBuilder for HttpCredentialBuilder {
                 "organization_id is required for DID-mediated signing",
             ));
         }
-        let mut claims = request.claims.clone();
-        if let Some(status) = credential_status_claim(&request.status_list_entries) {
-            claims.insert("credentialStatus".to_owned(), status);
-        }
+        let claims = claims_for_credential_format(request);
         match request.kind {
             CredentialBuilderKind::SdJwt => {
                 self.build_sd_jwt(request, claims.into_iter().collect())
@@ -363,6 +360,19 @@ impl CredentialBuilder for HttpCredentialBuilder {
             }
         }
     }
+}
+
+fn claims_for_credential_format(request: &CredentialBuildRequest) -> Map<String, Value> {
+    let mut claims = request.claims.clone();
+    // credentialStatus is a W3C VC/SD-JWT field, not an ISO mDL data element.
+    // Putting it in the mDL namespace makes the issued document differ from the
+    // governed template and can be rejected by independent wallets.
+    if request.kind != CredentialBuilderKind::Mdoc {
+        if let Some(status) = credential_status_claim(&request.status_list_entries) {
+            claims.insert("credentialStatus".to_owned(), status);
+        }
+    }
+    claims
 }
 
 const REDACTED_SIGNING_VALUE: &str = "[REDACTED]";
@@ -1264,6 +1274,23 @@ mod tests {
                 "index": 7,
                 "status_list_uri": "https://issuer.example/status/1",
             })],
+        }
+    }
+
+    #[test]
+    fn mdoc_keeps_w3c_status_out_of_iso_namespace() {
+        let mdoc = request(CredentialBuilderKind::Mdoc);
+        let mdoc_claims = claims_for_credential_format(&mdoc);
+        assert_eq!(mdoc_claims.get("name"), Some(&json!("Alice")));
+        assert!(!mdoc_claims.contains_key("credentialStatus"));
+
+        for kind in [
+            CredentialBuilderKind::SdJwt,
+            CredentialBuilderKind::JwtVcJson,
+            CredentialBuilderKind::DataIntegrity,
+        ] {
+            let claims = claims_for_credential_format(&request(kind));
+            assert_eq!(claims["credentialStatus"]["statusListIndex"], "7");
         }
     }
 

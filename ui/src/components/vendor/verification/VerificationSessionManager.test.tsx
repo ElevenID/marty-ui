@@ -120,6 +120,44 @@ describe('VerificationSessionManager', () => {
     expect(screen.getByRole('tab', { name: /history \(1\)/i })).toBeInTheDocument();
   });
 
+  it('loads actual terminal evidence before showing a historical result', async () => {
+    const user = userEvent.setup();
+    mockListFlowExecutions.mockResolvedValue([{
+      id: 'verified-session-1', flow_type: 'oid4vp_presentation', status: 'COMPLETED',
+      created_at: '2026-07-12T12:00:00Z', updated_at: '2026-07-12T12:05:00Z',
+    }]);
+    mockGetVerificationFlowResult.mockResolvedValue({
+      instance_id: 'verified-session-1', status: 'COMPLETED', result: 'passed', decision: 'allow',
+      verified_claims: { age_over_21: true }, credential_results: [{
+        trust_check_passed: true, signature_valid: true,
+        authenticated_disclosures: { format: 'mso_mdoc', documents: [{
+          doc_type: 'org.iso.18013.5.1.mDL', namespaces: { 'org.iso.18013.5.1': ['age_over_21'] },
+        }] },
+      }],
+    });
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('tab', { name: /history \(1\)/i }));
+    await user.click(await screen.findByRole('button', { name: 'View session details' }));
+    expect(mockGetVerificationFlowResult).toHaveBeenCalledWith('verified-session-1');
+    expect(await screen.findByTestId('verification-result-summary')).toHaveAttribute(
+      'data-disclosed-claim-names', '["age_over_21"]',
+    );
+  });
+
+  it('does not infer a successful result from history status when evidence fails to load', async () => {
+    const user = userEvent.setup();
+    mockListFlowExecutions.mockResolvedValue([{
+      id: 'unavailable-session-1', flow_type: 'oid4vp_presentation', status: 'COMPLETED',
+      created_at: '2026-07-12T12:00:00Z', updated_at: '2026-07-12T12:05:00Z',
+    }]);
+    mockGetVerificationFlowResult.mockRejectedValue(new Error('Result unavailable'));
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('tab', { name: /history \(1\)/i }));
+    await user.click(await screen.findByRole('button', { name: 'View session details' }));
+    expect(await screen.findByText('Result unavailable')).toBeInTheDocument();
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
+  });
+
   it('generates the details QR code when the flow exposes only request_uri', async () => {
     const user = userEvent.setup();
     const requestUri = 'openid4vp://authorize?request_uri=https%3A%2F%2Fexample.test%2Frequest';

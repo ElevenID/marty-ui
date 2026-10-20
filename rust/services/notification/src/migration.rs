@@ -54,6 +54,9 @@ pub async fn migrate(
     sqlx::raw_sql(include_str!("../migrations/0001_notification_schema.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!("../migrations/0002_webhook_delivery_correlation.sql"))
+        .execute(&mut *transaction)
+        .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -93,6 +96,13 @@ async fn validate_connection(connection: &mut sqlx::PgConnection) -> Result<(), 
     if checks != 2 {
         return Err(MigrationError::Incompatible(
             "webhook secret storage constraints are missing".into(),
+        ));
+    }
+    let delivery_correlation: i64 = sqlx::query_scalar("SELECT count(*) FROM information_schema.columns WHERE table_schema='notification_service' AND table_name='webhook_deliveries' AND column_name='correlation_id' AND data_type='character varying' AND character_maximum_length=64")
+        .fetch_one(&mut *connection).await?;
+    if delivery_correlation != 1 {
+        return Err(MigrationError::Incompatible(
+            "webhook delivery correlation column is missing".into(),
         ));
     }
     Ok(())

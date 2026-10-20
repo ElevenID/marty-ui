@@ -475,15 +475,17 @@ fn project_credential_result(value: Value) -> Result<Value, FlowContractError> {
         }
     }
     value.entry("claim_results").or_insert_with(|| json!([]));
-    value.entry("trust_check_passed").or_insert(json!(true));
-    value.entry("freshness_check_passed").or_insert(json!(true));
-    value.entry("signature_valid").or_insert(json!(true));
     for field in [
         "trust_check_passed",
         "freshness_check_passed",
         "signature_valid",
     ] {
-        required_bool(&value, field)?;
+        if value
+            .get(field)
+            .is_some_and(|entry| !entry.is_null() && !entry.is_boolean())
+        {
+            return Err(FlowContractError);
+        }
     }
     for field in ["revocation_checked", "not_revoked"] {
         if value
@@ -912,5 +914,33 @@ mod tests {
             .expect("verification result"),
             contract.expected_verification_result
         );
+    }
+
+    #[test]
+    fn credential_checks_are_never_invented_by_projection() {
+        let missing_checks = json!({
+            "credential_template_id": "template-1",
+            "satisfied": true
+        });
+        let projected = project_credential_result(missing_checks).expect("project result");
+        for field in [
+            "trust_check_passed",
+            "freshness_check_passed",
+            "signature_valid",
+        ] {
+            assert!(projected.get(field).is_none(), "unexpected {field}");
+        }
+
+        let explicit_checks = json!({
+            "credential_template_id": "template-1",
+            "satisfied": false,
+            "trust_check_passed": false,
+            "freshness_check_passed": true,
+            "signature_valid": false
+        });
+        let projected = project_credential_result(explicit_checks).expect("project result");
+        assert_eq!(projected["trust_check_passed"], false);
+        assert_eq!(projected["freshness_check_passed"], true);
+        assert_eq!(projected["signature_valid"], false);
     }
 }

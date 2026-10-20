@@ -101,7 +101,7 @@ function isVerificationFlowInstance(session = {}) {
   ));
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// â”€â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function StatusChip({ status }) {
   const normalized = normalizeSessionStatus(status);
@@ -125,7 +125,7 @@ function TabPanel({ children, value, index }) {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return 'â€”';
   return new Date(iso).toLocaleString();
 }
 
@@ -166,7 +166,7 @@ function VerificationSessionManager({ organizationId }) {
     return () => { detailRequest.current += 1; };
   }, [organizationId]);
 
-  // ── Data fetching ─────────────────────────────────────────────────────────
+  // â”€â”€ Data fetching â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const fetchSessions = useCallback(async () => {
     if (!organizationId) {
@@ -236,12 +236,12 @@ function VerificationSessionManager({ organizationId }) {
     fetchVerifierIssuerDid();
   }, [fetchVerifierIssuerDid]);
 
-  // ── Filtered session lists ────────────────────────────────────────────────
+  // â”€â”€ Filtered session lists â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const activeSessions  = sessions.filter((s) => ACTIVE_STATUSES.includes(normalizeSessionStatus(s.status)));
   const historySessions = sessions.filter((s) => HISTORY_STATUSES.includes(normalizeSessionStatus(s.status)));
 
-  // ── Wizard handlers ───────────────────────────────────────────────────────
+  // â”€â”€ Wizard handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const openWizard = () => {
     setWizardStep(0);
@@ -258,7 +258,7 @@ function VerificationSessionManager({ organizationId }) {
 
   const handleWizardNext = async () => {
     if (wizardStep === 1) {
-      // Step 1 → 2: create the session
+      // Step 1 â†’ 2: create the session
       setWizardLoading(true);
       setWizardError(null);
       try {
@@ -292,11 +292,15 @@ function VerificationSessionManager({ organizationId }) {
   const handleWizardBack = () => setWizardStep((s) => s - 1);
 
   const handleVerificationComplete = (completedSession) => {
-    showSuccess(`Verification ${completedSession.status}`);
+    if (String(completedSession?.status || '').toLowerCase() === 'completed'
+      && String(completedSession?.result || '').toLowerCase() === 'passed'
+      && String(completedSession?.decision || '').toLowerCase() === 'allow') {
+      showSuccess('Verification completed');
+    }
     fetchSessions();
   };
 
-  // ── Detail handlers ───────────────────────────────────────────────────────
+  // â”€â”€ Detail handlers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const openDetail = async (session) => {
     const request = ++detailRequest.current;
@@ -328,7 +332,7 @@ function VerificationSessionManager({ organizationId }) {
     setDetailSession(null);
   };
 
-  // ── Render ────────────────────────────────────────────────────────────────
+  // â”€â”€ Render â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
   const renderSessionTable = (rows) => (
     <TableContainer>
@@ -362,7 +366,7 @@ function VerificationSessionManager({ organizationId }) {
                     </Typography>
                   </Tooltip>
                 </TableCell>
-                <TableCell>{session.purpose || '—'}</TableCell>
+                <TableCell>{session.purpose || 'â€”'}</TableCell>
                 <TableCell><StatusChip status={session.status} /></TableCell>
                 <TableCell>{formatDate(session.created_at)}</TableCell>
                 <TableCell>{formatDate(session.updated_at)}</TableCell>
@@ -418,6 +422,7 @@ function VerificationSessionManager({ organizationId }) {
             </span>
           </Tooltip>
           <Button
+            data-testid="verification-new-session"
             variant="contained"
             startIcon={<AddIcon />}
             onClick={openWizard}
@@ -527,6 +532,7 @@ function VerificationSessionManager({ organizationId }) {
           )}
           {wizardStep < 2 && (
             <Button
+              data-testid={wizardStep === 1 ? 'verification-start-session' : 'verification-next-step'}
               variant="contained"
               onClick={handleWizardNext}
               disabled={

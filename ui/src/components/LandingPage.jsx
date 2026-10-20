@@ -288,7 +288,7 @@ function DeveloperQuickstartSection({ t }) {
                     {DEVELOPER_QUICKSTART.note}
                   </Typography>
                   <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
-                    <Chip label="POST /v1/credentials/verify" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
+                    <Chip label="POST /v1/vc-api/credentials/verify" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
                     <Chip label="/flows/verify for wallet journeys" size="small" sx={{ bgcolor: 'rgba(255,255,255,0.08)', color: 'common.white' }} />
                   </Box>
                 </Paper>
