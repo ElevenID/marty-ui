@@ -433,10 +433,10 @@ it does not skip tests or establish historical evidence reuse.
 The next A0 Canvas inventory slice observes each acceptance target's direct
 Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
 fixtures, recording checkout-relative paths and exact hashes (95 composition,
-50 worker inputs in the reviewed tree). Unsupported syntax for the counted
-`#[path]`/`include!`/embedded-file forms, missing files and out-of-checkout
-paths fail the evidence recorder before test execution. This is observed
-first-hop visibility, not a complete Rust parser: other module forms,
+50 worker inputs in the reviewed tree). Bounded count checks reject the tested
+non-literal `#[path]`/`include!`/embedded-file forms; missing files and
+out-of-checkout paths fail the evidence recorder before test execution. This is
+observed first-hop visibility, not a complete Rust parser: other module forms,
 nested imports, generated/runtime files,
 external images, assertion reachability and full source closure remain open.
 No Canvas test or qualification tier is skipped.
