@@ -71,6 +71,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     binding_id: binding.id, platform_id: platformId, credential_template_id: templates.credential.id };
   report.scope = scope;
   report.operations = [];
+  report.pendingOperations = [];
   const seen = new Set();
   const inventory = () => marty.get(`/v1/issued-credentials?organization_id=${enc(organizationId)}`);
   const unsigned = async () => {
@@ -129,6 +130,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   }
   report.preIssuanceCorrection = await correction('pre-issuance');
   await unsigned();
+  report.pendingOperations.push('scoped-approval');
   const approval = await marty.post(`/v1/integrations/canvas/applications/${enc(applicationId)}/approve`,
     { review_notes: `Canvas capture approval ${scenario}` }, [200]);
   same(approval?.application_id, applicationId, 'Approval returned another application');
@@ -142,6 +144,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   same(reservation.organization_id, organizationId, 'Approval transaction organization');
   same(reservation.credential_template_id, templates.credential.id, 'Approval transaction template');
   assert.ok(!reservation.issued_at, 'Approval signed before the wallet claim');
+  report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
   await operations.reloadLearnerExperience(page);
   await page.getByTestId('canvas-ready-to-claim').waitFor({ state: 'visible' });
   await unsigned();
@@ -152,6 +155,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   const responsePromise = page.waitForResponse(response => new URL(response.url()).origin === martyOrigin
     && new URL(response.url()).pathname === `/v1/me/applications/${applicationId}/claim`
     && response.request().method() === 'POST');
+  report.pendingOperations.push('wallet-claim');
   await page.getByTestId('canvas-claim-action').click();
   const response = await responsePromise;
   const claim = await operations.responseJson(response, 'canvas_claim_failed', 'Canvas claim', [200]);
@@ -166,6 +170,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   const credentialId = issued.credential_id || issued.id;
   report.credentialId = credentialId;
   report.issuerDid = issued.issuer_did;
+  report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'wallet-claim');
   await page.getByTestId('credential-claim-dialog').getByRole('button', { name: /close|done/i }).first().click();
   await operations.reloadLearnerExperience(page);
   await page.getByTestId('canvas-claim-complete').waitFor({ state: 'visible' });

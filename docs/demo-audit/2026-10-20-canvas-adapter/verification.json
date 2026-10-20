@@ -7,7 +7,7 @@
     "tests/scripts/run-canvas-oss-standard-contract.test.js"
   ],
   "exit_code": 0,
-  "log_sha256": "8d7868492f3d37d3f105cc259df553bd49e9eaeb68226730c9d5fc3f85109499",
+  "log_sha256": "f4765791d0dae9e96a44556b45336fb28800772ee028ac73641fd62ed5ba0749",
   "node": "v24.14.1",
   "production_execution": false,
   "source_tests": {

@@ -167,7 +167,8 @@ async function main() {
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    if (state.marty && applicationId) await cleanup('owned-issuance-retirement', async () => {
+    let retired = true;
+    if (state.marty && applicationId) retired = await cleanup('owned-issuance-retirement', async () => {
       const records = await state.marty.get(`/v1/issued-credentials?organization_id=${encodeURIComponent(state.organizationId || process.env.CANVAS_OSS_ORGANIZATION_ID)}`);
       const owned = records.filter(r => r.application_id === applicationId);
       assert.ok(owned.length <= 1);
@@ -198,9 +199,12 @@ async function main() {
         exact(retired);
         assert.equal(String(retired.status).toLowerCase(), 'revoked');
       }
+      assert.ok(report.transactionId || !(report.pendingOperations || []).includes('scoped-approval'),
+        'Approval outcome is uncertain; preserve the platform and exact application for reconciliation');
     });
-    let disconnected = true;
-    if (state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
+    report.resourceRetirementConfirmed = retired;
+    let disconnected = retired;
+    if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
       const result = await state.marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}/oauth`, [200]);
       assert.equal(result.status, 'disconnected');
       assert.equal(result.scopes.length, 0);
