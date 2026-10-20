@@ -102,13 +102,14 @@ def test_existing_beta_signer_does_not_qualify_supported_consumers() -> None:
     deployment = CONTRACT["deployment_gate"]
     assert deployment["supported_consumers"] == ["base", "selfhost", "K8s"]
     assert "beta-only" in deployment["existing_beta_signer"]
-    gate = deployment["required_before_python_retirement"]
+    gate = deployment["required_for_supported_deployment"]
     assert "same shared Rust implementation" in gate
     assert "narrow signer credential and KMS key policy" in gate
     assert "private signer-to-ingress network" in gate
     assert "no public sign route" in gate
     assert "no OpenBao token exposure" in gate
     assert "marty-credentials #305" in gate
+    assert "does not establish this runtime qualification" in gate
     assert "no provider HMAC generation" in CONTRACT["supported_signer_runtime"]["kms"]
     assert "do not re-enable a local-secret" in CONTRACT["supported_signer_runtime"]["rollback"]
 
