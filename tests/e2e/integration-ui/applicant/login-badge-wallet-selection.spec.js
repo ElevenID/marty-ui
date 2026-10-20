@@ -260,6 +260,12 @@ async function installApplicantWalletMocks(page, { applications = [], credential
         id: APPLICATION_ID,
         status: 'APPROVED',
         claim_state: 'OFFER_READY',
+        claim_capabilities: {
+          oid4vci_wallet: true,
+          delivery_destination_selection: false,
+          canvas_credentials_mirror: false,
+          offer_reuse: 'pending_until_consumed_or_expired',
+        },
         credential_offer_uri: `https://issuer.example.test/offers/${issueRequests.length}`,
         offer_expires_at: '2099-07-10T23:59:00Z',
         credential_offer_uris: Object.fromEntries(walletRegistry.map((wallet) => [wallet.id, `https://issuer.example.test/offers/${wallet.id}`])),
@@ -325,7 +331,7 @@ test('applicant selects a browser wallet during login badge claim flow', async (
   expect(createRequests[0]).not.toHaveProperty('metadata');
 
   await expect.poll(() => issueRequests.length).toBeGreaterThanOrEqual(1);
-  expect(issueRequests[0].delivery_destination_ids).toContain('dd-oid4vci-compatible-wallet');
+  expect(issueRequests).toEqual([{}]);
 
   await page.getByTestId('wallet-option-wr-waltid-001').click();
 
@@ -333,9 +339,9 @@ test('applicant selects a browser wallet during login badge claim flow', async (
   await expect(page.getByRole('heading', { name: 'Scan with walt.id Wallet' })).toBeVisible();
   await expect(page.getByText('Secure issuance via OpenID4VCI')).toBeVisible();
 
-  const latestIssueRequest = issueRequests[issueRequests.length - 1];
-  expect(latestIssueRequest.delivery_destination_ids).toContain('dd-oid4vci-compatible-wallet');
-  expect(latestIssueRequest.canvas_credentials_consent).toBe(false);
+  // Wallet selection changes the local transport for the server-owned offer;
+  // it must not reissue or submit unsupported destination/consent fields.
+  expect(issueRequests).toEqual([{}]);
 
   const storedWallets = await page.evaluate((userId) => {
     return JSON.parse(localStorage.getItem(`elevenid_wallets_${userId}`) || '[]');
