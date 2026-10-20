@@ -52,6 +52,7 @@ if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyCo
 $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-tunnel-configuration.ps1")
@@ -440,16 +441,6 @@ function Assert-BetaCallbackSignerNetwork {
     }
 }
 
-function Assert-BetaVolume([string]$Name) {
-    $raw = & docker volume inspect $Name
-    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
-    $volume = ($raw -join "`n") | ConvertFrom-Json
-    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $script:BetaProject) {
-        throw "Refusing volume outside $($script:BetaProject): $Name"
-    }
-    return $Name
-}
-
 function Get-FileSha256([string]$Path) {
     return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
@@ -750,12 +741,16 @@ function New-BetaStateBackup {
     )
 
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
+    Protect-BetaStateBackupDirectory -Path $Destination
+    if ($SafeRelease -cnotmatch '^[A-Za-z0-9][A-Za-z0-9_.-]+$') { throw 'Invalid beta backup name' }
     $postgres = Get-ComposeContainerId -Service "postgres"
     $applicant = Get-ComposeContainerId -Service "applicant"
     $redis = Get-ComposeContainerId -Service "redis"
-    foreach ($required in @($postgres, $applicant, $redis)) { if (-not $required) { throw "Beta backup requires the running state services" } }
-    $applicantVolume = Assert-BetaVolume "elevenid-beta_applicant_data"
-    $openBaoVolume = Assert-BetaVolume "elevenid-beta_openbao_data"
+    $openbao = Get-ComposeContainerId -Service "openbao"
+    foreach ($required in @($postgres, $applicant, $redis, $openbao)) { if (-not $required) { throw "Beta backup requires the running state services" } }
+    Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers
+    $applicantVolume = ($script:StateVolumePlan | Where-Object logical_name -eq 'applicant_data').volume_name
+    $openBaoVolume = ($script:StateVolumePlan | Where-Object logical_name -eq 'openbao_data').volume_name
     Invoke-Checked -FilePath docker -Arguments @("exec", $postgres, "sh", "-lc", "pg_dump -U postgres -Fc -d marty -f /tmp/$SafeRelease-marty.dump && pg_dump -U postgres -Fc -d keycloak -f /tmp/$SafeRelease-keycloak.dump && pg_dumpall -U postgres --globals-only -f /tmp/$SafeRelease-globals.sql")
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-marty.dump", (Join-Path $Destination "postgres-marty.dump"))
     Invoke-Checked -FilePath docker -Arguments @("cp", "${postgres}:/tmp/$SafeRelease-keycloak.dump", (Join-Path $Destination "postgres-keycloak.dump"))
@@ -767,7 +762,14 @@ function New-BetaStateBackup {
         throw "Authenticated beta Redis snapshot failed"
     }
     Invoke-Checked -FilePath docker -Arguments @("cp", "${redis}:/data/dump.rdb", (Join-Path $Destination "redis-dump.rdb"))
-    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$openBaoVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "cd /source && tar -czf /backup/openbao-data.tar.gz .")
+    # A live Raft directory copy is not a consistent database backup. Keep the
+    # token inside its owning node and retain a native snapshot plus static custody.
+    $raftFile = "/tmp/$SafeRelease-openbao-raft.snap"
+    $raftCommand = 'BAO_TOKEN=$(cat /bao/data/root.token) BAO_ADDR=https://127.0.0.1:8200 BAO_CACERT=/bao/data/tls/ca.crt bao operator raft snapshot save ' + $raftFile
+    Invoke-Checked -FilePath docker -Arguments @('exec', $openbao, 'sh', '-ec', $raftCommand)
+    Invoke-Checked -FilePath docker -Arguments @('cp', "${openbao}:$raftFile", (Join-Path $Destination 'openbao-raft.snap'))
+    Invoke-Checked -FilePath docker -Arguments @('exec', $openbao, 'rm', '-f', $raftFile)
+    Invoke-Checked -FilePath docker -Arguments @("run", "--rm", "--mount", "type=volume,src=$openBaoVolume,dst=/source,readonly", "--mount", "type=bind,src=$Destination,dst=/backup", $script:VolumeHelperImage, "sh", "-lc", "cd /source && test -d raft && tar -czf /backup/openbao-data.tar.gz --exclude=./raft .")
 
     $files = @(Get-ChildItem -LiteralPath $Destination -File | Sort-Object Name | ForEach-Object {
         [ordered]@{ name = $_.Name; size = $_.Length; sha256 = Get-FileSha256 $_.FullName }
@@ -776,6 +778,8 @@ function New-BetaStateBackup {
         schema_version = 1
         phase = $Phase
         application_writers_stopped = $WritersStopped
+        state_volumes = $script:StateVolumePlan
+        openbao_backup = 'native-raft-snapshot-and-static-custody'
         created_at = (Get-Date).ToUniversalTime().ToString("o")
         files = $files
     } | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $ManifestPath -Encoding utf8
@@ -1146,6 +1150,7 @@ $plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only of
 $preflightPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $preflightPostgres) { throw "Beta PostgreSQL container is unavailable" }
 Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $preflightPostgres
+$script:StateVolumePlan = @(Get-BetaStateVolumePlan)
 if ($UsePreparedLocalImages) {
     $null = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
     $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
@@ -1223,6 +1228,10 @@ function Assert-MaintenanceContainersRestored([string[]]$ExpectedContainers) {
 . (Join-Path $PSScriptRoot "beta-deployment-lock.ps1")
 $betaDeploymentLock = Enter-BetaDeploymentLock
 try {
+Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers
+$stateVolumeOverride = Join-Path $script:ArtifactDir 'beta-state-volumes.json'
+Write-Utf8Text -Path $stateVolumeOverride -Content ((ConvertTo-BetaStateVolumeOverride -Plan $script:StateVolumePlan) + "`n")
+$script:ComposeFiles += $stateVolumeOverride
 $betaTunnelOverride = Join-Path $script:ArtifactDir "beta-tunnel.private-input.yml"
 $null = Get-BetaTunnelInputBinding -RepoRoot $script:RepoRoot `
     -CredentialEnvFile $TunnelTokenEnvFile -Expected $betaTunnelBinding `

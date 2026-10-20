@@ -107,7 +107,9 @@ def worktree_digest(repo: Path, files: Iterable[Path]) -> str:
 def write_snapshot(repo: Path, files: Iterable[Path], destination: Path) -> str:
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("wb") as raw_file:
-        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_file, mtime=0) as gzip_file:
+        # Local developer snapshots favor fast regeneration; archive hashes still
+        # bind the exact compressed bytes and source digests bind file contents.
+        with gzip.GzipFile(filename="", mode="wb", fileobj=raw_file, mtime=0, compresslevel=1) as gzip_file:
             with tarfile.open(fileobj=gzip_file, mode="w", format=tarfile.PAX_FORMAT) as archive:
                 for relative in files:
                     absolute = repo / relative

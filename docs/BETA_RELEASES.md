@@ -66,6 +66,20 @@ It changes no database state. A live fence, same-cluster restart, incomplete
 intent, changed receipt, or production target remains rejected. Never delete a
 marker merely because a local deployment is blocked.
 
+State-volume names are resolved from the actual beta PostgreSQL, Redis, applicant
+and OpenBao mounts. The shared plan requires exact project/resource ownership,
+records each volume's creation identity, and rejects foreign/shared attachments
+except stopped successful beta OpenBao initializers. Deployment pins those
+existing volumes as external resources, so a reset-specific name is preserved
+and a missing volume cannot be silently created. Backups retain the plan;
+restore checks it before stopping services or writing data. A historical backup
+without explicit volume bindings requires investigation before restore.
+Backup directories restrict access to the current user, SYSTEM and local
+administrators on Windows (mode 0700 elsewhere). OpenBao backup uses its native
+Raft snapshot command with credentials kept inside the node; the separate static
+custody archive excludes the live Raft directory. Database restore preserves the
+running OpenBao state; disaster recovery of its retained snapshot is separate.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and

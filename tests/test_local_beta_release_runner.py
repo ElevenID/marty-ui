@@ -529,12 +529,12 @@ def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
 
-    assert 'Assert-BetaVolume "elevenid-beta_applicant_data"' in deploy
+    assert 'Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers' in deploy
     assert "type=volume,src=$applicantVolume,dst=/source,readonly" in deploy
     assert "test -s /source/applicant_store.json" in deploy
     assert "${applicant}:/app/data/applicant_store.json" not in deploy
 
-    volume_restore = restore.index('Assert-BetaVolume "elevenid-beta_applicant_data"')
+    volume_restore = restore.index('Assert-BetaStateVolumePlan -Expected $stateVolumes')
     service_start = restore.index(
         'Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach"'
     )
