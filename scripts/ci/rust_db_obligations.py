@@ -190,12 +190,15 @@ def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
             raise ValueError("invalid Rust test source")
         content = source.read_text(encoding="utf-8")
         module_paths = re.findall(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]', content)
+        included_source_paths = re.findall(r'\binclude!\s*\(\s*"([^"]+)"\s*\)', content)
         literal_paths = re.findall(
             r'\binclude_(?:str|bytes)!\s*\(\s*"([^"]+)"\s*\)', content
         )
-        if len(module_paths) != len(re.findall(r"#\s*\[\s*path\b", content)) or len(
-            literal_paths
-        ) != len(re.findall(r"\binclude_(?:str|bytes)!\s*\(", content)):
+        if (
+            len(module_paths) != len(re.findall(r"#\s*\[\s*path\b", content))
+            or len(included_source_paths) != len(re.findall(r"\binclude!\s*\(", content))
+            or len(literal_paths) != len(re.findall(r"\binclude_(?:str|bytes)!\s*\(", content))
+        ):
             raise ValueError("unrecognized Rust source input")
         package, target, _ = obligation(name)
         manifest_path = (
@@ -213,7 +216,7 @@ def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
         ):
             raise ValueError("unrecognized Canvas test target")
         paths = {source_path}
-        for relative in (*module_paths, *literal_paths):
+        for relative in (*module_paths, *included_source_paths, *literal_paths):
             candidate = source.parent / relative
             if candidate.is_symlink():
                 raise ValueError("linked Rust source input")

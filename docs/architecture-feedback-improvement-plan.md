@@ -431,9 +431,9 @@ image refs and selected PostgreSQL registry in each Canvas acceptance record;
 it does not skip tests or establish historical evidence reuse.
 
 The next A0 Canvas inventory slice observes each acceptance target's direct
-Rust `#[path]` modules and literal `include_str!`/`include_bytes!` fixtures,
-recording checkout-relative paths and exact hashes (91 composition, 50 worker
-inputs in the reviewed tree). Unsupported import syntax, missing files or
+Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
+fixtures, recording checkout-relative paths and exact hashes (95 composition,
+50 worker inputs in the reviewed tree). Unsupported import syntax, missing files or
 out-of-checkout paths fail the evidence recorder before test execution. This
 is first-hop visibility only: nested imports, generated/runtime files,
 external images, assertion reachability and full source closure remain open.

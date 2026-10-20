@@ -1499,7 +1499,7 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
     (
         (
             "canvas_composition_acceptance",
-            "rust/services/issuance/tests/support/renewal_reference_fixture.rs",
+            "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
         ),
         (
             "canvas_worker_acceptance",
@@ -1513,20 +1513,32 @@ def test_canvas_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) 
     assert paths == sorted(set(paths))
     assert INVENTORY.CANVAS_RUST_TEST_SOURCES[name] in paths
     assert fixture in paths
+    if name == "canvas_composition_acceptance":
+        assert {
+            "rust/services/issuance/tests/support/bounded_fixture_command.rs",
+            "rust/services/issuance/tests/support/bounded_fixture_command_tests.rs",
+            "rust/services/issuance/tests/support/canvas_published_database.rs",
+            "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
+        } <= set(paths)
     assert all(
         item["sha256"] == INVENTORY.digest(ROOT / item["path"]) for item in inputs
     )
 
 
+@pytest.mark.parametrize(
+    "source_content",
+    (
+        '#[path = concat!("private-", "fixture.rs")]\nmod fixture;\n',
+        'include!(concat!("private-", "fixture.rs"));\n',
+    ),
+)
 def test_canvas_rust_first_hop_inputs_reject_unrecognized_import(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, source_content
 ) -> None:
     source_path = INVENTORY.CANVAS_RUST_TEST_SOURCES["canvas_worker_acceptance"]
     source = tmp_path / source_path
     source.parent.mkdir(parents=True)
-    source.write_text(
-        '#[path = concat!("private-", "fixture.rs")]\nmod fixture;\n', encoding="utf-8"
-    )
+    source.write_text(source_content, encoding="utf-8")
     manifest = source.parent.parent / "Cargo.toml"
     manifest.write_text(
         '[package]\nname = "marty-canvas-worker-acceptance"\n'
