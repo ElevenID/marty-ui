@@ -3982,6 +3982,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "rust/deleted-crate/fixture.json",
                 "rust/acceptance/support/base_runtime_redis.rs",
                 "rust/acceptance/support/didcomm_gateway_replay.rs",
+                "rust/acceptance/support/didcomm_native_grpc_fixture.rs",
+                "rust/acceptance/support/issuance_named_peers.rs",
                 "contracts/canvas-worker-oracle.json",
                 "proto/candidate.proto",
                 "services/Dockerfile",

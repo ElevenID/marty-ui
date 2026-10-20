@@ -1,4 +1,4 @@
-//! Shared complete native tonic platform. Only initiation is exercised; other
+//! Shared Flow/Canvas acceptance native tonic platform. Only initiation is exercised; other
 //! credential-service side-effect ports fail closed. Real DIDComm delivery, when
 //! selected, belongs to the supplied shared initiation projector, not those ports.
 use async_trait::async_trait;

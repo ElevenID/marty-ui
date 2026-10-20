@@ -10,13 +10,13 @@ mod base_runtime_redis;
     reason = "shared fixture also serves Canvas acceptance cases"
 )]
 mod didcomm_gateway_replay;
-#[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
+#[path = "../../../acceptance/support/didcomm_native_grpc_fixture.rs"]
 #[allow(
     dead_code,
     reason = "shared fixture also serves Canvas acceptance cases"
 )]
 mod didcomm_native_grpc_fixture;
-#[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
+#[path = "../../../acceptance/support/issuance_named_peers.rs"]
 #[allow(
     dead_code,
     reason = "shared fixture also serves other acceptance cases"
