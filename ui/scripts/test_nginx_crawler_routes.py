@@ -159,6 +159,7 @@ class NginxCrawlerRouteContract(unittest.TestCase):
             {
                 "index.html": "<h1>marketing fixture</h1>",
                 "console/index.html": "<h1>console fixture</h1>",
+                "locales/de/marketing.json": '{"navigation":{"home":"Startseite"}}',
                 **{name: content for name, (_, content) in CRAWLER_FILES.items()},
             },
         )
@@ -254,6 +255,14 @@ class NginxCrawlerRouteContract(unittest.TestCase):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)
             self.assertIn("marketing fixture", body)
+        status, headers, body = self.request(port, "/locales/de/marketing.json")
+        self.assertEqual(status, 200)
+        self.assertTrue(headers["content-type"].startswith("application/json"))
+        self.assertEqual(json.loads(body)["navigation"]["home"], "Startseite")
+        status, headers, body = self.request(port, "/locales/de/missing.json")
+        self.assertEqual(status, 404)
+        self.assertNotIn("marketing fixture", body)
+        self.assert_security_headers(headers)
         for path in ("/console", "/console/credentials"):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)

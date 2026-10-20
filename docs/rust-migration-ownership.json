@@ -182,7 +182,7 @@
       "status": "native-active",
       "canonical": {
         "repository": "ElevenID/marty-core",
-        "paths": ["marty-oid4vci/src/presentation_request.rs"],
+        "paths": ["marty-oid4vci/src/presentation_request.rs", "tests/vectors/oid4vp_request_builder.json"],
         "binding_paths": ["marty-bindings/src/lib.rs"]
       },
       "legacy": []

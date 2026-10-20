@@ -400,14 +400,27 @@ assertion reachability. Retain `transitive_source_closure=incomplete` and all
 existing broad/protected gates. The renderer checkout-root provenance check
 and negative tests address the review finding without asserting full closure.
 
-Next A0 maintenance candidate (local, not yet hosted): inventory each of the
-eleven renderer helpers' static Python import names in the run-bound record.
-Reject relative, direct dynamic-loader, non-stdlib/non-PyYAML and
-checkout-shadowed imports before accepting the observed source graph. This
-does not pin third-party package bytes or prove conditional execution,
-generated outputs, external tools or assertion reachability; retain
-`transitive_source_closure=incomplete`
-and the unchanged protected gates.
+The next A0 renderer slice [#1426](https://github.com/ElevenID/marty-ui/pull/1426)
+merged as `58e92ace7` after protected CI. It records eleven helpers' static
+Python import names and rejects relative, direct dynamic-loader,
+non-stdlib/non-PyYAML and checkout-shadowed imports. It does not pin
+third-party package bytes or prove conditional execution, generated outputs,
+external tools or assertion reachability; retain
+`transitive_source_closure=incomplete` and the unchanged protected gates.
+
+October 20 A0 Canvas follow-up (local review): the last successful main full
+run `39231230045` lasted 41m18s; Canvas was 40.8m, with 22.57m database
+contracts, 8.17m four-case preflight and 7.45m compilation. Routine #1428 PR
+run `39225063739` had a 22.4m Canvas job: 10.15m database contracts, 2.05m
+two-case preflight and 7.42m compilation. These are different revisions and
+qualification tiers, not a controlled speedup comparison. The full tier's
+367.4s published mixed-roster reference and 366.6s current preflight are
+distinct; the reference's 365.3s probe timer is nested, not extra work. The
+reference is serial to protect its 10s child-interrupt bound. Routine PR CI
+already omits the long historical tier, so reference reuse would not shorten
+its feedback. The next reviewed A0 change records the exact pinned published
+image refs and selected PostgreSQL registry in each Canvas acceptance record;
+it does not skip tests or establish historical evidence reuse.
 
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in

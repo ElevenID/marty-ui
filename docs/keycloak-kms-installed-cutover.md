@@ -42,7 +42,9 @@ test-user accounts as part of installed acceptance.
    bound to the original source and must not be reassigned. Consider signed
    `v1.1.257` passed an exploratory fresh 16 GiB installed business/custody
    journey, but its prepared bundle came from a failed producer and its
-   coordinated cold restore remains unrun. Consider `v1.1.258` only after
+   coordinated cold restore remains unrun. `v1.1.258` has a signed Stack release
+   but remains unqualified for installed handoff. `v1.1.259` has an experimental
+   tester preview but no installed qualification. Consider `v1.1.260` only after
    its exact-main release, terminally successful bundle producer, independent
    fresh installed journey, and restored-stack gates pass.
 2. Create empty PostgreSQL/Redis/applicant and OpenBao Raft state roots and a

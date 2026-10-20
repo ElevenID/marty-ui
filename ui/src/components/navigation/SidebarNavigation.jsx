@@ -41,6 +41,7 @@ import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole } from '../../contexts/ConsoleContext';
 import { getApplicantStats } from '../../services/dashboardApi';
 import { ADMIN_VENDOR_NAV, APPLICANT_NAV, findActiveNavItem } from '../../config/navigation';
+import { SHOW_PUBLIC_DOCUMENTATION_NAV } from '@ui-public-config';
 
 const DRAWER_WIDTH = 260;
 const DRAWER_WIDTH_COLLAPSED = 72;
@@ -483,12 +484,14 @@ function SidebarNavigation({ mobileOpen, onMobileClose }) {
                 </Button>
               </Box>
             )}
-            <Typography variant="caption" color="text.secondary">
-              Need help?{' '}
-              <Link to="/docs" style={{ color: theme.palette.primary.main }}>
-                View API Docs
-              </Link>
-            </Typography>
+            {SHOW_PUBLIC_DOCUMENTATION_NAV && (
+              <Typography variant="caption" color="text.secondary">
+                Need help?{' '}
+                <Link to="/docs" style={{ color: theme.palette.primary.main }}>
+                  View API Docs
+                </Link>
+              </Typography>
+            )}
           </Box>
         </>
       )}
