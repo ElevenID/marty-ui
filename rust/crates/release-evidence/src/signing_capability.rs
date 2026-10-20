@@ -90,9 +90,14 @@ fn includes(value: &Value, key: &str, expected: &str) -> bool {
         .is_some_and(|items| items.iter().any(|item| item.as_str() == Some(expected)))
 }
 
-fn prepared(
-    input: &SigningCapabilityInput,
-) -> Result<(Vec<u8>, Vec<u8>, String, String), &'static str> {
+struct PreparedCapability {
+    payload: Vec<u8>,
+    point: Vec<u8>,
+    binding: String,
+    public_key: String,
+}
+
+fn prepared(input: &SigningCapabilityInput) -> Result<PreparedCapability, &'static str> {
     let expected = &input.expected;
     if !text(&expected.run_id, 128)
         || !hash(&expected.nonce)
@@ -214,16 +219,16 @@ fn prepared(
     ]
     .join("\0")
         + "\0";
-    Ok((
-        payload.into_bytes(),
+    Ok(PreparedCapability {
+        payload: payload.into_bytes(),
         point,
-        binding_sha256,
-        public_key_sha256,
-    ))
+        binding: binding_sha256,
+        public_key: public_key_sha256,
+    })
 }
 
 pub fn prepare_signing_capability(input: &SigningCapabilityInput) -> Result<Value, &'static str> {
-    let (payload, _, _, _) = prepared(input)?;
+    let PreparedCapability { payload, .. } = prepared(input)?;
     Ok(json!({
         "schema": SCHEMA,
         "challenge_sha256": sha256(&payload),
@@ -237,7 +242,12 @@ pub fn prepare_signing_capability(input: &SigningCapabilityInput) -> Result<Valu
 }
 
 pub fn verify_signing_capability(input: &SigningCapabilityInput) -> Result<Value, &'static str> {
-    let (payload, point, binding, public_key) = prepared(input)?;
+    let PreparedCapability {
+        payload,
+        point,
+        binding,
+        public_key,
+    } = prepared(input)?;
     let response = input
         .signing_response
         .as_ref()
