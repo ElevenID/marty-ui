@@ -439,6 +439,13 @@ is first-hop visibility only: nested imports, generated/runtime files,
 external images, assertion reachability and full source closure remain open.
 No Canvas test or qualification tier is skipped.
 
+The follow-up reuses that bounded Rust first-hop collector for the Flow and
+self-host acceptance targets (9 and 10 source inputs in the reviewed tree).
+Their run-bound records now name direct `#[path]`/`include!` Rust modules and
+literal embedded fixtures alongside the existing renderer/runner evidence.
+This does not establish nested-module or runtime-input closure and does not
+change acceptance selection or the required CI lanes.
+
 October 20 A5 diagnostic gap: the first exact-main full run
 [39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
 had one substantive test failure,
