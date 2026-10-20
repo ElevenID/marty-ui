@@ -134,6 +134,48 @@ def digest(path: Path) -> str:
     return checksum.hexdigest()
 
 
+def compiler_target_source_inputs(executable: Path) -> dict[str, object]:
+    """Observe one compiled test target's Rustc depfile, not Cargo dependencies."""
+    depfile = executable.with_suffix(".d")
+    try:
+        if depfile.is_symlink() or not depfile.is_file():
+            raise ValueError("missing compiler depfile")
+        first = depfile.read_text(encoding="utf-8").splitlines()[0]
+        target, separator, dependencies = first.partition(": ")
+        declared_target = Path(target)
+        if not declared_target.is_absolute():
+            declared_target = ROOT / "rust" / declared_target
+        if (
+            not separator
+            or declared_target.resolve(strict=True) != depfile.resolve(strict=True)
+            or "\\ " in dependencies
+            or not dependencies.strip()
+        ):
+            raise ValueError("unrecognized compiler depfile")
+        root = ROOT.resolve(strict=True)
+        paths = set()
+        for token in dependencies.split():
+            candidate = Path(token)
+            if not candidate.is_absolute():
+                candidate = ROOT / "rust" / candidate
+            if candidate.is_symlink():
+                raise ValueError("linked compiler source input")
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_file():
+                raise ValueError("invalid compiler source input")
+            paths.add(resolved.relative_to(root).as_posix())
+        return {
+            "compiler_depfile_sha256": digest(depfile),
+            "compiler_target_source_scope": "single_rustc_test_target",
+            "observed_compiler_target_source_inputs": [
+                {"path": path, "sha256": digest(ROOT / path)}
+                for path in sorted(paths)
+            ],
+        }
+    except (OSError, UnicodeError, ValueError, IndexError) as error:
+        raise ValueError("compiler_target_source_input_drift") from error
+
+
 def canvas_published_image_inputs() -> dict[str, object]:
     """Record the two immutable published-image inputs without environment data."""
     path = "contracts/canvas-worker-consumer-range-oracle.json"
@@ -474,7 +516,12 @@ def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
 
 
 def artifact_identity(
-    executable: Path, package: str, target: str, *, library_test: bool = False
+    executable: Path,
+    package: str,
+    target: str,
+    *,
+    library_test: bool = False,
+    record_compiler_inputs: bool = False,
 ) -> dict:
     executable_sha256 = digest(executable)
     runner_temp = os.environ.get("RUNNER_TEMP")
@@ -513,13 +560,16 @@ def artifact_identity(
         raise ValueError("missing_compiler_artifact_executable")
     if not same_path and digest(recorded_executable) != executable_sha256:
         raise ValueError("compiler_artifact_content_mismatch")
-    return {
+    identity = {
         "provenance": "same_run_compiler_artifact",
         "compiler_artifacts_sha256": digest(artifacts),
         "features": artifact.get("features", []),
         "binding": "same_path" if same_path else "byte_identical_copy",
         "executable_sha256": executable_sha256,
     }
+    if record_compiler_inputs:
+        identity.update(compiler_target_source_inputs(recorded_executable))
+    return identity
 
 
 def libtest_harness(package: str, target: str) -> dict:
@@ -1544,7 +1594,12 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
         evidence.update(
             artifact_identity(executable, package, target, library_test=True)
             if unit
-            else artifact_identity(executable, package, target)
+            else artifact_identity(
+                executable,
+                package,
+                target,
+                record_compiler_inputs=flow or selfhost or canvas,
+            )
         )
         # Never probe --list on custom harnesses, which may ignore the flag and
         # execute their bodies. All current dispatches use standard libtest.

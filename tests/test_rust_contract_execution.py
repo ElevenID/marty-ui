@@ -858,7 +858,7 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     original_artifact_identity = INVENTORY.artifact_identity
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
@@ -937,7 +937,7 @@ def test_flow_inventory_nested_libtest_summary_stays_owned(
     assert build.returncode == 0, build.stderr
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(INVENTORY, "verify_flow_roster", lambda *_args: None)
     for item in INVENTORY.obligation("flow_acceptance")[2]:
         monkeypatch.setenv(item["name"], "owned-fixture")
@@ -1025,7 +1025,7 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     assert build.returncode == 0, build.stderr
     monkeypatch.delenv("RUNNER_TEMP", raising=False)
     monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     for item in INVENTORY.obligation("selfhost_acceptance")[2]:
         monkeypatch.setenv(item["name"], "private-runtime-value")
     monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
@@ -1275,7 +1275,7 @@ def test_db_inventory_preserves_child_failure_and_saves_observed_outcomes(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "private-credential-value")
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
     )
@@ -1726,7 +1726,7 @@ def test_db_inventory_missing_result_log_fails_closed_and_cleans_temp_directory(
 
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     monkeypatch.setenv("MARTY_TEST_REDIS_URL", "owned-fixture")
-    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args: {})
+    monkeypatch.setattr(INVENTORY, "artifact_identity", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         INVENTORY, "expected_cases", lambda *args, **kwargs: ({"happy"}, set())
     )
@@ -1874,6 +1874,113 @@ def test_db_inventory_rejects_stale_foreign_ambiguous_or_missing_artifacts(
         INVENTORY.artifact_identity(
             copied, "marty-signing-keys", "registry_storage_contract"
         )
+
+
+def test_compiler_depfile_records_nested_source_and_embedded_fixture(
+    tmp_path, monkeypatch
+) -> None:
+    root = tmp_path / "checkout"
+    executable = root / "rust/target/debug/deps/flow_acceptance-abcd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test executable")
+    source = root / "rust/crates/flow-acceptance/tests/support/nested.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("// nested source\n", encoding="utf-8")
+    fixture = root / "contracts/flow-oracle.json"
+    fixture.parent.mkdir(parents=True)
+    fixture.write_text('{"public":true}\n', encoding="utf-8")
+    depfile = executable.with_suffix(".d")
+    depfile.write_text(
+        f"{depfile}: crates/flow-acceptance/tests/support/nested.rs "
+        "../contracts/flow-oracle.json\n\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(INVENTORY, "ROOT", root)
+    observed = INVENTORY.compiler_target_source_inputs(executable)
+    assert observed == {
+        "compiler_depfile_sha256": INVENTORY.digest(depfile),
+        "compiler_target_source_scope": "single_rustc_test_target",
+        "observed_compiler_target_source_inputs": [
+            {"path": "contracts/flow-oracle.json", "sha256": INVENTORY.digest(fixture)},
+            {
+                "path": "rust/crates/flow-acceptance/tests/support/nested.rs",
+                "sha256": INVENTORY.digest(source),
+            },
+        ],
+    }
+    artifacts = tmp_path / "rust-test-artifacts.json"
+    artifacts.write_text(
+        json.dumps(
+            {
+                "reason": "compiler-artifact",
+                "package_id": "path+file:///checkout#marty-flow-acceptance@0.1.0",
+                "target": {"kind": ["test"], "name": "flow_published_schema_contract"},
+                "executable": str(executable),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    identity = INVENTORY.artifact_identity(
+        executable,
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+        record_compiler_inputs=True,
+    )
+    assert identity["observed_compiler_target_source_inputs"] == observed[
+        "observed_compiler_target_source_inputs"
+    ]
+    assert identity["binding"] == "same_path"
+    alias = tmp_path / "flow-acceptance-alias"
+    shutil.copyfile(executable, alias)
+    aliased = INVENTORY.artifact_identity(
+        alias,
+        "marty-flow-acceptance",
+        "flow_published_schema_contract",
+        record_compiler_inputs=True,
+    )
+    assert aliased["binding"] == "byte_identical_copy"
+    assert aliased["observed_compiler_target_source_inputs"] == observed[
+        "observed_compiler_target_source_inputs"
+    ]
+    depfile.unlink()
+    with pytest.raises(ValueError, match="compiler_target_source_input_drift"):
+        INVENTORY.artifact_identity(
+            executable,
+            "marty-flow-acceptance",
+            "flow_published_schema_contract",
+            record_compiler_inputs=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "wrong-target.d: crates/flow-acceptance/tests/support/nested.rs",
+        "{depfile}: ../../private-source.rs",
+        "{depfile}: crates/flow-acceptance/tests/support/missing.rs",
+        "{depfile}: crates/flow-acceptance/tests/support/nested\\ source.rs",
+        "{depfile}: ",
+    ],
+)
+def test_compiler_depfile_rejects_unproved_or_foreign_inputs(
+    tmp_path, monkeypatch, rule
+) -> None:
+    root = tmp_path / "checkout"
+    executable = root / "rust/target/debug/deps/flow_acceptance-abcd.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"test executable")
+    source = root / "rust/crates/flow-acceptance/tests/support/nested.rs"
+    source.parent.mkdir(parents=True)
+    source.write_text("// nested source\n", encoding="utf-8")
+    (tmp_path / "private-source.rs").write_text("private\n", encoding="utf-8")
+    depfile = executable.with_suffix(".d")
+    depfile.write_text(rule.format(depfile=depfile) + "\n", encoding="utf-8")
+    monkeypatch.setattr(INVENTORY, "ROOT", root)
+    with pytest.raises(ValueError, match="compiler_target_source_input_drift") as error:
+        INVENTORY.compiler_target_source_inputs(executable)
+    assert "private-source" not in str(error.value)
 
 
 def test_canvas_database_contracts_use_same_run_artifact_resolver() -> None:

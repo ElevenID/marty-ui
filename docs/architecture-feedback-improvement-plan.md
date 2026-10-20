@@ -449,6 +449,18 @@ This does not establish nested-module or runtime-input closure, nor prove that
 all future Rust module syntaxes are recognized. It does not change acceptance
 selection or the required CI lanes.
 
+The next A0 slice records the Rust compiler depfile adjacent to each of the
+four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
+file inputs without relying on a second hand-maintained module list. A local
+Rust 1.95 package-scoped compile of `marty-platform-clock` confirmed that the
+actual Cargo depfile names both `src/lib.rs` and its embedded public JSON
+fixture; the recorder also parsed that actual depfile. The compiler record is
+target-scoped diagnostic evidence, not authenticated provenance or complete
+closure: it does not enumerate source in dependent crates, cannot guarantee
+coverage of generated files, and does not cover runtime inputs or reached
+assertions. `transitive_source_closure`
+remains incomplete, and no test selection or qualification gate changes.
+
 October 20 A5 diagnostic gap: the first exact-main full run
 [39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
 had one substantive test failure,
