@@ -1,6 +1,14 @@
 # Architecture and development-feedback improvement tracker
 
-Status: active requirements and queue, 2026-10-17.
+Status: active requirements and queue, 2026-10-20.
+
+October 20 release-path checkpoint: exact-main full CI
+[39425370404](https://github.com/ElevenID/marty-ui/actions/runs/39425370404)
+passed at `d74f0133d2b6f0056b79a9f145842791bc1f04f8`; its Canvas job took
+34m54s. This validates that the current full tier still executes, not a
+before/after speedup. The separate `v1.1.260-selfhost-preview.1` handoff is
+public but remains an unsupported, unqualified manual-install preview; its
+archive verification is not installed-product qualification.
 
 October 18 checkpoint: #1393 and #1394 are merged after protected CI. The
 unfiltered Issuance-library diagnostic in #1397 passed its PR run with 594
@@ -422,6 +430,34 @@ its feedback. The next reviewed A0 change records the exact pinned published
 image refs and selected PostgreSQL registry in each Canvas acceptance record;
 it does not skip tests or establish historical evidence reuse.
 
+The next A0 Canvas inventory slice observes each acceptance target's direct
+Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
+fixtures, recording checkout-relative paths and exact hashes (95 composition,
+50 worker inputs in the reviewed tree). Unsupported import syntax, missing files or
+out-of-checkout paths fail the evidence recorder before test execution. This
+is first-hop visibility only: nested imports, generated/runtime files,
+external images, assertion reachability and full source closure remain open.
+No Canvas test or qualification tier is skipped.
+
+October 20 A5 diagnostic gap: the first exact-main full run
+[39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
+had one substantive test failure,
+`worker_lease_expiry_reference_matches_published_process`, in its 33m55s
+Canvas job; 125 worker cases passed and two were ignored. The aggregate CI
+gate failed consequentially. The frozen
+published-process oracle rejected a PostgreSQL waiter in `assert_blocker` at
+line 494 during `renewal_lock_early_release`. Its safe failure report contains
+only the exception class and frames, so it cannot distinguish the count,
+worker-query match, and PID conditions in that composite assertion. Identical
+source passed the independent full rerun
+[39413856660](https://github.com/ElevenID/marty-ui/actions/runs/39413856660)
+(Canvas 34m54s); the later current-main full run above also passed. The
+intermittent cause is therefore unproven. Do not relax the real-time lock,
+expiry, or process assertions, rewrite the pinned historical capture source,
+or claim successful reuse. A separate current-input diagnostic should classify
+only bounded, non-secret blocker states before any future oracle change; keep
+the frozen corpus and its source hashes independent.
+
 October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
 landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
 the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
@@ -461,6 +497,24 @@ Issuance role at Gateway; production keeps managed passport signing off unless
 explicitly enabled. The source-backed planner tests check the routes, grant
 origin and production key bindings. This changes no live selector, and A3
 non-Cargo closure remains open.
+
+The October 20 shadow-planner audit found a packaged runtime edge absent from
+Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or
+embedded pages previously returned only that crate, although the binary is
+built and shipped by the sandbox image, service images, and Canvas profile.
+The planner now records six source-backed packaging/use witnesses and keeps
+these inputs broad even if a witness disappears. This corrects shadow evidence
+only; live CI selection and its required checks are unchanged. No speedup is
+claimed until the full non-Cargo graph is qualified.
+
+The October 20 packaged-runtime audit also found that Cargo reverse edges
+alone returned narrow results for the `marty-keyless-grpc-bridge` and
+`marty-passport-keyless-edge` crates. The service-image build copies their
+executables, while Compose runs the Envoy-to-Issuance bridge and the Passport
+and OIDF keyless edges. The shadow planner now records the source-backed
+build, image and runtime witnesses, including the packaged passport TLS
+bootstrap binary, and keeps these changes broad if a witness disappears.
+This is input evidence, not a live CI selector change or measured speedup.
 
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing

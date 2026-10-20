@@ -31,6 +31,92 @@ SELFHOST_CLEANUP_RELATIVE = "../../canvas-acceptance/tests/support/owned_cleanup
 # Cargo reverse edges cannot represent that artifact/runtime relationship.
 # These witnesses explain a full shadow fallback; they never authorize a skip.
 PACKAGED_RUNTIME_PRODUCERS = {
+    "marty-canvas-sandbox": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "canvas-sandbox",
+        "witnesses": (
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "cargo build --locked --release -p marty-canvas-sandbox",
+            ),
+            (
+                "docker/canvas-sandbox/Dockerfile",
+                "COPY --from=builder /tmp/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "docker-compose.profile.canvas-sandbox.yml",
+                "  canvas-sandbox:\n    build:\n      context: .\n      dockerfile: docker/canvas-sandbox/Dockerfile",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "rust/services/Dockerfile.ci",
+                "COPY --from=builder /build/rust/target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox",
+            ),
+            (
+                "scripts/qualify-canvas-seed-disposable.sh",
+                "up --build -d gateway issuance signing-keys canvas-real canvas-sandbox issuance-canvas-localhost-bridge",
+            ),
+        ),
+    },
+    "marty-keyless-grpc-bridge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "envoy-issuance-bridge",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge",
+            ),
+            (
+                "docker-compose.base.yml",
+                '    entrypoint: ["/usr/local/bin/marty-keyless-grpc-bridge"]',
+            ),
+        ),
+    },
+    "marty-passport-keyless-edge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "passport/oidf-keyless-edges",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-edge /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap",
+            ),
+            (
+                "scripts/passport_supported_provisioning_producer.py",
+                '"--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",',
+            ),
+            (
+                "docker-compose.passport-supported-disposable.yml",
+                "    entrypoint: [/usr/local/bin/marty-passport-keyless-edge]",
+            ),
+            (
+                "docker-compose.profile.oidf.yml",
+                "        SERVICE_NAME: oidf-keyless-edge",
+            ),
+            (
+                "services/entrypoint.sh",
+                "\texec /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+        ),
+    },
     "marty-canvas-demo-seed": {
         "consumer_kind": "packaged-executable/runtime",
         "consumer": "db-migrate",

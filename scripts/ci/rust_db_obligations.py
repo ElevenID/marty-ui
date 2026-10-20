@@ -171,6 +171,65 @@ def canvas_published_image_inputs() -> dict[str, object]:
     }
 
 
+CANVAS_RUST_TEST_SOURCES = {
+    "canvas_composition_acceptance": (
+        "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ),
+    "canvas_worker_acceptance": (
+        "rust/crates/canvas-worker-acceptance/tests/canvas_published_worker_contract.rs"
+    ),
+}
+
+
+def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
+    """Observe direct Rust test imports and literals, not their transitive graph."""
+    source_path = CANVAS_RUST_TEST_SOURCES[name]
+    source = ROOT / source_path
+    try:
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("invalid Rust test source")
+        content = source.read_text(encoding="utf-8")
+        module_paths = re.findall(r'#\s*\[\s*path\s*=\s*"([^"]+)"\s*\]', content)
+        included_source_paths = re.findall(r'\binclude!\s*\(\s*"([^"]+)"\s*\)', content)
+        literal_paths = re.findall(
+            r'\binclude_(?:str|bytes)!\s*\(\s*"([^"]+)"\s*\)', content
+        )
+        if (
+            len(module_paths) != len(re.findall(r"#\s*\[\s*path\b", content))
+            or len(included_source_paths) != len(re.findall(r"\binclude!\s*\(", content))
+            or len(literal_paths) != len(re.findall(r"\binclude_(?:str|bytes)!\s*\(", content))
+        ):
+            raise ValueError("unrecognized Rust source input")
+        package, target, _ = obligation(name)
+        manifest_path = (
+            ROOT / "rust/crates" / package.removeprefix("marty-") / "Cargo.toml"
+        )
+        manifest = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+        declared = [
+            entry for entry in manifest.get("test", []) if entry.get("name") == target
+        ]
+        if (
+            manifest["package"]["name"] != package
+            or len(declared) != 1
+            or declared[0].get("path")
+            != source.relative_to(manifest_path.parent).as_posix()
+        ):
+            raise ValueError("unrecognized Canvas test target")
+        paths = {source_path}
+        for relative in (*module_paths, *included_source_paths, *literal_paths):
+            candidate = source.parent / relative
+            if candidate.is_symlink():
+                raise ValueError("linked Rust source input")
+            resolved = candidate.resolve(strict=True)
+            path = resolved.relative_to(ROOT.resolve(strict=True))
+            if not resolved.is_file():
+                raise ValueError("invalid Rust source input")
+            paths.add(path.as_posix())
+        return [{"path": path, "sha256": digest(ROOT / path)} for path in sorted(paths)]
+    except (OSError, UnicodeError, ValueError, KeyError) as error:
+        raise ValueError("canvas_rust_source_input_drift") from error
+
+
 def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
     """The dispatch owner's declared inputs; environment values never leave it."""
     postgres = "ISSUANCE_POSTGRES_TEST_URL"
@@ -1449,6 +1508,10 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 "full" if qualification == "1" else "routine"
             )
             evidence["published_image_inputs"] = canvas_published_image_inputs()
+            evidence["observed_first_hop_rust_source_inputs"] = (
+                canvas_rust_first_hop_inputs(name)
+            )
+            evidence["transitive_source_closure"] = "incomplete"
             if name == "canvas_worker_acceptance":
                 tiers = {
                     variable: os.environ.get(variable)
