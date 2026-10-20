@@ -57,7 +57,14 @@ Review that manifest, then update `image.digest` and set `image.digest_state` to
 `published` in the lock. Acceptance rejects a manifest whose tag, source/tree SHA,
 base image, source policy, labels or output digest differs from that reviewed lock.
 
-Create and protect the `canvas-oss-image-publish` GitHub environment before the first image run. Limit reviewers to trusted maintainers and prevent self-review. The image workflow admits only a manual run from `ElevenID/marty-ui` `main`; all third-party Actions in the image, portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs.
+Create the `canvas-oss-image-publish` GitHub environment with a custom deployment
+branch policy allowing only the `main` branch. The source image publication
+environment has no required-reviewer gate, as authorized by the maintainer;
+manual dispatch from reviewed main authorizes building and publishing the pinned
+image. A successful publication still requires manifest review and lock-file
+promotion before portability acceptance. The image workflow admits only a manual
+run from `ElevenID/marty-ui` `main`; all third-party Actions in the image,
+portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs.
 
 ## Local runner and beta prerequisites
 
