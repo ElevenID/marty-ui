@@ -150,7 +150,36 @@ def owned_service_closure(declared: set[str], running: set[str]) -> bool:
             and declared - running <= OPTIONAL_EDGE_SERVICES)
 
 
-def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
+def secret_mounts(project: str, secret_root: Path, services: set[str],
+                  model: dict) -> int:
+    definitions = model.get("secrets")
+    declared = model.get("services")
+    if not isinstance(definitions, dict) or not isinstance(declared, dict):
+        raise RuntimeError("owned Compose secret model is invalid")
+    expected: dict[str, dict[str, str]] = {}
+    names: set[str] = set()
+    for service in services:
+        spec = declared.get(service)
+        if not isinstance(spec, dict) or not isinstance(spec.get("secrets", []), list):
+            raise RuntimeError("owned Compose service secrets are invalid")
+        targets: dict[str, str] = {}
+        for reference in spec.get("secrets", []):
+            if isinstance(reference, str):
+                source, target = reference, f"/run/secrets/{reference}"
+            elif isinstance(reference, dict):
+                source, target = reference.get("source"), reference.get("target")
+            else:
+                raise RuntimeError("owned Compose service secret reference is invalid")
+            definition = definitions.get(source) if isinstance(source, str) else None
+            if (not isinstance(definition, dict) or not isinstance(target, str)
+                    or not target.startswith("/run/secrets/")
+                    or not target.removeprefix("/run/secrets/")
+                    or definition.get("file") != str(secret_root / source)
+                    or target in targets):
+                raise RuntimeError("owned Compose secret binding is invalid")
+            targets[target] = str(secret_root / source)
+            names.add(source)
+        expected[service] = targets
     ids = subprocess.run(["docker", "ps", "-aq", "--filter",
                           f"label=com.docker.compose.project={project}"],
                          capture_output=True, text=True, timeout=30, check=True).stdout.split()
@@ -161,9 +190,15 @@ def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
             or not all(isinstance(item, dict) and isinstance(item.get("Mounts"), list)
                        for item in inspected)):
         raise RuntimeError("owned project mounts are invalid")
-    names: set[str] = set()
     mount_count = 0
+    inspected_services: set[str] = set()
     for item in inspected:
+        labels = item.get("Config", {}).get("Labels", {})
+        service = labels.get("com.docker.compose.service") if isinstance(labels, dict) else None
+        if (service not in expected or service in inspected_services
+                or labels.get("com.docker.compose.project") != project):
+            raise RuntimeError("owned project container identity is invalid")
+        inspected_services.add(service)
         seen: set[str] = set()
         for mount in item["Mounts"]:
             if not isinstance(mount, dict):
@@ -174,14 +209,14 @@ def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
             if not target.startswith("/run/secrets/"):
                 continue
             mount_count += 1
-            name = target.removeprefix("/run/secrets/")
-            if (not name or "/" in name or name in seen
-                    or mount.get("Source") != str(secret_root / name)
-                    or mount.get("RW") is not False):
+            if (target in seen or target not in expected[service]
+                    or mount.get("Source") != expected[service][target]
+                    or mount.get("Type") != "bind" or mount.get("RW") is not False):
                 raise RuntimeError("owned project secret mount differs from generation")
-            seen.add(name)
-        names.update(seen)
-    if not RENEWED_TOKEN_FILES <= names:
+            seen.add(target)
+        if seen != set(expected[service]):
+            raise RuntimeError("owned project secret mounts are incomplete")
+    if inspected_services != services or not RENEWED_TOKEN_FILES <= names:
         raise RuntimeError("owned project renewal token mounts are incomplete")
     return mount_count
 
@@ -409,10 +444,11 @@ def activate(args: argparse.Namespace) -> dict:
             or not {"keycloak", "gateway", "signing-keys", "postgres"} <= services
             or not healthy(baseline, services)):
         raise ValueError("owned KMS-only project is not healthy before renewal")
-    secret_mounts(args.project_name, args.current_secrets, services)
+    secret_mounts(args.project_name, args.current_secrets, services, old_model)
     try:
         recreate(new, services, cwd=cwd, log_file=args.log_dir / "renewed-compose.log")
-        mount_count = secret_mounts(args.project_name, args.renewed_secrets, services)
+        mount_count = secret_mounts(args.project_name, args.renewed_secrets, services,
+                                    new_model)
         report = {"schema": "marty.selfhost-renewal-activation/v1",
                   "result": "activated", "project": args.project_name,
                   "secret_files": count, "renewed_files": changed,
@@ -421,7 +457,7 @@ def activate(args: argparse.Namespace) -> dict:
     except Exception:
         try:
             recreate(old, services, cwd=cwd, log_file=args.log_dir / "rollback-compose.log")
-            secret_mounts(args.project_name, args.current_secrets, services)
+            secret_mounts(args.project_name, args.current_secrets, services, old_model)
         except Exception as error:
             raise RuntimeError("renewal failed and KMS-only rollback failed") from error
         write_report(args.report, {"schema": "marty.selfhost-renewal-activation/v1",

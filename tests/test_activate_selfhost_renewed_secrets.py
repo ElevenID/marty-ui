@@ -136,34 +136,48 @@ def test_secret_mounts_require_exact_read_only_generation_files(
 ) -> None:
     root = tmp_path / "generation"
     names = sorted(activation.RENEWED_TOKEN_FILES)
-    mounts = [{"Destination": f"/run/secrets/{name}",
+    mounts = [{"Destination": f"/run/secrets/{name}", "Type": "bind",
                "Source": str(root / name), "RW": False}
               for name in names]
-    inspected = [{"Mounts": mounts}, {"Mounts": [dict(mounts[0])]}]
+    alias = {"Destination": "/run/secrets/renamed.token", "Type": "bind",
+             "Source": str(root / names[0]), "RW": False}
+    project = "marty-selfhost-probe"
+    model = {"secrets": {name: {"file": str(root / name)} for name in names},
+             "services": {
+                 "gateway": {"secrets": [{"source": name,
+                                          "target": f"/run/secrets/{name}"}
+                                         for name in names]},
+                 "auth": {"secrets": [{"source": names[0],
+                                      "target": alias["Destination"]}]}}}
+    inspected = [
+        {"Config": {"Labels": {"com.docker.compose.project": project,
+                               "com.docker.compose.service": service}},
+         "Mounts": service_mounts}
+        for service, service_mounts in (("gateway", mounts), ("auth", [alias]))
+    ]
     monkeypatch.setattr(activation.subprocess, "run", lambda *_args, **_kwargs:
                         subprocess.CompletedProcess([], 0, "a" * 12 + "\n" + "b" * 12, ""))
     monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs: inspected)
-    assert activation.secret_mounts("marty-selfhost-probe", root,
-                                    {"gateway", "auth"}) == len(names) + 1
+    assert activation.secret_mounts(project, root, {"gateway", "auth"}, model) == len(names) + 1
 
     for changed in (
         lambda entries: entries[0]["Mounts"][0].update(
             Source=str(root / names[1])),
         lambda entries: entries[0]["Mounts"][0].update(RW=True),
         lambda entries: entries[0]["Mounts"].pop(),
+        lambda entries: entries[1]["Mounts"][0].update(
+            Source=str(root / names[1])),
     ):
         broken = deepcopy(inspected)
         changed(broken)
         monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs: broken)
         with pytest.raises(RuntimeError, match="secret mount|token mounts"):
-            activation.secret_mounts("marty-selfhost-probe", root,
-                                     {"gateway", "auth"})
+            activation.secret_mounts(project, root, {"gateway", "auth"}, model)
 
     monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs:
-                        [{"Mounts": "invalid"}, inspected[1]])
+                        [{**inspected[0], "Mounts": "invalid"}, inspected[1]])
     with pytest.raises(RuntimeError, match="project mounts are invalid"):
-        activation.secret_mounts("marty-selfhost-probe", root,
-                                 {"gateway", "auth"})
+        activation.secret_mounts(project, root, {"gateway", "auth"}, model)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")

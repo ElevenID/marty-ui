@@ -191,7 +191,7 @@ def audit(args: argparse.Namespace) -> Path:
             or not {"keycloak", "gateway", "signing-keys", "postgres"} <= services
             or not healthy(items, services)):
         raise ValueError("active KMS-only project is not healthy")
-    secret_mounts(args.project_name, active, services)
+    secret_mounts(args.project_name, active, services, new_model)
     return export_current_snapshot(args)
 
 
