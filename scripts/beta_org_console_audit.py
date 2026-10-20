@@ -2288,7 +2288,10 @@ def main() -> int:
     parser.add_argument(
         "--record-video",
         action="store_true",
-        help="Record a reviewable WebM video and Playwright trace in the audit artifact directory.",
+        help=(
+            "Record a reviewable WebM video and Playwright trace in the audit artifact directory. "
+            "The recorder's RECORD_VIDEO=0 override runs functional checks with a trace and no video."
+        ),
     )
     parser.add_argument(
         "--recording-pause-ms",
@@ -2306,6 +2309,11 @@ def main() -> int:
         ),
     )
     args = parser.parse_args()
+    functional_rerun = os.environ.get("RECORD_VIDEO") == "0"
+    record_video = args.record_video and not functional_rerun
+    # The D-10 recorder contract requires a trace in both modes. Functional
+    # traces retain execution events without capturing screenshots or DOMs.
+    record_trace = args.record_video or functional_rerun
 
     env = load_env_file(ENV_FILE)
     base_url = (
@@ -2335,7 +2343,7 @@ def main() -> int:
             "viewport": RECORDING_VIEWPORT,
             "ignore_https_errors": True,
         }
-        if args.record_video:
+        if record_video:
             context_options.update({
                 "record_video_dir": str(artifact_dir),
                 "record_video_size": RECORDING_VIEWPORT,
@@ -2343,15 +2351,17 @@ def main() -> int:
         context = browser.new_context(
             **context_options,
         )
-        if args.record_video:
-            context.tracing.start(screenshots=True, snapshots=True, sources=True)
+        if record_trace:
+            context.tracing.start(
+                screenshots=record_video, snapshots=record_video, sources=record_video,
+            )
         page = context.new_page()
-        page_video = page.video if args.record_video else None
+        page_video = page.video if record_video else None
         audit = Audit(
             page,
             artifact_dir,
             base_url,
-            recording_pause_ms=args.recording_pause_ms if args.record_video else 0,
+            recording_pause_ms=args.recording_pause_ms if record_video else 0,
         )
         audit.attach_events()
 
@@ -2383,9 +2393,10 @@ def main() -> int:
             audit.cleanup_created_api_keys()
             report = audit.report()
             recording: dict[str, str] | None = None
-            if args.record_video:
+            if record_trace:
                 trace_path = artifact_dir / "mip-primitives-management-trace.zip"
                 context.tracing.stop(path=str(trace_path))
+            if record_video:
                 recording = {
                     "video": report_artifact_path(
                         artifact_dir / "mip-primitives-management.webm", artifact_dir
@@ -2402,6 +2413,13 @@ def main() -> int:
             browser.close()
             if recording:
                 report["recording"] = recording
+            if functional_rerun:
+                report.update({
+                    "functional_rerun": True,
+                    "capture_quality": {"status": "NOT_CAPTURED"},
+                    "recording": None,
+                    "trace": report_artifact_path(trace_path, artifact_dir),
+                })
             report_path = artifact_dir / "report.json"
             report_path.write_text(json.dumps(report, indent=2, default=str), encoding="utf-8")
             print(f"[audit] report={report_path}")

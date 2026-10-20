@@ -57,23 +57,32 @@ function formatTimestamp(totalSeconds) {
 }
 
 function useAsyncResource(loader, dependencies) {
-  const [state, setState] = useState({ status: 'loading', data: null, error: null });
   const [attempt, setAttempt] = useState(0);
+  const requestKey = JSON.stringify([...dependencies, attempt]);
+  const [state, setState] = useState({ requestKey, status: 'loading', data: null, error: null });
   const retry = useCallback(() => setAttempt((current) => current + 1), []);
 
   useEffect(() => {
     const controller = new AbortController();
-    setState({ status: 'loading', data: null, error: null });
+    setState({ requestKey, status: 'loading', data: null, error: null });
     loader(controller.signal)
-      .then((data) => setState({ status: 'ready', data, error: null }))
+      .then((data) => {
+        if (!controller.signal.aborted) setState({ requestKey, status: 'ready', data, error: null });
+      })
       .catch((error) => {
-        if (error.name !== 'AbortError') setState({ status: 'error', data: null, error });
+        if (!controller.signal.aborted && error.name !== 'AbortError') {
+          setState({ requestKey, status: 'error', data: null, error });
+        }
       });
     return () => controller.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...dependencies, attempt]);
 
-  return { ...state, retry };
+  // Route changes render before their effect runs. Do not display the previous
+  // release during that render or accept a late completion after it was aborted.
+  return state.requestKey === requestKey
+    ? { ...state, retry }
+    : { status: 'loading', data: null, error: null, retry };
 }
 
 function LoadState({ resource, label }) {
@@ -444,7 +453,6 @@ function AssertionIcon({ result }) {
 export function DemoScenarioPage() {
   const { stackVersion, scenario: scenarioSlug } = useParams();
   const manifestResource = useAsyncResource((signal) => loadDemoManifest(stackVersion, { signal }), [stackVersion]);
-  const [startSeconds, setStartSeconds] = useState(0);
   if (manifestResource.status !== 'ready') return <LoadState resource={manifestResource} label="scenario evidence" />;
 
   const manifest = manifestResource.data;
@@ -457,6 +465,19 @@ export function DemoScenarioPage() {
     );
   }
 
+  const recordingKey = JSON.stringify([
+    manifest.stack_version,
+    scenario.slug,
+    scenario.scenario_revision,
+    scenario.youtube_id,
+    scenario.state,
+  ]);
+  return <DemoScenarioDetail key={recordingKey} manifest={manifest} scenario={scenario} />;
+}
+
+function DemoScenarioDetail({ manifest, scenario }) {
+  // Seek position belongs to this exact recording, alongside its consent state.
+  const [startSeconds, setStartSeconds] = useState(0);
   const isPublicVideo = scenario.state === 'PUBLIC' && Boolean(scenario.youtube_id);
   const structuredData = isPublicVideo ? {
     '@context': 'https://schema.org',

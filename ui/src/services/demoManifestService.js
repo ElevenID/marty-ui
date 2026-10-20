@@ -88,8 +88,10 @@ async function fetchJson(url, signal) {
   }
 }
 
-function isHeadlessPrerender() {
-  return typeof navigator !== 'undefined' && /HeadlessChrome/i.test(navigator.userAgent || '');
+function isBuildPrerender() {
+  // Only the build renderer injects this marker. Headless audit browsers must
+  // load the same deployed evidence and see the same failures as other viewers.
+  return typeof window !== 'undefined' && window.__ELEVENID_PRERENDER__?.demoManifests === true;
 }
 
 function clone(value) {
@@ -119,6 +121,13 @@ export function validateDemoIndex(index) {
     assert(!versions.has(release.stack_version), `${release.stack_version} is duplicated.`);
     versions.add(release.stack_version);
   });
+  if (index.latest_available_stack_version != null) {
+    assert(versions.has(index.latest_available_stack_version), 'The latest available ElevenID LLC release is missing.');
+  }
+  assert(
+    index.latest_approved_stack_version || index.latest_available_stack_version,
+    'No latest ElevenID LLC release is available.',
+  );
   if (index.latest_approved_stack_version) {
     assert(versions.has(index.latest_approved_stack_version), 'The latest approved ElevenID LLC release is missing.');
     const latest = index.releases.find((release) => release.stack_version === index.latest_approved_stack_version);
@@ -158,6 +167,7 @@ export function validateDemoManifest(manifest) {
   assert(Array.isArray(manifest.scenarios) && manifest.scenarios.length > 0, 'This release has no demo scenarios.');
   const slugs = new Set();
   manifest.scenarios.forEach((scenario) => {
+    assert(scenario && typeof scenario === 'object', 'Invalid demo scenario.');
     assert(scenario.mip_version === manifest.mip_version, `${scenario.slug}: MIP metadata does not match its ElevenID LLC release.`);
     assert(!slugs.has(scenario.slug), `${scenario.slug}: duplicate scenario.`);
     slugs.add(scenario.slug);
@@ -171,6 +181,14 @@ export function validateDemoManifest(manifest) {
       `${scenario.slug}: invalid recording classification.`,
     );
     assert(Array.isArray(scenario.revision_history), `${scenario.slug}: revision history is missing.`);
+    assert(Array.isArray(scenario.assertions), `${scenario.slug}: evidence assertions are missing.`);
+    scenario.assertions.forEach((item) => {
+      assert(
+        item && typeof item.id === 'string' && typeof item.label === 'string'
+          && ['PASS', 'FAIL', 'BLOCKED', 'NOT_RUN'].includes(item.result),
+        `${scenario.slug}: invalid evidence assertion.`,
+      );
+    });
     const priorRevisions = new Set();
     scenario.revision_history.forEach((revision) => {
       assert(Number.isInteger(revision.scenario_revision) && revision.scenario_revision > 0, `${scenario.slug}: invalid prior revision.`);
@@ -219,13 +237,13 @@ export function validateDemoManifest(manifest) {
 }
 
 export async function loadDemoIndex({ signal } = {}) {
-  if (isHeadlessPrerender()) return validateDemoIndex(clone(DEMO_INDEX));
+  if (isBuildPrerender()) return validateDemoIndex(clone(DEMO_INDEX));
   return validateDemoIndex(await fetchJson(`${MANIFEST_ROOT}/index.json`, signal));
 }
 
 export async function loadDemoManifest(stackVersion, { signal } = {}) {
   assert(STACK_VERSION_PATTERN.test(stackVersion || ''), 'Invalid ElevenID LLC version.');
-  const source = isHeadlessPrerender()
+  const source = isBuildPrerender()
     ? clone(DEMO_MANIFESTS[stackVersion])
     : await fetchJson(`${MANIFEST_ROOT}/${stackVersion}.json`, signal);
   assert(source, `ElevenID LLC v${stackVersion} does not have a published manifest.`);

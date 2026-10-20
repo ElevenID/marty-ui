@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+from types import SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 
@@ -45,6 +48,125 @@ def _required_steps():
             "body_excerpt": "Administration denied",
         },
     ]
+
+
+@pytest.mark.parametrize("record_video_env", [None, "0", "1"])
+def test_main_honors_recorder_video_mode_and_keeps_required_trace(
+    monkeypatch, tmp_path: Path, record_video_env: str | None,
+) -> None:
+    audit = _load_audit_module()
+    events = []
+    contexts = []
+    trace_options = []
+    artifact_dir = tmp_path / "attempt"
+    functional = record_video_env == "0"
+
+    class Trace:
+        def start(self, **options):
+            trace_options.append(options)
+
+        def stop(self, *, path):
+            with ZipFile(path, "w") as archive:
+                archive.writestr("test.trace", '{"type":"synthetic-trace"}\n')
+
+    class Video:
+        def path(self):
+            events.append("video-finalized")
+            video = artifact_dir / "raw.webm"
+            video.write_bytes(b"\x1a\x45\xdf\xa3synthetic-video")
+            return str(video)
+
+    class Page:
+        @property
+        def video(self):
+            events.append("video-requested")
+            return Video()
+
+    class Context:
+        tracing = Trace()
+
+        def new_page(self):
+            return Page()
+
+        def close(self):
+            events.append("context-closed")
+
+    class Browser:
+        def new_context(self, **options):
+            contexts.append(options)
+            return Context()
+
+        def close(self):
+            events.append("browser-closed")
+
+    class Playwright:
+        def __enter__(self):
+            return SimpleNamespace(chromium=SimpleNamespace(launch=lambda **_options: Browser()))
+
+        def __exit__(self, *_args):
+            return False
+
+    class FixtureAudit(audit.Audit):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.steps = _required_steps()
+
+        def attach_events(self):
+            pass
+
+        def snapshot(self, *_args, **_kwargs):
+            pass
+
+        def cleanup_created_api_keys(self):
+            events.append("cleanup")
+
+    monkeypatch.setattr(audit, "Audit", FixtureAudit)
+    monkeypatch.setattr(audit, "sync_playwright", Playwright)
+    monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit, "fetch_json_from_page", lambda *_args: {})
+    for name in [
+        "log_in", "create_org", "create_key_service_if_possible", "create_issuer_identity",
+        "create_trust_profile", "create_revocation_profile", "create_credential_template",
+        "create_application_template", "create_policy_and_deployment", "create_flow",
+        "create_api_key", "verify_resource_inventory", "verify_unauthorized_administration_denied",
+    ]:
+        monkeypatch.setattr(audit, name, lambda *_args, step=name: events.append(step))
+    monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--record-video"])
+    monkeypatch.setenv("TEST_VENDOR_EMAIL", "operator@example.test")
+    monkeypatch.setenv("TEST_VENDOR_PASSWORD", "synthetic-test-password")
+    monkeypatch.setenv("DEMO_ARTIFACT_DIR", str(artifact_dir))
+    if record_video_env is None:
+        monkeypatch.delenv("RECORD_VIDEO", raising=False)
+    else:
+        monkeypatch.setenv("RECORD_VIDEO", record_video_env)
+
+    assert audit.main() == 0
+    report = json.loads((artifact_dir / "report.json").read_text())
+    assert report["releaseReady"] is True
+    assert all(report["behaviorAssertions"].values())
+    assert events.index("verify_resource_inventory") < events.index("cleanup")
+    assert events.index("verify_unauthorized_administration_denied") < events.index("cleanup")
+    assert events.index("context-closed") < events.index("browser-closed")
+    assert (artifact_dir / "mip-primitives-management-trace.zip").is_file()
+    if functional:
+        assert "record_video_dir" not in contexts[0]
+        assert "record_video_size" not in contexts[0]
+        assert "video-requested" not in events
+        assert "video-finalized" not in events
+        assert not list(artifact_dir.glob("*.webm"))
+        assert report["functional_rerun"] is True
+        assert report["capture_quality"]["status"] == "NOT_CAPTURED"
+        assert report["recording"] is None
+        assert report["trace"] == "mip-primitives-management-trace.zip"
+        assert trace_options == [{"screenshots": False, "snapshots": False, "sources": False}]
+    else:
+        assert contexts[0]["record_video_dir"] == str(artifact_dir)
+        assert "video-finalized" in events
+        assert (artifact_dir / "mip-primitives-management.webm").is_file()
+        assert report["recording"] == {
+            "video": "mip-primitives-management.webm",
+            "trace": "mip-primitives-management-trace.zip",
+        }
 
 
 def test_signing_service_audit_uses_the_selected_remote_service() -> None:

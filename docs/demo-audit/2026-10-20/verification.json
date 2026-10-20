@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-10-20",
+  "audit_pass": 2,
+  "date_basis": "UTC",
+  "scope": "Focused local engineering and failure-path verification; full authenticated demo qualification not run",
+  "environment": {
+    "os": "Linux",
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "ui_browser_playwright": "1.62.1",
+    "chrome_for_testing": "155.0.8059.84",
+    "pytest": "9.1.1",
+    "python_playwright": "1.64.0",
+    "notes": [
+      "Explicit installed Chrome used instead of the package-pinned browser; no browser-version equivalence claim.",
+      "Google Fonts CSS failed certificate validation in the local browser; layout used fallback fonts.",
+      "D10 focused Python environment emitted one unknown asyncio_mode configuration warning; synchronous tests passed.",
+      "Legacy helper/Canvas named cases were verified via direct node commands; Node --test emitted only file-level counts for those two suites in this environment."
+    ]
+  },
+  "checks": [
+    {
+      "id": "ui-route-and-player",
+      "result": "PASS",
+      "tests": 17,
+      "suites": 2,
+      "cwd": "marty-ui/ui",
+      "command": "npm test -- src/components/pages/DemoPages.test.tsx src/components/demos/DemoVideoPlayer.test.tsx",
+      "baseline_reproduction": {
+        "new_regressions_failed": 3,
+        "existing_tests_passed": 5
+      },
+      "boundary": "Real React Router navigation with deferred service fixtures and the actual player component; no remote video playback."
+    },
+    {
+      "id": "exact-credential-type",
+      "result": "PASS",
+      "tests": 20,
+      "cwd": "marty-ui",
+      "command": "node --test --test-reporter=spec tests/scripts/run-canvas-oss-standard-contract.test.js",
+      "baseline_reproduction": {
+        "failed": 4,
+        "passed": 16
+      },
+      "boundary": "Real local ES256 signatures and holder keys, scripted fetch responses; no external KMS or Canvas execution."
+    },
+    {
+      "id": "d10-recording-mode",
+      "result": "PASS",
+      "tests": 32,
+      "cwd": "marty-ui",
+      "command": "python -m pytest -q tests/test_beta_org_console_audit_release_checks.py",
+      "baseline_reproduction": {
+        "new_mode_cases_failed": 1,
+        "new_mode_cases_passed": 2
+      },
+      "boundary": "Real Python main and behavior checks with synthetic audit operations and Playwright fixtures; no beta mutations."
+    },
+    {
+      "id": "d12-recording-gate-and-privacy",
+      "result": "PASS",
+      "tests": 8,
+      "cwd": "marty-ui",
+      "command": "node --test tests/scripts/audit-beta-physical-passport-flow.test.js",
+      "launch_override": "The same tests ran with chromium.launch executablePath set to installed Chrome 155; managed browser archive was unavailable.",
+      "boundary": "Local receipt/evidence contracts, standalone mode refusal, and one real-browser masking case using synthetic content; no protected live execution."
+    },
+    {
+      "id": "recorder-functional-contracts",
+      "result": "PASS",
+      "tests": 30,
+      "cwd": "marty-demo-recorder",
+      "command": "node --test --test-reporter=spec test/config.test.js test/functionalRerun.test.js test/functionalScenarioContracts.test.js",
+      "boundary": "Selected exact-source snapshot; current shipped scenario definitions exercised through recorder/qualification adapters with injected drivers."
+    },
+    {
+      "id": "typescript",
+      "result": "PASS",
+      "cwd": "marty-ui/ui",
+      "command": "node_modules/.bin/tsc -p tsconfig.build.json --noEmit"
+    },
+    {
+      "id": "production-build",
+      "result": "PASS",
+      "cwd": "marty-ui/ui",
+      "command": "PUPPETEER_EXECUTABLE_PATH=<installed-chrome> npm run build",
+      "prerender_enabled": true,
+      "vite_build_duration_seconds": 170,
+      "notes": [
+        "Production build passed with the existing large-chunk warning."
+      ]
+    },
+    {
+      "id": "production-catalog-browser",
+      "result": "PASS",
+      "tests": 29,
+      "cwd": "marty-ui",
+      "command": "DEMO_AUDIT_UI_MODE=production DEMO_AUDIT_BROWSER_EXECUTABLE=<installed-chrome> node tests/scripts/audit-local-demo-catalog.js",
+      "evidence": "browser-report.json",
+      "boundary": "Local built public UI and served manifests; unauthenticated, YouTube frame, and controlled manifest response fixtures; no backend qualification."
+    },
+    {
+      "id": "legacy-demo-journey",
+      "result": "PASS",
+      "tests": 10,
+      "skipped": 0,
+      "cwd": "marty-ui",
+      "command": "node tests/scripts/demo-journey-helpers.test.js",
+      "boundary": "Local failure-path doubles with released applicant contract fixtures; no full seeded or wallet journey."
+    },
+    {
+      "id": "legacy-canvas-recording",
+      "result": "PASS",
+      "tests": 18,
+      "skipped": 0,
+      "cwd": "marty-ui",
+      "command": "node tests/scripts/record-canvas-employer-demo.test.js",
+      "boundary": "Synthetic checkpoint, missing-control, storage-session, and main/finalization fixtures; no real Canvas or provider delivery."
+    },
+    {
+      "id": "legacy-demo-discovery",
+      "result": "PASS",
+      "scenes_discovered": 6,
+      "cwd": "marty-ui/tests",
+      "command": "npx playwright test --config playwright.demo.config.js --list",
+      "boundary": "Parse/discovery only; six scenes were not executed."
+    },
+    {
+      "id": "application-ownership-and-consumers",
+      "result": "PASS",
+      "tests": 66,
+      "skipped": 0,
+      "cwd": "marty-ui",
+      "commands": [
+        "node tests/scripts/beta-demo-resource-helpers.test.js",
+        "node tests/scripts/audit-beta-employee-access.test.js",
+        "node tests/scripts/audit-beta-passport-clearance.test.js",
+        "node tests/scripts/beta-employee-access-contract.test.js",
+        "node tests/scripts/beta-passport-clearance-contract.test.js",
+        "node tests/scripts/audit-beta-credential-lifecycle.test.js",
+        "node tests/scripts/audit-beta-issuer-provider-switch.test.js"
+      ],
+      "named_tests_by_file": {
+        "beta-demo-resource-helpers.test.js": 23,
+        "audit-beta-employee-access.test.js": 5,
+        "audit-beta-passport-clearance.test.js": 6,
+        "beta-employee-access-contract.test.js": 2,
+        "beta-passport-clearance-contract.test.js": 4,
+        "audit-beta-credential-lifecycle.test.js": 20,
+        "audit-beta-issuer-provider-switch.test.js": 6
+      },
+      "aggregate_runner_note": "Combined node --test reported 7 file results. Each file was also executed directly to confirm the 66 named cases.",
+      "boundary": "Scripted browser/fetch doubles and current contract fixtures; exact source DTOs reviewed locally. No live beta or real wallet issuance.",
+      "baseline_reproductions": {
+        "commit": "1fe047fa21a2f04df5140b9071e3ef8e3580c905",
+        "findings": [
+          "DA-015",
+          "DA-020",
+          "DA-021",
+          "DA-022"
+        ],
+        "method": "Offline baseline module loaded with synthetic pages; reproduced unrelated credential revoke, existing application withdrawal, draft activation, lost created ID, and skipped unlock after response loss."
+      }
+    },
+    {
+      "id": "syntax-and-whitespace",
+      "result": "PASS",
+      "cwd": "marty-ui and marty-demo-recorder",
+      "boundary": "Changed JavaScript parsed by executed suites/discovery; both complete patch ranges must pass git diff --check before packaging."
+    }
+  ],
+  "prior_pass_evidence": {
+    "path": "../2026-10-19/verification.json",
+    "note": "Prior Rust, QR, manifest-service, and other results remain historical unless explicitly included among this pass's checks. The 20 lifecycle and 6 provider-switch consumer cases were rerun in the ownership regression group.",
+    "full_prior_suite_rerun": false,
+    "retained_without_rerun": [
+      "Rust wallet",
+      "rendered QR and QR assertions",
+      "manifest service suite",
+      "external timeout suite"
+    ]
+  },
+  "patch_application_verification": "Packaged separately after final commits; both cumulative and incremental series must match final repository tree hashes.",
+  "full_stack_execution": "NOT_RUN",
+  "summary": {
+    "local_named_tests_passed": 201,
+    "public_browser_checks_passed": 29,
+    "legacy_scenes_parsed_not_executed": 6,
+    "full_stack_scenarios_executed": 0
+  },
+  "audited_implementation_commits": {
+    "ElevenID/marty-ui": "75e67bcd4b1086823ac14ecb07a6546323005435",
+    "ElevenID/marty-demo-recorder": "a31f7d3b4fab3c00631c00b1575eff5d8dfcc9f8"
+  }
+}

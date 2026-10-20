@@ -6,6 +6,7 @@ import {
   compareStackVersions,
   loadDemoIndex,
   loadDemoManifest,
+  validateDemoIndex,
   validateDemoManifest,
 } from './demoManifestService';
 
@@ -22,6 +23,7 @@ const scenario = {
   media_evidence: null,
   published_at: null,
   publication_attestation: null,
+  assertions: [],
 };
 
 const manifest = {
@@ -50,7 +52,10 @@ const manifest = {
   scenarios: [scenario],
 };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  Reflect.deleteProperty(window, '__ELEVENID_PRERENDER__');
+});
 
 describe('demoManifestService', () => {
   it('orders immutable ElevenID LLC versions independently from MIP versions', () => {
@@ -166,4 +171,57 @@ describe('demoManifestService', () => {
     await expect(loadDemoIndex()).rejects.toThrow('malformed JSON');
     await expect(loadDemoIndex()).rejects.toThrow('(503)');
   });
+
+  it('loads deployed evidence in ordinary headless browsers and reports HTTP failures', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 HeadlessChrome/155.0.0.0');
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response('', { status: 503 }));
+
+    await expect(loadDemoIndex()).rejects.toThrow('(503)');
+    await expect(loadDemoManifest('2026.08.0')).rejects.toThrow('(503)');
+    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
+      '/demos/manifests/index.json',
+      '/demos/manifests/2026.08.0.json',
+    ]);
+  });
+
+  it('uses compiled evidence only when the build renderer explicitly requests it', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 Chrome/155.0.0.0');
+    Object.defineProperty(window, '__ELEVENID_PRERENDER__', {
+      configurable: true,
+      value: { demoManifests: true },
+    });
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('No manifest server in this build renderer'));
+    const expectedIndex = JSON.parse(readFileSync('public/demos/manifests/index.json', 'utf8'));
+
+    const loadedIndex = await loadDemoIndex();
+    const loadedManifest = await loadDemoManifest(loadedIndex.latest_available_stack_version);
+
+    expect(loadedIndex).toEqual(validateDemoIndex(expectedIndex));
+    expect(loadedManifest.stack_version).toBe(expectedIndex.latest_available_stack_version);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('rejects a latest-available pointer that is absent from the release index', () => {
+    const candidate = JSON.parse(readFileSync('public/demos/manifests/index.json', 'utf8'));
+    candidate.latest_available_stack_version = '2026.99.0';
+
+    expect(() => validateDemoIndex(candidate)).toThrow(DemoManifestError);
+  });
+
+  it('rejects an index with no available or approved catalog entry', () => {
+    const candidate = JSON.parse(readFileSync('public/demos/manifests/index.json', 'utf8'));
+    delete candidate.latest_available_stack_version;
+
+    expect(() => validateDemoIndex(candidate)).toThrow(DemoManifestError);
+  });
+
+  it.each([undefined, null, {}, [null], [{ result: 42 }]])(
+    'rejects malformed draft assertions before they can crash the catalog: %j',
+    (assertions) => {
+      const candidate = JSON.parse(readFileSync('public/demos/manifests/2026.08.0.json', 'utf8'));
+      candidate.scenarios[0].assertions = assertions;
+
+      expect(() => validateDemoManifest(candidate)).toThrow(DemoManifestError);
+    },
+  );
 });

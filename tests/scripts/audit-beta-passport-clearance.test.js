@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  approveAndIssue,
+  createAndSubmitApplication,
   clearanceApplicationTemplatePayload,
   clearanceCredentialPayload,
   clearanceFlowPayload,
@@ -11,6 +13,47 @@ const {
   clearanceTrustProfilePayload,
   requireConfigurationBinding,
 } = require('./audit-beta-passport-clearance');
+const { DEFAULT_BETA_ORGANIZATION_ID } = require('./beta-credential-contract');
+
+function ownedRun(extra = {}) {
+  return {
+    organizationId: process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID,
+    applicationTemplateId: 'passport-application-template',
+    credentialTemplateId: 'passport-credential-template',
+    applicantId: 'passport-applicant',
+    runId: 'passport-run',
+    applicationId: null,
+    uncertainMutations: [],
+    ...extra,
+  };
+}
+
+function application(owned, extra = {}) {
+  return {
+    id: owned.applicationId || 'passport-application/1',
+    organization_id: owned.organizationId,
+    application_template_id: owned.applicationTemplateId,
+    credential_template_id: owned.credentialTemplateId,
+    applicant_id: owned.applicantId,
+    integration_context: { demo_run_id: owned.runId },
+    status: 'DRAFT',
+    ...extra,
+  };
+}
+
+function fakePage(responses) {
+  const requests = [];
+  return {
+    requests,
+    async evaluate(_callback, request) {
+      requests.push(request);
+      assert.ok(responses.length, `Unexpected request to ${request.requestPath}`);
+      const response = responses.shift();
+      if (response instanceof Error) throw response;
+      return response;
+    },
+  };
+}
 
 const source = {
   issuer_did: 'did:web:beta.example:orgs:issuer',
@@ -152,4 +195,66 @@ test('D-01 configuration rejects evidence, resource, policy, and trigger drift',
   const wrongTrigger = configuration();
   wrongTrigger.flow.trigger.config.event_type = 'APPLICATION_SUBMITTED';
   assert.throws(() => requireConfigurationBinding(wrongTrigger), /approval event contract/);
+});
+
+test('D-01 retains its created application ID when stored passport evidence fails validation', async () => {
+  const owned = ownedRun();
+  const evidenceDigest = 'a'.repeat(64);
+  const page = fakePage([
+    {
+      ok: true,
+      status: 201,
+      body: application(owned, { form_data: { passport_evidence_sha256: 'b'.repeat(64) } }),
+    },
+  ]);
+
+  await assert.rejects(
+    () => createAndSubmitApplication(page, owned, evidenceDigest, owned.runId),
+    /Stored D-01 application is not bound to the supplied passport evidence/,
+  );
+  assert.equal(owned.applicationId, 'passport-application/1');
+  assert.deepEqual(owned.uncertainMutations, []);
+  assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method]), [
+    ['/v1/me/applications', 'POST'],
+  ]);
+  const body = JSON.parse(page.requests[0].requestOptions.body);
+  assert.deepEqual(body.integration_context, {
+    evidence_type: 'marty_verifier_emrtd',
+    evidence_sha256: evidenceDigest,
+    demo_run_id: owned.runId,
+  });
+  assert.equal(body.form_data.passport_evidence_sha256, evidenceDigest);
+});
+
+test('D-01 attempts exact lock release on approval mismatch and retains unconfirmed lock outcomes', async () => {
+  for (const lostRelease of [false, true]) {
+    const owned = ownedRun({ applicationId: 'passport-application/1' });
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned, { status: 'SUBMITTED' }) },
+      {
+        ok: true,
+        status: 200,
+        body: { id: 'reviewer-lock', organization_id: owned.organizationId, applicant_id: owned.applicationId },
+      },
+      {
+        ok: true,
+        status: 200,
+        body: application(owned, { status: 'APPROVED', integration_context: { demo_run_id: 'another-run' } }),
+      },
+      lostRelease ? new Error('Lost reviewer lock release response') : { ok: true, status: 200, body: { released: true } },
+    ]);
+
+    await assert.rejects(() => approveAndIssue(page, owned, 'a'.repeat(64)), lostRelease
+      ? /Lost reviewer lock release response/
+      : /Application response does not match this run/);
+    const root = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/passport-application%2F1`;
+    assert.deepEqual(page.requests.map(({ requestPath, requestOptions }) => [requestPath, requestOptions.method || 'GET']), [
+      [root, 'GET'],
+      [`${root}/lock`, 'POST'],
+      [`${root}/approve`, 'POST'],
+      [`${root}/lock`, 'DELETE'],
+    ]);
+    assert.equal(owned.transactionId, undefined);
+    assert.deepEqual(owned.uncertainMutations, lostRelease ? [{ operation: 'reviewer_lock' }] : []);
+  }
 });

@@ -18,6 +18,7 @@ import {
   Toolbar,
   Tooltip,
   Typography,
+  useMediaQuery,
 } from '@mui/material';
 import LoginIcon from '@mui/icons-material/Login';
 import LogoutIcon from '@mui/icons-material/Logout';
@@ -93,6 +94,7 @@ function AppShell({ children, showAppBar = true }) {
   };
 
   const theme = useMemo(() => createDynamicTheme(branding), [branding]);
+  const compactHeader = useMediaQuery(theme.breakpoints.down('sm'));
   const adminImpersonationEnabled = isAdminImpersonationEnabled();
 
   useEffect(() => {
@@ -138,9 +140,9 @@ function AppShell({ children, showAppBar = true }) {
 
             <LanguageSwitcher
               variant="standard"
+              compact={compactHeader}
               sx={{
-                mr: 2,
-                minWidth: 120,
+                mr: { xs: 1, sm: 2 },
                 '& .MuiInputBase-root': {
                   color: 'common.white',
                 },

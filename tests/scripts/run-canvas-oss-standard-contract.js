@@ -1355,6 +1355,11 @@ function verifyCompactJws(compact, publicJwk) {
 }
 
 async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIssuerOrigin = DEFAULT_MARTY_ORIGIN) {
+  requireCondition(
+    typeof expectedTemplate?.vct === 'string' && expectedTemplate.vct.trim().length > 0,
+    'credential_template_vct_missing',
+    'Credential verification requires the selected template\'s exact VCT before claiming its offer.',
+  );
   const offer = parseCredentialOfferUri(offerUri);
   const issuerUrl = pinnedHttpsUrl(
     offer.issuer,
@@ -1411,8 +1416,7 @@ async function receiveAndVerifyCredential(offerUri, expectedTemplate, expectedIs
   const method = verificationMethodFromDidDocument(didDocument, predecoded.header.kid);
   const verified = verifyCompactJws(issuerJws, method.publicKeyJwk);
   requireCondition(
-    verified.payload.vct === expectedTemplate.vct
-      || String(verified.payload.vct || '').includes(String(expectedTemplate.credential_type || '')),
+    verified.payload.vct === expectedTemplate.vct,
     'open_badge_type_mismatch',
     'The KMS-signed credential does not match the selected Open Badge template.',
   );

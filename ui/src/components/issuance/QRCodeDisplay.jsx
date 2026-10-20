@@ -237,6 +237,7 @@ const QRCodeDisplay = ({
               (<Box sx={{ position: 'relative' }}>
                 <img
                   src={qrPayload}
+                  data-testid="credential-offer-qr"
                   alt="Credential Offer QR Code"
                   style={{ width: effectiveSize, height: effectiveSize }}
                 />
@@ -272,6 +273,7 @@ const QRCodeDisplay = ({
               (<Box sx={{ position: 'relative' }}>
                 <QRCodeSVG
                   value={effectiveQrValue}
+                  data-testid="credential-offer-qr"
                   size={effectiveSize}
                   level={branding?.qr_error_correction || "H"}
                   includeMargin={true}

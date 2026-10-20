@@ -13,6 +13,7 @@ const {
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
   parseCredentialOfferUri,
+  receiveAndVerifyCredential,
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
@@ -54,6 +55,93 @@ function compactEs256(privateKey, payload) {
   });
   return `${signingInput}.${signature.toString('base64url')}`;
 }
+
+function localCredentialExchange(t, vct) {
+  const origin = 'https://beta.elevenidllc.com';
+  const issuer = `${origin}/org/org-1`;
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const offer = {
+    credential_issuer: issuer,
+    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'local-test-offer' } },
+  };
+  const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify(offer))}`;
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    const href = String(url);
+    requests.push({ url: href, method: options.method || 'GET' });
+    let body;
+    if (href === `${origin}/.well-known/openid-credential-issuer/org/org-1`) {
+      body = {
+        credential_issuer: issuer,
+        token_endpoint: `${origin}/v1/issuance/token`,
+        credential_endpoint: `${origin}/v1/issuance/credential`,
+        nonce_endpoint: `${origin}/v1/issuance/nonce`,
+      };
+    } else if (href === `${origin}/v1/issuance/token`) {
+      body = { access_token: 'local-test-token', token_type: 'Bearer', expires_in: 1800 };
+    } else if (href === `${origin}/v1/issuance/nonce`) {
+      body = { c_nonce: 'local-test-nonce' };
+    } else if (href === `${origin}/v1/issuance/credential`) {
+      const proof = JSON.parse(options.body).proofs.jwt[0];
+      const proofHeader = JSON.parse(Buffer.from(proof.split('.')[0], 'base64url').toString('utf8'));
+      const compact = compactEs256(privateKey, {
+        iss: 'did:web:issuer.example',
+        vct,
+        cnf: { jwk: proofHeader.jwk },
+      });
+      body = { credentials: [{ format: 'dc+sd-jwt', credential: compact }] };
+    } else if (href === 'https://issuer.example/.well-known/did.json') {
+      body = {
+        id: 'did:web:issuer.example',
+        verificationMethod: [{ id: 'did:web:issuer.example#key-1', publicKeyJwk: publicKey.export({ format: 'jwk' }) }],
+        assertionMethod: ['did:web:issuer.example#key-1'],
+      };
+    } else {
+      assert.fail(`Unexpected local credential-exchange request: ${href}`);
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+  return { offerUri, origin, requests };
+}
+
+test('credential receipt accepts the exact template VCT with a verified signature and holder binding', async (t) => {
+  const fixture = localCredentialExchange(t, 'urn:example:OpenBadgeCredential');
+  const result = await receiveAndVerifyCredential(fixture.offerUri, { vct: 'urn:example:OpenBadgeCredential' }, fixture.origin);
+  assert.equal(result.payload.vct, 'urn:example:OpenBadgeCredential');
+  assert.equal(fixture.requests.length, 5);
+});
+
+for (const [name, actualVct, template] of [
+  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential' }],
+  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential' }],
+  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential' }],
+]) {
+  test(`credential receipt rejects ${name} even with a valid signature and holder binding`, async (t) => {
+    const fixture = localCredentialExchange(t, actualVct);
+    await assert.rejects(
+      receiveAndVerifyCredential(fixture.offerUri, template, fixture.origin),
+      (error) => error instanceof ContractFailure && error.code === 'open_badge_type_mismatch',
+    );
+    assert.equal(fixture.requests.length, 5);
+  });
+}
+
+test('credential receipt requires an exact expected template VCT before consuming the offer', async (t) => {
+  const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify({
+    credential_issuer: 'https://beta.elevenidllc.com/org/org-1',
+    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'unconsumed-test-offer' } },
+  }))}`;
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => assert.fail('Missing template VCT must fail before network activity'));
+  for (const template of [null, {}, { vct: '' }, { vct: '   ' }, { credential_type: 'OpenBadgeCredential' }]) {
+    await assert.rejects(
+      receiveAndVerifyCredential(offerUri, template),
+      (error) => error instanceof ContractFailure && error.code === 'credential_template_vct_missing',
+    );
+  }
+  assert.equal(fetchMock.mock.callCount(), 0);
+});
 
 test('observation ledger emits the fixed schema and never invents optional coverage', () => {
   const execution = {

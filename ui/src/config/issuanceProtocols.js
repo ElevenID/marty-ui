@@ -44,7 +44,11 @@ const ISSUANCE_PROTOCOLS = [
         ...data,
         offer_url: data.credential_offer_uri || data.offer_url || null,
         expires_at: data.offer_expires_at || data.expires_at || null,
-        status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
+        // The Applicant response status describes the application, not the QR
+        // invitation. Expiry is evaluated separately by the invite display.
+        status: data.credential_offer_uri || data.offer_url
+          || Object.values(data.credential_offer_uris || {}).some((uri) => typeof uri === 'string' && uri.trim())
+          ? 'active' : 'pending',
       };
     },
     /**

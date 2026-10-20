@@ -29,6 +29,7 @@ const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
 const {
   VIDEO_SIZE,
   createArtifactDir,
+  createActionRecording,
   finalizeVideo,
   showStep,
 } = require('./demo-recording');
@@ -304,27 +305,50 @@ async function reverifyIssuedCredential(issued) {
   };
 }
 
-async function rebindThroughConsole(page, issuerDid) {
+async function rebindThroughConsole(page, issuerDid, recording = null) {
   await page.goto(`${BETA_ORIGIN}/console/org/deploy/issuer-identity`, {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
   });
   const row = page.locator('tbody tr').filter({ hasText: issuerDid }).first();
   await row.waitFor({ state: 'visible', timeout: 30_000 });
-  const responsePromise = page.waitForResponse((response) => (
-    new URL(response.url()).pathname === '/v1/signing-keys/issuer-identities'
-    && response.request().method() === 'PATCH'
-  ), { timeout: 60_000 });
-  await row.getByRole('button', { name: 'Move identity to default signing service' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Move identity' }).click();
+  await recording?.explain(page, 'change-signing-provider', 'Synthetic scenario: move signing operations to the configured replacement provider while keeping the issuer identity.', {
+    title: 'Keep the issuer identity while changing the signer',
+  });
+  const responsePromise = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    if (url.origin !== new URL(BETA_ORIGIN).origin
+        || url.pathname !== '/v1/signing-keys/issuer-identities'
+        || response.request().method() !== 'PATCH') return false;
+    try {
+      const payload = response.request().postDataJSON();
+      return payload?.organization_id === ORG_ID && payload?.issuer_did === issuerDid;
+    } catch {
+      return false;
+    }
+  }, { timeout: 60_000 });
+  const move = row.getByRole('button', { name: 'Move identity to default signing service' });
+  if (recording) await recording.click(page, move, { action: 'change-signing-provider', phase: 'open' });
+  else await move.click();
+  const confirm = page.getByRole('dialog').getByRole('button', { name: 'Move identity' });
+  if (recording) await recording.click(page, confirm, { action: 'change-signing-provider', phase: 'confirmation', durationMs: 3200 });
+  else await confirm.click();
   const response = await responsePromise;
   const body = await response.json().catch(() => null);
+  recording?.mark('change-signing-provider', 'response-received', { httpStatus: response.status(), changed: body?.changed === true });
   return {
     ok: response.ok(),
     status: response.status(),
     changed: body?.changed === true,
     identity: body?.identity || null,
   };
+}
+
+function requireProviderStage(report, ...names) {
+  const assertions = providerSwitchBehaviorAssertions(report);
+  for (const name of names) {
+    if (assertions[name] !== true) throw new Error(`Provider scenario did not establish ${name}`);
+  }
 }
 
 async function directRebind(page, issuerDid) {
@@ -441,6 +465,15 @@ async function main() {
     });
     const page = await context.newPage();
     const video = page.video();
+    const recording = createActionRecording({
+      enabled: RECORD_VIDEO, scenario: 'stable-issuer-identity-pluggable-kms', pageName: 'admin',
+      onEvent: (events) => { report.recordingActions = events; },
+    });
+    report.demonstrationBoundary = {
+      data: 'SYNTHETIC_ISSUER', providerConfiguration: 'AUTHENTICATED_PUBLIC_API',
+      identityRebind: 'REAL_ADMIN_UI', signatureVerification: 'MACHINE_EVIDENCE',
+      unpublishedReplacementDenial: 'AUTHENTICATED_PUBLIC_API_NEGATIVE_TEST',
+    };
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     page.on('response', (response) => {
       if (!response.url().startsWith(BETA_ORIGIN) || response.status() < 400) return;
@@ -520,10 +553,12 @@ async function main() {
         timeout: 60_000,
       });
       await page.getByText(issuerDid).first().waitFor({ state: 'visible', timeout: 30_000 });
+      requireProviderStage(report, 'create_issuer_profile');
       await showProviderStep(page, 'Stable issuer DID created', 'The public identity is active without exposing provider or key coordinates.');
 
       const providerA = await issueAndVerify(page, template);
       report.providerA = { issuance: providerA.issuance, credential: providerA.credential };
+      requireProviderStage(report, 'issue_with_provider_a');
       await showProviderStep(page, 'Credential signed by provider A', 'The first credential verifies against the DID method published by managed custody.');
 
       const providerBKey = await signingKeyForIdentity(page, seedDid);
@@ -539,11 +574,11 @@ async function main() {
         serviceId: providerBId,
       };
 
-      report.rebind = await rebindThroughConsole(page, issuerDid);
+      report.rebind = await rebindThroughConsole(page, issuerDid, recording);
       if (!report.rebind.ok || !report.rebind.changed) {
         throw new Error(`Provider switch failed (HTTP ${report.rebind.status})`);
       }
-      await showProviderStep(page, 'Custody moved to provider B', 'The replacement public key was published before the active provider changed.');
+      await showProviderStep(page, 'Issuer identity updated', 'The service confirmed the provider change. Next, verify the new credential and the earlier credential.');
 
       const providerBResult = await issueAndVerify(page, template);
       report.providerB = {
@@ -553,6 +588,7 @@ async function main() {
       const oldReverification = await reverifyIssuedCredential(providerA.issued);
       report.providerA.reverifiedAfterSwitch = oldReverification.verified;
       report.didAfterSwitch = { assertionMethodIds: oldReverification.assertionMethodIds };
+      requireProviderStage(report, 'switch_signing_provider', 'verify_same_did_identity');
       await showProviderStep(page, 'One DID, both credentials valid', 'New issuance uses provider B while the provider-A credential remains verifiable through the retained DID method.');
 
       const beforeFailureConfig = await loadSigningConfig(page);
@@ -574,6 +610,7 @@ async function main() {
         issueAfterDenial: afterDenial.issuance,
         credentialAfterDenial: afterDenial.credential,
       };
+      requireProviderStage(report, 'unpublished_signing_key_denied');
       await showProviderStep(page, 'Unpublished replacement denied', 'An unavailable replacement key cannot cut over custody; issuance continues on the last published provider-B method.');
 
       report.behaviorAssertions = providerSwitchBehaviorAssertions(report);

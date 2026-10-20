@@ -266,6 +266,9 @@ async function ensureActiveResource(page, {
   if (matches.length > 1) throw new Error(`Multiple resources named '${name}' exist`);
   let resource = matches[0] || null;
   let created = false;
+  if (resource && resource.organization_id !== organizationId) {
+    throw new Error(`${name} belongs to another organization`);
+  }
   if (!resource) {
     resource = await requireJson(page, collectionPath, {
       method: 'POST',
@@ -274,8 +277,13 @@ async function ensureActiveResource(page, {
     }, `Create ${name}`);
     created = true;
   }
-  if (!resource?.id) throw new Error(`${name} has no stable identifier`);
+  if (typeof resource?.id !== 'string' || !resource.id.trim()) {
+    throw new Error(`${name} has no stable identifier`);
+  }
+  if (resource.organization_id !== organizationId) throw new Error(`${name} belongs to another organization`);
+  const resourceId = resource.id;
   if (String(resource.status || '').toUpperCase() === 'DRAFT') {
+    if (!created) throw new Error(`${name} is an existing draft; this run does not own its activation`);
     if (validate) {
       await requireJson(page, `${collectionPath}/${encodeURIComponent(resource.id)}/validate`, {
         method: 'POST',
@@ -287,10 +295,13 @@ async function ensureActiveResource(page, {
   }
   resource = await requireJson(
     page,
-    `${collectionPath}/${encodeURIComponent(resource.id)}`,
+    `${collectionPath}/${encodeURIComponent(resourceId)}`,
     {},
     `Reload ${name}`,
   );
+  if (resource?.id !== resourceId || resource.organization_id !== organizationId) {
+    throw new Error(`${name} reload does not match the owned organization resource`);
+  }
   if (String(resource.status || '').toUpperCase() !== 'ACTIVE') {
     throw new Error(`${name} is not active`);
   }
@@ -311,86 +322,273 @@ async function ensureApplicantProfile(page, {
   }, 'Create applicant profile');
 }
 
-async function findCurrentCredential(page, {
-  organizationId,
-  credentialTemplateId,
-  startedAt,
-  waitFor,
-}) {
-  return waitFor(() => page.evaluate(async ({ organizationId: orgId, templateId, lowerBound }) => {
-    const response = await fetch(
-      `/v1/issued-credentials?organization_id=${encodeURIComponent(orgId)}`,
-      { credentials: 'include' },
-    );
-    const records = await response.json().catch(() => []);
-    if (!response.ok || !Array.isArray(records)) return null;
-    return records
-      .filter((record) => record.credential_template_id === templateId)
-      .filter((record) => new Date(record.issued_at || record.created_at || 0) >= new Date(lowerBound))
-      .sort((left, right) => new Date(right.issued_at || 0) - new Date(left.issued_at || 0))[0]
-      || null;
-  }, { organizationId, templateId: credentialTemplateId, lowerBound: startedAt }));
+function requireIdentifier(value, label) {
+  if (typeof value !== 'string' || !value.trim()) throw new Error(`${label} is required`);
 }
 
-async function cleanupApplicationCredential(page, {
-  organizationId,
-  applicationId,
-  credentialId,
-  reason,
-}) {
-  const result = { credentialRevoked: false, applicationWithdrawn: false };
-  if (credentialId) {
-    const response = await browserJson(page, `/v1/issued-credentials/${encodeURIComponent(credentialId)}/revoke`, {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    });
-    result.credentialRevoked = response.ok;
+function requireApplicationScope(owned, requireCreated = true) {
+  for (const field of ['organizationId', 'applicationTemplateId', 'credentialTemplateId', 'applicantId', 'runId']) {
+    requireIdentifier(owned[field], field);
   }
-  if (applicationId) {
-    const response = await browserJson(
-      page,
-      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(applicationId)}/withdraw`,
-      { method: 'POST', body: JSON.stringify({ reason }) },
+  if (requireCreated) requireIdentifier(owned.applicationId, 'applicationId');
+}
+
+function requireOwnedApplication(application, owned, creating = false) {
+  requireApplicationScope(owned, !creating);
+  requireIdentifier(application?.id, 'Application response ID');
+  if ((!creating && application.id !== owned.applicationId)
+      || application.organization_id !== owned.organizationId
+      || application.application_template_id !== owned.applicationTemplateId
+      || application.credential_template_id !== owned.credentialTemplateId
+      || application.applicant_id !== owned.applicantId
+      || application.integration_context?.demo_run_id !== owned.runId) {
+    throw new Error('Application response does not match this run and its organization, applicant, and templates');
+  }
+  return application;
+}
+
+function markApplicationMutation(owned, operation) {
+  owned.uncertainMutations ||= [];
+  owned.uncertainMutations.push({ operation });
+}
+
+function resolveApplicationMutation(owned, operation) {
+  owned.uncertainMutations = (owned.uncertainMutations || [])
+    .filter((entry) => entry.operation !== operation);
+}
+
+async function createOwnedApplication(page, owned, { formData, integrationContext = {}, label }) {
+  requireApplicationScope(owned, false);
+  if (owned.applicationId || owned.uncertainMutations?.some(({ operation }) => operation === 'application_creation')) {
+    throw new Error('This run already created an application or has an uncertain creation outcome');
+  }
+  markApplicationMutation(owned, 'application_creation');
+  const created = await requireJson(page, '/v1/me/applications', {
+    method: 'POST',
+    body: JSON.stringify({
+      organization_id: owned.organizationId,
+      application_template_id: owned.applicationTemplateId,
+      form_data: formData,
+      integration_context: { ...integrationContext, demo_run_id: owned.runId },
+    }),
+  }, label);
+  requireOwnedApplication(created, owned, true);
+  // Retain ownership before submit or scenario-specific evidence validation.
+  owned.applicationId = created.id;
+  resolveApplicationMutation(owned, 'application_creation');
+  return created;
+}
+
+async function submitOwnedApplication(page, owned, label) {
+  requireApplicationScope(owned);
+  const submitted = await requireJson(page, `/v1/me/applications/${encodeURIComponent(owned.applicationId)}/submit`, {
+    method: 'POST',
+  }, label);
+  requireOwnedApplication(submitted, owned);
+  if (String(submitted.status || '').toUpperCase() !== 'SUBMITTED') {
+    throw new Error('Application submission did not reach SUBMITTED');
+  }
+  return submitted;
+}
+
+function requireOrganizationInventory(records, organizationId, label) {
+  if (!Array.isArray(records)) throw new Error(`${label} returned a malformed collection`);
+  if (records.some((record) => record?.organization_id !== organizationId)) {
+    throw new Error(`${label} returned data outside the requested organization`);
+  }
+}
+
+function selectApplicationTransaction(records, owned) {
+  for (const field of ['organizationId', 'credentialTemplateId', 'applicationId']) {
+    requireIdentifier(owned[field], field);
+  }
+  requireOrganizationInventory(records, owned.organizationId, 'Issuance transaction inventory');
+  const matches = records.filter((record) => record.application_id === owned.applicationId
+    || (owned.transactionId && record.id === owned.transactionId));
+  if (matches.length > 1) throw new Error('Application has multiple issuance transactions; ownership is ambiguous');
+  const transaction = matches[0] || null;
+  if (transaction) {
+    requireIdentifier(transaction.id, 'Issuance transaction ID');
+    if (transaction.application_id !== owned.applicationId
+        || transaction.credential_template_id !== owned.credentialTemplateId
+        || (owned.transactionId && transaction.id !== owned.transactionId)) {
+      throw new Error('Issuance transaction does not match the exact application and template');
+    }
+  }
+  return transaction;
+}
+
+async function readApplicationTransaction(page, owned) {
+  return selectApplicationTransaction(
+    await listResources(page, '/v1/issuance', owned.organizationId),
+    owned,
+  );
+}
+
+function recordApplicationTransaction(owned, transaction) {
+  owned.transactionId = transaction.id;
+  resolveApplicationMutation(owned, 'issuance');
+}
+
+async function issueOwnedApplication(page, owned, label, { requestIssue } = {}) {
+  requireApplicationScope(owned);
+  markApplicationMutation(owned, 'issuance');
+  const endpoint = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}/issue`;
+  // Console recording may dispatch this request through the real invite button.
+  // Both paths retain the same application and transaction ownership checks.
+  const issued = requestIssue
+    ? await requestIssue(endpoint)
+    : await requireJson(page, endpoint, { method: 'POST' }, label);
+  requireOwnedApplication(issued, owned);
+  // The applicant issue response's id identifies the application. Its internal
+  // transaction ID is omitted; resolve it through the public transaction list.
+  const transaction = await readApplicationTransaction(page, owned);
+  if (!transaction) throw new Error('Application issuance transaction was not discoverable');
+  recordApplicationTransaction(owned, transaction);
+  return { issued, transaction };
+}
+
+function selectCurrentCredential(records, owned) {
+  for (const field of ['organizationId', 'credentialTemplateId', 'applicationId', 'transactionId']) {
+    requireIdentifier(owned[field], field);
+  }
+  requireOrganizationInventory(records, owned.organizationId, 'Issued credential inventory');
+  const matches = records.filter((record) => record.application_id === owned.applicationId
+    || record.flow_execution_id === owned.transactionId
+    || (owned.credentialId && record.id === owned.credentialId));
+  if (matches.length > 1) throw new Error('Application has multiple credential records; ownership is ambiguous');
+  const credential = matches[0] || null;
+  if (credential) {
+    requireIdentifier(credential.id, 'Issued credential ID');
+    if (credential.application_id !== owned.applicationId
+        || credential.flow_execution_id !== owned.transactionId
+        || credential.credential_template_id !== owned.credentialTemplateId
+        || (owned.credentialId && credential.id !== owned.credentialId)) {
+      throw new Error('Issued credential does not match the exact application, transaction, and template');
+    }
+  }
+  return credential;
+}
+
+async function findCurrentCredential(page, { waitFor, ...owned }) {
+  if (typeof waitFor !== 'function') throw new Error('Credential wait function is required');
+  // Validate before polling so a missing exact identifier cannot become a
+  // same-template or timestamp-based fallback.
+  selectCurrentCredential([], owned);
+  return waitFor(async () => selectCurrentCredential(
+    await listResources(page, '/v1/issued-credentials', owned.organizationId), owned,
+  ));
+}
+
+async function cleanupApplicationCredential(page, owned, reason) {
+  const result = {
+    ok: false,
+    credentialRevoked: false,
+    applicationWithdrawn: false,
+    pendingTransactionIds: [],
+    uncertainMutations: [...(owned.uncertainMutations || [])],
+    failures: [],
+  };
+  if (!owned.applicationId && !owned.transactionId && !owned.credentialId) {
+    result.ok = result.uncertainMutations.length === 0;
+    return result;
+  }
+  requireApplicationScope(owned);
+  const applicationPath = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}`;
+  const application = requireOwnedApplication(await requireJson(page, applicationPath), owned);
+  const transaction = await readApplicationTransaction(page, owned);
+  if (!transaction && (owned.transactionId || owned.credentialId)) {
+    throw new Error('Cannot re-establish the tracked application issuance transaction for cleanup');
+  }
+  let credential = null;
+  if (transaction) {
+    recordApplicationTransaction(owned, transaction);
+    credential = selectCurrentCredential(
+      await listResources(page, '/v1/issued-credentials', owned.organizationId), owned,
     );
-    result.applicationWithdrawn = response.ok;
+    if (!credential && owned.credentialId) throw new Error('Tracked credential is absent from its application transaction');
+    if (credential) {
+      if (!['ACTIVE', 'SUSPENDED', 'REVOKED', 'EXPIRED'].includes(String(credential.status).toUpperCase())) {
+        throw new Error('Owned credential has an unknown lifecycle status');
+      }
+      owned.credentialId = credential.id;
+    } else if (!['failed', 'expired', 'revoked'].includes(String(transaction.status).toLowerCase())) {
+      result.pendingTransactionIds.push(transaction.id);
+    }
+  } else if (['OFFERED', 'CREDENTIALED'].includes(String(application.status).toUpperCase())) {
+    result.failures.push({ operation: 'locate_issuance', status: 0 });
   }
+  // Establish every binding before mutating any resource. A response from an
+  // unrelated run must never authorize even one revoke or withdrawal.
+  if (credential) {
+    if (String(credential.status).toUpperCase() === 'REVOKED') {
+      result.credentialRevoked = true;
+    } else {
+      const response = await browserJson(page, `/v1/issued-credentials/${encodeURIComponent(credential.id)}/revoke`, {
+        method: 'POST', body: JSON.stringify({ reason }),
+      }).catch(() => ({ ok: false, status: 0 }));
+      try {
+        result.credentialRevoked = response.ok
+          && selectCurrentCredential([response.body], owned)?.id === credential.id
+          && String(response.body.status).toUpperCase() === 'REVOKED';
+      } catch { result.credentialRevoked = false; }
+      if (!result.credentialRevoked) result.failures.push({ operation: 'revoke', id: credential.id, status: response.status });
+    }
+  }
+  if (String(application.status).toUpperCase() === 'WITHDRAWN') {
+    result.applicationWithdrawn = true;
+  } else {
+    const response = await browserJson(page, `${applicationPath}/withdraw`, {
+      method: 'POST', body: JSON.stringify({ reason }),
+    }).catch(() => ({ ok: false, status: 0 }));
+    try {
+      result.applicationWithdrawn = response.ok
+        && requireOwnedApplication(response.body, owned).status === 'WITHDRAWN';
+    } catch { result.applicationWithdrawn = false; }
+    if (!result.applicationWithdrawn) result.failures.push({ operation: 'withdraw', id: owned.applicationId, status: response.status });
+  }
+  result.uncertainMutations = [...(owned.uncertainMutations || [])];
+  result.ok = result.applicationWithdrawn
+    && result.failures.length === 0
+    && result.pendingTransactionIds.length === 0
+    && result.uncertainMutations.length === 0;
   return result;
 }
 
-async function withdrawConflictingApplications(applicantPage, adminPage, {
+async function requireNoConflictingApplications(applicantPage, {
   organizationId,
   credentialTemplateId,
-  reason,
 }) {
-  const collection = await requireJson(
-    applicantPage,
-    '/v1/me/applications?limit=500',
-    {},
-    'Load applicant applications before release qualification',
-  );
-  if (!Array.isArray(collection?.items)) {
-    throw new Error('Applicant application lookup returned a malformed collection');
-  }
+  requireIdentifier(organizationId, 'organizationId');
+  requireIdentifier(credentialTemplateId, 'credentialTemplateId');
   const terminalStatuses = new Set(['REJECTED', 'WITHDRAWN', 'SUSPENDED']);
-  const conflicts = collection.items.filter((application) => (
-    application?.organization_id === organizationId
-    && application?.credential_template_id === credentialTemplateId
-    && !terminalStatuses.has(String(application?.status || '').toUpperCase())
-  ));
-  const withdrawn = [];
-  for (const application of conflicts) {
-    if (typeof application.id !== 'string' || application.id.length === 0) {
-      throw new Error('Conflicting applicant application is missing an id');
+  let offset = 0;
+  let total;
+  const seen = new Set();
+  do {
+    const collection = await requireJson(applicantPage, `/v1/me/applications?limit=500&offset=${offset}`, {},
+      'Check existing applicant applications');
+    if (!Array.isArray(collection?.items) || !Number.isInteger(collection.total)
+        || collection.total < 0 || collection.offset !== offset
+        || (total !== undefined && total !== collection.total)
+        || collection.items.length > collection.total - offset
+        || (collection.items.length === 0 && offset < collection.total)) {
+      throw new Error('Applicant application lookup returned a malformed or changing collection');
     }
-    await requireJson(
-      adminPage,
-      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(application.id)}/withdraw`,
-      { method: 'POST', body: JSON.stringify({ reason }) },
-      'Withdraw conflicting applicant application',
-    );
-    withdrawn.push({ id: application.id, previousStatus: application.status || null });
-  }
-  return withdrawn;
+    total = collection.total;
+    for (const application of collection.items) {
+      requireIdentifier(application?.id, 'Existing application ID');
+      if (seen.has(application.id)) throw new Error('Applicant application listing contains duplicate records');
+      seen.add(application.id);
+      if (application.organization_id === organizationId
+          && application.credential_template_id === credentialTemplateId
+          && !terminalStatuses.has(String(application.status || '').toUpperCase())) {
+        throw new Error(`Existing application ${application.id} blocks this demo; resolve it explicitly before starting a new run`);
+      }
+    }
+    offset += collection.items.length;
+  } while (offset < total);
+  return { ok: true, inspected: seen.size };
 }
 
 module.exports = {
@@ -398,16 +596,22 @@ module.exports = {
   browserJson,
   cleanupApplicationCredential,
   compactObject,
+  createOwnedApplication,
   ensureActiveResource,
   ensureApplicantProfile,
   ensureGovernedIssuer,
   findCurrentCredential,
   governedIssuerTrustProfilePayload,
   listResources,
+  issueOwnedApplication,
   requestedClaim,
   requireJson,
+  requireNoConflictingApplications,
+  requireOwnedApplication,
   resolveActiveIssuerDid,
   safeErrorDetail,
+  selectApplicationTransaction,
+  selectCurrentCredential,
   selectOrganization,
-  withdrawConflictingApplications,
+  submitOwnedApplication,
 };

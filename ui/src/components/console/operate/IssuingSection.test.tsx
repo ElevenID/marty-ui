@@ -5,7 +5,7 @@ import { server } from '@test/mocks/server';
 import IssuingSection from './IssuingSection';
 
 vi.mock('../../issuance/OID4VCIInviteDisplay', () => ({
-  default: ({ offerData }: any) => <div>Offer: {offerData.offer_url}</div>,
+  default: ({ offerData }: any) => <div>Offer: {offerData.offer_url}<span>Wallet offers: {JSON.stringify(offerData.credential_offer_uris)}</span><span>Invite status: {offerData.status}</span></div>,
 }));
 
 describe('organization reviewer issuance', () => {
@@ -37,5 +37,17 @@ describe('organization reviewer issuance', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(/organization/i);
     expect(selfClaims).toBe(0);
     expect(screen.queryByText(/Offer:/)).not.toBeInTheDocument();
+  });
+
+  it('displays a valid per-wallet offer without inventing a default URI', async () => {
+    server.use(http.post('http://localhost:8000/v1/organizations/org-review/applicants/app-employee/issue', () => HttpResponse.json({
+      status: 'OFFERED', credential_offer_uris: { 'wr-marty-001': 'openid-credential-offer://wallet-only' },
+    })));
+    render(<IssuingSection organizationId="org-review" applicationId="app-employee" applicationStatus="approved" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Display OID4VCI Invite' }));
+    expect(await screen.findByText('Wallet offers: {"wr-marty-001":"openid-credential-offer://wallet-only"}')).toBeInTheDocument();
+    expect(screen.getByText('Invite status: active')).toBeInTheDocument();
+    expect(screen.getByText('Offer:', { exact: true })).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
