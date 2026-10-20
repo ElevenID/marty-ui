@@ -10,6 +10,37 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import probe_didcomm_openbao_ha as probe  # noqa: E402
 
 
+def test_docker_retries_only_prelaunch_wsl_interop_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    monkeypatch.setenv("WSL_INTEROP", "/run/WSL/test_interop")
+    monkeypatch.setattr(probe.time, "sleep", lambda _seconds: None)
+
+    def run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(
+                args, 1, "", "<3>WSL ERROR: UtilAcceptVsock:271: accept4 failed 110",
+            )
+        return subprocess.CompletedProcess(args, 0, "ok\n", "")
+
+    monkeypatch.setattr(probe.subprocess, "run", run)
+    assert probe.docker("port", "disposable", "8200/tcp") == "ok"
+    assert calls == [["docker", "port", "disposable", "8200/tcp"]] * 2
+
+    calls.clear()
+
+    def ordinary_failure(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, "", "permission denied")
+
+    monkeypatch.setattr(probe.subprocess, "run", ordinary_failure)
+    with pytest.raises(RuntimeError, match="permission denied"):
+        probe.docker("run", "--rm", "disposable")
+    assert len(calls) == 1
+
+
 def test_slow_init_fails_once_and_cleans_up(monkeypatch: pytest.MonkeyPatch) -> None:
     operations: list[tuple[str, ...]] = []
     init_timeouts: list[float] = []

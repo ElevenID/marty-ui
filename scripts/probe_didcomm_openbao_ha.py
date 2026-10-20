@@ -50,9 +50,18 @@ def prepare_image() -> None:
 
 
 def docker(*args: str, timeout: int = 90) -> str:
-    result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, check=False, timeout=timeout
-    )
+    for attempt in range(3):
+        result = subprocess.run(
+            ["docker", *args], capture_output=True, text=True, check=False,
+            timeout=timeout,
+        )
+        # This WSL interop error occurs before docker.exe starts. Retrying any
+        # other failure could repeat a non-idempotent Docker operation.
+        if (result.returncode == 0 or not os.environ.get("WSL_INTEROP")
+                or "UtilAcceptVsock:271: accept4 failed 110" not in result.stderr
+                or attempt == 2):
+            break
+        time.sleep(1)
     if result.returncode:
         raise RuntimeError(
             f"Disposable Docker operation failed: {args[0]} "
