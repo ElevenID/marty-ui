@@ -44,6 +44,12 @@ script; it does not build or qualify images. Supply freshly built UI assets with
 the snapshot's `marty-ui-release.json`. The prepared-image runner checks that
 served marker as well as image labels before starting maintenance.
 
+Use `scripts/smoke_local_beta_ui.py --image <image-id> --source-manifest <manifest>`
+for a quick local UI component check. It starts an owned loopback-only container,
+checks the homepage, console shell, served marker and local script MIME types,
+requires the UI alone to refuse stack readiness, and removes its container.
+This is component validation, not an authenticated demo or full-stack qualification.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and

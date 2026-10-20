@@ -533,12 +533,16 @@ function Assert-OfficialImageLabels(
     [string]$ExpectedRevision,
     [string]$InputKind = "Official"
 ) {
-    $version = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
-    if ($LASTEXITCODE -ne 0 -or $version -ne $ExpectedVersion) {
+    $labelJson = & docker image inspect $Reference --format '{{json .Config.Labels}}'
+    if ($LASTEXITCODE -ne 0) { throw "$InputKind $Role image labels are unavailable" }
+    try { $labels = ($labelJson -join "`n") | ConvertFrom-Json }
+    catch { throw "$InputKind $Role image labels are invalid" }
+    $version = if ($null -ne $labels) { $labels.PSObject.Properties['org.opencontainers.image.version'] } else { $null }
+    if ($null -eq $version -or [string]$version.Value -cne $ExpectedVersion) {
         throw "$InputKind $Role image version label does not match the stack release"
     }
-    $revision = & docker image inspect $Reference --format '{{index .Config.Labels "org.opencontainers.image.revision"}}'
-    if ($LASTEXITCODE -ne 0 -or $revision -ne $ExpectedRevision) {
+    $revision = if ($null -ne $labels) { $labels.PSObject.Properties['org.opencontainers.image.revision'] } else { $null }
+    if ($null -eq $revision -or [string]$revision.Value -cne $ExpectedRevision) {
         throw "$InputKind $Role image revision label does not match the stack release"
     }
 }
