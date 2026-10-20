@@ -8336,40 +8336,41 @@ mod tests {
             .unwrap();
         let issuer_response = router.clone().oneshot(issuer_request).await.unwrap();
         assert_eq!(issuer_response.status(), StatusCode::OK);
-        let calls = recorder.0.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        let forwarded_issuer = &calls[2].1;
-        let issuer_header = forwarded_issuer
-            .headers
-            .get(marty_signing_grant::HEADER_NAME)
-            .expect("trusted issuer CSR grant");
-        assert_ne!(issuer_header, "forged-grant");
-        let issuer_grant =
-            marty_signing_grant::GrantEnvelope::from_header_value(issuer_header).unwrap();
-        let issuer_intent: IssuerCsrIntent = serde_json::from_value(issuer_body).unwrap();
-        assert_eq!(issuer_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
-        assert_eq!(issuer_grant.claims.organization_id, "org-1");
-        assert_eq!(issuer_grant.claims.route, forwarded_issuer.path);
-        assert_eq!(
-            issuer_grant.claims.issuer_did.as_deref(),
-            Some("did:web:example.test:issuer")
-        );
-        assert_eq!(issuer_grant.claims.service_id, None);
-        assert_eq!(issuer_grant.claims.key_reference, None);
-        assert_eq!(issuer_grant.claims.key_purpose, "csca");
-        assert_eq!(issuer_grant.claims.algorithm, "ES256");
-        assert_eq!(
-            issuer_grant.claims.payload_sha256_b64,
-            marty_signing_grant::payload_digest(&issuer_intent.bound_payload())
-        );
-        assert_eq!(
-            forwarded_issuer
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            let forwarded_issuer = &calls[2].1;
+            let issuer_header = forwarded_issuer
                 .headers
-                .get("x-api-key")
-                .map(String::as_str),
-            Some("dedicated-issuer-sign-key-000001")
-        );
-        drop(calls);
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted issuer CSR grant");
+            assert_ne!(issuer_header, "forged-grant");
+            let issuer_grant =
+                marty_signing_grant::GrantEnvelope::from_header_value(issuer_header).unwrap();
+            let issuer_intent: IssuerCsrIntent = serde_json::from_value(issuer_body).unwrap();
+            assert_eq!(issuer_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(issuer_grant.claims.organization_id, "org-1");
+            assert_eq!(issuer_grant.claims.route, forwarded_issuer.path);
+            assert_eq!(
+                issuer_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+            assert_eq!(issuer_grant.claims.service_id, None);
+            assert_eq!(issuer_grant.claims.key_reference, None);
+            assert_eq!(issuer_grant.claims.key_purpose, "csca");
+            assert_eq!(issuer_grant.claims.algorithm, "ES256");
+            assert_eq!(
+                issuer_grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(&issuer_intent.bound_payload())
+            );
+            assert_eq!(
+                forwarded_issuer
+                    .headers
+                    .get("x-api-key")
+                    .map(String::as_str),
+                Some("dedicated-issuer-sign-key-000001")
+            );
+        }
         let mdoc_body = json!({
             "issuer_did": "did:web:example.test:issuer",
             "key_purpose": "mdoc_dsc",
@@ -8390,23 +8391,24 @@ mod tests {
             router.clone().oneshot(mdoc_request).await.unwrap().status(),
             StatusCode::OK
         );
-        let calls = recorder.0.lock().unwrap();
-        assert_eq!(calls.len(), 4);
-        let forwarded_mdoc = &calls[3].1;
-        let mdoc_grant = marty_signing_grant::GrantEnvelope::from_header_value(
-            forwarded_mdoc
-                .headers
-                .get(marty_signing_grant::HEADER_NAME)
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(mdoc_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
-        assert_eq!(mdoc_grant.claims.key_purpose, "mdoc_dsc");
-        assert_eq!(
-            mdoc_grant.claims.issuer_did.as_deref(),
-            Some("did:web:example.test:issuer")
-        );
-        drop(calls);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 4);
+            let forwarded_mdoc = &calls[3].1;
+            let mdoc_grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                forwarded_mdoc
+                    .headers
+                    .get(marty_signing_grant::HEADER_NAME)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mdoc_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(mdoc_grant.claims.key_purpose, "mdoc_dsc");
+            assert_eq!(
+                mdoc_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+        }
         let mut invalid_format = mdoc_body;
         invalid_format["credential_format"] = json!("SD_JWT_VC");
         let invalid_request = Request::builder()
