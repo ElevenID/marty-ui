@@ -485,23 +485,8 @@ def run() -> None:
         started.append(snapshot_name)
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
         if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
-            unseal_request = urllib.request.Request(
-                snapshot_base + "/v1/sys/unseal", method="POST",
-                data=json.dumps({"key": volume_file(state, "unseal.key")}).encode(),
-                headers={"Content-Type": "application/json"},
-            )
-            try:
-                with urllib.request.urlopen(
-                    unseal_request, timeout=10,
-                    context=ssl.create_default_context(cafile=str(snapshot_ca)),
-                ) as response:  # noqa: S310 - verified disposable loopback TLS
-                    if response.status != 200:
-                        raise RuntimeError("restored Raft unseal returned invalid status")
-            except urllib.error.HTTPError as error:
-                detail = json.loads(error.read()).get("errors", [])
-                raise RuntimeError(
-                    f"restored Raft unseal failed with HTTP {error.code}: {detail}"
-                ) from None
+            fresh(snapshot_base, "POST", "sys/unseal", "",
+                  {"key": volume_file(state, "unseal.key")})
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")
