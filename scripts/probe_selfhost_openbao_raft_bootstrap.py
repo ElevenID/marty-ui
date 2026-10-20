@@ -46,6 +46,7 @@ from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
+    docker_process,
     prepare_image,
     request as http_request,
     require_status as http_require_status,
@@ -99,9 +100,8 @@ def start_node(name: str, volume: str, ca_file: Path) -> str:
         )
         return base
     except (RuntimeError, IndexError, ValueError) as error:
-        logs = subprocess.run(
-            ["docker", "logs", "--tail", "20", name],
-            capture_output=True, text=True, timeout=10, check=False,
+        logs = docker_process(
+            ["docker", "logs", "--tail", "20", name], timeout=10,
         )
         raise RuntimeError(
             f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
@@ -181,13 +181,7 @@ def run() -> None:
                 IMAGE,
                 "/scripts/openbao-selfhost-init.sh",
             ]
-        result = subprocess.run(
-            bootstrap_command,
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
+        result = docker_process(bootstrap_command, timeout=300)
         if result.returncode:
             raise RuntimeError("Disposable self-host Raft bootstrap failed")
         docker(
@@ -195,10 +189,7 @@ def run() -> None:
             "--entrypoint", "/bin/sh", IMAGE, "-c",
             "test ! -e /bao/data/selfhost-init.json",
         )
-        repeated = subprocess.run(
-            bootstrap_command, capture_output=True, text=True,
-            timeout=60, check=False,
-        )
+        repeated = docker_process(bootstrap_command, timeout=60)
         if repeated.returncode == 0 or "requires fresh, uninitialized Raft state" not in repeated.stderr:
             raise RuntimeError(
                 "Initialized OpenBao bootstrap refusal differed: "
@@ -571,12 +562,23 @@ def run() -> None:
                                  ca_file=snapshot_ca)[1].get("sealed") is True,
         )
         original_unseal_key = volume_file(state, "unseal.key")
-        wait_for(
-            "force-restored Raft node to accept original unseal key",
-            lambda: http_request(snapshot_base, "POST", "sys/unseal",
-                                 {"key": original_unseal_key},
-                                 ca_file=snapshot_ca)[0] == 200,
-        )
+        unseal_statuses: set[int] = set()
+
+        def restored_unseal_ready() -> bool:
+            status, response = http_request(snapshot_base, "POST", "sys/unseal",
+                                            {"key": original_unseal_key},
+                                            ca_file=snapshot_ca)
+            unseal_statuses.add(status)
+            return status == 200 and response.get("sealed") is False
+
+        try:
+            wait_for("force-restored Raft node to accept original unseal key",
+                     restored_unseal_ready, seconds=90)
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"Force-restored Raft unseal failed with statuses "
+                f"{sorted(unseal_statuses)}"
+            ) from error
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Force-restored Raft node lost Transit ciphertext")
@@ -601,17 +603,9 @@ def run() -> None:
         print("Self-host HTTPS Raft bootstrap, cold copy and snapshot recovery passed")
     finally:
         for name in reversed(started):
-            subprocess.run(
-                ["docker", "rm", "-f", name], capture_output=True,
-                timeout=30, check=False,
-            )
+            docker_process(["docker", "rm", "-f", name], timeout=30)
         for volume in reversed(volumes):
-            subprocess.run(
-                ["docker", "volume", "rm", volume],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
+            docker_process(["docker", "volume", "rm", volume], timeout=30)
         public_ca_dir.cleanup()
 
 

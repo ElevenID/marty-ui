@@ -49,10 +49,12 @@ def prepare_image() -> None:
     )
 
 
-def docker(*args: str, timeout: int = 90) -> str:
+def docker_process(command: list[str], *, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+    if not command or command[0] != "docker":
+        raise ValueError("disposable Docker command is invalid")
     for attempt in range(3):
         result = subprocess.run(
-            ["docker", *args], capture_output=True, text=True, check=False,
+            command, capture_output=True, text=True, check=False,
             timeout=timeout,
         )
         # This WSL interop error occurs before docker.exe starts. Retrying any
@@ -62,6 +64,11 @@ def docker(*args: str, timeout: int = 90) -> str:
                 or attempt == 2):
             break
         time.sleep(1)
+    return result
+
+
+def docker(*args: str, timeout: int = 90) -> str:
+    result = docker_process(["docker", *args], timeout=timeout)
     if result.returncode:
         raise RuntimeError(
             f"Disposable Docker operation failed: {args[0]} "
