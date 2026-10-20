@@ -33,8 +33,10 @@ checks Linux/amd64 and exact source/version labels through that ID, and reuses
 the shared service selectors. It skips image builds while retaining source
 verification, rehearsal, backups, maintenance fencing, and recovery. This option
 cannot be combined with `-OfficialStackRelease`.
-`-PlanOnly` checks the current passport fence boundary and prepared image inputs;
-execution repeats those checks under the deployment lock.
+`-PlanOnly` checks the current passport fence boundary, prepared image inputs,
+and paired DIDComm/passport configuration; execution repeats those checks under
+the deployment lock. DIDComm uses the existing native HTTPS custody validator
+for the current TLS/Raft profile, including when encrypted delivery is disabled.
 
 `scripts/generate_local_runtime_dockerfiles.py --source <checkout> --output <directory>`
 derives service, migration, and public UI runtime recipes from the production

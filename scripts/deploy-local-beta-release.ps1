@@ -1151,6 +1151,11 @@ if ($UsePreparedLocalImages) {
     $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
     $null = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
 }
+Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
+Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
+    -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
 
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"

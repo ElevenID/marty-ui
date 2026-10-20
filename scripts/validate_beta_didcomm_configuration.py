@@ -243,6 +243,10 @@ def validate_model(model, *, authcrypt_enabled, base_https=False):
         legacy_environment = environment_mapping(
             model["services"]["issuance"]["environment"]
         )
+        if any(key in legacy_environment for key in (
+            "DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_KMS_ADDR", "DIDCOMM_KMS_TOKEN_FILE"
+        )):
+            raise DidcommConfigurationError("Legacy DIDComm key custody is forbidden")
         if legacy_environment.get("DIDCOMM_DELIVERY_OWNER") != "native":
             raise DidcommConfigurationError("Beta DIDComm delivery owner is not native")
         if legacy_environment.get("ISSUANCE_NATIVE_SERVICE_URL") != NATIVE_URL:
@@ -303,7 +307,9 @@ def validate_compose(
         if result.returncode or len(result.stdout) > MAX_MODEL_BYTES:
             raise DidcommConfigurationError("DIDComm Compose validation failed")
         model = json.loads(result.stdout)
-        validate_model(model, authcrypt_enabled=authcrypt_enabled)
+        # The default native profile now always uses the TLS/Raft OpenBao
+        # custody contract. The old dev-plugin contract is not a beta mode.
+        validate_model(model, authcrypt_enabled=authcrypt_enabled, base_https=True)
     except (OSError, subprocess.SubprocessError, UnicodeError, json.JSONDecodeError):
         raise DidcommConfigurationError("DIDComm Compose validation failed") from None
 
