@@ -1,5 +1,6 @@
 #!/bin/sh
 set -e
+umask 077
 
 is_placeholder_secret_value() {
     value="$1"
@@ -105,14 +106,12 @@ if [ "${initialized}" != "false" ]; then
     echo "OpenBao bootstrap requires fresh, uninitialized Raft state." >&2
     exit 1
 fi
-if [ -e "${BAO_INIT_FILE}" ]; then
+if [ -e "${BAO_INIT_FILE}" ] || [ -e "${BAO_ROOT_TOKEN_FILE}" ] || [ -e "${BAO_UNSEAL_KEY_FILE}" ]; then
     echo "OpenBao is uninitialized but initialization material already exists; use a clean KMS-only state directory." >&2
     exit 1
 fi
 echo "Initializing OpenBao..."
 bao operator init -address="${BAO_ADDR}" -key-shares=1 -key-threshold=1 -format=json > "${BAO_INIT_FILE}"
-chmod 0600 "${BAO_INIT_FILE}"
-
 init_json="$(tr -d '\r' < "${BAO_INIT_FILE}")"
 unseal_key="$(json_first_array_entry "${init_json}" unseal_keys_b64)"
 root_token="$(json_field "${init_json}" root_token)"
@@ -124,6 +123,9 @@ fi
 
 write_secret_file "${BAO_UNSEAL_KEY_FILE}" "${unseal_key}" 0400
 write_secret_file "${BAO_ROOT_TOKEN_FILE}" "${root_token}" 0400
+sync
+rm -f "${BAO_INIT_FILE}"
+unset init_json
 
 current_status="$(status_json)"
 sealed="$(json_bool "${current_status}" sealed)"

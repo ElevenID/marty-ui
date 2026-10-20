@@ -836,21 +836,13 @@ def run() -> None:
             )
             live_issuance_signing_phase(bao_url, token, source_ca)
             live_didcomm_phase()
-            init_material = json.loads(read_volume_file(state, "selfhost-init.json"))
-            if unseal != init_material["unseal_keys_b64"][0]:
-                raise RuntimeError(
-                    "Disposable OpenBao unseal file differs from init material"
-                )
             host_state = temp / "state"
             host_state.mkdir()
             (host_state / "tls").mkdir()
             shutil.copyfile(source_ca, host_state / "tls" / "ca.crt")
-            for name, value in (
-                ("selfhost-init.json", read_volume_file(state, "selfhost-init.json")),
-                ("root.token", root),
-                ("unseal.key", unseal),
-            ):
-                (host_state / name).write_text(value, encoding="utf-8")
+            root_file = host_state / "root.token"
+            root_file.write_text(root, encoding="utf-8")
+            root_file.chmod(0o600)
             containers.append(pg_name)
             database_url, _ = start_postgres(pg_name, pg_data)
             docker(
@@ -917,6 +909,18 @@ def run() -> None:
             )
 
             export_dir = temp / "exports"
+            export_dir.mkdir(mode=0o700)
+            snapshot_identity = temp / "snapshot-identity"
+            snapshot_identity.mkdir(mode=0o700)
+            provision = subprocess.run(
+                [sys.executable, str(ROOT / "scripts/provision_selfhost_snapshot_identity.py"),
+                 "--bao-addr", bao_url, "--bao-ca", str(source_ca),
+                 "--root-token-file", str(root_file), "--output", str(snapshot_identity)],
+                capture_output=True, timeout=60, check=False,
+            )
+            if provision.returncode:
+                raise RuntimeError("Coordinated snapshot identity provisioning failed")
+            root_file.unlink()
             result = subprocess.run(
                 [
                     sys.executable,
@@ -927,6 +931,8 @@ def run() -> None:
                     str(export_dir),
                     "--bao-url",
                     bao_url,
+                    "--snapshot-identity-dir",
+                    str(snapshot_identity),
                 ],
                 capture_output=True,
                 timeout=300,
@@ -936,6 +942,8 @@ def run() -> None:
                 raise RuntimeError("Coordinated OpenBao snapshot export failed")
             archive = next(export_dir.glob("*.zip"))
             with zipfile.ZipFile(archive) as bundle:
+                if any(name.startswith("recovery/") for name in bundle.namelist()):
+                    raise RuntimeError("Coordinated snapshot contains root or unseal files")
                 snapshot = bundle.read("raft.snap")
                 manifest = json.loads(bundle.read("manifest.json"))
             if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:

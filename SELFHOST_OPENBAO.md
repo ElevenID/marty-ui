@@ -11,6 +11,14 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 
 The OpenBao state directory contains highly sensitive material, including the initial root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them. The root token is still needed by initial provisioning helpers; retirement of that token remains a separate hardening gate. Snapshot export uses its own AppRole, not the root token or the renewal AppRole.
 
+During fresh initialization, `selfhost-init.json` is created owner-only so a
+crash before recovery files are written does not lose the sole unseal key or
+initial root token. Bootstrap synchronizes those files and removes the duplicate
+JSON before reporting success. If initialization is interrupted, preserve the
+state directory and inspect the owner-only init file or the completed root and
+unseal files for recovery; do not run the one-time bootstrap again against
+initialized Raft state.
+
 ## Start The Standalone OpenBao Stack
 
 For a fresh state directory, initialize once in this order:

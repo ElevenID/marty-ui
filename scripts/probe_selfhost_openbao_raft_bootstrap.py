@@ -161,6 +161,11 @@ def run() -> None:
         )
         if result.returncode:
             raise RuntimeError("Disposable self-host Raft bootstrap failed")
+        docker(
+            "run", "--rm", "-v", f"{state}:/bao/data:ro",
+            "--entrypoint", "/bin/sh", IMAGE, "-c",
+            "test ! -e /bao/data/selfhost-init.json",
+        )
         repeated = subprocess.run(
             bootstrap_command, capture_output=True, text=True,
             timeout=60, check=False,
