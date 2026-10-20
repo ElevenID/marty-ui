@@ -53,7 +53,7 @@ def existing_policy_names(bao: Bao, current: Path) -> list[str]:
     return names
 
 
-def operator_acl(policy_names: list[str]) -> str:
+def operator_acl(policy_names: list[str], *, allow_secret_id_rotation: bool = True) -> str:
     """Only reviewed read, CSR, sign, lookup, capability, and named mint paths."""
     if len(policy_names) != 21 or len(set(policy_names)) != 21:
         raise ValueError("renewal leaf policy inventory is incomplete")
@@ -65,8 +65,6 @@ def operator_acl(policy_names: list[str]) -> str:
         "sys/capabilities": ("update",),
         f"auth/token/create/{LEAF_ROLE}": ("update",),
         f"auth/token/roles/{LEAF_ROLE}": ("read",),
-        f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id": ("update",),
-        f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy": ("update",),
         "sys/policies/acl": ("list",),
         f"sys/policies/acl/{OPERATOR_POLICY}": ("read",),
         "workload-pki/cert/ca": ("read",),
@@ -74,6 +72,9 @@ def operator_acl(policy_names: list[str]) -> str:
         "keycloak-pki/roles/rs256": ("read",),
         "keycloak-pki/sign/rs256": ("update",),
     }
+    if allow_secret_id_rotation:
+        paths[f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id"] = ("update",)
+        paths[f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy"] = ("update",)
     for name in policy_names:
         if not NAME.fullmatch(name) or name in ("default", "root", OPERATOR_POLICY):
             raise ValueError("renewal leaf policy name is invalid")

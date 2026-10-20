@@ -51,7 +51,9 @@ def test_rollback_root_child_stops_retirement_audit(
         bao_ca=ca, bao_addr="https://127.0.0.1:8200",
         rollback_secrets=tmp_path / "rollback", active_secrets=tmp_path / "active",
         rollback_env=tmp_path / "rollback.env", active_env=tmp_path / "active.env",
-        renewal_identity=tmp_path / "renewal", snapshot_identity=tmp_path / "snapshot",
+        renewal_identity=tmp_path / "renewal",
+        ca_rotation_identity=tmp_path / "ca-rotation",
+        snapshot_identity=tmp_path / "snapshot",
         evidence_identity=tmp_path / "evidence", audit_identity=tmp_path / "audit",
         snapshot_rotator_identity=tmp_path / "snapshot-rotator",
         audit_org_id="00000000-0000-0000-0000-000000000001",
@@ -64,6 +66,7 @@ def test_rollback_root_child_stops_retirement_audit(
     monkeypatch.setattr(retirement, "Bao", lambda *_args: object())
     monkeypatch.setattr(retirement, "renewal_login",
                         lambda *_args: ("role", "secret", [], "scoped-token"))
+    monkeypatch.setattr(retirement, "ca_rotation_login", lambda *_args: "ca-token")
     monkeypatch.setattr(retirement, "require_renewal_authority", lambda *_args: None)
 
     def reject_child(_bao, old, new, ttl, *, require_orphan_old, require_orphan_new):

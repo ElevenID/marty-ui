@@ -3,9 +3,10 @@
 
 Run against the same HTTPS OpenBao used by the self-host workload bootstrap.
 The DIDComm plugin must already be mounted. This script never exports a private
-key and refuses to overwrite any existing Keycloak input. Renewal reuses the
-same remote key versions, PKI issuer, and exact scoped policies; it does not
-activate the staged credentials or roll the short-lived CA.
+key and refuses to overwrite any existing Keycloak input. Ordinary renewal
+reuses the current PKI issuer; explicit CA-rotation staging uses a separately
+scoped authority and issuer while retaining the same remote key versions.
+Neither path activates the staged credentials.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from urllib.error import HTTPError, URLError
 
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE,
                                     certificate_public_key_der, public_key_der,
+                                    require_ca_rotation_authority,
                                     require_renewal_authority)
 
 
@@ -35,6 +37,24 @@ OUTPUTS = frozenset({
 })
 SESSION_TTL = "8h"
 MIN_VALIDITY_SECONDS = 7 * 60 * 60
+ROLE_CONFIG = {
+    "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
+    "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
+}
+
+
+def selected_pki_mount(*, renew: bool, requested: str | None) -> str:
+    if not renew:
+        if requested is not None:
+            raise ValueError("Keycloak CA selection is renewal-only")
+        return "keycloak-pki"
+    if requested is None or requested == "keycloak-pki":
+        return "keycloak-pki"
+    version = requested.removeprefix("keycloak-pki-v")
+    if (not requested.startswith("keycloak-pki-v") or not version.isdecimal()
+            or int(version) not in range(2, 9) or version != str(int(version))):
+        raise ValueError("replacement Keycloak PKI mount is invalid")
+    return requested
 
 
 class KeycloakBao(Bao):
@@ -134,40 +154,50 @@ def require_cert_lifetime(certificate: str) -> None:
         raise RuntimeError("disposable Keycloak certificate expires before tester session")
 
 
-def require_mounts(bao: Bao, *, renew: bool = False) -> None:
+def require_mounts(bao: Bao, *, renew: bool = False,
+                   pki_mount: str = "keycloak-pki") -> None:
     mounts = require_data(bao.request("GET", "sys/mounts"), "transit/")
     if (mounts["transit/"].get("type") != "transit"
             or mounts.get("didcomm/", {}).get("type") != "openbao-didcomm-authcrypt"
-            or ("keycloak-pki/" in mounts) == (not renew)
-            or (renew and mounts.get("keycloak-pki/", {}).get("type") != "pki")):
+            or (not renew and "keycloak-pki/" in mounts)
+            or (renew and mounts.get("keycloak-pki/", {}).get("type") != "pki")
+            or (renew and mounts.get(f"{pki_mount}/", {}).get("type") != "pki")):
         raise RuntimeError("disposable OpenBao lacks the reviewed Keycloak mounts")
 
 
-def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
+def provision(bao: Bao, *, renew: bool = False,
+              pki_mount: str = "keycloak-pki") -> dict[str, str]:
     """Return exactly seven public certificates/scoped tokens, not private keys."""
+    pki_mount = selected_pki_mount(
+        renew=renew, requested=pki_mount if renew or pki_mount != "keycloak-pki" else None,
+    )
     if renew:
-        require_renewal_authority(bao)
-    require_mounts(bao, renew=renew)
+        if pki_mount == "keycloak-pki":
+            require_renewal_authority(bao)
+        else:
+            require_ca_rotation_authority(bao)
+    require_mounts(bao, renew=renew, pki_mount=pki_mount)
     if renew:
-        role = require_data(bao.request("GET", "keycloak-pki/roles/rs256"), "key_type")
+        if pki_mount != "keycloak-pki":
+            bao.request("POST", f"{pki_mount}/roles/rs256", ROLE_CONFIG)
+        role = require_data(bao.request("GET", f"{pki_mount}/roles/rs256"), "key_type")
         if (role["key_type"] != "rsa" or role.get("key_bits") != 2048
                 or role.get("allow_any_name") is not True
                 or role.get("max_ttl") != 8 * 60 * 60):
             raise RuntimeError("Keycloak renewal PKI role changed")
-        ca = require_data(bao.request("GET", "keycloak-pki/cert/ca"), "certificate")
+        ca = require_data(bao.request("GET", f"{pki_mount}/cert/ca"), "certificate")
         require_cert_lifetime(ca["certificate"])
     else:
-        bao.request("POST", "sys/mounts/keycloak-pki", {"type": "pki"})
+        bao.request("POST", "sys/mounts/keycloak-pki", {
+            "type": "pki", "config": {"max_lease_ttl": "8760h"},
+        })
         ca = require_data(bao.request("POST", "keycloak-pki/root/generate/internal", {
-            "common_name": "Marty disposable Keycloak CA", "ttl": "24h",
+            "common_name": "Marty disposable Keycloak CA", "ttl": "8760h",
             "key_type": "ec", "key_bits": 256,
         }), "certificate")
         if "private_key" in ca:
             raise RuntimeError("disposable Keycloak PKI exported its CA key")
-        bao.request("POST", "keycloak-pki/roles/rs256", {
-            "allow_any_name": True, "key_type": "rsa", "key_bits": 2048,
-            "max_ttl": SESSION_TTL, "use_csr_common_name": False, "use_csr_sans": False,
-        })
+        bao.request("POST", "keycloak-pki/roles/rs256", ROLE_CONFIG)
     outputs: dict[str, str] = {}
     for realm in REALMS:
         rsa_key = f"keycloak-{realm}-rs256"
@@ -186,7 +216,7 @@ def provision(bao: Bao, *, renew: bool = False) -> dict[str, str]:
                 raise RuntimeError("disposable Keycloak key lacks version-1 custody")
         csr = require_data(bao.request("POST", f"transit/keys/{rsa_key}/csr",
                                        {"version": 1}), "csr")["csr"]
-        signed = require_data(bao.request("POST", "keycloak-pki/sign/rs256", {
+        signed = require_data(bao.request("POST", f"{pki_mount}/sign/rs256", {
             "csr": csr, "common_name": f"{realm}.keycloak.internal", "ttl": SESSION_TTL,
         }), "certificate")
         if "private_key" in signed:
@@ -296,9 +326,13 @@ def main() -> int:
         mode = os.environ.get("SELFHOST_KEYCLOAK_MODE", "initial")
         if mode not in ("initial", "renew"):
             raise RuntimeError("Keycloak provisioning mode is invalid")
-        token_file = Path(os.environ[
-            "BAO_RENEWAL_TOKEN_FILE" if mode == "renew" else "BAO_ROOT_TOKEN_FILE"
-        ])
+        selected_mount = selected_pki_mount(
+            renew=mode == "renew", requested=os.environ.get("SELFHOST_KEYCLOAK_PKI_MOUNT"),
+        )
+        token_variable = ("BAO_CA_ROTATION_TOKEN_FILE" if selected_mount != "keycloak-pki"
+                          else "BAO_RENEWAL_TOKEN_FILE" if mode == "renew"
+                          else "BAO_ROOT_TOKEN_FILE")
+        token_file = Path(os.environ[token_variable])
         root = Path(os.environ["SELFHOST_KEYCLOAK_OUTPUT_DIR"])
         if (not endpoint.startswith("https://") or not ca.is_absolute()
                 or not ca.is_file() or ca.is_symlink() or not token_file.is_absolute()
@@ -309,7 +343,8 @@ def main() -> int:
             raise RuntimeError("Keycloak OpenBao authority token is absent")
         require_available_private_root(root)
         renewing = mode == "renew"
-        write_outputs(root, provision(KeycloakBao(endpoint, ca, token), renew=renewing),
+        write_outputs(root, provision(KeycloakBao(endpoint, ca, token), renew=renewing,
+                                      pki_mount=selected_mount),
                       staged=renewing)
     except (KeyError, OSError, ValueError, RuntimeError, HTTPError, URLError,
             HTTPException) as error:

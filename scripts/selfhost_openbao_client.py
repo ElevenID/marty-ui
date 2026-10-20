@@ -123,3 +123,12 @@ def require_renewal_authority(bao: Bao) -> None:
             or data.get("path") != "auth/selfhost-renew/login"
             or type(data.get("ttl")) is not int or not 3600 <= data["ttl"] <= 8 * 60 * 60):
         raise ValueError("OpenBao renewal authority is not the scoped AppRole token")
+
+
+def require_ca_rotation_authority(bao: Bao) -> None:
+    data = bao.request("POST", "auth/token/lookup", {"token": bao.token}).get("data", {})
+    if (not isinstance(data, dict) or data.get("policies") != ["selfhost-kms-ca-rotation"]
+            or data.get("path") != "auth/selfhost-ca-rotation/login"
+            or type(data.get("ttl")) is not int
+            or not 3600 <= data["ttl"] <= 8 * 60 * 60):
+        raise ValueError("OpenBao CA-rotation authority is not the scoped AppRole token")

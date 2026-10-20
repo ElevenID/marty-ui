@@ -126,8 +126,8 @@ node even if its temporary fresh-cluster key unsealed it beforehand.
 
 Before considering revocation of the initial root token, run
 `scripts/check_selfhost_root_retirement.py --help` and supply the active and
-rollback secret generations, their Compose env files, the renewal and snapshot
-reader identities, the separate evidence, audit and snapshot rotator identities, the
+rollback secret generations, their Compose env files, the renewal, CA-rotation
+and snapshot reader identities, the separate evidence, audit and snapshot rotator identities, the
 owned project and an owner-private snapshot export directory. It
 verifies all 21 renewable token scopes in
 **both** generations, the 13 static service/grant tokens in each generation,
@@ -137,6 +137,27 @@ and checks a current v2 Raft snapshot with the separate snapshot identity. The
 audit does not revoke the root or establish coordinated backup provenance, CA rollover,
 or an expiry-crossing business journey. Retain the root until those separate
 gates have passed on a fresh installation.
+
+Provision the dedicated CA-rotation AppRole before the root-retirement audit.
+Use a new owner-private directory and the current complete secret generation:
+
+```bash
+ca_rotation_dir="$(dirname "$SELFHOST_OPENBAO_STATE_DIR")/ca-rotation-identity"
+mkdir -m 700 -p "$ca_rotation_dir"
+python scripts/provision_selfhost_ca_rotation_identity.py --mode bootstrap \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --current-secrets /absolute/path/to/current/secrets \
+  --output "$(realpath "$ca_rotation_dir")"
+```
+
+The root-retirement audit requires `--ca-rotation-identity "$ca_rotation_dir"`
+and validates a fresh rootless login and its exact ACL. This identity is
+separate from routine leaf renewal. It is limited to reviewed versioned PKI
+mounts and cannot export Transit keys or manage unrelated mounts. Provisioning
+the identity alone does not rotate either CA or activate a new trust bundle;
+complete the separate overlap and session gates before production root retirement.
 
 After those gates, `scripts/retire_selfhost_bootstrap_root.py` takes the same
 arguments as the audit. It runs the complete audit and scoped snapshot export,

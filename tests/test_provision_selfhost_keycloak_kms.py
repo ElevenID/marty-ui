@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from provision_selfhost_keycloak_kms import (  # noqa: E402
     MIN_VALIDITY_SECONDS, OUTPUTS, SESSION_TTL, require_cert_lifetime,
-    renewed_token, require_mounts, scoped_token, write_outputs,
+    renewed_token, require_mounts, scoped_token, selected_pki_mount, write_outputs,
 )
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
@@ -171,6 +171,30 @@ def test_keycloak_provisioning_requires_current_didcomm_plugin() -> None:
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:ci")
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:local")
     assert not PLUGIN_IMAGE.fullmatch("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm:latest")
+
+
+def test_replacement_keycloak_issuer_is_explicit_and_bounded() -> None:
+    assert selected_pki_mount(renew=True, requested=None) == "keycloak-pki"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v2") == "keycloak-pki-v2"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v8") == "keycloak-pki-v8"
+    for value in ("", "keycloak-pki-v1", "keycloak-pki-v02", "keycloak-pki-v9",
+                  "keycloak-pki-v2/sign/rs256"):
+        with pytest.raises(ValueError, match="mount is invalid"):
+            selected_pki_mount(renew=True, requested=value)
+    with pytest.raises(ValueError, match="renewal-only"):
+        selected_pki_mount(renew=False, requested="keycloak-pki-v2")
+
+    class ReplacementMounts(Mounts):
+        def request(self, method: str, path: str) -> dict:
+            response = super().request(method, path)
+            response["data"]["keycloak-pki-v2/"] = {"type": "pki"}
+            return response
+
+    require_mounts(ReplacementMounts("openbao-didcomm-authcrypt", keycloak=True),
+                   renew=True, pki_mount="keycloak-pki-v2")
+    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
+        require_mounts(Mounts("openbao-didcomm-authcrypt", keycloak=True),
+                       renew=True, pki_mount="keycloak-pki-v2")
 
 
 def test_keycloak_token_requires_a_real_session_length() -> None:

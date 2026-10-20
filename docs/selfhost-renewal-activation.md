@@ -67,6 +67,24 @@ same file inventory and modes, unchanged static inputs and public CA, and
 changed certificates and scoped tokens. It refuses CA rollover; that needs
 a separate trust-overlap procedure.
 
+Replacement-issuer preparation is a separate rootless source stage, not an
+activation shortcut. After provisioning the CA-rotation AppRole while the
+bootstrap root still exists, use
+`provision_selfhost_ca_rotation_identity.py --mode stage-issuer` with its
+private identity, an empty 0700 output directory, `--kind workload` or
+`--kind keycloak`, and an unused version from 2 through 8. It creates only
+that exact PKI mount and a one-year internal CA, then writes its **public**
+certificate. `--mode login` writes a short-lived token for
+`BAO_CA_ROTATION_TOKEN_FILE`. The Rust workload producer can select the
+corresponding `MARTY_SELFHOST_WORKLOAD_PKI_MOUNT=workload-pki-vN`; the Keycloak
+producer can select `SELFHOST_KEYCLOAK_PKI_MOUNT=keycloak-pki-vN`. Both retain
+the existing non-exportable Transit key versions. These source stages do not
+make the new issuers trusted by an installed app: the ordinary generation
+assembler and activation deliberately reject that change until the public
+dual-trust, old/new leaf, session and retirement gates are implemented and
+qualified. Do not substitute the new leaf files into a live generation by
+hand.
+
 Use a self-host Compose release whose ordinary `db-migrate` renders with
 `MARTY_KMS_BOOTSTRAP_ENABLED=false`, without a bootstrap-token mount, and
 whose separate `kms-initialize` role is confined to the `kms-init` profile.

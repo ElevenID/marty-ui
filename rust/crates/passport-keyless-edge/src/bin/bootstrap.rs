@@ -59,7 +59,7 @@ fn selected_workload_pki_mount(
             let parsed = version
                 .parse::<u16>()
                 .map_err(|_| "replacement workload PKI version is invalid")?;
-            if !(2..=9999).contains(&parsed) || parsed.to_string() != version {
+            if !(2..=8).contains(&parsed) || parsed.to_string() != version {
                 return Err("replacement workload PKI version is invalid".into());
             }
             Ok(mount)
@@ -597,10 +597,15 @@ async fn provision(
         }
     };
     if profile != Profile::SelfhostRenew {
+        let mount_config = if profile == Profile::Selfhost {
+            json!({"type":"pki", "config":{"max_lease_ttl":"8760h"}})
+        } else {
+            json!({"type":"pki"})
+        };
         bao.checked(
             Method::POST,
             &format!("sys/mounts/{pki_mount}"),
-            Some(json!({"type":"pki"})),
+            Some(mount_config),
             None,
         )
         .await?;
@@ -616,11 +621,16 @@ async fn provision(
         bao.checked(Method::GET, &format!("{pki_mount}/cert/ca"), None, None)
             .await?
     } else {
+        let ca_ttl = if profile == Profile::Selfhost {
+            "8760h"
+        } else {
+            "48h"
+        };
         bao.checked(
             Method::POST,
             &format!("{pki_mount}/root/generate/internal"),
             Some(json!({
-                "common_name": ca_name, "ttl": "48h",
+                "common_name": ca_name, "ttl": ca_ttl,
                 "key_type": "ec", "key_bits": 256,
             })),
             None,
@@ -662,7 +672,7 @@ async fn provision(
             .checked(Method::GET, &format!("transit/keys/{key}"), None, None)
             .await?;
         checked_transit_key_metadata(&metadata, profile)?;
-        if profile == Profile::SelfhostRenew {
+        if profile == Profile::SelfhostRenew && pki_mount == "workload-pki" {
             let existing_role = bao
                 .checked(
                     Method::GET,
@@ -688,6 +698,17 @@ async fn provision(
                 None,
             )
             .await?;
+            if profile == Profile::SelfhostRenew {
+                let configured = bao
+                    .checked(
+                        Method::GET,
+                        &format!("{pki_mount}/roles/{}", role.name),
+                        None,
+                        None,
+                    )
+                    .await?;
+                checked_existing_role(&configured, role)?;
+            }
         }
         let csr = bao
             .checked(
@@ -991,9 +1012,8 @@ mod tests {
             "workload-pki-v2"
         );
         assert_eq!(
-            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v9999"))
-                .unwrap(),
-            "workload-pki-v9999"
+            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v8")).unwrap(),
+            "workload-pki-v8"
         );
         assert_eq!(renewal_authority("workload-pki").0, "selfhost-kms-renewal");
         assert_eq!(
@@ -1005,6 +1025,7 @@ mod tests {
             "workload-pki-next",
             "workload-pki-v1",
             "workload-pki-v02",
+            "workload-pki-v9",
             "workload-pki-v10000",
             "workload-pki-v2/roles/admin",
         ] {

@@ -25,6 +25,7 @@ from activate_selfhost_renewed_secrets import (  # noqa: E402
     secret_mounts, statuses,
 )
 from provision_selfhost_renewal_identity import checked_login as renewal_login  # noqa: E402
+from provision_selfhost_ca_rotation_identity import checked_login as ca_rotation_login  # noqa: E402
 from provision_selfhost_evidence_identity import checked_login as evidence_login  # noqa: E402
 from provision_selfhost_audit_identity import checked_login as audit_login  # noqa: E402
 from provision_selfhost_audit_token import policy_for as audit_policy_for  # noqa: E402
@@ -60,7 +61,12 @@ FORBIDDEN_STATIC_CAPABILITIES = (
     "auth/token/revoke",
     "auth/token/roles/selfhost-renew-leaf",
     "sys/auth/selfhost-renew",
+    "sys/auth/selfhost-ca-rotation",
     "sys/mounts/transit",
+    "sys/mounts/workload-pki-v2",
+    "sys/mounts/keycloak-pki-v2",
+    "workload-pki-v2/root/generate/internal",
+    "keycloak-pki-v2/root/generate/internal",
     "sys/policies/acl/credential-service",
     "sys/seal",
     "sys/step-down",
@@ -167,6 +173,7 @@ def audit(args: argparse.Namespace) -> Path:
             or not args.openbao_config.is_absolute()
             or not args.evidence_identity.is_absolute()
             or not args.audit_identity.is_absolute()
+            or not args.ca_rotation_identity.is_absolute()
             or not args.snapshot_rotator_identity.is_absolute()):
         raise ValueError("root retirement audit inputs are invalid")
     snapshot_origin(args.bao_addr)
@@ -178,6 +185,8 @@ def audit(args: argparse.Namespace) -> Path:
 
     renewal = Bao(args.bao_addr, args.bao_ca, "")
     _, _, _, operator_token = renewal_login(renewal, args.renewal_identity)
+    ca_rotation_login(Bao(args.bao_addr, args.bao_ca, ""),
+                      args.ca_rotation_identity)
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     require_renewal_authority(bao)
     checked_tokens(bao, rollback, active, args.minimum_token_ttl,
@@ -222,7 +231,8 @@ def audit(args: argparse.Namespace) -> Path:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("compose_file", "rollback_env", "active_env", "rollback_secrets",
-                 "active_secrets", "bao_ca", "renewal_identity", "snapshot_identity",
+                 "active_secrets", "bao_ca", "renewal_identity", "ca_rotation_identity",
+                 "snapshot_identity",
                  "evidence_identity", "audit_identity", "snapshot_rotator_identity",
                  "openbao_state_dir",
                  "snapshot_export_dir", "openbao_config"):
