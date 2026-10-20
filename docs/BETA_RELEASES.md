@@ -79,6 +79,10 @@ administrators on Windows (mode 0700 elsewhere). OpenBao backup uses its native
 Raft snapshot command with credentials kept inside the node; the separate static
 custody archive excludes the live Raft directory. Database restore preserves the
 running OpenBao state; disaster recovery of its retained snapshot is separate.
+Rehearsal readiness uses argument arrays and captures expected native startup
+errors without changing the caller's failure policy. Its temporary OpenBao CA
+is read through `exec` and accepted only as a public PEM certificate; Docker's
+archive API cannot retrieve that tmpfs file on the beta host.
 
 ## Release sequence
 

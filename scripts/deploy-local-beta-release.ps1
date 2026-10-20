@@ -1516,11 +1516,9 @@ try {
     if (-not $redisReady) { throw "Rehearsal Redis did not become ready" }
     if (-not $openBaoReady) { throw "Rehearsal OpenBao did not become ready" }
     $copyCaPath = Join-Path $logsDir "openbao-copy-public-ca.crt"
-    Invoke-Checked -FilePath docker -Arguments @("cp", "${copyOpenBaoContainer}:/tmp/bao-tls/vault-ca.pem", $copyCaPath)
-    $copyCaContent = Get-Content -LiteralPath $copyCaPath -Raw
-    if ($copyCaContent -notmatch '-----BEGIN CERTIFICATE-----' -or $copyCaContent -match 'PRIVATE KEY') {
-        throw "Rehearsal OpenBao public CA is invalid"
-    }
+    # Docker's archive/cp API cannot read this tmpfs mount on the beta host.
+    $copyCaContent = Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'
+    Write-Utf8Text -Path $copyCaPath -Content $copyCaContent
     $copyCaMount = "type=bind,src=$copyCaPath,dst=/bao-public-ca/ca.crt,readonly"
     Invoke-Checked -FilePath docker -Arguments @(
         "run", "--rm", "--network", "container:$copyOpenBaoContainer",
