@@ -16,6 +16,15 @@ from functools import partial
 from pathlib import Path
 
 from check_selfhost_root_retirement import STATIC_KMS_TOKENS, checked_static_tokens
+from provision_selfhost_audit_identity import bootstrap as bootstrap_audit_identity
+from provision_selfhost_audit_identity import checked_login as audit_login
+from provision_selfhost_audit_identity import mint as mint_audit_token
+from provision_selfhost_audit_identity import rotate as rotate_audit_identity
+from provision_selfhost_audit_identity import require_revoked as audit_revoked
+from provision_selfhost_audit_identity import ROLE_ID_FILE as AUDIT_ROLE_ID_FILE
+from provision_selfhost_audit_identity import SECRET_ID_FILE as AUDIT_SECRET_ID_FILE
+from provision_selfhost_audit_token import POLICY as AUDIT_POLICY
+from provision_selfhost_audit_token import policy_for as audit_policy_for
 from provision_selfhost_custody_signer import refresh_scoped_token
 from provision_selfhost_evidence_identity import bootstrap as bootstrap_evidence_identity
 from provision_selfhost_evidence_identity import checked_login as evidence_login
@@ -299,6 +308,33 @@ def run() -> None:
         if not isinstance(first_evidence_leaf, str) or len(first_evidence_leaf) < 20:
             raise RuntimeError("Initial orphan evidence token is absent")
         mint_evidence_token(Bao(base, ca_file, ""), evidence_identity)
+        audit_org = "00000000-0000-0000-0000-000000000001"
+        audit_policy, audit_paths = audit_policy_for(
+            audit_org, "marty", "did:web:localhost:orgs:marty",
+        )
+        for path in audit_paths[:2]:
+            evidence_bao.request("POST", path, {
+                "type": "ed25519", "exportable": False,
+                "allow_plaintext_backup": False,
+            })
+        evidence_bao.request("PUT", f"sys/policies/acl/{AUDIT_POLICY}", {
+            "policy": audit_policy,
+        })
+        audit_identity = Path(public_ca_dir.name) / "audit-identity"
+        audit_identity.mkdir(mode=0o700)
+        bootstrap_audit_identity(evidence_bao, audit_identity, audit_policy)
+        retired_audit_identity = audit_identity
+        audit_identity = Path(public_ca_dir.name) / "audit-identity-rotated"
+        audit_identity.mkdir(mode=0o700)
+        rotate_audit_identity(Bao(base, ca_file, ""), retired_audit_identity,
+                              audit_identity, audit_policy)
+        initial_audit = evidence_bao.request("POST", "auth/token/create", {
+            "policies": [AUDIT_POLICY], "no_default_policy": True,
+            "no_parent": True, "renewable": False, "ttl": "1h",
+            "explicit_max_ttl": "1h",
+        }).get("auth", {}).get("client_token")
+        if not isinstance(initial_audit, str) or len(initial_audit) < 20:
+            raise RuntimeError("Initial orphan audit token is absent")
         identity = Path(public_ca_dir.name) / "snapshot-identity"
         identity.mkdir(mode=0o700)
         provision = subprocess.run(
@@ -377,6 +413,27 @@ def run() -> None:
                 or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
                                 token=first_evidence_leaf, ca_file=ca_file)[0] != 403):
             raise RuntimeError("Rootless evidence refresh retained its old token")
+        renewed_audit = mint_audit_token(Bao(cold_base, ca_file, ""), audit_identity,
+                                        audit_policy, audit_paths)
+        audit_revoked(
+            Bao(cold_base, ca_file, ""),
+            (retired_audit_identity / AUDIT_ROLE_ID_FILE).read_text().strip(),
+            (retired_audit_identity / AUDIT_SECRET_ID_FILE).read_text().strip(),
+        )
+        audit_file = Path(public_ca_dir.name) / "audit-leaf.token"
+        audit_file.write_text(initial_audit, encoding="ascii")
+        audit_operator = audit_login(Bao(cold_base, ca_file, ""), audit_identity,
+                                     audit_policy)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, audit_operator), audit_file, renewed_audit,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (audit_file.read_text(encoding="ascii") != renewed_audit
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=initial_audit, ca_file=ca_file)[0] != 403
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=renewed_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Rootless audit refresh lost scoped read authority")
         rootless_exports = Path(public_ca_dir.name) / "rootless-exports"
         rootless_exports.mkdir(mode=0o700)
         rootless = subprocess.run(
@@ -416,6 +473,11 @@ def run() -> None:
         ) as response:  # noqa: S310 - verified disposable loopback TLS
             if response.status not in (200, 204):
                 raise RuntimeError("Fresh Raft snapshot force-restore failed")
+        wait_for(
+            "force-restored Raft node to seal",
+            lambda: http_request(snapshot_base, "GET", "sys/seal-status",
+                                 ca_file=snapshot_ca)[1].get("sealed") is True,
+        )
         docker("stop", snapshot_name)
         docker("rm", snapshot_name)
         started.remove(snapshot_name)
@@ -423,8 +485,23 @@ def run() -> None:
         started.append(snapshot_name)
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
         if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
-            fresh(snapshot_base, "POST", "sys/unseal", "",
-                  {"key": volume_file(state, "unseal.key")})
+            unseal_request = urllib.request.Request(
+                snapshot_base + "/v1/sys/unseal", method="POST",
+                data=json.dumps({"key": volume_file(state, "unseal.key")}).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                with urllib.request.urlopen(
+                    unseal_request, timeout=10,
+                    context=ssl.create_default_context(cafile=str(snapshot_ca)),
+                ) as response:  # noqa: S310 - verified disposable loopback TLS
+                    if response.status != 200:
+                        raise RuntimeError("restored Raft unseal returned invalid status")
+            except urllib.error.HTTPError as error:
+                detail = json.loads(error.read()).get("errors", [])
+                raise RuntimeError(
+                    f"restored Raft unseal failed with HTTP {error.code}: {detail}"
+                ) from None
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")

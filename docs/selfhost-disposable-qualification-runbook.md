@@ -457,6 +457,16 @@ sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
   --org-slug "${MARTY_ORG_SLUG:?Set the seeded organization slug}" \
   --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
   --project-name "$openbao_project"
+audit_identity_root="$(dirname "$openbao_state_root")/audit-identity"
+sudo install -d -m 700 "$audit_identity_root"
+sudo python3 "$source_root/scripts/provision_selfhost_audit_identity.py" \
+  --mode bootstrap --bao-addr "https://127.0.0.1:$openbao_port" \
+  --bao-ca "$openbao_state_root/tls/ca.crt" \
+  --root-token-file "$openbao_state_root/root.token" \
+  --org-id "$MARTY_ORG_ID" --org-slug "$MARTY_ORG_SLUG" \
+  --did "$SELFHOST_ISSUER_DID" --output "$audit_identity_root"
+# Later audit token refresh requires --refresh-token --identity-root
+# "$audit_identity_root" with the same org, slug, DID, state, output and project.
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --archive "$prepared/prepared-selfhost-bundle.zip" \
   --image-lock "$prepared/prepared-selfhost-images.json" \

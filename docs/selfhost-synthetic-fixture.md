@@ -107,6 +107,17 @@ Revoke a live token through its own `revoke-self` capability and remove `.new`
 only after OpenBao confirms revocation or that token's expiry,
 then rerun `--refresh-token`. Keep `.new` private and do not delete it merely
 because the OpenBao API is unavailable.
+The separate audit token has its own `selfhost-audit` AppRole. Provision its
+`audit-identity` sibling after the initial read-only audit token, using
+`provision_selfhost_audit_identity.py --mode bootstrap` with the same seeded
+organization ID, slug and DID. Later run the audit-token helper with
+`--refresh-token --identity-root "$audit_identity_root"`; it checks the exact
+three-key read policy and named orphan lineage, then self-revokes the previous
+leaf. Rotate the audit SecretID with `--mode rotate --identity
+"$audit_identity_root" --output "$next_audit_identity_root"`; if old-SecretID
+retirement is interrupted, finish with `--mode retire --identity
+"$next_audit_identity_root" --retired-identity "$audit_identity_root"`.
+Both commands require the same org ID, slug and DID used at bootstrap.
 The signed statement records both managed transit key references, versions,
 and public profile selector tuples, plus the attestation key reference and
 version. The test separately exercises issue, present, verify, revoke, and
