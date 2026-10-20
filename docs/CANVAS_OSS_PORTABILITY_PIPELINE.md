@@ -53,6 +53,9 @@ object, peeled commit and Git tree, rejects a dirty worktree, verifies the locke
 upstream base-image manifests, and applies the reviewed BuildKit source policy
 without editing the Canvas Dockerfile. It publishes SBOM/provenance and
 release/ref/base labels plus the source-policy digest in a fixed image manifest.
+Base verification fetches the locked index and Linux/amd64 child by digest,
+hashes their raw bytes, and checks the exact platform-to-child binding. A later
+change to the upstream tag does not select a new base or invalidate the pinned one.
 Review that manifest, then update `image.digest` and set `image.digest_state` to
 `published` in the lock. Acceptance rejects a manifest whose tag, source/tree SHA,
 base image, source policy, labels or output digest differs from that reviewed lock.
