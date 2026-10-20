@@ -55,7 +55,54 @@ def test_drain_preflight_counts_artifacts_and_flows_before_backup():
     )
 
 
-def test_beta_mutations_hold_one_lock_and_recheck_live_writers() -> None:
+def _maintenance_guard(source: str, tmp_path: Path) -> dict:
+    powershell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if powershell is None:
+        pytest.skip("PowerShell is unavailable")
+    runner = tmp_path / "runner.ps1"
+    runner.write_text(source, encoding="utf-8")
+    harness = tmp_path / "inspect-guard.ps1"
+    harness.write_text(r'''
+param([string]$Source)
+$tokens=$null; $errors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
+if ($errors.Count) { throw "Invalid runner syntax" }
+$commands=@($ast.FindAll({param($node)
+    $node -is [Management.Automation.Language.CommandAst]
+},$true))
+$mutations=@($commands | Where-Object { $_.GetCommandName() -eq 'Start-BetaMutation' })
+$stops=@($commands | Where-Object {
+    $_.GetCommandName() -eq 'Invoke-Checked' -and
+    $_.Extent.Text.Contains('docker -Arguments (@("stop")')
+})
+$protected=$false
+if ($mutations.Count -eq 1 -and $stops.Count -eq 1) {
+    $mutation=$mutations[0]; $stop=$stops[0]
+    $parent=$mutation.Parent
+    while ($null -ne $parent) {
+        if ($parent -is [Management.Automation.Language.TryStatementAst] -and
+            $parent.CatchClauses.Count -gt 0 -and
+            $parent.Body.Extent.StartOffset -lt $mutation.Extent.StartOffset -and
+            $mutation.Extent.EndOffset -lt $stop.Extent.StartOffset -and
+            $stop.Extent.EndOffset -lt $parent.Body.Extent.EndOffset) {
+            $protected=$true
+        }
+        $parent=$parent.Parent
+    }
+}
+@{protected=$protected; mutationCount=$mutations.Count; stopCount=$stops.Count} |
+    ConvertTo-Json -Compress
+''', encoding="utf-8")
+    result = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-File", str(harness),
+         "-Source", str(runner)],
+        capture_output=True, text=True, timeout=8, check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return json.loads(result.stdout)
+
+
+def test_beta_mutations_hold_one_lock_and_recheck_live_writers(tmp_path) -> None:
     deploy = SCRIPT.read_text(encoding="utf-8")
     restore = RESTORE.read_text(encoding="utf-8")
     for source in (deploy, restore):
@@ -79,13 +126,32 @@ def test_beta_mutations_hold_one_lock_and_recheck_live_writers() -> None:
         'Assert-NoInFlightPassportJobs\n')
     assert deploy.index('Assert-NoInFlightPassportJobs\n') < deploy.index(
         'Write-Step "Capture quiesced maintenance snapshot"')
-    assert deploy.index('try {\n    Start-BetaMutation') < deploy.index(
-        'docker -Arguments (@("stop")')
+    # Allow read-only credential checks before mutation while proving that both
+    # the mutation marker and actual stop stay in the same recovery-protected body.
+    assert _maintenance_guard(deploy, tmp_path) == {
+        "protected": True, "mutationCount": 1, "stopCount": 1,
+    }
     assert 'Assert-MaintenanceContainersRestored $maintenanceContainers' in deploy
     assert deploy.index('Assert-MaintenanceContainersRestored $maintenanceContainers') < deploy.index(
         'Complete-BetaMutation\n            Write-Warning')
     assert deploy.index('$liveMutationStarted = $true') < deploy.index(
         '"openbao-init")')
+
+
+@pytest.mark.parametrize("outside", ["marker", "stop", "reversed"])
+def test_maintenance_guard_rejects_unprotected_or_reordered_mutation(tmp_path, outside):
+    marker = "Start-BetaMutation\n"
+    stop = 'Invoke-Checked -FilePath docker -Arguments (@("stop") + $maintenanceContainers)\n'
+    body = marker + stop
+    prefix = suffix = ""
+    if outside == "marker":
+        prefix, body = marker, stop
+    elif outside == "stop":
+        suffix, body = stop, marker
+    else:
+        body = stop + marker
+    source = prefix + "try {\n" + body + "} catch { throw }\n" + suffix
+    assert _maintenance_guard(source, tmp_path)["protected"] is False
 
 
 @pytest.mark.parametrize(
