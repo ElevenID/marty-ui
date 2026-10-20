@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
 const { chromium } = require('@playwright/test');
 const stock = require('./run-canvas-oss-standard-contract');
-const { runCanvasCapture } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
 const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
@@ -199,8 +199,7 @@ async function main() {
         exact(retired);
         assert.equal(String(retired.status).toLowerCase(), 'revoked');
       }
-      assert.ok(report.transactionId || !(report.pendingOperations || []).includes('scoped-approval'),
-        'Approval outcome is uncertain; preserve the platform and exact application for reconciliation');
+      requireCaptureMutationReconciliation(report);
     });
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;

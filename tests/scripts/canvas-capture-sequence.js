@@ -40,6 +40,14 @@ function requireIssuedBinding(records, scope, transactionId) {
   return record;
 }
 
+function requireCaptureMutationReconciliation(report) {
+  const pending = report.pendingOperations || [];
+  assert.ok(report.transactionId || !pending.includes('scoped-approval'),
+    'Approval outcome is uncertain; preserve the platform and exact application for reconciliation');
+  assert.ok(!pending.includes('legacy-evidence-ingest'),
+    'Rejected-ingest outcome is uncertain; preserve the platform and exact application for reconciliation');
+}
+
 async function readLearnerStatus(page) {
   return page.evaluate(async () => {
     const session = JSON.parse(sessionStorage.getItem('elevenid.canvas-lti.session.v1') || 'null');
@@ -74,6 +82,12 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.pendingOperations = [];
   const seen = new Set();
   const inventory = () => marty.get(`/v1/issued-credentials?organization_id=${enc(organizationId)}`);
+  const transactions = async () => {
+    const records = await marty.get(`/v1/issuance?organization_id=${enc(organizationId)}`);
+    assert.ok(Array.isArray(records), 'Issuance inventory is not a collection');
+    return records.filter(record => String(record.application_id) === applicationId);
+  };
+  const approvalPath = `/v1/integrations/canvas/applications/${enc(applicationId)}/approve`;
   const unsigned = async () => {
     const state = await readLearnerStatus(page);
     assert.equal(state.claim?.unsigned, true);
@@ -120,6 +134,19 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       await grade(40);
       denied = await sync(`${prefix}-deny`, false);
       assert.notEqual(headFingerprint(denied), headFingerprint(initial), 'Correction reused initial evidence');
+      // A displayed deny is insufficient: exercise the real management boundary
+      // while denied, then prove it neither reserved an offer nor signed a credential.
+      report.pendingOperations.push('scoped-approval');
+      assert.equal((await transactions()).length, 0, 'Unexpected issuance reservation before denied approval');
+      const rejection = await marty.post(approvalPath, { review_notes: `Denied Canvas capture ${scenario}` }, [409]);
+      assert.equal(rejection?.detail, 'Canvas application is not ready for approval');
+      assert.equal((await transactions()).length, 0, 'Denied approval reserved an issuance transaction');
+      const state = await unsigned();
+      assert.equal(state.claim.available, false, 'Denied approval enabled the wallet claim');
+      report.deniedApproval = { applicationId, jobId: denied.jobId, httpStatus: 409,
+        transactionCount: 0, credentialCount: 0, claimAvailable: false };
+      report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
+      await checkpoint(page, 'approval-denied-on-current-evidence', report.deniedApproval);
     } finally {
       // Always restore the exact synthetic grade, including when denial/readback fails.
       await grade(95);
@@ -131,7 +158,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.preIssuanceCorrection = await correction('pre-issuance');
   await unsigned();
   report.pendingOperations.push('scoped-approval');
-  const approval = await marty.post(`/v1/integrations/canvas/applications/${enc(applicationId)}/approve`,
+  const approval = await marty.post(approvalPath,
     { review_notes: `Canvas capture approval ${scenario}` }, [200]);
   same(approval?.application_id, applicationId, 'Approval returned another application');
   const transactionId = approval?.issuance_transaction_id;
@@ -184,10 +211,12 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   if (scenario === 'external-evidence-to-credential') {
     const reviewsPath = `/v1/integrations/canvas/evidence-policy-reviews?organization_id=${enc(organizationId)}&binding_id=${enc(binding.id)}&limit=100`;
     assert.equal((await marty.get(reviewsPath)).filter(r => r.application_id === applicationId && r.status === 'open').length, 0);
-    let review;
+    let review, postDenied;
     try {
       await grade(40);
-      await sync('post-issuance-deny', false);
+      postDenied = await sync('post-issuance-deny', false);
+      assert.notEqual(headFingerprint(postDenied), headFingerprint(report.preIssuanceCorrection.recovered),
+        'Post-issuance denial reused recovered evidence');
       review = await operations.waitFor(async () => {
         const matches = (await marty.get(reviewsPath)).filter(r => r.application_id === applicationId
           && r.credential_id === credentialId && r.status === 'open');
@@ -200,7 +229,10 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       report.correctionReview = { id: review.id, applicationId, credentialId, status: 'open', credentialStatus: 'ACTIVE' };
       await checkpoint(page, 'correction-review-open', report.correctionReview);
     } finally { await grade(95); }
-    await sync('post-issuance-recovery', true);
+    const postRecovered = await sync('post-issuance-recovery', true);
+    assert.notEqual(headFingerprint(postRecovered), headFingerprint(postDenied),
+      'Post-issuance recovery reused denied evidence');
+    report.postIssuanceCorrection = { denied: postDenied, recovered: postRecovered };
     const resolved = await operations.waitFor(async () => {
       const records = await marty.get(reviewsPath);
       const exact = records.find(r => r.id === review.id && r.application_id === applicationId && r.credential_id === credentialId);
@@ -212,9 +244,32 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     assert.equal(String(current.status).toUpperCase(), 'ACTIVE');
     await checkpoint(page, 'correction-review-resolved', report.correctionReview);
   }
-  const legacy = await marty.post('/v1/integrations/canvas/evidence-events', {}, [410]);
+  const authoritativeSnapshot = async () => ({
+    evidence: headFingerprint({ headRevisions: operations.validateAuthoritativeEvidenceHeads(
+      await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`),
+      pinnedBinding.evidence_requirements).map(f => ({ requirementId: f.requirement_id,
+      sourceRevision: f.source_revision, payloadHash: f.payload_hash })) }),
+    transactions: hash(await transactions()),
+    credentials: hash((await inventory()).filter(record => String(record.application_id) === applicationId)),
+  });
+  const beforeLegacy = await authoritativeSnapshot();
+  report.pendingOperations.push('legacy-evidence-ingest');
+  const legacy = await marty.post('/v1/integrations/canvas/evidence-events', {
+    canvas_event_id: `untrusted-capture-${applicationId}`, organization_id: organizationId,
+    credential_template_id: templates.credential.id, application_id: applicationId,
+    canvas_account_id: 'untrusted-capture-account', canvas_course_id: String(fixtures.course.id),
+    canvas_course_name: 'Untrusted capture claim', canvas_enrollment_id: 'untrusted-capture-enrollment',
+    canvas_user_id: String(fixtures.learner.id), learner_email: 'untrusted-provenance@marty.demo',
+    achievement_name: 'Untrusted capture claim', completion_at: new Date(now()).toISOString(),
+    evidence_type: 'assignment', canvas_assignment_id: String(fixtures.assignment.id),
+    completed: true, passed: true, score_percent: 100, eligible: true,
+  }, [410]);
+  assert.deepEqual(await authoritativeSnapshot(), beforeLegacy,
+    'Rejected untrusted ingestion changed evidence, reservations or issued credentials');
+  report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'legacy-evidence-ingest');
   // The client accepts only the observed HTTP 410, never a report-shaped result.
   report.legacyIngestUnavailable = true;
+  report.untrustedIngest = { applicationId, httpStatus: 410, authoritativeStateUnchanged: true };
   void legacy;
   report.behaviorAssertions = scenario === 'canvas-learning-achievement'
     ? { capture_canvas_evidence: true, governed_review: true, issue_open_badge: true, invalid_evidence_provenance_denied: true }
@@ -222,4 +277,4 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   return { page, applicationId, transactionId, credentialId };
 }
 
-module.exports = { requireJobBinding, requireIssuedBinding, runCanvasCapture, readLearnerStatus };
+module.exports = { requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation, runCanvasCapture, readLearnerStatus };

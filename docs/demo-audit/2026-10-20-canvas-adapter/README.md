@@ -31,3 +31,27 @@ The new controlled sequence tests cover foreign bootstrap/job/credential binding
 These local fixtures are tests of the adapter. They are not Canvas or beta results. On the read-only environment check, beta still served `beta-v259-vc-di-fe5ec5fd0751`; Canvas login returned HTTP 502; the imported source had none of the required stock-image/bootstrap/runtime artifacts; no isolated test-wallet container was running. No new deployment, live shared-resource mutation, recording or publication was performed.
 
 Actual governed execution on a matching deployment remains required. Both current scenarios, independent-wallet requirements and all catalog qualification flags remain unqualified. The final master still needs successful source capture, voice, matching subtitles, measured crop/zoom, source-bound disclosed cursor actions and viewing/listening review. Preserve the existing lifecycle presentation profile and media-retention policy.
+
+
+## Current negative operations and mutation reconciliation
+
+A displayed policy deny alone does not establish management enforcement. While
+the real grade is 40 and its fresh job reports deny, the adapter now calls the
+real scoped approval endpoint, requires the canonical not-ready HTTP 409, and
+reads back zero application transactions, zero issued credentials and an
+unavailable unsigned claim. Only then does it restore grade 95 and perform a
+fresh permitted sync and successful approval. The grade is restored even on
+failure, and assertions stay incomplete. D08 post-issuance denial/recovery also
+requires changed authoritative head fingerprints, rather than fresh job IDs alone.
+
+The retired ingestion probe sends a run-correlated, untrusted event claiming a
+passing score. It requires HTTP 410 and unchanged evidence-head, transaction and
+credential snapshots. An empty-body route probe cannot stand in for this actual
+negative operation. No custom Canvas producer or plugin is introduced.
+
+If an approval or rejected-ingestion mutation is interrupted or its readback
+contradicts rejection, preserve the exact platform/application for reconciliation.
+Retiring a known credential alone cannot prove an uncertain extra mutation safe.
+The shared cleanup guard prevents platform/secret disposal in that condition.
+Focused controlled tests exercise the failure paths; they do not constitute
+production Canvas or credential results. All live prerequisites remain mandatory.

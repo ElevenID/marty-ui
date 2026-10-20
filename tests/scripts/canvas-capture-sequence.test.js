@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { runCanvasCapture, requireJobBinding, requireIssuedBinding } = require('./canvas-capture-sequence');
+const { runCanvasCapture, requireJobBinding, requireIssuedBinding, requireCaptureMutationReconciliation } = require('./canvas-capture-sequence');
 const stock = require('./run-canvas-oss-standard-contract');
 const APP = '10000000-0000-4000-8000-000000000001';
 const scope = { application_id: APP, organization_id: 'org', binding_id: 'binding',
@@ -31,31 +31,50 @@ test('receipt readback rejects wrong transaction, template, organization, duplic
 });
 
 function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {}) {
-  const state = { grade: 95, issued: false, approved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [] };
+  const state = { grade: 95, issued: false, approved: false, reserved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [] };
   const report = { behaviorAssertions: {} };
   const record = { ...scope, id: 'credential', flow_execution_id: 'tx', status: 'ACTIVE', issuer_did: 'did:web:issuer.test' };
   const review = { id: 'review', application_id: APP, credential_id: 'credential', status: 'open' };
   const marty = {
     async get(url) {
+      if (url.startsWith('/v1/issuance?')) return state.reserved ? [{ ...scope, id: 'tx', status: 'pending' }] : [];
       if (url.startsWith('/v1/issued-credentials?')) return state.issued ? [record] : [];
       if (url === '/v1/issued-credentials/credential') return record;
       if (url.startsWith('/v1/issuance/tx?')) return { ...scope, id: 'tx' };
-      if (url.endsWith('/evidence-facts')) return [{ id: `fact-${state.revision}`, provider: 'canvas',
+      if (url.endsWith('/evidence-facts')) {
+        if ((fail === 'post-denial-stale-evidence' && state.jobs === 4)
+          || (fail === 'post-recovery-stale-evidence' && state.jobs === 5)) return state.lastFacts;
+        const facts = [{ id: `fact-${state.revision}`, provider: 'canvas',
         requirement_id: 'score', fact_type: 'canvas.assignment_score', source: { source: 'canvas_rest' },
         verification: { status: 'VERIFIED' }, logical_key: 'a'.repeat(64),
         source_revision: String(state.revision).padStart(64, '0'), payload_hash: String(state.grade).padStart(64, '0'),
         observed_at: new Date(10000).toISOString(), effective_at: new Date(10000).toISOString() }];
+        state.lastFacts = facts; return facts;
+      }
       if (url.includes('/evidence-policy-reviews?')) return state.review ? [{ ...review,
         status: state.grade === 40 ? 'open' : 'resolved', resolution_action: 'evidence_recovered' }] : [];
       throw Error('Unexpected GET '+url);
     },
     async post(url, body, statuses) {
       if (url.endsWith('/approve')) {
+        if (state.grade === 40) {
+          assert.deepEqual(statuses, [409]);
+          if (fail === 'denied-approval-reserved') state.reserved = true;
+          if (fail === 'denied-approval-issued') state.issued = true;
+          if (fail === 'denied-approval-claimable') state.approved = true;
+          return { detail: fail === 'denied-approval-wrong-reason' ? 'Unrelated conflict' : 'Canvas application is not ready for approval' };
+        }
         assert.equal(state.grade, 95); assert.equal(state.issued, false); state.approved = true;
+        state.reserved = true;
         return { application_id: fail === 'foreign-approval' ? 'foreign' : APP, issuance_transaction_id: 'tx' };
       }
       assert.equal(url, '/v1/integrations/canvas/evidence-events');
+      assert.equal(body.application_id, APP);
+      assert.equal(body.canvas_account_id, 'untrusted-capture-account');
+      assert.equal(body.completed, true);
+      assert.equal(body.score_percent, 100);
       assert.deepEqual(statuses, [410]); state.legacy = true;
+      if (fail === 'ingest-side-effect') state.revision++;
       return { detail: 'gone' };
     },
   };
@@ -110,6 +129,9 @@ test('D08 current operations bind one launch, approval, receipt, verifier and re
   assert.equal(h.report.correctionReview.resolved, true);
   assert.equal(h.report.credentialId, 'credential');
   assert.equal(h.state.legacy, true);
+  assert.equal(h.report.deniedApproval.httpStatus, 409);
+  assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, true);
+  assert.doesNotThrow(() => requireCaptureMutationReconciliation(h.report));
   assert.equal(h.state.checkpoints.includes('correction-review-open'), true);
   assert.equal(h.state.checkpoints.includes('correction-review-resolved'), true);
   assert.deepEqual(Object.values(h.report.behaviorAssertions), [true, true, true, true]);
@@ -121,6 +143,26 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.equal(h.report.correctionReview, undefined);
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
 });
+
+for (const fail of ['denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable',
+  'denied-approval-wrong-reason', 'ingest-side-effect']) {
+  test(`${fail} cannot qualify and leaves uncertain mutation ownership for reconciliation`, async () => {
+    const h = harness({ fail }); await assert.rejects(h.run());
+    assert.equal(h.state.grade, 95);
+    assert.deepEqual(h.report.behaviorAssertions, {});
+    assert.throws(() => requireCaptureMutationReconciliation(h.report), /uncertain/);
+    assert.equal(h.report.pendingOperations.includes(fail === 'ingest-side-effect'
+      ? 'legacy-evidence-ingest' : 'scoped-approval'), true);
+  });
+}
+
+for (const fail of ['post-denial-stale-evidence', 'post-recovery-stale-evidence']) {
+  test(`${fail} cannot turn a fresh job or review into fresh authoritative evidence`, async () => {
+    const h = harness({ fail }); await assert.rejects(h.run(), /reused.*evidence/);
+    assert.equal(h.state.grade, 95);
+    assert.deepEqual(h.report.behaviorAssertions, {});
+  });
+}
 
 for (const fail of ['foreign-bootstrap', 'denial-sync', 'stale-job', 'foreign-approval', 'verification-denied']) {
   test(`${fail} leaves assertions incomplete and restores the exact synthetic grade`, async () => {
