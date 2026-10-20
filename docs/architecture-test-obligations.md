@@ -378,6 +378,12 @@ edits to it as a full-workspace change. This corrects ownership without
 changing the executing case roster, test semantics, required gates, or a
 measured CI duration.
 
+The native gRPC issuance fixture and named control-plane/signing peers are
+also included only by the Flow and Canvas acceptance targets. Their shared
+sources now live alongside the other acceptance fixtures; no production crate
+uses them. This changes source ownership, not the binary, database, or
+network behavior exercised by either target.
+
 ## Issuance-to-Revocation Profile runtime input
 
 Issuance has two independent non-Cargo transports to Revocation Profile. The

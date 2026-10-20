@@ -28,7 +28,7 @@ mod bounded_fixture_command {
 mod envoy_runtime;
 #[path = "../../../services/issuance/tests/support/envoy_runtime_sidecar.rs"]
 mod envoy_runtime_sidecar;
-#[path = "../../../services/issuance/tests/support/issuance_named_peers.rs"]
+#[path = "../../../acceptance/support/issuance_named_peers.rs"]
 mod issuance_named_peers;
 #[path = "support/remote_tls_peer.rs"]
 mod remote_tls_peer;
@@ -399,7 +399,7 @@ async fn didcomm_renewal_private_ip_refusal_preserves_published_rows() {
     println!("\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");
 }
 
-#[path = "../../../services/issuance/tests/support/didcomm_native_grpc_fixture.rs"]
+#[path = "../../../acceptance/support/didcomm_native_grpc_fixture.rs"]
 #[allow(dead_code, reason = "shared fixture also serves Flow acceptance cases")]
 mod didcomm_native_grpc_fixture;
 

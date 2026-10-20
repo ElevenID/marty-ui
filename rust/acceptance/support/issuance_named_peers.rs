@@ -1,4 +1,4 @@
-//! Fresh renewal through the packaged binary. Only named control-plane/signing
+//! Flow/Canvas acceptance renewal through the packaged binary. Only named control-plane/signing
 //! peers are synthetic; admission, Core assembly/encryption and delivery are real.
 use std::{
     collections::BTreeMap,
