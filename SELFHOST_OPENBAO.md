@@ -5,28 +5,40 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 ## Paths
 
 - `SELFHOST_OPENBAO_STATE_DIR` stores OpenBao Raft data and recovery material
-- `SELFHOST_OPENBAO_EXPORT_DIR` stores zipped export archives created with `scripts/export-selfhost-openbao.py`
+- `SELFHOST_OPENBAO_EXPORT_DIR` is an owner-only (0700) directory for Raft archives
+- `SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR` holds a separate snapshot-read-only AppRole RoleID and SecretID (0700 directory, 0600 files)
 - `SELFHOST_SECRET_DIR/openbao_service_token` is the runtime token the main self-host stack consumes
 
-The OpenBao state directory contains highly sensitive material, including the init JSON, the root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them.
+The OpenBao state directory contains highly sensitive material, including the initial root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them. The root token is still needed by initial provisioning helpers; retirement of that token remains a separate hardening gate. Snapshot export uses its own AppRole, not the root token or the renewal AppRole.
+
+During fresh initialization, `selfhost-init.json` is created owner-only so a
+crash before recovery files are written does not lose the sole unseal key or
+initial root token. Bootstrap synchronizes those files and removes the duplicate
+JSON before reporting success. If initialization is interrupted, preserve the
+state directory and inspect the owner-only init file or the completed root and
+unseal files for recovery; do not run the one-time bootstrap again against
+initialized Raft state.
 
 ## Start The Standalone OpenBao Stack
 
-```bash
-docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d
-```
-
-Or use the GNU make target in [Makefile](Makefile):
+For a fresh state directory, initialize once in this order:
 
 ```bash
-make selfhost-prod-openbao-up
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d openbao
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml run --rm --no-deps openbao-bootstrap
+docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml up -d --wait openbao-unseal
 ```
 
-This stack does three things:
+The GNU make equivalent is `make selfhost-prod-openbao-bootstrap`. For later
+starts and restarts, use `make selfhost-prod-openbao-up` or ordinary Compose
+`up -d`; neither invokes the one-time bootstrap.
+
+This project has four services:
 
 - `openbao-tls-init` creates or verifies the OpenBao listener certificate and CA entirely in `SELFHOST_OPENBAO_STATE_DIR/tls`
 - `openbao` runs the standalone server on `127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}`
-- `openbao-bootstrap` initializes, unseals, configures the transit/PKI/KV/policy layout, publishes only the public TLS CA as `SELFHOST_SECRET_DIR/openbao_tls_ca_cert`, and writes a fresh `openbao_service_token` if the current file is missing, still a placeholder, rejected by OpenBao, or unable to sign the credential issuer key
+- `openbao-bootstrap` is opt-in for initial transit/PKI/KV/policy provisioning and publishes scoped runtime tokens and the public TLS CA
+- `openbao-unseal` reads only the KMS-owned state directory and unseals an initialized node after restart through the authenticated HTTPS API
 
 For the main self-host application stack on the same machine, set `BAO_ADDR=https://host.docker.internal:${SELFHOST_OPENBAO_HOST_PORT}`. The certificate covers that host name, and application containers use the published public CA. The TLS private keys stay within the KMS state volume.
 
@@ -34,7 +46,7 @@ The initializer renews a listener certificate that has less than 30 days left
 whenever it starts. The certificate and key occupy one owner-only PEM file, so
 replacement is atomic and keeps the same public CA. To rotate the listener
 identity while OpenBao is running, use `make selfhost-prod-openbao-rotate-tls`;
-the target renews the PEM, restarts OpenBao, and reruns bootstrap to unseal it.
+the target renews the PEM, restarts OpenBao, and waits for the unseal service.
 Plan a separate CA and client-trust cutover before the KMS-owned CA expires;
 listener renewal cannot extend the CA lifetime.
 
@@ -44,21 +56,49 @@ The recovery material lives under `SELFHOST_OPENBAO_STATE_DIR`.
 
 - If the host reboots, restart the standalone OpenBao compose project
 - For a cold move to another host, stop the OpenBao server, copy `SELFHOST_OPENBAO_STATE_DIR` to the new host, and start the same compose file there. Do not copy the live Raft data directory as a backup.
-- If `openbao_service_token` is missing on the destination, rerun the bootstrap service:
-
-```bash
-docker compose --env-file .env.selfhost.production.local -f docker-compose.selfhost.openbao.yml run --rm openbao-bootstrap
-```
-
-Or:
-
-```bash
-make selfhost-prod-openbao-bootstrap
-```
+- Preserve the separately owned scoped token files with the installation's
+  secret generation. A missing runtime token needs explicit scoped recovery;
+  normal restart and TLS rotation do not recreate it with the root token.
 
 ## Export
 
-To create a portable OpenBao recovery archive:
+To prepare portable OpenBao recovery archives:
+
+After the one-time OpenBao bootstrap, create an owner-only snapshot identity
+directory and provision its dedicated AppRole once. Use absolute paths for these
+private inputs:
+
+```bash
+mkdir -m 700 -p "$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR" "$SELFHOST_OPENBAO_EXPORT_DIR"
+python scripts/provision_selfhost_snapshot_identity.py \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --root-token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --output "$(realpath "$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR")"
+snapshot_rotator_dir="$(dirname "$SELFHOST_OPENBAO_STATE_DIR")/snapshot-rotator-identity"
+mkdir -m 700 -p "$snapshot_rotator_dir"
+python scripts/provision_selfhost_snapshot_rotator.py \
+  --mode bootstrap \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --root-token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --output "$(realpath "$snapshot_rotator_dir")"
+```
+
+The role can only read `sys/storage/raft/snapshot`. Its identity can retrieve
+the complete encrypted KMS state, so protect it separately from routine renewal
+credentials. The separate rotator can only create and destroy SecretIDs for the
+snapshot reader and its own role; it cannot read snapshots, sign, export keys,
+or create unrestricted tokens. To rotate the reader after root retirement, use
+`provision_selfhost_snapshot_rotator.py --mode rotate-reader --identity
+"$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR" --output "$next_reader_dir"
+--rotator-identity "$snapshot_rotator_dir"` with the same `--bao-addr` and
+`--bao-ca`. Validate the replacement export before retiring the old private
+directory. `--mode rotate-rotator` rotates the rotator's own SecretID; both
+roles have matching `retire-reader` and `retire-rotator` modes to complete an
+interrupted old-SecretID retirement. Keep active and replacement identities
+separately backed up until the old login is confirmed rejected. Subsequent
+exports need only the reader identity:
 
 ```bash
 python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local
@@ -73,10 +113,61 @@ make selfhost-prod-openbao-export
 The command requests an authenticated Raft snapshot from the running local OpenBao API. It writes a zip archive under `SELFHOST_OPENBAO_EXPORT_DIR` containing:
 
 - `raft.snap`, the OpenBao Raft snapshot
-- `recovery/selfhost-init.json`, `recovery/root.token`, and `recovery/unseal.key`
 - the current `openbao-selfhost.hcl`
 - a manifest with the snapshot SHA-256
 
 The exporter verifies the loopback HTTPS server with `SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt`. It does not include OpenBao's TLS private keys in the archive. A cold snapshot restore on a new node must establish a new TLS identity and redistribute its public CA before application traffic resumes. Copying the entire stopped state directory retains the existing TLS identity; protect that copy as KMS key material.
 
-The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. Because the archive contains root-token and unseal-key material, protect it like production secrets.
+The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure and separately held original unseal material. It contains neither the root token nor unseal key. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. The snapshot still contains the complete KMS custody state; protect it like production secrets.
+
+After force restore, start the `openbao-unseal` sidecar and wait for OpenBao
+to be healthy before starting application migrations. The restore seals the
+node even if its temporary fresh-cluster key unsealed it beforehand.
+
+Before considering revocation of the initial root token, run
+`scripts/check_selfhost_root_retirement.py --help` and supply the active and
+rollback secret generations, their Compose env files, the renewal, CA-rotation
+and snapshot reader identities, the separate evidence, audit and snapshot rotator identities, the
+owned project and an owner-private snapshot export directory. It
+verifies all 21 renewable token scopes in
+**both** generations, the 13 static service/grant tokens in each generation,
+their live non-exportable signers and public certificates, rootless
+ordinary migration, and the healthy active project's secret mounts. It creates
+and checks a current v2 Raft snapshot with the separate snapshot identity. The
+audit does not revoke the root or establish coordinated backup provenance, CA rollover,
+or an expiry-crossing business journey. Retain the root until those separate
+gates have passed on a fresh installation.
+
+Provision the dedicated CA-rotation AppRole before the root-retirement audit.
+Use a new owner-private directory and the current complete secret generation:
+
+```bash
+ca_rotation_dir="$(dirname "$SELFHOST_OPENBAO_STATE_DIR")/ca-rotation-identity"
+mkdir -m 700 -p "$ca_rotation_dir"
+python scripts/provision_selfhost_ca_rotation_identity.py --mode bootstrap \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --current-secrets /absolute/path/to/current/secrets \
+  --output "$(realpath "$ca_rotation_dir")"
+```
+
+The root-retirement audit requires `--ca-rotation-identity "$ca_rotation_dir"`
+and validates a fresh rootless login and its exact ACL. This identity is
+separate from routine leaf renewal. It is limited to reviewed versioned PKI
+mounts and cannot export Transit keys or manage unrelated mounts. Provisioning
+the identity alone does not rotate either CA or activate a new trust bundle;
+complete the separate overlap and session gates before production root retirement.
+
+After those gates, `scripts/retire_selfhost_bootstrap_root.py` takes the same
+arguments as the audit. It runs the complete audit and scoped snapshot export,
+requires the owner-private `root.token` inside the supplied OpenBao state,
+revokes that exact token through the verified HTTPS `auth/token/revoke` endpoint,
+checks that its lookup is denied, reruns the complete rootless audit, then
+removes the stale root-token file from active state. If interrupted after
+revocation, it can be repeated to complete the post-check and file removal.
+Exclude the stale root-token file from future backups. In a separate cold-copy
+rehearsal, `auth/token/revoke` succeeded and the root lookup returned 403;
+`auth/token/revoke-self` returned 500 and left it valid. Keep the unseal material
+under separate custody: revoking the root token does not unseal OpenBao or
+replace a Raft recovery test.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import ssl
 import subprocess
 import sys
@@ -14,15 +15,47 @@ import zipfile
 from functools import partial
 from pathlib import Path
 
+from check_selfhost_root_retirement import STATIC_KMS_TOKENS, checked_static_tokens
+from provision_selfhost_audit_identity import bootstrap as bootstrap_audit_identity
+from provision_selfhost_audit_identity import checked_login as audit_login
+from provision_selfhost_audit_identity import mint as mint_audit_token
+from provision_selfhost_audit_identity import rotate as rotate_audit_identity
+from provision_selfhost_audit_identity import require_revoked as audit_revoked
+from provision_selfhost_audit_identity import ROLE_ID_FILE as AUDIT_ROLE_ID_FILE
+from provision_selfhost_audit_identity import SECRET_ID_FILE as AUDIT_SECRET_ID_FILE
+from provision_selfhost_audit_identity import LEAF_ROLE as AUDIT_LEAF_ROLE
+from provision_selfhost_audit_token import POLICY as AUDIT_POLICY
+from provision_selfhost_audit_token import policy_for as audit_policy_for
+from provision_selfhost_custody_signer import refresh_scoped_token
+from provision_selfhost_evidence_identity import bootstrap as bootstrap_evidence_identity
+from provision_selfhost_evidence_identity import checked_login as evidence_login
+from provision_selfhost_evidence_identity import mint as mint_evidence_token
+from provision_selfhost_evidence_identity import rotate as rotate_evidence_identity
+from provision_selfhost_evidence_identity import require_revoked as evidence_revoked
+from provision_selfhost_evidence_identity import ROLE_ID_FILE as EVIDENCE_ROLE_ID_FILE
+from provision_selfhost_evidence_identity import SECRET_ID_FILE as EVIDENCE_SECRET_ID_FILE
+from provision_selfhost_evidence_identity import LEAF_ROLE as EVIDENCE_LEAF_ROLE
+from provision_selfhost_snapshot_rotator import bootstrap as bootstrap_snapshot_rotator
+from provision_selfhost_snapshot_rotator import rotate_reader as rotate_snapshot_reader
+from provision_selfhost_snapshot_rotator import rotate_rotator as rotate_snapshot_rotator
+from provision_selfhost_snapshot_rotator import READER_ROTATION, ROTATOR_ROTATION
+from selfhost_approle_rotation import require_revoked as rotation_revoked
+from provision_selfhost_snapshot_identity import ROLE_ID_FILE as SNAPSHOT_ROLE_ID_FILE
+from provision_selfhost_snapshot_identity import SECRET_ID_FILE as SNAPSHOT_SECRET_ID_FILE
 from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
+    docker_process,
     prepare_image,
     request as http_request,
     require_status as http_require_status,
     wait_for,
 )
+from selfhost_openbao_client import (Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_LEAF_ACL,
+                                   CUSTODY_SIGNER_POLICY)
+
+DOCKER_ROOT = Path(os.environ.get("MARTY_OPENBAO_PROBE_HOST_ROOT", str(ROOT)))
 
 
 def volume_file(volume: str, path: str) -> str:
@@ -49,7 +82,7 @@ def server_digest(volume: str) -> str:
 
 
 def start_node(name: str, volume: str, ca_file: Path) -> str:
-    config = ROOT / "docker/openbao-selfhost.hcl"
+    config = DOCKER_ROOT / "docker/openbao-selfhost.hcl"
     docker(
         "run", "-d", "--name", name,
         "--label", "marty.disposable=kms-selfhost-probe",
@@ -67,9 +100,8 @@ def start_node(name: str, volume: str, ca_file: Path) -> str:
         )
         return base
     except (RuntimeError, IndexError, ValueError) as error:
-        logs = subprocess.run(
-            ["docker", "logs", "--tail", "20", name],
-            capture_output=True, text=True, timeout=10, check=False,
+        logs = docker_process(
+            ["docker", "logs", "--tail", "20", name], timeout=10,
         )
         raise RuntimeError(
             f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
@@ -122,8 +154,7 @@ def run() -> None:
         base = start_node(server, state, ca_file)
         if request(base, "GET", "sys/health")[0] != 501:
             raise RuntimeError("Fresh self-host Raft state was initialized unexpectedly")
-        result = subprocess.run(
-            [
+        bootstrap_command = [
                 "docker",
                 "run",
                 "--rm",
@@ -140,23 +171,30 @@ def run() -> None:
                 "-v",
                 f"{runtime}:/bao/runtime",
                 "-v",
-                f"{ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
                 "-v",
-                f"{ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
                 "-v",
-                f"{ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
                 "--entrypoint",
                 "/bin/sh",
                 IMAGE,
                 "/scripts/openbao-selfhost-init.sh",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=300,
-            check=False,
-        )
+            ]
+        result = docker_process(bootstrap_command, timeout=300)
         if result.returncode:
             raise RuntimeError("Disposable self-host Raft bootstrap failed")
+        docker(
+            "run", "--rm", "-v", f"{state}:/bao/data:ro",
+            "--entrypoint", "/bin/sh", IMAGE, "-c",
+            "test ! -e /bao/data/selfhost-init.json",
+        )
+        repeated = docker_process(bootstrap_command, timeout=60)
+        if repeated.returncode == 0 or "requires fresh, uninitialized Raft state" not in repeated.stderr:
+            raise RuntimeError(
+                "Initialized OpenBao bootstrap refusal differed: "
+                f"exit={repeated.returncode}, stderr={repeated.stderr[-300:]}"
+            )
         published_ca = docker(
             "run", "--rm", "-v", f"{runtime}:/bao/runtime:ro",
             "--entrypoint", "/bin/cat", IMAGE,
@@ -169,6 +207,19 @@ def run() -> None:
         root = volume_file(state, "root.token")
         if len(root) < 16:
             raise RuntimeError("Disposable bootstrap did not retain its root token")
+        static_root = Path(public_ca_dir.name) / "static-token-audit"
+        static_root.mkdir(mode=0o700)
+        default_runtime_names = {
+            "openbao_service_token": "credential-service.token",
+            "notification_openbao_token": "notification-webhook-service.token",
+            "haip_kms_token": "haip-kms.token",
+        }
+        for name in STATIC_KMS_TOKENS:
+            (static_root / name).write_text(
+                volume_file(runtime, default_runtime_names.get(name, name)),
+                encoding="ascii",
+            )
+        checked_static_tokens(Bao(base, ca_file, root), static_root, 3600)
         leader = require_status(base, "GET", "sys/leader", root)
         if leader.get("is_self") is not True:
             raise RuntimeError("Disposable self-host Raft node is not active")
@@ -229,20 +280,88 @@ def run() -> None:
         host_state.mkdir()
         (host_state / "tls").mkdir()
         (host_state / "tls" / "ca.crt").write_bytes(ca_file.read_bytes())
-        for name in ("selfhost-init.json", "root.token", "unseal.key"):
-            (host_state / name).write_text(
-                volume_file(state, name), encoding="utf-8"
-            )
+        root_file = host_state / "root.token"
+        root_file.write_text(volume_file(state, "root.token"), encoding="utf-8")
+        root_file.chmod(0o600)
+        evidence_bao = Bao(base, ca_file, root)
+        evidence_bao.request("POST", f"transit/keys/{CUSTODY_SIGNER}", {
+            "type": "ed25519", "exportable": False,
+            "allow_plaintext_backup": False,
+        })
+        evidence_bao.request("PUT", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}", {
+            "policy": CUSTODY_SIGNER_LEAF_ACL,
+        })
+        evidence_identity = Path(public_ca_dir.name) / "evidence-identity"
+        evidence_identity.mkdir(mode=0o700)
+        bootstrap_evidence_identity(evidence_bao, evidence_identity)
+        retired_evidence_identity = evidence_identity
+        evidence_identity = Path(public_ca_dir.name) / "evidence-identity-rotated"
+        evidence_identity.mkdir(mode=0o700)
+        rotate_evidence_identity(Bao(base, ca_file, ""), retired_evidence_identity,
+                                 evidence_identity)
+        minted_initial = evidence_bao.request("POST", "auth/token/create", {
+            "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+            "no_parent": True, "renewable": False, "ttl": "1h",
+            "explicit_max_ttl": "1h",
+        })
+        first_evidence_leaf = minted_initial.get("auth", {}).get("client_token")
+        if not isinstance(first_evidence_leaf, str) or len(first_evidence_leaf) < 20:
+            raise RuntimeError("Initial orphan evidence token is absent")
+        mint_evidence_token(Bao(base, ca_file, ""), evidence_identity)
+        audit_org = "00000000-0000-0000-0000-000000000001"
+        audit_policy, audit_paths = audit_policy_for(
+            audit_org, "marty", "did:web:localhost:orgs:marty",
+        )
+        for path in audit_paths[:2]:
+            evidence_bao.request("POST", path, {
+                "type": "ed25519", "exportable": False,
+                "allow_plaintext_backup": False,
+            })
+        evidence_bao.request("PUT", f"sys/policies/acl/{AUDIT_POLICY}", {
+            "policy": audit_policy,
+        })
+        audit_identity = Path(public_ca_dir.name) / "audit-identity"
+        audit_identity.mkdir(mode=0o700)
+        bootstrap_audit_identity(evidence_bao, audit_identity, audit_policy)
+        retired_audit_identity = audit_identity
+        audit_identity = Path(public_ca_dir.name) / "audit-identity-rotated"
+        audit_identity.mkdir(mode=0o700)
+        rotate_audit_identity(Bao(base, ca_file, ""), retired_audit_identity,
+                              audit_identity, audit_policy)
+        initial_audit = evidence_bao.request("POST", "auth/token/create", {
+            "policies": [AUDIT_POLICY], "no_default_policy": True,
+            "no_parent": True, "renewable": False, "ttl": "1h",
+            "explicit_max_ttl": "1h",
+        }).get("auth", {}).get("client_token")
+        if not isinstance(initial_audit, str) or len(initial_audit) < 20:
+            raise RuntimeError("Initial orphan audit token is absent")
+        identity = Path(public_ca_dir.name) / "snapshot-identity"
+        identity.mkdir(mode=0o700)
+        provision = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/provision_selfhost_snapshot_identity.py"),
+             "--bao-addr", base, "--bao-ca", str(host_state / "tls" / "ca.crt"),
+             "--root-token-file", str(root_file), "--output", str(identity)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if provision.returncode:
+            raise RuntimeError(f"Disposable snapshot identity failed: {provision.stderr[-800:]}")
+        snapshot_rotator = Path(public_ca_dir.name) / "snapshot-rotator-identity"
+        snapshot_rotator.mkdir(mode=0o700)
+        bootstrap_snapshot_rotator(evidence_bao, snapshot_rotator)
+        root_file.unlink()
         exported = Path(public_ca_dir.name) / "exports"
+        exported.mkdir(mode=0o700)
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts/export-selfhost-openbao.py"),
              "--state-dir", str(host_state), "--export-dir", str(exported),
-             "--bao-url", base],
+             "--bao-url", base, "--snapshot-identity-dir", str(identity)],
             capture_output=True, text=True, timeout=300, check=False,
         )
         if result.returncode:
             raise RuntimeError(f"Disposable HTTPS Raft export failed: {result.stderr[-800:]}")
         with zipfile.ZipFile(next(exported.glob("*.zip"))) as bundle:
+            if any(name.startswith("recovery/") for name in bundle.namelist()):
+                raise RuntimeError("Raft archive leaked root or unseal recovery material")
             snapshot = bundle.read("raft.snap")
             manifest = json.loads(bundle.read("manifest.json"))
         if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:
@@ -273,6 +392,145 @@ def run() -> None:
                 f"{haip_version}", root)["data"]["version"] != haip_version:
             raise RuntimeError("Cold Raft state copy lost HAIP key version")
 
+        # The dedicated snapshot identity must survive revocation of the
+        # original bootstrap root on the copied Raft state.
+        cold(cold_base, "POST", "auth/token/revoke-self", root)
+        if http_request(cold_base, "GET", f"transit/keys/{key_name}",
+                        token=root, ca_file=ca_file)[0] != 403:
+            raise RuntimeError("Revoked bootstrap root still has KMS access")
+        old_snapshot_rotator = snapshot_rotator
+        snapshot_rotator = Path(public_ca_dir.name) / "snapshot-rotator-identity-next"
+        snapshot_rotator.mkdir(mode=0o700)
+        rotate_snapshot_rotator(Bao(cold_base, ca_file, ""),
+                                old_snapshot_rotator, snapshot_rotator)
+        rotation_revoked(
+            Bao(cold_base, ca_file, ""),
+            (old_snapshot_rotator / ROTATOR_ROTATION.role_id_file).read_text().strip(),
+            (old_snapshot_rotator / ROTATOR_ROTATION.secret_id_file).read_text().strip(),
+            ROTATOR_ROTATION,
+        )
+        old_snapshot_reader = identity
+        identity = Path(public_ca_dir.name) / "snapshot-identity-next"
+        identity.mkdir(mode=0o700)
+        rotate_snapshot_reader(Bao(cold_base, ca_file, ""), old_snapshot_reader,
+                               identity, snapshot_rotator)
+        rotation_revoked(
+            Bao(cold_base, ca_file, ""),
+            (old_snapshot_reader / SNAPSHOT_ROLE_ID_FILE).read_text().strip(),
+            (old_snapshot_reader / SNAPSHOT_SECRET_ID_FILE).read_text().strip(),
+            READER_ROTATION,
+        )
+        evidence_revoked(
+            Bao(cold_base, ca_file, ""),
+            (retired_evidence_identity / EVIDENCE_ROLE_ID_FILE).read_text().strip(),
+            (retired_evidence_identity / EVIDENCE_SECRET_ID_FILE).read_text().strip(),
+        )
+        renewed_evidence_leaf = mint_evidence_token(Bao(cold_base, ca_file, ""),
+                                                    evidence_identity)
+        evidence_file = Path(public_ca_dir.name) / "evidence-leaf.token"
+        evidence_file.write_text(first_evidence_leaf, encoding="ascii")
+        operator = evidence_login(Bao(cold_base, ca_file, ""), evidence_identity)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, operator), evidence_file, renewed_evidence_leaf,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (evidence_file.read_text(encoding="ascii") != renewed_evidence_leaf
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=first_evidence_leaf, ca_file=ca_file)[0] != 403):
+            raise RuntimeError("Rootless evidence refresh retained its old token")
+        renewed_audit = mint_audit_token(Bao(cold_base, ca_file, ""), audit_identity,
+                                        audit_policy, audit_paths)
+        audit_revoked(
+            Bao(cold_base, ca_file, ""),
+            (retired_audit_identity / AUDIT_ROLE_ID_FILE).read_text().strip(),
+            (retired_audit_identity / AUDIT_SECRET_ID_FILE).read_text().strip(),
+        )
+        audit_file = Path(public_ca_dir.name) / "audit-leaf.token"
+        audit_file.write_text(initial_audit, encoding="ascii")
+        audit_operator = audit_login(Bao(cold_base, ca_file, ""), audit_identity,
+                                     audit_policy)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, audit_operator), audit_file, renewed_audit,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (audit_file.read_text(encoding="ascii") != renewed_audit
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=initial_audit, ca_file=ca_file)[0] != 403
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=renewed_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Rootless audit refresh lost scoped read authority")
+        # Mint short-lived orphan leaves only after root revocation, prove they
+        # work before expiry, then exercise the expired-token refresh branch.
+        short_evidence = Bao(cold_base, ca_file, operator).request(
+            "POST", f"auth/token/create/{EVIDENCE_LEAF_ROLE}", {
+                "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+                "renewable": False, "ttl": "3s", "explicit_max_ttl": "3s",
+            },
+        ).get("auth", {}).get("client_token")
+        short_audit = Bao(cold_base, ca_file, audit_operator).request(
+            "POST", f"auth/token/create/{AUDIT_LEAF_ROLE}", {
+                "policies": [AUDIT_POLICY], "no_default_policy": True,
+                "renewable": False, "ttl": "3s", "explicit_max_ttl": "3s",
+            },
+        ).get("auth", {}).get("client_token")
+        if (not isinstance(short_evidence, str) or len(short_evidence) < 20
+                or not isinstance(short_audit, str) or len(short_audit) < 20
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=short_evidence, ca_file=ca_file)[0] != 200
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=short_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Short-lived rootless custody leaves are invalid")
+        wait_for(
+            "short-lived evidence and audit leaves to expire",
+            lambda: (
+                http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                             token=short_evidence, ca_file=ca_file)[0] == 403
+                and http_request(cold_base, "GET", audit_paths[0],
+                                 token=short_audit, ca_file=ca_file)[0] == 403
+            ),
+            seconds=20,
+        )
+        expired_evidence_file = Path(public_ca_dir.name) / "expired-evidence.token"
+        expired_evidence_file.write_text(short_evidence, encoding="ascii")
+        after_expiry_evidence = mint_evidence_token(Bao(cold_base, ca_file, ""),
+                                                    evidence_identity)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, operator), expired_evidence_file,
+            after_expiry_evidence,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        expired_audit_file = Path(public_ca_dir.name) / "expired-audit.token"
+        expired_audit_file.write_text(short_audit, encoding="ascii")
+        after_expiry_audit = mint_audit_token(Bao(cold_base, ca_file, ""),
+                                              audit_identity, audit_policy,
+                                              audit_paths)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, audit_operator), expired_audit_file,
+            after_expiry_audit,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (expired_evidence_file.read_text(encoding="ascii") != after_expiry_evidence
+                or expired_audit_file.read_text(encoding="ascii") != after_expiry_audit
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=after_expiry_evidence, ca_file=ca_file)[0] != 200
+                or http_request(cold_base, "GET", audit_paths[0],
+                                token=after_expiry_audit, ca_file=ca_file)[0] != 200):
+            raise RuntimeError("Rootless custody token recovery failed after expiry")
+        rootless_exports = Path(public_ca_dir.name) / "rootless-exports"
+        rootless_exports.mkdir(mode=0o700)
+        rootless = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/export-selfhost-openbao.py"),
+             "--state-dir", str(host_state), "--export-dir", str(rootless_exports),
+             "--bao-url", cold_base, "--snapshot-identity-dir", str(identity)],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if rootless.returncode:
+            raise RuntimeError(f"Rootless Raft export failed: {rootless.stderr[-800:]}")
+        with zipfile.ZipFile(next(rootless_exports.glob("*.zip"))) as bundle:
+            if (bundle.read("raft.snap") == b"" or
+                    any(name.startswith("recovery/") for name in bundle.namelist())):
+                raise RuntimeError("Rootless Raft archive is invalid")
+
         # A fresh node has its own TLS CA; a Raft snapshot never exports that
         # node-local private identity into the application or archive.
         snapshot_ca = Path(public_ca_dir.name) / "snapshot-ca.crt"
@@ -282,7 +540,8 @@ def run() -> None:
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
         fresh = partial(http_require_status, ca_file=snapshot_ca)
         initialized = fresh(snapshot_base, "POST", "sys/init", "",
-                            {"secret_shares": 1, "secret_threshold": 1})
+                            {"secret_shares": 1, "secret_threshold": 1},
+                            timeout=30)
         fresh(snapshot_base, "POST", "sys/unseal", "",
               {"key": initialized["keys_base64"][0]})
         restore_request = urllib.request.Request(
@@ -297,14 +556,41 @@ def run() -> None:
         ) as response:  # noqa: S310 - verified disposable loopback TLS
             if response.status not in (200, 204):
                 raise RuntimeError("Fresh Raft snapshot force-restore failed")
+        wait_for(
+            "force-restored Raft node to seal",
+            lambda: http_request(snapshot_base, "GET", "sys/seal-status",
+                                 ca_file=snapshot_ca)[1].get("sealed") is True,
+        )
+        original_unseal_key = volume_file(state, "unseal.key")
+        unseal_statuses: set[int] = set()
+
+        def restored_unseal_ready() -> bool:
+            status, response = http_request(snapshot_base, "POST", "sys/unseal",
+                                            {"key": original_unseal_key},
+                                            ca_file=snapshot_ca)
+            unseal_statuses.add(status)
+            return status == 200 and response.get("sealed") is False
+
+        try:
+            wait_for("force-restored Raft node to accept original unseal key",
+                     restored_unseal_ready, seconds=90)
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"Force-restored Raft unseal failed with statuses "
+                f"{sorted(unseal_statuses)}"
+            ) from error
+        if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
+                 {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
+            raise RuntimeError("Force-restored Raft node lost Transit ciphertext")
         docker("stop", snapshot_name)
         docker("rm", snapshot_name)
         started.remove(snapshot_name)
         snapshot_name = f"{server}-restored"
         started.append(snapshot_name)
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
-        fresh(snapshot_base, "POST", "sys/unseal", "",
-              {"key": volume_file(state, "unseal.key")})
+        if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
+            fresh(snapshot_base, "POST", "sys/unseal", "",
+                  {"key": original_unseal_key})
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")
@@ -317,17 +603,9 @@ def run() -> None:
         print("Self-host HTTPS Raft bootstrap, cold copy and snapshot recovery passed")
     finally:
         for name in reversed(started):
-            subprocess.run(
-                ["docker", "rm", "-f", name], capture_output=True,
-                timeout=30, check=False,
-            )
+            docker_process(["docker", "rm", "-f", name], timeout=30)
         for volume in reversed(volumes):
-            subprocess.run(
-                ["docker", "volume", "rm", volume],
-                capture_output=True,
-                timeout=30,
-                check=False,
-            )
+            docker_process(["docker", "volume", "rm", volume], timeout=30)
         public_ca_dir.cleanup()
 
 

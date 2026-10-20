@@ -41,13 +41,19 @@ try {
 
     Push-Location $RepoRoot
     try {
-        if (-not (Test-ContainerReady 'marty-selfhost-openbao-openbao-1')) {
+        if (-not (Test-ContainerReady 'marty-selfhost-openbao-openbao-1') -or
+            -not (Test-ContainerReady 'marty-selfhost-openbao-openbao-unseal-1')) {
             Invoke-Step 'Start standalone OpenBao' {
-                docker compose --env-file $SelfhostEnv -f $OpenbaoCompose up -d --no-build
+                docker compose --env-file $SelfhostEnv -f $OpenbaoCompose up -d --no-build openbao openbao-unseal
             }
-            Invoke-Step 'Unseal/bootstrap OpenBao' {
-                docker compose --env-file $SelfhostEnv -f $OpenbaoCompose run --rm openbao-bootstrap
-            }
+        }
+        $baoDeadline = (Get-Date).AddMinutes(2)
+        while (-not (Test-ContainerReady 'marty-selfhost-openbao-openbao-1') -and
+               (Get-Date) -lt $baoDeadline) {
+            Start-Sleep -Seconds 5
+        }
+        if (-not (Test-ContainerReady 'marty-selfhost-openbao-openbao-1')) {
+            throw 'OpenBao did not become healthy after the unseal service started.'
         }
         $productionServices = @('marty-selfhost-prod-edge-1', 'marty-selfhost-prod-gateway-1', 'marty-selfhost-prod-cloudflared-1', 'marty-selfhost-prod-ui-1', 'marty-selfhost-prod-applicant-1', 'marty-selfhost-prod-issuance-1')
         if (@($productionServices | Where-Object { -not (Test-ContainerReady $_) }).Count -gt 0) {

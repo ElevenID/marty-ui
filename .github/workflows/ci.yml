@@ -888,8 +888,8 @@ jobs:
           push: false
           tags: marty-openbao-didcomm:ci
           provenance: false
-      - name: Verify packaged plugin binary
-        run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt'
+      - name: Verify packaged plugin and self-host helpers
+        run: docker run --rm --entrypoint /bin/sh marty-openbao-didcomm:ci -ec 'test -x /plugins/openbao-didcomm-authcrypt && test -x /usr/local/bin/selfhost-tls-init && test -x /usr/local/bin/selfhost-unseal'
       - name: Build the pinned Keycloak remote-key image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
         with:

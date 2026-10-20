@@ -95,6 +95,35 @@ def test_prepare_only_uses_all_eight_unchanged_commands_and_no_services(
     )
 
 
+def test_preparation_uses_configured_cargo_target_for_binary(probe, monkeypatch):
+    module, _, _ = probe
+    target = module.ROOT / "linux-target"
+    binary = target / "debug" / (
+        "marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys"
+    )
+    binary.parent.mkdir(parents=True)
+    binary.write_bytes(b"test binary")
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(target))
+    monkeypatch.setattr(
+        module.subprocess, "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    assert module.build_rust() == binary
+
+
+def test_docker_host_mount_translation_is_explicit(probe, monkeypatch):
+    module, _, _ = probe
+    source = Path("/mnt/c/worktree/docker/openbao-selfhost.hcl")
+    monkeypatch.delenv("MARTY_OPENBAO_PROBE_HOST_MNT", raising=False)
+    assert module.docker_host_path(source) == str(source)
+    monkeypatch.setenv("MARTY_OPENBAO_PROBE_HOST_MNT", "/run/desktop/mnt/host")
+    assert module.docker_host_path(source) == (
+        "/run/desktop/mnt/host/c/worktree/docker/openbao-selfhost.hcl"
+    )
+    with pytest.raises(ValueError, match="Docker host path"):
+        module.docker_host_path(Path("/tmp/private"))
+
+
 @pytest.mark.parametrize(
     "fault, status", [("failed", "failed"), ("timeout", "timeout"), ("spawn", "error")]
 )

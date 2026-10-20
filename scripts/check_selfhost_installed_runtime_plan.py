@@ -21,6 +21,7 @@ EXPECTED_SERVICES = frozenset({
     "deployment-profile", "device-registration", "edge", "event-stream", "flow",
     "gateway", "issuance", "issuance-migrations", "issuance-native", "keycloak",
     "keycloak-configurator", "notification", "organization", "postgres",
+    "kms-initialize",
     "presentation-policy", "redis", "revocation-profile",
     "revocation-profile-migrate", "signing-keys", "trust-profile",
     "tunnel-nginx-proxy", "ui", "verification",
@@ -57,6 +58,7 @@ EXPECTED_DEPENDENCIES = {
                         "postgres": H, "revocation-profile": H, "signing-keys": H},
     "keycloak": {"postgres": H},
     "keycloak-configurator": {"keycloak": H},
+    "kms-initialize": {"db-migrate": C},
     "notification": {"db-migrate": C},
     "organization": {"db-migrate": C, "redis": H},
     "presentation-policy": {"db-migrate": C},
@@ -88,8 +90,10 @@ EXPECTED_ROLE_SECRETS = {
     "credential-template": {"marty_db_password", "issuance_api_key", "grpc_service_token",
                             "workload_identity_ca_cert", "ct_workload_server_cert",
                             "openbao_tls_ca_cert", "ct_tls_kms_token"},
-    "db-migrate": {"marty_db_password", "openbao_bootstrap_token", "notification_openbao_token",
+    "db-migrate": {"marty_db_password", "notification_openbao_token",
                    "openbao_tls_ca_cert"},
+    "kms-initialize": {"marty_db_password", "openbao_bootstrap_token",
+                       "notification_openbao_token", "openbao_tls_ca_cert"},
     "deployment-profile": {"marty_db_password", "grpc_service_token",
                            "deployment_profile_workload_client_cert",
                            "openbao_tls_ca_cert", "deployment_profile_tls_kms_token",
@@ -192,6 +196,14 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
         raise ValueError("runtime DAG is not bound to full prepared preflight")
     keycloak = services["keycloak"]
     configurator = services["keycloak-configurator"]
+    migration = services["db-migrate"]
+    initializer = services["kms-initialize"]
+    if (migration.get("environment", {}).get("MARTY_KMS_BOOTSTRAP_ENABLED") != "false"
+            or "BAO_TOKEN_FILE" in migration.get("environment", {})
+            or initializer.get("environment", {}).get("MARTY_KMS_BOOTSTRAP_ENABLED") != "true"
+            or initializer.get("environment", {}).get("BAO_TOKEN_FILE") !=
+            "/run/secrets/openbao_bootstrap_token"):
+        raise ValueError("installed migration/provisioning authority is invalid")
     if (not isinstance(keycloak, dict) or not isinstance(configurator, dict)
             or not isinstance(keycloak.get("image"), str)
             or KEYCLOAK_IMAGE.fullmatch(keycloak["image"]) is None
@@ -229,18 +241,20 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
                 or Path(declaration["file"]).resolve() != (secret_root / name).resolve()):
             raise ValueError(f"installed runtime secret {name} changed declaration")
     edges: dict[str, set[str]] = {}
-    profile_members: dict[str, set[str]] = {"default": set(), "beta-tunnel": set()}
+    profile_members: dict[str, set[str]] = {"default": set(), "beta-tunnel": set(),
+                                             "kms-init": set()}
     for name, service in services.items():
         if not isinstance(service, dict):
             raise ValueError(f"installed runtime service {name} is invalid")
         profiles = service.get("profiles", [])
         if not isinstance(profiles, list) or any(not isinstance(p, str) for p in profiles):
             raise ValueError(f"installed runtime service {name} has invalid profiles")
-        expected_profiles = ["beta-tunnel"] if name in BETA_SERVICES else []
+        expected_profiles = (["beta-tunnel"] if name in BETA_SERVICES else
+                             ["kms-init"] if name == "kms-initialize" else [])
         if profiles != expected_profiles:
             raise ValueError(f"installed runtime service {name} changed profile")
         if profiles:
-            profile_members["beta-tunnel"].add(name)
+            profile_members[profiles[0]].add(name)
         else:
             profile_members["default"].add(name)
         references = service.get("secrets", [])
@@ -308,6 +322,7 @@ def plan(model: dict, preflight: dict, secret_root: Path) -> dict:
         "service_count": len(services),
         "default_service_count": len(profile_members["default"]),
         "beta_tunnel_service_count": len(profile_members["beta-tunnel"]),
+        "kms_init_service_count": len(profile_members["kms-init"]),
         "dependency_count": sum(map(len, edges.values())),
         "startup_layers": layers,
     }

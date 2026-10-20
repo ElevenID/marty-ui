@@ -1,7 +1,7 @@
 """The disposable signer helper keeps operator secret material out of source."""
 
-import os
 import json
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,142 +14,157 @@ import provision_selfhost_custody_signer as signer
 import provision_selfhost_disposable_tls as tls
 
 
-@pytest.mark.parametrize("cleanup_fails,write_fails,valid_policy,orphan", [
-    (False, False, False, True), (True, False, False, True),
-    (False, True, True, True), (False, False, True, False),
-])
-def test_scoped_validation_failure_revokes_or_preserves_new_token(
+def test_refresh_requires_evidence_identity_before_root_token_use(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    cleanup_fails: bool, write_fails: bool, valid_policy: bool, orphan: bool,
 ) -> None:
     private_root = tmp_path / "private"
     state_root = private_root / "openbao-state"
     output_root = private_root / "secrets"
     (state_root / "tls").mkdir(parents=True)
     output_root.mkdir()
-    root_token = state_root / "root.token"
-    root_token.write_text("r" * 16, encoding="ascii")
-    root_token.chmod(0o400)
     (state_root / "tls" / "ca.crt").write_text("ca", encoding="ascii")
     (output_root / "selfhost_custody_signer_token").write_text("old", encoding="ascii")
     (output_root / "selfhost_custody_signer.pub").write_text("pem", encoding="ascii")
-    calls = []
-
-    class FakeBao:
-        def __init__(self, endpoint: str, ca: Path, token: str) -> None:
-            self.token = token
-
-        def request(self, method: str, path: str, body: dict | None = None) -> dict:
-            calls.append((self.token, method, path))
-            if path == f"transit/keys/{signer.CUSTODY_SIGNER}":
-                return {"data": {"type": "ed25519", "exportable": False,
-                                 "allow_plaintext_backup": False,
-                                 "latest_version": 1,
-                                 "keys": {"1": {"public_key": "raw"}}}}
-            if path == "auth/token/create":
-                assert body is not None
-                assert body["no_parent"] is True
-                assert "orphan" not in body
-                return {"auth": {"client_token": "new"}}
-            if path == "auth/token/lookup-self":
-                return {"data": {"policies": ([signer.CUSTODY_SIGNER_POLICY]
-                                               if valid_policy else []),
-                                 "orphan": orphan, "ttl": 3600}}
-            if path == f"transit/export/signing-key/{signer.CUSTODY_SIGNER}":
-                raise HTTPError("https://127.0.0.1", 403, "denied", {}, None)
-            if path == "auth/token/revoke" and cleanup_fails:
-                raise HTTPError("https://127.0.0.1", 503, "unavailable", {}, None)
-            return {}
-
     monkeypatch.setattr(signer, "private_directory", lambda path: path)
     monkeypatch.setattr(signer, "verified_openbao_owner", lambda *_args: "locked-image")
-    monkeypatch.setattr(signer, "read_protected_root_token", lambda _path: "r" * 16)
-    monkeypatch.setattr(signer, "Bao", FakeBao)
-    monkeypatch.setattr(signer, "ed25519_public_pem", lambda _raw: "pem")
-
-    def secure_open(path: Path, flags: int, mode: int) -> int:
-        if write_fails and str(path).endswith(".new"):
-            raise PermissionError("injected pending-token write failure")
-        return os.open(path, flags, mode)
-
-    monkeypatch.setattr(signer, "os", SimpleNamespace(
-        name="posix", geteuid=lambda: 0, open=secure_open, fdopen=os.fdopen,
-        fchown=lambda *_args: None, fchmod=lambda *_args: None,
-        O_WRONLY=os.O_WRONLY, O_CREAT=os.O_CREAT, O_EXCL=os.O_EXCL,
-        O_NOFOLLOW=getattr(os, "O_NOFOLLOW", 0),
-    ))
-    expected = PermissionError if write_fails else ValueError
-    with pytest.raises(expected):
+    monkeypatch.setattr(signer, "read_protected_root_token",
+                        lambda _path: pytest.fail("root token was read"))
+    monkeypatch.setattr(signer, "Bao", lambda *_args: pytest.fail("Bao was used"))
+    monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+    with pytest.raises(ValueError, match="evidence identity is required"):
         signer.provision("https://127.0.0.1:18200", state_root, output_root,
                          "marty-selfhost-openbao-qualification",
                          refresh_token=True)
-    assert ("r" * 16, "POST", "auth/token/revoke") in calls
     assert (output_root / "selfhost_custody_signer_token").read_text(encoding="ascii") == "old"
-    pending = output_root / "selfhost_custody_signer_token.new"
-    assert pending.exists() is cleanup_fails
-    if cleanup_fails:
-        assert pending.read_text(encoding="ascii") == "new"
 
 
-def test_refresh_revokes_old_token_before_replacement(tmp_path: Path) -> None:
+@pytest.mark.parametrize("lost_response", [False, True])
+def test_refresh_preserves_new_token_if_revocation_is_ambiguous(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lost_response: bool,
+) -> None:
     token_file = tmp_path / "selfhost_custody_signer_token"
     token_file.write_text("old", encoding="ascii")
+    active_tokens = {"old", "new"}
 
-    class BaoSuccess:
-        def request(self, method: str, path: str, body: dict) -> None:
-            assert (method, path, body["token"]) == (
-                "POST", "auth/token/revoke", "old")
+    class Operator:
+        endpoint = "https://127.0.0.1:18200"
+        ca = tmp_path / "ca.crt"
+
+    class Leaf:
+        def __init__(self, _endpoint, _ca, token):
+            assert token == "old"
+
+        def request(self, method, path):
+            assert (method, path) == ("POST", "auth/token/revoke-self")
             assert token_file.read_text(encoding="ascii") == "old"
-
-    signer.refresh_scoped_token(
-        BaoSuccess(), token_file, "new",
-        lambda path, value, mode: path.write_text(value, encoding="ascii"),
-    )
-    assert token_file.read_text(encoding="ascii") == "new"
-    assert not token_file.with_name(token_file.name + ".new").exists()
-
-
-def test_refresh_keeps_old_token_if_revocation_fails(tmp_path: Path) -> None:
-    token_file = tmp_path / "selfhost_custody_signer_token"
-    token_file.write_text("old", encoding="ascii")
-    calls = []
-
-    class BaoFailure:
-        def request(self, method: str, path: str, body: dict) -> None:
-            calls.append((method, path, body["token"]))
-            if body["token"] == "old":
-                raise HTTPError("https://127.0.0.1", 503, "unavailable", {}, None)
-
-    def write(path: Path, value: str, mode: int) -> None:
-        assert mode == 0o400
-        path.write_text(value, encoding="ascii")
-
-    with pytest.raises(RuntimeError, match="operator recovery"):
-        signer.refresh_scoped_token(BaoFailure(), token_file, "new", write)
-    assert token_file.read_text(encoding="ascii") == "old"
-    assert token_file.with_name(token_file.name + ".new").read_text(encoding="ascii") == "new"
-    assert calls == [("POST", "auth/token/revoke", "old")]
-
-
-def test_refresh_preserves_new_token_if_revoke_response_is_lost(tmp_path: Path) -> None:
-    token_file = tmp_path / "selfhost_custody_signer_token"
-    token_file.write_text("old", encoding="ascii")
-
-    class BaoFailure:
-        def request(self, method: str, path: str, body: dict) -> None:
-            assert body["token"] == "old"
-            active_tokens.discard("old")  # Server acted, but its reply was lost.
+            if lost_response:
+                active_tokens.discard("old")
             raise HTTPError("https://127.0.0.1", 503, "unavailable", {}, None)
 
-    active_tokens = {"old", "new"}
+    monkeypatch.setattr(signer, "Bao", Leaf)
     with pytest.raises(RuntimeError, match="operator recovery"):
         signer.refresh_scoped_token(
-            BaoFailure(), token_file, "new",
+            Operator(), token_file, "new",
             lambda path, value, mode: path.write_text(value, encoding="ascii"),
         )
     assert token_file.read_text(encoding="ascii") == "old"
     assert token_file.with_name(token_file.name + ".new").read_text(encoding="ascii") == "new"
-    assert active_tokens == {"new"}
+    assert active_tokens == ({"new"} if lost_response else {"old", "new"})
+
+
+def test_rootless_refresh_uses_old_leaf_self_revocation(tmp_path: Path,
+                                                        monkeypatch: pytest.MonkeyPatch) -> None:
+    token_file = tmp_path / "selfhost_custody_signer_token"
+    token_file.write_text("old", encoding="ascii")
+    calls = []
+
+    class Operator:
+        endpoint = "https://127.0.0.1:18200"
+        ca = tmp_path / "ca.crt"
+
+    class Leaf:
+        def __init__(self, endpoint, ca, token):
+            assert (endpoint, ca, token) == (Operator.endpoint, Operator.ca, "old")
+
+        def request(self, method, path):
+            assert token_file.read_text(encoding="ascii") == "old"
+            calls.append((method, path))
+
+    monkeypatch.setattr(signer, "Bao", Leaf)
+    signer.refresh_scoped_token(
+        Operator(), token_file, "new",
+        lambda path, value, mode: path.write_text(value, encoding="ascii"),
+    )
+    assert calls == [("POST", "auth/token/revoke-self")]
+    assert token_file.read_text(encoding="ascii") == "new"
+
+
+@pytest.mark.parametrize("new_lookup_valid", [False, True])
+def test_expired_leaf_403_requires_live_operator_lookup_of_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_lookup_valid: bool,
+) -> None:
+    token_file = tmp_path / "selfhost_custody_signer_token"
+    token_file.write_text("expired", encoding="ascii")
+
+    class Operator:
+        endpoint = "https://127.0.0.1:18200"
+        ca = tmp_path / "ca.crt"
+
+        def request(self, method, path, body):
+            assert (method, path) == ("POST", "auth/token/lookup")
+            if body["token"] == "expired":
+                raise HTTPError(self.endpoint, 403, "denied", {}, None)
+            assert body["token"] == "replacement"
+            return {"data": {"ttl": 3599 if new_lookup_valid else 0}}
+
+    class Leaf:
+        def __init__(self, endpoint, ca, token):
+            assert (endpoint, ca, token) == (Operator.endpoint, Operator.ca,
+                                             "expired")
+
+        def request(self, method, path):
+            assert (method, path) == ("POST", "auth/token/revoke-self")
+            raise HTTPError(Operator.endpoint, 403, "expired", {}, None)
+
+    monkeypatch.setattr(signer, "Bao", Leaf)
+    if new_lookup_valid:
+        signer.refresh_scoped_token(
+            Operator(), token_file, "replacement",
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        assert token_file.read_text(encoding="ascii") == "replacement"
+        assert not token_file.with_name(token_file.name + ".new").exists()
+    else:
+        with pytest.raises(RuntimeError, match="operator recovery"):
+            signer.refresh_scoped_token(
+                Operator(), token_file, "replacement",
+                lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+            )
+        assert token_file.read_text(encoding="ascii") == "expired"
+        assert token_file.with_name(token_file.name + ".new").read_text() == (
+            "replacement"
+        )
+
+
+def test_rootless_identity_cannot_share_runtime_secret_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = tmp_path / "private"
+    state = private / "openbao-state"
+    secrets = private / "secrets"
+    (state / "tls").mkdir(parents=True)
+    secrets.mkdir()
+    (state / "tls" / "ca.crt").write_text("ca", encoding="ascii")
+    (secrets / "selfhost_custody_signer_token").write_text("old", encoding="ascii")
+    (secrets / "selfhost_custody_signer.pub").write_text("public", encoding="ascii")
+    monkeypatch.setattr(signer, "os", SimpleNamespace(name="posix", geteuid=lambda: 0))
+    monkeypatch.setattr(signer, "private_directory", lambda path: path)
+    monkeypatch.setattr(signer, "verified_openbao_owner", lambda *_args: "owned")
+    monkeypatch.setattr(signer, "Bao", lambda *_args: pytest.fail("identity was read"))
+    with pytest.raises(ValueError, match="separate from stack secrets"):
+        signer.provision("https://127.0.0.1:18200", state, secrets,
+                         "marty-selfhost-openbao-qualification",
+                         refresh_token=True, identity_root=secrets)
 
 
 def test_pending_refresh_rejected_before_new_token_created(
@@ -173,9 +188,10 @@ def test_pending_refresh_rejected_before_new_token_created(
     with pytest.raises(ValueError, match="pending custody token refresh"):
         signer.provision("https://127.0.0.1:18200", state_root, output_root,
                          "marty-selfhost-openbao-qualification",
-                         refresh_token=True)
+                         refresh_token=True, identity_root=private_root / "evidence-identity")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX mode bits are required")
 def test_operator_root_must_be_private_and_outside_source(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -82,7 +82,7 @@ fn render(stage: &Path, args: &[String]) -> marty_selfhost_bundle::Result<String
 fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     let root = tempfile::tempdir().unwrap();
     let mut options = fixture(root.path());
-    let openbao_source = "services:\n  openbao-tls-init:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-bootstrap:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n";
+    let openbao_source = "services:\n  openbao-tls-init:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-unseal:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n  openbao-bootstrap:\n    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}\n";
     fs::write(
         options.repo.join("docker-compose.selfhost.openbao.yml"),
         openbao_source,
@@ -141,6 +141,10 @@ fn opt_in_image_lock_pins_the_staged_bundle_and_rejects_release_mismatch() {
     );
     assert_eq!(
         openbao["services"]["openbao"]["image"].as_str(),
+        Some(plugin)
+    );
+    assert_eq!(
+        openbao["services"]["openbao-unseal"]["image"].as_str(),
         Some(plugin)
     );
     assert_eq!(
@@ -495,6 +499,20 @@ fn folded_and_list_first_paths_preserve_required_selectors_and_sibling_fields() 
     assert_eq!(volume["source"].as_str().unwrap(), "./scripts/start.sh");
     assert_eq!(volume["target"].as_str().unwrap(), "/app/start.sh");
     assert_eq!(volume["read_only"].as_bool(), Some(true));
+}
+
+#[test]
+fn rendered_host_paths_outside_stage_are_rejected() {
+    for key in ["file: ", "source: ", "- source: "] {
+        for path in [
+            "/other-stage/scripts/start.sh",
+            r"C:\other-stage\scripts\start.sh",
+            r"\\wsl.localhost\Ubuntu-24.04\other-stage\scripts\start.sh",
+        ] {
+            let input = format!("{key}{}\n", serde_json::to_string(path).unwrap());
+            assert!(marty_selfhost_bundle::relativize(&input, Path::new("/stage")).is_err());
+        }
+    }
 }
 
 #[test]

@@ -15,6 +15,8 @@ import time
 import urllib.error
 import urllib.request
 
+from probe_didcomm_openbao_ha import docker_host_path
+
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-didcomm-tls-local")
@@ -61,22 +63,29 @@ def probe() -> None:
         raise RuntimeError("disposable plugin image is invalid")
     suffix = secrets.token_hex(6)
     name = f"marty-didcomm-tls-{suffix}"
+    token_volume = f"marty-didcomm-tls-token-{suffix}"
+    ca_volume = f"marty-didcomm-tls-ca-{suffix}"
     with tempfile.TemporaryDirectory(prefix="marty-didcomm-tls-") as temporary:
         root = Path(temporary)
-        token_file = root / "root-token"
         token = secrets.token_hex(32)
-        token_file.write_text(token, encoding="ascii")
-        public = root / "public-ca"
-        public.mkdir()
         script = ROOT / "scripts/passport_supported_openbao_start.sh"
         try:
+            for volume in (token_volume, ca_volume):
+                docker("volume", "create", "--label", "marty.disposable=didcomm-tls-probe", volume)
+            seeded = subprocess.run([
+                "docker", "run", "--rm", "-i", "-v", f"{token_volume}:/run/secrets",
+                "--entrypoint", "/bin/sh", IMAGE, "-c",
+                "umask 077; cat > /run/secrets/bao_root_token",
+            ], input=token, capture_output=True, text=True, check=False, timeout=60)
+            if seeded.returncode:
+                raise RuntimeError("disposable OpenBao token volume could not be seeded")
             docker(
                 "run", "-d", "--name", name, "--hostname", "openbao",
                 "--label", "marty.disposable=didcomm-tls-probe",
                 "-p", "127.0.0.1::8200", "--tmpfs", "/tmp/bao-tls:rw,mode=1777",
-                "--mount", f"type=bind,src={script},dst=/usr/local/bin/passport-supported-openbao-start,readonly",
-                "--mount", f"type=bind,src={token_file},dst=/run/secrets/bao_root_token,readonly",
-                "--mount", f"type=bind,src={public},dst=/bao/public-ca",
+                "--mount", f"type=bind,src={docker_host_path(script)},dst=/usr/local/bin/passport-supported-openbao-start,readonly",
+                "-v", f"{token_volume}:/run/secrets:ro",
+                "-v", f"{ca_volume}:/bao/public-ca",
                 "-e", "PASSPORT_BAO_TLS_MODE=required",
                 "-e", 'BAO_LOCAL_CONFIG={"plugin_directory":"/plugins"}',
                 "--entrypoint", "/bin/sh", IMAGE,
@@ -87,9 +96,15 @@ def probe() -> None:
             if re.fullmatch(r"[0-9]{2,5}", port) is None:
                 raise RuntimeError("disposable OpenBao port is invalid")
             base = f"https://localhost:{port}"
-            ca = public / "ca.crt"
+            ca = root / "ca.crt"
             deadline = time.monotonic() + 30
             while time.monotonic() < deadline:
+                try:
+                    public_ca = docker("run", "--rm", "-v", f"{ca_volume}:/pub:ro",
+                                       "--entrypoint", "/bin/cat", IMAGE, "/pub/ca.crt")
+                    ca.write_text(public_ca + "\n", encoding="ascii")
+                except RuntimeError:
+                    pass
                 if ca.is_file() and ca.stat().st_size:
                     context = ssl.create_default_context(cafile=ca)
                     try:
@@ -125,7 +140,7 @@ def probe() -> None:
                 "MARTY_TEST_OPENBAO_CA_CERT_FILE": str(ca),
             })
             result = subprocess.run([
-                "cargo", "+1.95", "test", "--locked", "-p", "marty-issuance-service",
+                "cargo", "+1.95.0", "test", "--locked", "-p", "marty-issuance-service",
                 "--test", "didcomm_remote_kms_live", "--",
                 "--ignored", "--test-threads=1",
             ], cwd=ROOT / "rust", env=environment, check=False, timeout=300)
@@ -135,6 +150,9 @@ def probe() -> None:
         finally:
             subprocess.run(["docker", "rm", "-f", name], capture_output=True,
                            check=False, timeout=30)
+            for volume in (ca_volume, token_volume):
+                subprocess.run(["docker", "volume", "rm", "-f", volume],
+                               capture_output=True, check=False, timeout=30)
 
 
 if __name__ == "__main__":

@@ -17,11 +17,22 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-ha-probe:local")
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def docker_host_path(path: Path) -> str:
+    """Translate an opt-in WSL /mnt path for Docker Desktop bind mounts."""
+    host_mnt = os.environ.get("MARTY_OPENBAO_PROBE_HOST_MNT")
+    if not host_mnt:
+        return str(path)
+    source = PurePosixPath(str(path).replace("\\", "/"))
+    if not source.is_absolute() or not source.is_relative_to("/mnt"):
+        raise ValueError("Docker host path must be under the WSL /mnt root")
+    return str(PurePosixPath(host_mnt) / source.relative_to("/mnt"))
 
 
 def prepare_image() -> None:
@@ -38,10 +49,26 @@ def prepare_image() -> None:
     )
 
 
+def docker_process(command: list[str], *, timeout: int = 90) -> subprocess.CompletedProcess[str]:
+    if not command or command[0] != "docker":
+        raise ValueError("disposable Docker command is invalid")
+    for attempt in range(3):
+        result = subprocess.run(
+            command, capture_output=True, text=True, check=False,
+            timeout=timeout,
+        )
+        # This WSL interop error occurs before docker.exe starts. Retrying any
+        # other failure could repeat a non-idempotent Docker operation.
+        if (result.returncode == 0 or not os.environ.get("WSL_INTEROP")
+                or "UtilAcceptVsock:271: accept4 failed 110" not in result.stderr
+                or attempt == 2):
+            break
+        time.sleep(1)
+    return result
+
+
 def docker(*args: str, timeout: int = 90) -> str:
-    result = subprocess.run(
-        ["docker", *args], capture_output=True, text=True, check=False, timeout=timeout
-    )
+    result = docker_process(["docker", *args], timeout=timeout)
     if result.returncode:
         raise RuntimeError(
             f"Disposable Docker operation failed: {args[0]} "

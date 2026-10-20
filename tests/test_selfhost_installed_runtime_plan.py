@@ -33,12 +33,13 @@ PREFLIGHT = {
     "release": "v1.2.3",
     "source_sha": "b" * 40,
     "run_id": "123",
-    "service_count": 31,
+    "service_count": 32,
 }
 
 
 def model() -> dict:
-    services = {name: {"profiles": ["beta-tunnel"] if name in BETA_SERVICES else [],
+    services = {name: {"profiles": (["beta-tunnel"] if name in BETA_SERVICES else
+                                       ["kms-init"] if name == "kms-initialize" else []),
                        "healthcheck": {"test": ["CMD", "true"]}}
                 for name in EXPECTED_SERVICES}
     for name, dependencies in EXPECTED_DEPENDENCIES.items():
@@ -67,6 +68,11 @@ def model() -> dict:
         "MARTY_KEYCLOAK_KMS_KEY_PREFIX": "keycloak",
         "MARTY_KEYCLOAK_KMS_KEY_VERSION": "1",
     }
+    services["db-migrate"]["environment"] = {"MARTY_KMS_BOOTSTRAP_ENABLED": "false"}
+    services["kms-initialize"]["environment"] = {
+        "MARTY_KMS_BOOTSTRAP_ENABLED": "true",
+        "BAO_TOKEN_FILE": "/run/secrets/openbao_bootstrap_token",
+    }
     return {"services": services, "secrets": {
         name: {"name": f"marty-selfhost-prod_{name}",
                "file": str(SECRET_ROOT / name)} for name in EXPECTED_SECRET_NAMES},
@@ -84,12 +90,13 @@ def test_plan_is_exact_artifact_bound_and_covers_both_profiles() -> None:
     result = plan(model(), PREFLIGHT, SECRET_ROOT)
     assert result["qualification"] == "unqualified"
     assert result["archive_sha256"] == "a" * 64
-    assert result["service_count"] == 31
+    assert result["service_count"] == 32
     assert result["default_service_count"] == 29
     assert result["beta_tunnel_service_count"] == 2
+    assert result["kms_init_service_count"] == 1
     assert result["dependency_count"] == sum(map(len, EXPECTED_DEPENDENCIES.values()))
     layers = result["startup_layers"]
-    assert sum(map(len, layers)) == 31
+    assert sum(map(len, layers)) == 32
     assert next(i for i, layer in enumerate(layers) if "db-migrate" in layer) < next(
         i for i, layer in enumerate(layers) if "signing-keys" in layer)
 
@@ -164,5 +171,24 @@ def test_source_compose_has_reviewed_full_dag() -> None:
         cwd=ROOT, env=env, check=True, capture_output=True, text=True,
     )
     result = plan(json.loads(completed.stdout), PREFLIGHT, SECRET_ROOT)
-    assert result["service_count"] == 31
+    assert result["service_count"] == 32
     assert result["dependency_count"] > 30
+
+
+def test_default_selfhost_compose_never_mounts_bootstrap_root() -> None:
+    env = {**os.environ, "SELFHOST_STATE_DIR": str(ROOT / "_test_state"),
+           "SELFHOST_SECRET_DIR": str(ROOT / "_test_secrets"),
+           "MARTY_KEYCLOAK_KMS_IMAGE": "ghcr.io/elevenid/marty-ui-oss/keycloak@sha256:" + "e" * 64}
+    completed = subprocess.run(
+        ["docker", "compose", "--env-file", ".env.selfhost.production.example",
+         "-f", "docker-compose.selfhost.prod.yml",
+         "-f", "docker-compose.selfhost.bundle.override.yml", "config", "--format", "json"],
+        cwd=ROOT, env=env, check=True, capture_output=True, text=True,
+    )
+    services = json.loads(completed.stdout)["services"]
+    assert "kms-initialize" not in services
+    migration = services["db-migrate"]
+    assert migration["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] == "false"
+    assert "BAO_TOKEN_FILE" not in migration["environment"]
+    assert "openbao_bootstrap_token" not in {
+        item["source"] for item in migration["secrets"]}

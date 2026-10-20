@@ -65,7 +65,7 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
         raise ValueError("rendered OpenBao network is invalid")
     services = model.get("services")
     if (not isinstance(services, dict)
-            or set(services) != {"openbao-tls-init", "openbao", "openbao-bootstrap"}):
+            or set(services) != {"openbao-tls-init", "openbao", "openbao-unseal", "openbao-bootstrap"}):
         raise ValueError("rendered OpenBao service set is invalid")
     for name, service in services.items():
         if not isinstance(service, dict) or service.get("image") != image:
@@ -73,17 +73,20 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
         keys = {"image", "networks", "restart", "volumes", "entrypoint", "command"}
         if name == "openbao":
             keys.update({"depends_on", "ports", "healthcheck"})
-        elif name == "openbao-bootstrap":
+        elif name in {"openbao-unseal", "openbao-bootstrap"}:
             keys.update({"depends_on", "environment"})
+        if name == "openbao-bootstrap":
+            keys.add("profiles")
         if set(service) - keys or service.get("networks") != {"default": None}:
             raise ValueError("rendered OpenBao has unsafe runtime overrides")
         expected_entrypoint = {
             "openbao-tls-init": ["/usr/local/bin/selfhost-tls-init"],
             "openbao": None,
+            "openbao-unseal": ["/usr/local/bin/selfhost-unseal"],
             "openbao-bootstrap": ["/bin/sh", "/scripts/openbao-selfhost-init.sh"],
         }[name]
         expected_command = ["server", "-config=/bao/config/openbao.hcl"] if name == "openbao" else None
-        expected_restart = "unless-stopped" if name == "openbao" else "no"
+        expected_restart = "unless-stopped" if name in {"openbao", "openbao-unseal"} else "no"
         if (service.get("entrypoint") != expected_entrypoint
                 or service.get("command") != expected_command
                 or service.get("restart") != expected_restart):
@@ -93,6 +96,9 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
                 "condition": "service_completed_successfully", "required": True,
             }},
             "openbao-bootstrap": {"openbao": {
+                "condition": "service_started", "required": True,
+            }},
+            "openbao-unseal": {"openbao": {
                 "condition": "service_started", "required": True,
             }},
         }.get(name)
@@ -124,6 +130,14 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
             "DIDCOMM_KMS_PLUGIN_REQUIRED": "true",
         }:
             raise ValueError("rendered OpenBao bootstrap environment differs")
+        if name == "openbao-bootstrap" and service.get("profiles") != ["kms-init"]:
+            raise ValueError("OpenBao bootstrap must be opt-in")
+        if name == "openbao-unseal" and service.get("environment") != {
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/data/tls/ca.crt",
+            "BAO_UNSEAL_KEY_FILE": "/bao/data/unseal.key",
+        }:
+            raise ValueError("rendered OpenBao unseal environment differs")
         ports = service.get("ports", [])
         if name == "openbao":
             if (not isinstance(ports, list) or len(ports) != 1
@@ -149,7 +163,7 @@ def verify_model(model: object, image: str, state: Path, secret_root: Path,
                 raise ValueError("OpenBao bind mounts are invalid")
             actual[mount["target"]] = (Path(mount["source"]),
                                        mount.get("read_only", False))
-        expected = {"/bao/data": (state, False)}
+        expected = {"/bao/data": (state, name == "openbao-unseal")}
         if name == "openbao":
             expected["/bao/config/openbao.hcl"] = (
                 bundle / "docker" / "openbao-selfhost.hcl", True)
@@ -231,7 +245,7 @@ def start(private_root: Path, port: int) -> dict:
         "SELFHOST_OPENBAO_HOST_PORT": str(port),
     })
     compose = ["docker", "compose", "--project-name", project, "-f", str(compose_file)]
-    model = json.loads(run([*compose, "config", "--format", "json"], env=environment))
+    model = json.loads(run([*compose, "--profile", "kms-init", "config", "--format", "json"], env=environment))
     verify_model(model, image, state, secret_root, bundle, port, project)
     pending = root / "openbao-pending.json"
     with pending.open("x", encoding="utf-8") as output:
@@ -247,6 +261,8 @@ def start(private_root: Path, port: int) -> dict:
             env=environment, timeout=330)
         run([*compose, "run", "--no-deps", "--rm", "openbao-bootstrap"],
             env=environment, timeout=240)
+        run([*compose, "up", "-d", "--no-build", "openbao-unseal"],
+            env=environment, timeout=120)
         wait_healthy(compose, environment)
         openbao_network(project, state, image, expected_host_port=port)
         for name in OUTPUTS:

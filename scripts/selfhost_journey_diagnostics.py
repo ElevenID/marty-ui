@@ -18,7 +18,7 @@ from typing import Iterator
 
 PHASES = frozenset({
     "input_validation", "compose_render", "artifact_preflight",
-    "public_key_tool_build", "fresh_project", "image_pull", "startup",
+    "public_key_tool_build", "fresh_project", "image_pull", "kms_initialize", "startup",
     "readiness", "fixture_setup", "custody_verification", "public_journey",
     "keycloak_issuance_refresh", "keycloak_database_custody",
     "marty_database_custody", "cleanup",
