@@ -253,6 +253,8 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     credentials: hash((await inventory()).filter(record => String(record.application_id) === applicationId)),
   });
   const beforeLegacy = await authoritativeSnapshot();
+  report.untrustedIngest = { applicationId, httpStatus: null, before: beforeLegacy,
+    after: null, authoritativeStateUnchanged: false };
   report.pendingOperations.push('legacy-evidence-ingest');
   const legacy = await marty.post('/v1/integrations/canvas/evidence-events', {
     canvas_event_id: `untrusted-capture-${applicationId}`, organization_id: organizationId,
@@ -264,12 +266,14 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     evidence_type: 'assignment', canvas_assignment_id: String(fixtures.assignment.id),
     completed: true, passed: true, score_percent: 100, eligible: true,
   }, [410]);
-  assert.deepEqual(await authoritativeSnapshot(), beforeLegacy,
+  report.untrustedIngest.httpStatus = 410;
+  report.untrustedIngest.after = await authoritativeSnapshot();
+  assert.deepEqual(report.untrustedIngest.after, beforeLegacy,
     'Rejected untrusted ingestion changed evidence, reservations or issued credentials');
   report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'legacy-evidence-ingest');
   // The client accepts only the observed HTTP 410, never a report-shaped result.
   report.legacyIngestUnavailable = true;
-  report.untrustedIngest = { applicationId, httpStatus: 410, authoritativeStateUnchanged: true };
+  report.untrustedIngest.authoritativeStateUnchanged = true;
   void legacy;
   report.behaviorAssertions = scenario === 'canvas-learning-achievement'
     ? { capture_canvas_evidence: true, governed_review: true, issue_open_badge: true, invalid_evidence_provenance_denied: true }

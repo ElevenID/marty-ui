@@ -131,6 +131,7 @@ test('D08 current operations bind one launch, approval, receipt, verifier and re
   assert.equal(h.state.legacy, true);
   assert.equal(h.report.deniedApproval.httpStatus, 409);
   assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, true);
+  assert.deepEqual(h.report.untrustedIngest.before, h.report.untrustedIngest.after);
   assert.doesNotThrow(() => requireCaptureMutationReconciliation(h.report));
   assert.equal(h.state.checkpoints.includes('correction-review-open'), true);
   assert.equal(h.state.checkpoints.includes('correction-review-resolved'), true);
@@ -153,6 +154,10 @@ for (const fail of ['denied-approval-reserved', 'denied-approval-issued', 'denie
     assert.throws(() => requireCaptureMutationReconciliation(h.report), /uncertain/);
     assert.equal(h.report.pendingOperations.includes(fail === 'ingest-side-effect'
       ? 'legacy-evidence-ingest' : 'scoped-approval'), true);
+    if (fail === 'ingest-side-effect') {
+      assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, false);
+      assert.notDeepEqual(h.report.untrustedIngest.before, h.report.untrustedIngest.after);
+    }
   });
 }
 
