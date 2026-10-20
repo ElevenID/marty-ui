@@ -48,6 +48,17 @@ def test_security_job_rejects_a_stale_bun_lock_before_auditing() -> None:
     )
 
 
+def test_e2e_http_client_uses_patched_redirect_dependency() -> None:
+    lock = json.loads(_text("tests/package-lock.json"))
+    versions = [
+        metadata["version"]
+        for path, metadata in lock["packages"].items()
+        if path.endswith("node_modules/follow-redirects")
+    ]
+    assert versions
+    assert all(tuple(map(int, version.split("."))) >= (1, 16, 1) for version in versions)
+
+
 def test_vitest_suite_excludes_redirect_mock_file_read_advisory() -> None:
     # GHSA-82fw-gwwq-j7x9: both vitest and @vitest/mocker require 4.1.11.
     package = json.loads(_text("ui/package.json"))
