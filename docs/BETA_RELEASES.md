@@ -20,6 +20,11 @@ Record the exact source and distinguish local results from deployed-beta results
 Use beta-only guarded local build/overlay paths for runtime experiments, preserving
 backup, recovery, credential custody, and production isolation. A local candidate
 does not acquire official release status from a successful developer run.
+`create_local_release_manifest.py` accepts clean branch commits for this local
+path, snapshots the coordinated sources, and binds their exact commits and bytes.
+Its recorded `origin/main` revision is informational; verification does not wait
+for those branch commits to merge. Dirty or changed sources and any claim that
+the local snapshot is promotion-eligible or release-ready remain rejected.
 
 ## Release sequence
 

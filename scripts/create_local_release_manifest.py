@@ -140,10 +140,8 @@ def repository_record(repo: Path, snapshot_dir: Path) -> dict[str, object]:
         raise RuntimeError(
             f"Coordinated release repository is missing fetched origin/main: {repo.name}"
         ) from exc
-    if head_sha != protected_main_sha:
-        raise RuntimeError(
-            f"Coordinated release repository is not at protected origin/main: {repo.name}"
-        )
+    # origin/main is recorded for comparison, not an admission gate for an
+    # explicitly local, non-promotable developer snapshot.
     files = release_files(repo)
     source_sha256 = worktree_digest(repo, files)
     snapshot_path = snapshot_dir / f"{repo.name}.tar.gz"
@@ -205,6 +203,10 @@ def create_manifest(
 
 def verify_manifest(workspace: Path, manifest_path: Path) -> dict[str, object]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if (manifest.get("source_kind") != "local-worktree-snapshot"
+            or manifest.get("promotion_eligible") is not False
+            or manifest.get("release_ready") is not False):
+        raise RuntimeError("Developer snapshot must remain local and non-promotable")
     repositories = manifest.get("repositories")
     if not isinstance(repositories, dict) or set(repositories) != set(REPOSITORIES):
         raise RuntimeError("Source manifest repository set does not match release inputs")
@@ -247,17 +249,8 @@ def verify_manifest(workspace: Path, manifest_path: Path) -> dict[str, object]:
             raise RuntimeError(f"Coordinated release repository is no longer clean: {name}")
 
         expected_revision = _git(repo, "rev-parse", "HEAD").decode().strip()
-        protected_main_revision = (
-            _git(repo, "rev-parse", "--verify", "refs/remotes/origin/main")
-            .decode()
-            .strip()
-        )
-        if expected_revision != protected_main_revision:
-            raise RuntimeError(
-                f"Coordinated release repository moved away from protected origin/main: {name}"
-            )
-        if record.get("protected_main_sha") != protected_main_revision:
-            raise RuntimeError(f"Protected main revision changed after snapshot: {name}")
+        if record.get("head_sha") != expected_revision:
+            raise RuntimeError(f"Snapshot commit changed: {name}")
         revision = revisions_by_name[name]
         if revision.get("repository") != REPOSITORY_URLS[name]:
             raise RuntimeError(f"Component repository mismatch: {name}")
