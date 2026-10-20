@@ -1,0 +1,36 @@
+{
+  "scope": "LOCAL_CONTROLLED_SOURCE_TESTS_ONLY",
+  "command": [
+    "node",
+    "--test",
+    "tests/scripts/canvas-capture-sequence.test.js",
+    "tests/scripts/run-canvas-oss-standard-contract.test.js"
+  ],
+  "exit_code": 0,
+  "log_sha256": "8d7868492f3d37d3f105cc259df553bd49e9eaeb68226730c9d5fc3f85109499",
+  "node": "v24.14.1",
+  "production_execution": false,
+  "source_tests": {
+    "passed": 31,
+    "failed": 0,
+    "skipped": 0,
+    "new_canvas_capture_cases": 11,
+    "existing_stock_contract_cases": 20
+  },
+  "focused_ui": {
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "src/components/console/deploy/CanvasIntegrationsPage.test.tsx",
+      "-t",
+      "shows blocking readiness and the portable award pipeline",
+      "--maxWorkers=1"
+    ],
+    "exit_code": 0,
+    "passed": 1,
+    "other_cases_not_selected": 15,
+    "dependencies": "Existing workspace UI node_modules junction; no fresh lockfile install or full production bundle claim",
+    "vitest": "5.0.2"
+  }
+}
