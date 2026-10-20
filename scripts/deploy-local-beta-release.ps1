@@ -555,6 +555,16 @@ function Get-PreparedLocalBetaImage([string]$Reference, [string]$Role) {
     if ($LASTEXITCODE -ne 0 -or $platform -cne "linux/amd64") {
         throw "Prepared local $Role image must be Linux/amd64"
     }
+    if ($Role -eq "UI") {
+        $markerText = & docker run --rm --network none --read-only --entrypoint cat $id /usr/share/nginx/html/marty-ui-release.json
+        if ($LASTEXITCODE -ne 0) { throw "Prepared local UI release marker is missing" }
+        try { $marker = ($markerText -join "`n") | ConvertFrom-Json }
+        catch { throw "Prepared local UI release marker is invalid" }
+        if ($marker.component -cne "ui" -or $marker.release_version -cne $releaseVersion -or
+            $marker.marty_ui_sha -cne $sourceId) {
+            throw "Prepared local UI served marker does not match the source snapshot"
+        }
+    }
     return [string]$id
 }
 

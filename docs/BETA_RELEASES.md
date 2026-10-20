@@ -34,6 +34,16 @@ the shared service selectors. It skips image builds while retaining source
 verification, rehearsal, backups, maintenance fencing, and recovery. This option
 cannot be combined with `-OfficialStackRelease`.
 
+`scripts/generate_local_runtime_dockerfiles.py --source <checkout> --output <directory>`
+derives service, migration, and public UI runtime recipes from the production
+Dockerfiles. It preserves their runtime stages and replaces only compiler/asset
+inputs with named `local_binaries` and `local_assets` contexts. Linux binaries are
+copied with executable permissions even when their context is on a Windows drive.
+The generator checks the service executable inventory against the shared build
+script; it does not build or qualify images. Supply freshly built UI assets with
+the snapshot's `marty-ui-release.json`. The prepared-image runner checks that
+served marker as well as image labels before starting maintenance.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and
