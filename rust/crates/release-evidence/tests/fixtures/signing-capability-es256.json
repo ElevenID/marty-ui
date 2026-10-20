@@ -1,0 +1,139 @@
+{
+  "classification": "GENERATED_PUBLIC_TEST_VECTORS_NO_LIVE_KMS_OR_CREDENTIALS",
+  "vectors": [
+    {
+      "expected": {
+        "run_id": "fixture-run-001",
+        "nonce": "1111111111111111111111111111111111111111111111111111111111111111",
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+        "service_id": "svc-fixture",
+        "issuer_did": "did:web:issuer.unit.invalid:orgs:fixture",
+        "key_reference": "fixture-es256-key",
+        "key_purpose": "vc_jwt_issuer",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256"
+      },
+      "service_response": {
+        "status": 200,
+        "body": {
+          "service": {
+            "id": "svc-fixture",
+            "key_reference": "fixture-es256-key",
+            "status": "configured",
+            "algorithms": [
+              "ES256"
+            ],
+            "key_purposes": [
+              "vc_jwt_issuer",
+              "oid4vp_request_signing"
+            ]
+          },
+          "resolved_by": {
+            "key_purpose": "vc_jwt_issuer",
+            "algorithm": "ES256",
+            "credential_format": null
+          }
+        }
+      },
+      "identity_response": {
+        "status": 200,
+        "body": {
+          "identity": {
+            "issuer_did": "did:web:issuer.unit.invalid:orgs:fixture",
+            "key_purpose": "vc_jwt_issuer",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+            "status": "active"
+          },
+          "public_jwk": {
+            "kty": "EC",
+            "x": "WDaton2lU8UGLHnTdkIj5EZcqfT0wo4yOWcKhsyHCFY",
+            "y": "oEAosFD6tzSSyT_f71C17U8aSl93FvJZ76WJ4IUlLuw",
+            "crv": "P-256"
+          },
+          "managed_key_binding_sha256": "ae6448d2f8a040d79593c853726b3d0111b221e5785571aa954111f7bcb32802"
+        }
+      },
+      "signing_response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service_id": "svc-fixture",
+          "algorithm": "ES256",
+          "payload_length": 377,
+          "signature_encoding": "der",
+          "signature_b64": "MEUCIG5QJ12dYiGndyXJUw3OmfV_z7SJa2khsqu7Bmig2p9gAiEA886xs4eZp4tx5rWunCxrwmwlPfHeVuUzfv-HJeTVkss",
+          "signature_hex": "304502206e50275d9d6221a77725c9530dce99f57fcfb4896b6921b2abbb0668a0da9f60022100f3ceb1b38799a78b71e6b5ae9c2c6bc26c253df1de56e5337eff8725e4d592cb",
+          "signed_at": "2026-10-20T00:00:00Z"
+        }
+      }
+    },
+    {
+      "expected": {
+        "run_id": "fixture-run-001",
+        "nonce": "2222222222222222222222222222222222222222222222222222222222222222",
+        "organization_id": "00000000-0000-0000-0000-000000000001",
+        "service_id": "svc-fixture",
+        "issuer_did": "did:web:issuer.unit.invalid:orgs:fixture",
+        "key_reference": "fixture-es256-key",
+        "key_purpose": "oid4vp_request_signing",
+        "credential_format": "SD_JWT_VC",
+        "algorithm": "ES256"
+      },
+      "service_response": {
+        "status": 200,
+        "body": {
+          "service": {
+            "id": "svc-fixture",
+            "key_reference": "fixture-es256-key",
+            "status": "configured",
+            "algorithms": [
+              "ES256"
+            ],
+            "key_purposes": [
+              "vc_jwt_issuer",
+              "oid4vp_request_signing"
+            ]
+          },
+          "resolved_by": {
+            "key_purpose": "oid4vp_request_signing",
+            "algorithm": "ES256",
+            "credential_format": null
+          }
+        }
+      },
+      "identity_response": {
+        "status": 200,
+        "body": {
+          "identity": {
+            "issuer_did": "did:web:issuer.unit.invalid:orgs:fixture",
+            "key_purpose": "oid4vp_request_signing",
+            "credential_format": "SD_JWT_VC",
+            "algorithm": "ES256",
+            "status": "active"
+          },
+          "public_jwk": {
+            "kty": "EC",
+            "x": "WDaton2lU8UGLHnTdkIj5EZcqfT0wo4yOWcKhsyHCFY",
+            "y": "oEAosFD6tzSSyT_f71C17U8aSl93FvJZ76WJ4IUlLuw",
+            "crv": "P-256"
+          },
+          "managed_key_binding_sha256": "ae6448d2f8a040d79593c853726b3d0111b221e5785571aa954111f7bcb32802"
+        }
+      },
+      "signing_response": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service_id": "svc-fixture",
+          "algorithm": "ES256",
+          "payload_length": 386,
+          "signature_encoding": "der",
+          "signature_b64": "MEUCIQDgLSJjWEjyw0SeZyndURAuzBJr0BPBlUiBp1MKVPqjPQIgan3LB2O2v10vGc4W4eGgbRl0C_MFeSFAySmvWnj89Nc",
+          "signature_hex": "3045022100e02d22635848f2c3449e6729dd51102ecc126bd013c1954881a7530a54faa33d02206a7dcb0763b6bf5d2f19ce16e1e1a06d19740bf305792140c929af5a78fcf4d7",
+          "signed_at": "2026-10-20T00:00:00Z"
+        }
+      }
+    }
+  ]
+}

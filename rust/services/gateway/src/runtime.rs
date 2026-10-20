@@ -3312,7 +3312,9 @@ async fn mint_public_issuer_csr_grant(
         ));
     }
     if !request.issuer_did.starts_with("did:")
-        || !matches!(request.key_purpose.as_str(), "csca" | "x509_doc_signer")
+        || !(matches!(request.key_purpose.as_str(), "csca" | "x509_doc_signer")
+            || (request.key_purpose == "mdoc_dsc"
+                && request.credential_format.eq_ignore_ascii_case("MDOC")))
         || !matches!(request.algorithm.as_str(), "ES256" | "ES384" | "ES512")
     {
         return Err(detail_response(422, "Issuer CSR identity is invalid."));
@@ -4312,9 +4314,14 @@ async fn vc_api_verify_handler(state: Arc<GatewayRuntimeState>, request: Request
         .extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip().to_string());
+    let overrides = proxy_overrides(
+        &state,
+        &format!("/v1/presentation-policies/{policy_id}/evaluate"),
+        &identity,
+    );
     let upstream = match state
         .proxy
-        .execute(upstream_request, &identity, &ProxyOverrides::default())
+        .execute(upstream_request, &identity, &overrides)
         .await
     {
         Ok(response) => response,
@@ -5107,7 +5114,13 @@ fn trusted_identity(
         api_key_scopes: identity.api_key_scopes.clone(),
         organization_permissions: membership
             .map(|item| item.permissions.iter().cloned().collect())
-            .unwrap_or_default(),
+            .unwrap_or_else(|| {
+                if identity.source == AuthenticationSource::ApiKey {
+                    vec![required_permission.to_owned()]
+                } else {
+                    Vec::new()
+                }
+            }),
         organization_roles: membership
             .map(|item| item.role_names.iter().cloned().collect())
             .unwrap_or_default(),
@@ -5685,6 +5698,7 @@ mod tests {
             }
             let body = match request.path.as_str() {
                 path if path.contains("presentation-policies") && path.ends_with("/evaluate") => {
+                    assert_eq!(request.header("x-service-token"), Some("s".repeat(32).as_str()));
                     br#"{"decision":"allow","result":"passed"}"#.to_vec()
                 }
                 "/v1/compliance-profiles/system/discoverable" => serde_json::to_vec(&json!({
@@ -7866,6 +7880,49 @@ mod tests {
     }
 
     #[test]
+    fn scoped_api_key_forwards_only_the_authorized_permission() {
+        let identity = GatewayIdentity {
+            source: AuthenticationSource::ApiKey,
+            user_id: "key-owner".into(),
+            authentication_time_unix: None,
+            user_email: None,
+            user_domain: None,
+            session_organization_id: Some("org-1".into()),
+            api_key_id: Some("key-1".into()),
+            api_key_prefix: None,
+            api_key_scopes: vec!["applications:read".into()],
+        };
+        assert!(authorize_api_key(
+            "application:view",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_ok());
+        let trusted = trusted_identity(&identity, "org-1", "application:view", None);
+        assert_eq!(trusted.organization_permissions, vec!["application:view"]);
+        assert_eq!(
+            trusted.required_permission.as_deref(),
+            Some("application:view")
+        );
+        assert_eq!(trusted.organization_id.as_deref(), Some("org-1"));
+        assert!(authorize_api_key(
+            "application:approve",
+            "org-1",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            "application:view",
+            "foreign-org",
+            identity.session_organization_id.as_deref(),
+            &identity.api_key_scopes,
+        )
+        .is_err());
+    }
+
+    #[test]
     fn legacy_api_key_routes_prefer_the_tenant_authorized_organization() {
         let trusted_identity = TrustedIdentityContext {
             organization_id: Some("authorized-org".into()),
@@ -8277,42 +8334,94 @@ mod tests {
             .header(marty_signing_grant::HEADER_NAME, "forged-grant")
             .body(Body::from(issuer_body.to_string()))
             .unwrap();
-        let issuer_response = router.oneshot(issuer_request).await.unwrap();
+        let issuer_response = router.clone().oneshot(issuer_request).await.unwrap();
         assert_eq!(issuer_response.status(), StatusCode::OK);
-        let calls = recorder.0.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        let forwarded_issuer = &calls[2].1;
-        let issuer_header = forwarded_issuer
-            .headers
-            .get(marty_signing_grant::HEADER_NAME)
-            .expect("trusted issuer CSR grant");
-        assert_ne!(issuer_header, "forged-grant");
-        let issuer_grant =
-            marty_signing_grant::GrantEnvelope::from_header_value(issuer_header).unwrap();
-        let issuer_intent: IssuerCsrIntent = serde_json::from_value(issuer_body).unwrap();
-        assert_eq!(issuer_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
-        assert_eq!(issuer_grant.claims.organization_id, "org-1");
-        assert_eq!(issuer_grant.claims.route, forwarded_issuer.path);
-        assert_eq!(
-            issuer_grant.claims.issuer_did.as_deref(),
-            Some("did:web:example.test:issuer")
-        );
-        assert_eq!(issuer_grant.claims.service_id, None);
-        assert_eq!(issuer_grant.claims.key_reference, None);
-        assert_eq!(issuer_grant.claims.key_purpose, "csca");
-        assert_eq!(issuer_grant.claims.algorithm, "ES256");
-        assert_eq!(
-            issuer_grant.claims.payload_sha256_b64,
-            marty_signing_grant::payload_digest(&issuer_intent.bound_payload())
-        );
-        assert_eq!(
-            forwarded_issuer
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 3);
+            let forwarded_issuer = &calls[2].1;
+            let issuer_header = forwarded_issuer
                 .headers
-                .get("x-api-key")
-                .map(String::as_str),
-            Some("dedicated-issuer-sign-key-000001")
+                .get(marty_signing_grant::HEADER_NAME)
+                .expect("trusted issuer CSR grant");
+            assert_ne!(issuer_header, "forged-grant");
+            let issuer_grant =
+                marty_signing_grant::GrantEnvelope::from_header_value(issuer_header).unwrap();
+            let issuer_intent: IssuerCsrIntent = serde_json::from_value(issuer_body).unwrap();
+            assert_eq!(issuer_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(issuer_grant.claims.organization_id, "org-1");
+            assert_eq!(issuer_grant.claims.route, forwarded_issuer.path);
+            assert_eq!(
+                issuer_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+            assert_eq!(issuer_grant.claims.service_id, None);
+            assert_eq!(issuer_grant.claims.key_reference, None);
+            assert_eq!(issuer_grant.claims.key_purpose, "csca");
+            assert_eq!(issuer_grant.claims.algorithm, "ES256");
+            assert_eq!(
+                issuer_grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(&issuer_intent.bound_payload())
+            );
+            assert_eq!(
+                forwarded_issuer
+                    .headers
+                    .get("x-api-key")
+                    .map(String::as_str),
+                Some("dedicated-issuer-sign-key-000001")
+            );
+        }
+        let mdoc_body = json!({
+            "issuer_did": "did:web:example.test:issuer",
+            "key_purpose": "mdoc_dsc",
+            "credential_format": "MDOC",
+            "algorithm": "ES256",
+            "country": "US",
+            "organization": "ElevenID Beta",
+            "common_name": "Pilot mDL Document Signer"
+        });
+        let mdoc_request = Request::builder()
+            .method("PUT")
+            .uri("/v1/signing-keys/issuer-identities/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .body(Body::from(mdoc_body.to_string()))
+            .unwrap();
+        assert_eq!(
+            router.clone().oneshot(mdoc_request).await.unwrap().status(),
+            StatusCode::OK
         );
-        drop(calls);
+        {
+            let calls = recorder.0.lock().unwrap();
+            assert_eq!(calls.len(), 4);
+            let forwarded_mdoc = &calls[3].1;
+            let mdoc_grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                forwarded_mdoc
+                    .headers
+                    .get(marty_signing_grant::HEADER_NAME)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(mdoc_grant.claims.origin, SigningOrigin::GatewayIssuerDid);
+            assert_eq!(mdoc_grant.claims.key_purpose, "mdoc_dsc");
+            assert_eq!(
+                mdoc_grant.claims.issuer_did.as_deref(),
+                Some("did:web:example.test:issuer")
+            );
+        }
+        let mut invalid_format = mdoc_body;
+        invalid_format["credential_format"] = json!("SD_JWT_VC");
+        let invalid_request = Request::builder()
+            .method("PUT")
+            .uri("/v1/signing-keys/issuer-identities/certificate-csr")
+            .header("content-type", "application/json")
+            .header("cookie", "sessionId=valid")
+            .body(Body::from(invalid_format.to_string()))
+            .unwrap();
+        assert_eq!(
+            router.oneshot(invalid_request).await.unwrap().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 
     #[tokio::test]
@@ -9700,6 +9809,25 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(body["verified"], true);
         assert_eq!(body["results"]["decision"], "allow");
+    }
+
+    #[test]
+    fn vc_api_verification_handoff_uses_policy_service_authentication() {
+        let state = runtime_state();
+        let identity = TrustedIdentityContext {
+            organization_id: Some("org-1".into()),
+            user_id: Some("user-1".into()),
+            ..TrustedIdentityContext::default()
+        };
+        let overrides = proxy_overrides(
+            &state,
+            "/v1/presentation-policies/policy-1/evaluate",
+            &identity,
+        );
+        assert_eq!(
+            overrides.headers.get("x-service-token"),
+            state.service_token.as_ref()
+        );
     }
 
     #[tokio::test]

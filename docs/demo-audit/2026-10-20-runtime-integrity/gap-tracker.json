@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "scope": "Runtime integrity continuation; source repairs and unchanged production qualification",
+  "previousTracker": "../2026-10-20-production-gaps/gap-tracker.json",
+  "catalog": {
+    "configurations": 19,
+    "scenarios": 14,
+    "scenarioState": "DRAFT",
+    "assertions": 66,
+    "assertionResult": "NOT_RUN",
+    "presentationBeats": 61,
+    "presentationBeatState": "UNBOUND",
+    "releaseReady": false,
+    "publicDemoReady": false,
+    "qualificationUpgrades": 0
+  },
+  "gaps": [
+    {
+      "id": "RI-01",
+      "area": "Withdrawal while issuance remains live",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "A shared Rust guard checks approval, offer, credential and uncertain-attempt state under the store write lock; denied withdrawal returns 409 without persistence.",
+      "remaining": "Withdrawal is not transaction cancellation or credential revocation; historical withdrawn rows are unchanged.",
+      "evidence": "evidence/applicant-withdrawal-verification.json"
+    },
+    {
+      "id": "RI-02",
+      "area": "Claim UI advertised request options ignored by Rust",
+      "status": "CONTRACT_MISMATCH_CLOSED",
+      "resolution": "Rust advertises actual claim capabilities, rejects unsupported options, preserves no-options callers and pending offer reuse. The dialog removes unsupported choices.",
+      "remaining": "Holder delivery destination selection and optional Canvas mirroring remain unsupported on this native claim path.",
+      "evidence": "evidence/applicant-claim-verification.json"
+    },
+    {
+      "id": "RI-03",
+      "area": "Late issuance completion or stale transaction read overwrites a current claim",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Exact immutable offer identity permits safe duplicate completion; stale NoActiveFlow replies and transaction projections cannot mutate replacement state.",
+      "remaining": "Cancellation and reissue are not one distributed atomic operation; safe pre-reservation conflicts remain possible.",
+      "evidence": "evidence/applicant-reconciliation-verification.json"
+    },
+    {
+      "id": "RI-04",
+      "area": "Stale claim state, duplicate acquisition and wallet navigation",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Scoped request sharing, read-only status refresh, shared raw-response normalization and one guarded wallet opener support both mobile and real desktop QR paths.",
+      "remaining": "Local component/HTTP fixtures are not deployed wallet receipt or native launch qualification.",
+      "evidence": "evidence/claim-dialog-runtime-verification.json"
+    },
+    {
+      "id": "RI-05",
+      "area": "Canvas application status does not refresh after wallet return",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "The parent refreshes read-only server evidence on close/focus/visible return, coalesces reads and clears stale state on failures. Only confirmed claimed status displays completion.",
+      "remaining": "D07/D08 still require full recording adapter integration and actual live receipt.",
+      "evidence": "evidence/canvas-claim-return-verification.json"
+    },
+    {
+      "id": "RI-06",
+      "area": "Owned cleanup required forbidden withdrawal and broke D05 recovery",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Exact credential/transaction readback permits retained application history; D01/D04 require confirmed revocation and D05 reissues the same application with freshly proved retired transaction history.",
+      "remaining": "Foreign, ambiguous, active, issued or uncertain unused-offer history blocks recovery; live recovery remains NOT_RUN.",
+      "evidence": "evidence/owned-retirement-verification.json"
+    },
+    {
+      "id": "RI-07",
+      "area": "Sequential composition rejects native portrait video",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "One portrait media validator is reused by sequential composition and independent overview while preserving role-specific requirements and raw source identity.",
+      "remaining": "Actual native capture and measured geometry for every intended demo are still required.",
+      "evidence": "evidence/media-runtime-integrity-verification.json"
+    },
+    {
+      "id": "RI-08",
+      "area": "Pointer evidence accepts arbitrary matching bytes",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "A strict versioned measurement document binds selected source filename/hash/dimensions and exact event geometry/timing; validation runs before and after rendering.",
+      "remaining": "SOURCE_AND_MEASUREMENT_IDENTITY_ONLY does not independently establish an OS click or the truth of the described visual outcome. Historical files require reviewed rebinding for new compositions.",
+      "evidence": "evidence/media-runtime-integrity-verification.json"
+    },
+    {
+      "id": "RI-09",
+      "area": "Declared segment duration drifts from encoded frames",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "A shared 25 fps integer frame timeline controls normalized segments/slates, captions and pointer mapping, followed by encoded-stream validation.",
+      "remaining": "Requested duration can quantize; fewer than seven frames is rejected. The retained fixture is generated shapes and a sine tone.",
+      "evidence": "evidence/media-runtime-integrity-verification.json"
+    },
+    {
+      "id": "RI-10",
+      "area": "Canvas imported prerequisites are promoted to current assertions",
+      "status": "FALSE_PROMOTION_CLOSED",
+      "resolution": "Preflight and action boundaries reject current assertion IDs on imported attested cases with CANVAS_CURRENT_RUN_EVIDENCE_REQUIRED.",
+      "remaining": "This deliberately blocks the incomplete D07/D08 recording definitions until actual current operations are integrated.",
+      "evidence": "evidence/canvas-prerequisite-guard-verification.json"
+    }
+  ],
+  "priorFindingCorrections": [
+    {
+      "id": "PG-15",
+      "previousStatus": "OPEN_LIVE_EVIDENCE",
+      "status": "OPEN_SOURCE_AND_LIVE_EVIDENCE",
+      "reason": "Existing Canvas product controls are present, but generic recorder paths lack current LTI/bootstrap, evidence job, approval, wallet/verification, fixture binding and visible negative/recovery operations. A real environment alone cannot close these source gaps.",
+      "evidence": "evidence/canvas-prerequisite-guard-verification.json"
+    },
+    {
+      "id": "PG-18",
+      "status": "CLOSED_IN_SOURCE_WITH_NARROWER_CAPABILITY",
+      "reason": "Organization-scoped wallet catalog lookup is retained. Delivery destination lookup and Canvas mirror selection are removed because this holder claim path cannot execute those options. The previous scope description must not imply otherwise.",
+      "evidence": "evidence/claim-dialog-runtime-verification.json"
+    },
+    {
+      "id": "PG-03",
+      "status": "FOLLOWUP_SOURCE_REPAIRED",
+      "reason": "After exact remote retirement, issued application history is preserved. WITHDRAWN is no longer used as evidence that an offer or credential is retired.",
+      "evidence": "evidence/owned-retirement-verification.json"
+    },
+    {
+      "id": "PG-05",
+      "status": "FOLLOWUP_SOURCE_REPAIRED",
+      "reason": "D05 expired-offer recovery uses canonical /issue on the same exact application, with a freshly validated retired transaction ledger and new offer binding. First-run duplicate protection is unchanged.",
+      "evidence": "evidence/owned-retirement-verification.json"
+    },
+    {
+      "id": "PG-11",
+      "status": "PRIOR_TEST_CORRECTION_PRESERVED",
+      "reason": "The earlier final-frame-PTS correction remains valid. RI-09 separately fixes actual segment-rounding drift and does not change that historical finding."
+    },
+    {
+      "id": "PG-16",
+      "status": "OPEN_CAPTURE_AND_REVIEW",
+      "reason": "All 61 planned beats remain UNBOUND. Fresh source capture, actual voice, subtitles, measured crop and cursor alignment, and watching/listening to the exact final master are still required."
+    }
+  ],
+  "unchangedBoundaries": [
+    "Native automatic server retirement NOT_PERFORMED.",
+    "D10 external KMS execution NOT_RUN.",
+    "D12 physical-booklet and native hardware qualification remain pending.",
+    "No beta/deployed mutation, external publication, push or release qualification performed.",
+    "Previous core wallet isolation and native verifier acknowledgement repairs remain unchanged prerequisites for their paths."
+  ]
+}

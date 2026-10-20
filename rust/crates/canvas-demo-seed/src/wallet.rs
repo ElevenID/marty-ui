@@ -219,11 +219,22 @@ pub async fn claim_wallet_credential<T: WalletTransport + Sync, P: WalletProof +
         .as_str()
         .filter(|value| !value.is_empty())
         .ok_or("Token endpoint did not return an access token")?;
-    let nonce = token["c_nonce"]
+    // The current issuer returns proof nonces from the dedicated endpoint,
+    // independently of the token exchange. Do not reuse a legacy token nonce.
+    let nonce_response = transport
+        .request(WalletOperation {
+            method: "POST",
+            url: format!("{base}/v1/issuance/nonce"),
+            json: None,
+            form: None,
+            bearer: None,
+            timeout_seconds: 20,
+        })
+        .await?;
+    let nonce = nonce_response["c_nonce"]
         .as_str()
-        .filter(|value| !value.is_empty())
-        .or_else(|| token["nonce"].as_str().filter(|value| !value.is_empty()))
-        .ok_or("Token endpoint did not return a c_nonce")?;
+        .filter(|value| !value.trim().is_empty())
+        .ok_or("Nonce endpoint did not return a c_nonce")?;
     let audience_base = if public_api_url.trim().is_empty() {
         base
     } else {
@@ -236,7 +247,6 @@ pub async fn claim_wallet_credential<T: WalletTransport + Sync, P: WalletProof +
             method: "POST",
             url: format!("{base}/v1/issuance/credential"),
             json: Some(json!({
-                "format": "vc+sd-jwt",
                 "credential_configuration_id": "OpenBadgeCredential#sd-jwt",
                 "proofs": {"jwt": [proof_jwt]}
             })),

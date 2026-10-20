@@ -2452,10 +2452,13 @@ async fn generate_public_issuer_csr(
     if !authorize_issuer_sign(&state, &headers) {
         return public_error(StatusCode::UNAUTHORIZED, "Issuer CSR authority required.");
     }
-    if !matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer") {
+    if !(matches!(input.key_purpose.as_str(), "csca" | "x509_doc_signer")
+        || (input.key_purpose == "mdoc_dsc"
+            && input.credential_format.eq_ignore_ascii_case("MDOC")))
+    {
         return public_error(
             StatusCode::UNPROCESSABLE_ENTITY,
-            "Passport CSR purpose is unsupported.",
+            "Issuer CSR purpose or format is unsupported.",
         );
     }
     let identity = passport_csr_identity(&input);

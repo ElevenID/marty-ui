@@ -21,8 +21,26 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 450,
+  "route_count": 453,
   "routes": [
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/offline-verification-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/organizations/{organization_id}/offline-verification-events",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "GET",
+      "path": "/v1/organizations/{organization_id}/offline-verification-events/{verification_id}",
+      "status_code": 200
+    },
     {
       "include_in_schema": true,
       "method": "GET",

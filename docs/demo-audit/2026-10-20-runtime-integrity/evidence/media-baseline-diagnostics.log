@@ -1,0 +1,31 @@
+{
+  "kind": "SYNTHETIC_BASELINE_MEDIA_DIAGNOSTIC",
+  "baselineRepository": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+  "baselineRevision": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+  "unboundPointerDocumentAccepted": true,
+  "acceptedNonexistentEventId": "nonexistent-event",
+  "actualPortraitCapture": {
+    "codec": "h264",
+    "profile": "Constrained Baseline",
+    "width": 1080,
+    "height": 1920,
+    "pixelFormat": "yuv420p",
+    "frameRate": 25,
+    "bitrate": 69870,
+    "colorPrimaries": null,
+    "colorTransfer": null,
+    "colorSpace": null,
+    "fieldOrder": "progressive",
+    "duration": 0.8,
+    "audioStreams": []
+  },
+  "portraitRejectedByComposerCaptureValidator": "Capture quality gate failed: resolution must be at least 1920x1080; observed 1080x1920; aspect ratio must be 16:9; observed 1080x1920",
+  "fractionalSegments": {
+    "count": 20,
+    "requestedSecondsEach": 0.26,
+    "declaredDurationSeconds": 5.1999999999999975,
+    "encodedDurationSeconds": 5.6,
+    "encodedFrames": 140
+  },
+  "qualification": "NO_PRODUCT_OR_NATIVE_WALLET_EXECUTION"
+}

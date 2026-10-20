@@ -1,0 +1,12 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/ui
+
+
+ Test Files  2 passed (2)
+      Tests  31 passed (31)
+   Start at  03:49:03
+   Duration  10.10s (tests 54%, import 20%, environment 14%, transform 8%, setup 5%)
+
+    Isolate  2 workers spawned · ~782ms startup each (spawn + environment, per file)
+             at least ~782ms faster with isolate: false — reuses workers across files instead of one per file
+

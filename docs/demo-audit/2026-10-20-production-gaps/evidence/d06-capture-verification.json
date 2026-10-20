@@ -1,0 +1,133 @@
+{
+  "schemaVersion": 1,
+  "kind": "d06-recorder-live-capture-wiring-verification",
+  "verifiedAt": "2026-10-20T04:22:35.853599+00:00",
+  "result": "PASS",
+  "scope": "LOCAL_CLEAN_GIT_AND_REAL_NODE_IPC_ADAPTER_FIXTURES_ONLY",
+  "source": {
+    "recorderHeadBeforeCommit": "5ea1935d687f4be7c1090b780e173f3025f851b3",
+    "changesCommitted": false,
+    "files": [
+      {
+        "path": "demos/credential-lifecycle.json",
+        "sha256": "901bf27be050a0c21f71224271e29a375479a8433e69ce518fbba69b7468c570"
+      },
+      {
+        "path": "test/functionalScenarioContracts.test.js",
+        "sha256": "c4e279f747d798594cf20c3f05c5ffece87a1fe3525d1d4bae91f119cc517fa9"
+      },
+      {
+        "path": "docs/d06-lifecycle-capture.md",
+        "sha256": "a1493eef3bf95e132947fe0ef22d3c5345cc8bebf90d7c4f489f806d7f9dab40"
+      },
+      {
+        "path": "demos/lifecycle-alignment.json",
+        "sha256": "986a2e24f9b7bab073dcca152ce4c3a3640125686ee77d77ac8fd4d3a5af51bd"
+      }
+    ],
+    "testedRecorderModules": [
+      {
+        "path": "src/externalQualification.js",
+        "sha256": "473c2f9fd02afbbd603ff6232649869dc0961d22b4b6099ab5c93d1d6371014d"
+      },
+      {
+        "path": "src/functionalRerun.js",
+        "sha256": "66ee7eb38db01f25e302e8bfc8e2383a3be2677742ee9d716a0ecd12d61cdef5"
+      },
+      {
+        "path": "src/releaseBinding.js",
+        "sha256": "799c990b1860d9b7f197c12374fb80420243960a68d8e634434687731b8a15b7"
+      },
+      {
+        "path": "src/redaction.js",
+        "sha256": "31b291374f83be5f39fbf5ba9378c0065af95dad30e5a2ffe0e4b41eeebc15ec"
+      },
+      {
+        "path": "src/externalLiveEvidence.js",
+        "sha256": "815663a04df09cdab22e0b3d97c0a776a51fb7a6d4e4a2351142905b7bbc8e7c"
+      },
+      {
+        "path": "src/externalLiveEvidenceHelper.js",
+        "sha256": "1a8ec15dc70b35fb6bc276f035b5d709623b99fc17bbfd9d3867fe8222fc818d"
+      },
+      {
+        "path": "src/maintenancePreflight.js",
+        "sha256": "1f47243c08aedb9c5967ec260c286419fd895c9da98346f7d30c4699813cad24"
+      },
+      {
+        "path": "src/executionEvidence.js",
+        "sha256": "5928773f6529a8f9658e8732bdc095b03e4cdc0a977187c49017471ce6fa2d14"
+      }
+    ],
+    "uiDriver": {
+      "headAtReview": "201df5a70942f333a11787b263932addd591da37",
+      "entrypoint": "tests/scripts/audit-beta-credential-lifecycle.js",
+      "sha256": "6fd68013addaa9bf5dc003dcc98b27e3ffbb6dc138fa39c4d02042853e173cdf",
+      "modifiedByThisRepair": false
+    }
+  },
+  "checks": [
+    {
+      "command": "node --test test/functionalScenarioContracts.test.js",
+      "cwd": "marty-demo-recorder",
+      "namedTests": 10,
+      "passed": 10,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0,
+      "D06SpecificNamedCases": 4,
+      "otherExistingCases": 6,
+      "method": "The exact current recorder modules are copied into a clean owned Git fixture. Separate product and driver commits establish real ancestry. Default runQualification, runProcess, sourceBinder, helper and parent IPC run without overrides; the remote browser journey is replaced by an explicitly synthetic child."
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "marty-demo-recorder",
+      "exitCode": 0,
+      "result": "PASS"
+    },
+    {
+      "kind": "resolvedConfigurationAndActualEntrypointDigest",
+      "result": "PASS",
+      "scenarioRevision": 2,
+      "sourceComponent": "marty-ui",
+      "liveEvidence": true,
+      "driverRevisionEnvironment": "DEMO_D06_DRIVER_REVISION",
+      "driverRepositoryEnvironment": "DEMO_D06_DRIVER_REPOSITORY",
+      "fixedEntrypointSha256": "6fd68013addaa9bf5dc003dcc98b27e3ffbb6dc138fa39c4d02042853e173cdf",
+      "mandatoryInBothModes": [
+        "report.json",
+        "lifecycle-fixture-input.json"
+      ],
+      "recordedModeRequiredVideos": [
+        "credential-lifecycle-application.webm",
+        "credential-lifecycle-wallet.webm"
+      ],
+      "optionalActionLandmarks": "lifecycle-action-events.json"
+    }
+  ],
+  "regressions": [
+    "functional success requires actual complete IPC with one sealed fixture and observed synthetic trace",
+    "recorded success retains both source video roles; omission of either fails",
+    "fixture JSON remains mandatory in both modes",
+    "a PASS report with missing COMPLETE fails in both modes",
+    "wrong entrypoint SHA fails before child execution",
+    "dirty driver and dirty recorder each fail before child execution",
+    "missing action landmark JSON does not invalidate the external artifact contract"
+  ],
+  "alignment": {
+    "updatedEntryOnly": "credential-lifecycle",
+    "otherScenarioEntriesPreserved": true,
+    "captureBinding": "UNBOUND",
+    "catalogAssertions": "NOT_RUN",
+    "otherCaptureEvidenceUnchanged": true
+  },
+  "limitations": [
+    "No beta requests, browser launch, native wallet action, issuance, credential mutation, live signing, recording, voice generation, master or publication was performed.",
+    "Synthetic child assertions, response events and media placeholders establish transport/source/artifact handling only. They are not lifecycle functionality, real service correlation or valid media evidence.",
+    "The UI lifecycle driver was read and fingerprinted, not changed or executed by this repair.",
+    "Temporary fixture Git histories exercise source gates and are unrelated to upstream ancestry or package application proofs.",
+    "The actual driver still requires the canonical beta HTTPS origin, loopback isolated_sessions v1 Rust wallet, authorized operator, governed template/policy/revocation inputs and fresh release/manifest bindings.",
+    "Current report and fixture JSON remain required in functional mode; actual source recordings, measured frame binding and exact-master review remain necessary for media qualification.",
+    "Final reviewed capture-driver commit IDs must be supplied after applying the chosen UI lineage; fixed entrypoint bytes must match this config. The root agent owns final commits and application proofs."
+  ]
+}

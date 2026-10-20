@@ -50,6 +50,8 @@
     {"method":"POST","path":"/v1/organizations/org/applicants/a1/issue","permission":"issuance:initiate","resource":"application"},
     {"method":"POST","path":"/v1/organizations/org/applicants/a1/approve","permission":"application:approve","resource":"application"},
     {"method":"POST","path":"/v1/organizations/org/applicants/a1/reject","permission":"application:reject","resource":"application"},
+    {"method":"GET","path":"/v1/organizations/org/applicants","permission":"application:view","resource":"application"},
+    {"method":"GET","path":"/v1/organizations/org/applicants/a1","permission":"application:view","resource":"application"},
     {"method":"PATCH","path":"/v1/organizations/org/applicants/a1","permission":"application:review","resource":"application"},
     {"method":"POST","path":"/v1/flows/verify","permission":"verification:execute","resource":"verification"},
     {"method":"PATCH","path":"/v1/flows/verify","permission":null,"resource":null},

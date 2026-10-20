@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "scope": "D10 implementation and local generated-fixture verification only",
+  "result": "PASS",
+  "liveBetaRun": "NOT_RUN",
+  "liveKmsRun": "NOT_RUN",
+  "recordedDemo": "NOT_RUN",
+  "repositories": {
+    "marty-ui": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "baseHead": "ba34fcd5af792cf53fe290abb807b6f09ccac2e7",
+      "changesUncommitted": true,
+      "sourceSha256": {
+        "rust/crates/release-evidence/Cargo.toml": "96c4cb0cf9ff98258b00542b976b462c60bbf60623e5484761a5834ad4c95068",
+        "rust/crates/release-evidence/src/lib.rs": "cf592193348ca0349cfdb6206ebac7d6d819b505fc2d1a3e2c1596f7fe36dbda",
+        "rust/crates/release-evidence/src/signing_capability.rs": "552567a32b7981e638d3327f1bea731a27d426a9b8674925eaaf131263eb8051",
+        "rust/crates/release-evidence/src/signing_capability_cli.rs": "e1d795a22d70d873dba35d65cc43b462158be54c955d6343eb8fdf37a325bb88",
+        "rust/crates/release-evidence/tests/signing_capability.rs": "c00c6fa00919b2a276c9203c65893117c5875e107267dfebd59c366dc0d067bb",
+        "rust/crates/release-evidence/tests/fixtures/signing-capability-es256.json": "0c701331ee957a978ec2ce816bac4b30115aece622b3f67bb6f350767343fda9",
+        "scripts/beta_org_console_audit.py": "eb7745ba19eceb40b0812995e38b29f774792c7803621de8a047043acd240f9d",
+        "tests/test_beta_org_console_audit_release_checks.py": "b38ffa8838a10c3faff8f31a69756cf48471751e83b984c9b6723a7e5bc2a02b",
+        "tests/test_beta_org_console_audit_signing.py": "1228842ac8c6c39d32415f837e3f67b57f69422fa007aec9514f4770aaf307b2",
+        "ui/src/components/console/deploy/keyManagementServiceCatalog.js": "fb1f57354e74730c0de3ce377dab94c52b5f99db44f959b00f6c4986d4741675",
+        "ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts": "c54f94678aea980bb5530c2750ec8677ba2d7c821486bcd9d2025020188bf999"
+      }
+    },
+    "marty-demo-recorder": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "baseHead": "d9e41aefdfd9b5fee5109b4d7d186929fa7106dc",
+      "changesUncommitted": true,
+      "sourceSha256": {
+        "demos/organization-primitives.json": "19fdc7f1171f6335876d3d0c6aa6f11a9c580358f02e07672186c5ec7177c948",
+        "test/functionalScenarioContracts.test.js": "0005639db04807518d93776788a1c62521de7f8b13c681ebfe263e20b85b62bc",
+        "docs/functional-reruns.md": "0bcf84d938fe746b05839a0eec15b5b69d6e2970bb0fb44d093e64194933668a",
+        "docs/d10-signing-capability.md": "1b66c5e5e04b87157a81e5a43f0add41900ce4721b4f1dc83005bab09c7ddc6c"
+      }
+    }
+  },
+  "checks": [
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/rust",
+      "command": "PATH=/workspace/scratch/d8b5d3d3b0dd/rust-toolchain/bin:$PATH CARGO_HOME=/workspace/scratch/d8b5d3d3b0dd/rust-cargo-cache CARGO_TARGET_DIR=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target cargo test --locked -j 2 -p marty-release-evidence --test signing_capability",
+      "exitCode": 0,
+      "passed": 6,
+      "failed": 0,
+      "notes": "Actual generated P-256 signatures for both purposes; exact scope, replay, response, public-key and bounded CLI failure cases. No private fixture key retained."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "command": "DEMO_SIGNING_CAPABILITY_TEST_BIN=/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/validate-signing-capability /tmp/marty-audit-pass2-venv/bin/python -m pytest -q tests/test_beta_org_console_audit_release_checks.py tests/test_beta_org_console_audit_signing.py",
+      "exitCode": 0,
+      "passed": 48,
+      "failed": 0,
+      "skipped": 0,
+      "warnings": [
+        "Existing pytest.ini asyncio_mode option unrecognized in the focused audit virtual environment."
+      ],
+      "notes": "Includes actual Python/Rust CLI interoperability and signature replay rejection; browser/public APIs are fixture adapters. Includes validator bytes substituted before/after invocation and retained local executable provenance."
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "command": "npm test -- src/components/console/deploy/keyManagementServiceCatalog.test.ts",
+      "exitCode": 0,
+      "passed": 4,
+      "failed": 0
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "command": "node --test test/config.test.js test/functionalScenarioContracts.test.js",
+      "exitCode": 0,
+      "passed": 19,
+      "failed": 0,
+      "notes": "Mandatory D10 trace and both signing-proof JSON files in both recorded and functional modes."
+    }
+  ],
+  "totalNamedTestsPassed": 77,
+  "limitations": [
+    "No authorized live beta/KMS workflow was executed; real endpoint/token/key and fresh runtime evidence remain prerequisites.",
+    "The signing receipt scope is exact public-service signing capability only, not credential issuance, wallet acceptance or a completed OID4VP exchange.",
+    "Trace intentionally omits authentication, organization creation and KMS credential entry/submission; report records the gap.",
+    "Both modes require signing proof artifacts; functional mode has no video and grants no capture/publication qualification.",
+    "Only new signing module/test files were rustfmt-formatted. Shared release-evidence Cargo/lib wiring also includes the separately owned D03 module."
+  ],
+  "initialAttemptNotes": [
+    "Default Python lacked pytest; focused tests used the existing audit virtual environment.",
+    "Offline Cargo found one missing locked dependency set; authorized locked downloads completed without editing Cargo.lock.",
+    "An initial recorder test incorrectly forbade primary video in ordinary recorded mode; its assertion was corrected before the passing 19-test run."
+  ],
+  "validatorExecutable": {
+    "sha256": "7ef15e87d225beca06ba379a5255959cc732848ea47db3f9808cb5c1d00115ab",
+    "scope": "LOCAL_EXECUTABLE_BYTES_NOT_DEPLOYED_BUILD_ATTESTATION"
+  }
+}

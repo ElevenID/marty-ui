@@ -1,0 +1,138 @@
+{
+  "schemaVersion": 1,
+  "scope": "Production gap repairs and honest remaining work",
+  "catalog": {
+    "scenarios": 14,
+    "state": "DRAFT",
+    "assertions": 66,
+    "assertionResult": "NOT_RUN"
+  },
+  "gaps": [
+    {
+      "id": "PG-01",
+      "area": "Native template and issuer resolution",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Ported lifecycle fixes for issuer-organization template lookup, optional fields and badge discovery; common Rust issuer assertion-key resolution is independent of login trust.",
+      "remaining": "Fresh deployed issuance and independent-wallet verification remain required."
+    },
+    {
+      "id": "PG-02",
+      "area": "Shared wallet resets and concurrent cleanup",
+      "status": "CLOSED_IN_SOURCE_AND_LOCAL_RUNTIME",
+      "resolution": "Rust run sessions separate cookie capabilities, storage and run IDs; close drains active operation leases. Shared browser adapters use the owned session before mutation, including D01/D04 callers of the common receipt helper.",
+      "remaining": "Local isolation does not establish a public wallet product or deployed security qualification."
+    },
+    {
+      "id": "PG-03",
+      "area": "Revocation-profile ownership and unused offers",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Lifecycle references an exact existing active organization profile and cancels only captured pending transactions through the shared authenticated API/readback helper.",
+      "remaining": "Lost creation IDs, an issued-record race or unconfirmed readback retain incomplete cleanup."
+    },
+    {
+      "id": "PG-17",
+      "area": "D06 recorder IPC launch mismatch",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Lifecycle recorder configuration now enables the live IPC required by its actual driver, pins the reviewed source and retains its acknowledged fixture JSON in both modes.",
+      "remaining": "Set DEMO_D06_DRIVER_REVISION to the exact reviewed checkout; the source/config regression does not execute beta or create release media."
+    },
+    {
+      "id": "PG-04",
+      "area": "D03 minimal age disclosure and trust rejection",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Dedicated native age-receipt validator, recorder adapter and exact Flow-result UI expose authenticated mdoc element names and refuse extra disclosure or generic rejection as trust evidence.",
+      "remaining": "Pinned EUDI and Spruce native runs remain mandatory; an issuer-specific negative observation is required and typed backend reason stays unknown."
+    },
+    {
+      "id": "PG-05",
+      "area": "D05 foreign issuer and naturally expired offers",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Local shared support driver checks real native signature/trust/Auth results, natural short server TTL, no session on denial, and successful trusted reissue/login.",
+      "remaining": "Preprovisioned governed fixtures, a real deployed signing path and an isolated 60/120-second TTL lane are required."
+    },
+    {
+      "id": "PG-06",
+      "area": "D05 native consent, expiry and evidence controls",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Shared source-grounded flow uses actual Add to Wallet, Approve and Cancel controls; provisions each clean lane, checks real mobile sign-out, separates wallet IDs and verifies same-browser results. Expiry waits before native handoff and reads authoritative application state.",
+      "remaining": "No new native recording. Native-intent fallback must be supported by the pinned Chrome profile; unsupported chooser profiles remain blocked."
+    },
+    {
+      "id": "PG-07",
+      "area": "D09 loopback collector and premature native queue ACK",
+      "status": "CLOSED_IN_SOURCE_AND_LOCAL_DATABASE",
+      "resolution": "Rust Organization commits authenticated immutable receipts in PostgreSQL; native reporting retains queue IDs until exact durable receipt validation; recorder requires deployed readback and duplicate replay.",
+      "remaining": "Changed gateway, Organization migration/service and native verifier must be deployed together. A receipt is a client-report submission, not physical-device attestation."
+    },
+    {
+      "id": "PG-08",
+      "area": "D10 placeholder signer and configuration-only success",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Explicit real HTTPS OpenBao inputs and fresh challenges for VC issuer and OID4VP purposes are validated through shared Rust marty-crypto.",
+      "remaining": "Signing capability is distinct from actual issuance/presentation, and the live external KMS path remains NOT_RUN."
+    },
+    {
+      "id": "PG-09",
+      "area": "Android report/public manifest incompatibility",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Strict public projection preserves lane identity and exact evidence file hash; recorder and current UI/Python consumers enforce the schema, and UI labels separate wallet lanes.",
+      "remaining": "The full report is hash-checked, not a cryptographic attestation."
+    },
+    {
+      "id": "PG-10",
+      "area": "Current draft/config revision drift",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Only unpublished scenario revisions and descriptions align with current executable contracts; all numbered assertion declarations reconcile.",
+      "remaining": "Declaration coverage gives no runtime PASS and no historical media is promoted."
+    },
+    {
+      "id": "PG-11",
+      "area": "Composer duration test oracle",
+      "status": "CLOSED_TEST_DEFECT",
+      "resolution": "The test now inspects actual encoded MP4 duration, frame count and timestamps instead of treating final-frame PTS as container duration.",
+      "remaining": "Previous report wording is explicitly corrected; no rendering implementation change or actual demo render is inferred."
+    },
+    {
+      "id": "PG-12",
+      "area": "Private recorder source application boundary",
+      "status": "CLOSED_FULL_SOURCE_COMPATIBILITY",
+      "resolution": "Recovered and verified all 453 upstream source blobs, modes and the exact tree; prior patches and this pass are replayed against that complete source.",
+      "remaining": "Actual private upstream Git history was not imported. Synthetic reconstruction baseline and recorder bundle are excluded."
+    },
+    {
+      "id": "PG-13",
+      "area": "Retained first-party wallet config",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "Dedicated retained-case contract reuses the actual governed claim/Receive/Present/login driver and checks closed-session rejection under explicit first-party control scope.",
+      "remaining": "Fresh capture required; no independent-wallet, TTL, or public wallet product qualification is inferred."
+    },
+    {
+      "id": "PG-14",
+      "area": "Retained independent interoperability demo",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "A dedicated current contract reuses the shared pinned native flow with separate fresh Spruce receipt/presentation/authentication and provisioned cancellation lanes. It has its own source binding, reports and recordings.",
+      "remaining": "Fresh native execution remains mandatory. Exact format/disclosure, other vendors, physical-device security and automatic callback behavior are outside this bounded claim; no D03/D05 evidence is inherited."
+    },
+    {
+      "id": "PG-18",
+      "area": "Organization-scoped claim wallet selection",
+      "status": "CLOSED_IN_SOURCE",
+      "resolution": "The claim dialog receives the resolved application organization, allowing the existing wallet registry and delivery-destination lookup to use organization-specific entries.",
+      "remaining": "Actual registered wallet and governed issuer/login configuration must exist on the matching deployment."
+    },
+    {
+      "id": "PG-15",
+      "area": "Canvas and external evidence scenarios",
+      "status": "OPEN_LIVE_EVIDENCE",
+      "resolution": "Existing paths and imported negative attestations remain explicitly distinguished in the per-demo plan.",
+      "remaining": "Real stock Canvas/external source execution and fresh visible negative outcomes still need their actual environments."
+    },
+    {
+      "id": "PG-16",
+      "area": "Lifecycle media alignment across all demos",
+      "status": "OPEN_CAPTURE_AND_REVIEW",
+      "resolution": "Shared lifecycle-v1 voice/caption, measured crop, added-cursor and numbered story recipe is retained; all 61 planned beats remain UNBOUND.",
+      "remaining": "Actual source capture, measured geometry/timing, narration, subtitles and exact-master watching/listening are required before any publication upgrade."
+    }
+  ]
+}

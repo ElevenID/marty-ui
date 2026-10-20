@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from argparse import Namespace
 from pathlib import Path
 
@@ -18,11 +19,33 @@ from scripts.check_canvas_oss_portability import (
     validate_execution_assets,
     validate_image_manifest,
     validate_lock,
+    validate_operator_configuration_assets,
     validate_runtime_binding,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("changed", ["generator", "contract"])
+def test_operator_configuration_witness_requires_shared_owner_and_binding(tmp_path: Path, changed: str) -> None:
+    directory = tmp_path / "scripts/canvas-oss"
+    directory.mkdir(parents=True)
+    for name in ("generate-runtime-config.mjs", "runtime-config-contract.mjs"):
+        text = (ROOT / "scripts/canvas-oss" / name).read_text(encoding="utf-8")
+        if changed == "generator" and name == "generate-runtime-config.mjs":
+            text = text.replace("const files=renderRuntimeConfiguration({", "const files=unreviewedRenderer({")
+        if changed == "contract" and name == "runtime-config-contract.mjs":
+            text = text.replace("File.read(ENV.fetch('POSTGRES_PASSWORD_FILE')).strip", "UNREVIEWED_PASSWORD")
+        (directory / name).write_text(text, encoding="utf-8")
+    with pytest.raises(ContractError, match="shared renderer|secret file"):
+        validate_operator_configuration_assets(tmp_path)
+
+
+def test_actual_operator_generator_and_validator_contracts() -> None:
+    # Execute the producer/consumer checks in the existing release-contract CI lane.
+    subprocess.run(["node", "--test", "tests/scripts/canvas-runtime-config-contract.test.js"],
+                   cwd=ROOT, check=True, capture_output=True, text=True, timeout=60)
 
 
 def load(relative: str) -> dict:

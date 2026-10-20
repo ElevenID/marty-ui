@@ -1,0 +1,64 @@
+   Compiling marty-applicant v0.1.0 (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/rust/services/applicant)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.37s
+     Running tests/application_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/application_behavior-6808ddfa64016bca)
+
+running 17 tests
+test approval_requires_lock_and_uses_persisted_issuer_scope ... ok
+test creation_is_profile_bound_duplicate_safe_and_submission_creates_checks ... ok
+test no_op_issuance_reconciliation_preserves_application_ordering_metadata ... ok
+test completed_claim_is_not_overwritten_by_a_late_no_flow_error ... ok
+test profile_upsert_tracks_subject_and_email_without_split_identity_loss ... ok
+test prior_credential_status_does_not_block_a_new_application_review ... ok
+test profile_vetting_patch_merges_without_erasing_owned_data ... ok
+test review_commits_a_stable_event_id_and_retries_failed_delivery ... ok
+test uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot ... ok
+test completed_claim_reply_refuses_malformed_markers_and_a_new_active_attempt ... ok
+test completed_claim_reply_rejects_changed_offer_transaction_and_flow_identity ... ok
+test completed_claim_reply_preserves_reconciled_success_and_expiry_without_writes ... ok
+test withdrawal_cannot_hide_a_reserved_in_flight_offer ... ok
+test withdrawal_refuses_issuance_states_without_changing_records_or_persistence ... ok
+test withdrawal_preserves_safe_self_and_organization_decisions ... ok
+test withdrawal_refuses_retained_issuance_markers_even_on_early_or_terminal_states ... ok
+test production_authorizer_uses_the_canonical_mmf_policy ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/domain_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/domain_behavior-ded74fc9a0b1e07d)
+
+running 6 tests
+test one_shared_lifecycle_preserves_legacy_aliases_and_terminal_states ... ok
+test nullable_template_field_options_preserve_validation ... ok
+test reviewer_locks_refresh_owner_and_deny_competing_reviewer_until_expiry ... ok
+test complete_surface_and_domain_inventory_is_language_neutral ... ok
+test evidence_is_bounded_hashed_sanitized_and_expires_fail_closed ... ok
+test form_validation_returns_stable_field_failures_and_rejects_unknown_data ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/http_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/http_behavior-9ce2c0fa19389313)
+
+running 9 tests
+test organization_withdrawal_still_accepts_an_unissued_application_under_review ... ok
+test claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities ... ok
+test profile_and_application_workflow_preserves_released_http_shapes ... ok
+test operational_diagnostics_identify_the_required_native_backend ... ok
+test withdrawal_routes_preserve_authentication_authority_and_tenant_boundaries ... ok
+test claim_checks_holder_ownership_before_reporting_body_errors ... ok
+test withdrawal_routes_return_conflict_for_issuance_without_lifecycle_side_effects ... ok
+test claim_rejects_unsupported_options_and_malformed_json_before_mutation ... ok
+test every_language_neutral_operation_is_registered_on_the_native_router ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.31s
+
+     Running tests/issuance_behavior.rs (/workspace/scratch/d8b5d3d3b0dd/marty-ui/rust/target/debug/deps/issuance_behavior-095c4a4375834828)
+
+running 6 tests
+test missing_active_flow_persists_stable_issuer_owned_blocker ... ok
+test terminal_applications_are_not_reactivated_by_late_issuance_reconciliation ... ok
+test offer_is_not_credentialed_until_transaction_reports_issued ... ok
+test repeated_issued_reconciliation_is_a_no_op ... ok
+test uncertain_retry_reuses_exact_attempt_and_claim_snapshot ... ok
+test consumed_offer_requires_a_fresh_claim_attempt ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

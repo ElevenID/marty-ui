@@ -42,7 +42,7 @@ import { getAvailableProtocols } from '../../../config/issuanceProtocols';
 
 function SectionCard({ title, icon, children }) {
   return (
-    <Paper variant="outlined" sx={{ mb: 3 }}>
+    <Paper variant="outlined" data-testid="credential-issuance-section" sx={{ mb: 3 }}>
       <Box
         sx={{
           display: 'flex',
@@ -66,7 +66,12 @@ function SectionCard({ title, icon, children }) {
 
 // ── Main component ──────────────────────────────────────────────────────────
 
-export default function IssuingSection({ applicationId, applicationStatus }) {
+function hasCredentialOffer(data) {
+  return (typeof data?.offer_url === 'string' && data.offer_url.trim().length > 0)
+    || Object.values(data?.credential_offer_uris || {}).some((uri) => typeof uri === 'string' && uri.trim().length > 0);
+}
+
+export default function IssuingSection({ organizationId, applicationId, applicationStatus }) {
   const protocols = getAvailableProtocols();
   const singleProtocol = protocols.length === 1;
 
@@ -87,8 +92,8 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await selectedProtocol.generateOffer(applicationId);
-      if (!data?.offer_url) {
+      const data = await selectedProtocol.generateOffer(applicationId, { organizationId });
+      if (!hasCredentialOffer(data)) {
         setError('Credential offer URI was not returned. The issuance service may be unavailable. Please try again.');
         return;
       }
@@ -99,7 +104,7 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     } finally {
       setLoading(false);
     }
-  }, [selectedProtocol, applicationId]);
+  }, [selectedProtocol, organizationId, applicationId]);
 
   // ── Regenerate (e.g. after expiry) ──────────────────────────────────────
 
@@ -108,14 +113,18 @@ export default function IssuingSection({ applicationId, applicationStatus }) {
     setLoading(true);
     setError(null);
     try {
-      const data = await selectedProtocol.generateOffer(applicationId);
+      const data = await selectedProtocol.generateOffer(applicationId, { organizationId });
+      if (!hasCredentialOffer(data)) {
+        setError('Credential offer URI was not returned. The issuance service may be unavailable. Please try again.');
+        return;
+      }
       setOfferData(data);
     } catch (err) {
       setError(err.message || 'Failed to regenerate issuance invite');
     } finally {
       setLoading(false);
     }
-  }, [selectedProtocol, applicationId]);
+  }, [selectedProtocol, organizationId, applicationId]);
 
   const REISSUE_STATUSES = ['issued', 'credentialed'];
   const isReissue = REISSUE_STATUSES.includes(applicationStatus);

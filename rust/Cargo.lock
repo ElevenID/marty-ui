@@ -4346,6 +4346,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-issuer-key-resolution"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum",
+ "marty-didcomm",
+ "marty-key-material-policy",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "marty-key-material-policy"
 version = "0.1.0"
 dependencies = [
@@ -4543,6 +4556,7 @@ dependencies = [
  "chrono",
  "hex",
  "marty-crypto",
+ "marty-issuer-key-resolution",
  "marty-key-material-policy",
  "marty-oid4vci",
  "marty-oid4vp-contract",
@@ -4818,6 +4832,7 @@ dependencies = [
  "axum",
  "chrono",
  "marty-didcomm",
+ "marty-issuer-key-resolution",
  "marty-key-material-policy",
  "marty-verification",
  "mmf-core",
