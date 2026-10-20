@@ -37,8 +37,12 @@ fn correlation_migration_is_applied_and_validated() {
     let source = include_str!("../src/migration.rs");
     let sql = include_str!("../migrations/0002_webhook_delivery_correlation.sql");
     let compact_source: String = source.chars().filter(|c| !c.is_whitespace()).collect();
-    assert!(compact_source
-        .contains("include_str!(\"../migrations/0002_webhook_delivery_correlation.sql\")"));
+    // Keep a source assertion from looking like another compiler include input.
+    let expected_include = format!(
+        "{}({})",
+        "include_str!", r#""../migrations/0002_webhook_delivery_correlation.sql""#
+    );
+    assert!(compact_source.contains(&expected_include));
     assert!(source.contains("webhook delivery correlation column is missing"));
     assert!(sql.contains("ADD COLUMN IF NOT EXISTS correlation_id varchar(64)"));
 }

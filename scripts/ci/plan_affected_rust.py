@@ -336,7 +336,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "runtime_evidence": "rust/services/trust-profile/src/main.rs",
             "runtime_marker": "NativeIssuerKeyResolver::new(",
             "registration_marker": ".with_issuer_key_resolver(issuer_key_resolver)",
-            "request_evidence": "rust/services/trust-profile/src/issuer_keys.rs",
+            "request_evidence": "rust/crates/issuer-key-resolution/src/lib.rs",
             "client_marker": ".with_did_web_internal_base_urls(internal_base_urls)",
             "request_marker": ".resolve_with_metadata(did)",
             "deployment_evidence": "docker-compose.base.yml",
