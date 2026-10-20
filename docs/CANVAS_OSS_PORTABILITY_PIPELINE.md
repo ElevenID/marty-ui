@@ -6,6 +6,25 @@ It is intentionally separate from `docker-compose.profile.canvas-real.yml`, the 
 
 ## Current implementation boundary
 
+The upstream source image build runs on a disposable GitHub `ubuntu-24.04` VM;
+it does not need the beta Docker socket, tunnel, credentials, or WSL runner.
+`prepare_canvas_source_builder.py` removes only a fixed inventory of unrelated
+preinstalled SDK directories on that hosted VM, then requires at least 80 GiB
+free on the actual Docker backing filesystem and 12 GiB Docker memory. It
+rejects local/self-hosted invocation before Docker access or SDK removal. Hosted
+capacity is measured, never assumed: insufficient capacity fails the source
+build. GitHub advertises only 14 GB standard-runner storage; SDK reclamation is
+an attempted workaround, not a guaranteed capacity allocation.
+
+Default-branch publication, the protected `canvas-oss-image-publish` environment,
+pristine upstream source, immutable base-image conversion, SBOM and keyless
+provenance remain required. A published digest still needs review and lock-file
+promotion. This does not qualify Canvas or relax the separate local beta
+portability runner's Docker integration and physical capacity checks.
+
+References: [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [Ubuntu hosted image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
+
 The harness has an executable `readiness_only` mode, but the local host is **not ready to run it yet**. On 2026-07-15, the dedicated Ubuntu 24.04 WSL2 distribution, non-root runner account, prerequisites, and official Actions runner `2.335.1` were installed and checksum-verified. Docker Desktop integration is still intentionally disabled, zero self-hosted runners are registered for `ElevenID/marty-ui`, and the reviewed Canvas image lock remains `pending_source_build`. No successful nightly or portability run is claimed.
 
 After the dedicated distro, runner binary, reviewed image digest, and coordinated beta release exist, `readiness_only` starts the honest topology, verifies the deployed beta capability and public Canvas route, and emits `status=readiness_only`; it cannot be promoted or used by the demo recorder as portability proof.
@@ -22,9 +41,21 @@ The reviewed lock is [canvas-oss.lock.json](../deploy-config/catalog/canvas-oss.
 - an immutable GHCR digest after it has been built and reviewed.
 - immutable Postgres, Redis, Mailpit, and edge-proxy dependency digests;
 - the upstream `instructure/ruby-passenger:3.4-jammy` index and Linux/amd64 child digests used by `Dockerfile.production`;
-- the Linux/amd64 Playwright 1.56.0 base-image digest, dedicated contract Dockerfile, Playwright-only package lock, zero-high/critical npm audit gate, Compose service identity, and secret-file transport.
+- the locked Linux/amd64 Playwright base-image digest, dedicated contract Dockerfile, Playwright-only package lock, zero-high/critical npm audit gate, Compose service identity, and secret-file transport.
 
-Run **Canvas OSS Source Image** manually on the eventual `canvas-oss-wsl2` runner. The workflow checks out the annotated upstream tag, verifies its tag object, peeled commit, and Git tree, rejects a dirty worktree, verifies the locked upstream base-image index/amd64 manifests, and applies the reviewed BuildKit source policy that converts the upstream mutable base tag to the locked Linux/amd64 digest without editing the Canvas Dockerfile. It publishes SBOM/provenance and release/ref/base labels plus the source-policy digest in a fixed image manifest. Review that manifest, then update `image.digest` and set `image.digest_state` to `published` in the lock. Acceptance rejects any image manifest whose tag, source/tree SHA, base image, source policy, labels, or output digest differs from the reviewed lock.
+Run **Canvas OSS Source Image** manually from reviewed `main` on its disposable
+GitHub `ubuntu-24.04` VM. The source builder reclaims its fixed hosted SDK inventory
+and requires measured Docker backing capacity before building; it does not use
+the local WSL runner. That runner is required separately for beta portability.
+
+The source workflow checks out the annotated upstream tag, verifies its tag
+object, peeled commit and Git tree, rejects a dirty worktree, verifies the locked
+upstream base-image manifests, and applies the reviewed BuildKit source policy
+without editing the Canvas Dockerfile. It publishes SBOM/provenance and
+release/ref/base labels plus the source-policy digest in a fixed image manifest.
+Review that manifest, then update `image.digest` and set `image.digest_state` to
+`published` in the lock. Acceptance rejects a manifest whose tag, source/tree SHA,
+base image, source policy, labels or output digest differs from that reviewed lock.
 
 Create and protect the `canvas-oss-image-publish` GitHub environment before the first image run. Limit reviewers to trusted maintainers and prevent self-review. The image workflow admits only a manual run from `ElevenID/marty-ui` `main`; all third-party Actions in the image, portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs.
 
