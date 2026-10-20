@@ -14,6 +14,9 @@ const {
   requireConfigurationBinding,
 } = require('./audit-beta-passport-clearance');
 const { DEFAULT_BETA_ORGANIZATION_ID } = require('./beta-credential-contract');
+const { walletSessionDriverRegressions } = require('./demo-wallet-driver-test-helpers');
+
+walletSessionDriverRegressions('audit-beta-passport-clearance.js', 'D-01');
 
 function ownedRun(extra = {}) {
   return {

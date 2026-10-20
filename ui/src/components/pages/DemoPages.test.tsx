@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Link, Route, Routes } from 'react-router';
-import { act, renderWithRouter, screen, waitFor } from '@test/utils';
+import { act, renderWithRouter, screen, waitFor, within } from '@test/utils';
 
 import {
   DemoCatalogPage,
@@ -138,6 +138,40 @@ const index = {
 };
 
 describe('DemoPages', () => {
+  it('keeps same-build Android lane results distinct and renders historical wallet evidence', async () => {
+    const wallet = {
+      implementation: 'SpruceID Showcase Wallet', vendor: 'SpruceID', build: 'a'.repeat(40),
+      deployment_mode: 'ANDROID_EMULATOR', classification: 'INDEPENDENT',
+      protocols: ['openid4vp-1.0'], capabilities: ['credential login'],
+      result: 'PASS', tested_at: '2026-10-20T12:00:00Z',
+    };
+    mockLoadManifest.mockResolvedValue({
+      ...manifest,
+      scenarios: [{ ...scenarios[0], wallets: [
+        { ...wallet, lane_id: 'spruceid-same-device-happy', evidence_sha256: 'a'.repeat(64) },
+        { ...wallet, lane_id: 'spruceid-same-device-cancel', evidence_sha256: 'b'.repeat(64), result: 'FAIL' },
+        { ...wallet, implementation: 'Historical browser wallet', deployment_mode: 'INTERNAL_CONTROL', classification: 'INTERNAL_CONTROL' },
+      ] }],
+    });
+    const errors = vi.spyOn(console, 'error');
+    try {
+      renderWithRouter(
+        <Routes><Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} /></Routes>,
+        { initialEntries: ['/demos/2026.07.0/membership-badge-login'] },
+      );
+      const happy = await screen.findByText('Lane spruceid-same-device-happy');
+      const cancelled = screen.getByText('Lane spruceid-same-device-cancel');
+      expect(within(happy.parentElement!).getByText('INDEPENDENT / PASS')).toBeInTheDocument();
+      expect(within(cancelled.parentElement!).getByText('INDEPENDENT / FAIL')).toBeInTheDocument();
+      const historical = screen.getByText('Historical browser wallet').parentElement!;
+      expect(within(historical).getByText('INTERNAL CONTROL / PASS')).toBeInTheDocument();
+      expect(within(historical).queryByText(/^Lane /)).not.toBeInTheDocument();
+      expect(errors.mock.calls.filter((args) => args.some((value) => /same key|unique.*key/.test(String(value))))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it.each(['resolve', 'reject'] as const)('ignores an obsolete release load that later %ss', async (outcome) => {
     let resolveOld!: (value: typeof manifest) => void;
     let rejectOld!: (reason: Error) => void;

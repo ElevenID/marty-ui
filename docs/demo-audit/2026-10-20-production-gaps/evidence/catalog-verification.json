@@ -1,0 +1,1082 @@
+{
+  "schemaVersion": 1,
+  "result": "PASS",
+  "scope": "OFFLINE_CURRENT_CATALOG_AND_SOURCE_DECLARATIONS",
+  "command": "node production-gap-evidence/check-catalog.js",
+  "currentUiImplementationHead": "294ad0411901e30437a2d66fe0645bd012f5be24",
+  "configurationCount": 19,
+  "numberedContracts": 12,
+  "numberedDeclarationCoverage": "COMPLETE",
+  "declarationQualification": "NOT_ESTABLISHED",
+  "draftScenarios": 14,
+  "notRunAssertions": 66,
+  "plannedStoryBeats": 61,
+  "captureBindings": "ALL_UNBOUND",
+  "missingDedicatedConfigurations": [],
+  "resolutionBoundary": "Only explicit environment-selected driver revision placeholders use the current local UI head for structural validation. Current UI worktree is selected for local source and catalog reads. Runtime environments, hooks and live prerequisites are not resolved or executed.",
+  "rows": [
+    {
+      "config": "demos/canvas-learning-achievement.json",
+      "slug": "canvas-learning-achievement",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "lti-1.3",
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "assertionIds": [
+        "capture_canvas_evidence",
+        "governed_review",
+        "issue_open_badge",
+        "invalid_evidence_provenance_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "6caa73ba77dc6a2afc7670c240c24efac6789f07713d212b4a53723aa922902f"
+    },
+    {
+      "config": "demos/credential-lifecycle.json",
+      "slug": "credential-lifecycle",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "renew",
+        "suspend",
+        "reinstate",
+        "revoke",
+        "suspended_and_revoked_states_denied"
+      ],
+      "sourcePins": [
+        {
+          "entrypoint": "tests/scripts/audit-beta-credential-lifecycle.js",
+          "sha256": "6fd68013addaa9bf5dc003dcc98b27e3ffbb6dc138fa39c4d02042853e173cdf",
+          "declaredRevision": "${env.DEMO_D06_DRIVER_REVISION}",
+          "shapeCheckRevision": "294ad0411901e30437a2d66fe0645bd012f5be24",
+          "liveEvidence": true
+        }
+      ],
+      "result": "PASS",
+      "configSha256": "901bf27be050a0c21f71224271e29a375479a8433e69ce518fbba69b7468c570"
+    },
+    {
+      "config": "demos/employee-onboarding-secure-access.json",
+      "slug": "employee-onboarding-secure-access",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "approve_employee",
+        "issue_employee_credential",
+        "allow_active_access",
+        "suspended_employee_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "48eb90fc47502c195c286919000dfcab7d79a304d8a5d5cf52b4a336f6bd5660"
+    },
+    {
+      "config": "demos/external-admissions-duplicate-event.json",
+      "slug": "external-admissions-gateway-webhooks",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "https-webhooks"
+      ],
+      "assertionIds": [
+        "gateway_only_summary",
+        "duplicate_event_ignored"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "869fb4ce0c4994bcbe3fdbe4da0624212d8c8f940c11fbf069be298176ccfc50"
+    },
+    {
+      "config": "demos/external-admissions-gateway-webhooks.json",
+      "slug": "external-admissions-gateway-webhooks",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "https-webhooks"
+      ],
+      "assertionIds": [
+        "gateway_only_summary",
+        "insufficient_scope_denied",
+        "scoped_approval",
+        "signed_webhook_correlated"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "6316235a08835e35572e41137d4195d5ace41278c18b80d3085eae8e6b99a7d2"
+    },
+    {
+      "config": "demos/external-admissions-insufficient-scope.json",
+      "slug": "external-admissions-gateway-webhooks",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "https-webhooks"
+      ],
+      "assertionIds": [
+        "gateway_only_summary",
+        "insufficient_scope_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "04dbb6f83303fe4613aaab4844ab5326d932c6a1d82287ba603d51a2e59dd474"
+    },
+    {
+      "config": "demos/external-admissions-invalid-signature.json",
+      "slug": "external-admissions-gateway-webhooks",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "https-webhooks"
+      ],
+      "assertionIds": [
+        "gateway_only_summary",
+        "invalid_signature_rejected"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "f75a346aba3b51fb158f987125a9103861167536778361210f1282e9fe993359"
+    },
+    {
+      "config": "demos/external-evidence-to-credential.json",
+      "slug": "external-evidence-to-credential",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "normalize_external_evidence",
+        "evaluate_policy",
+        "review_and_issue",
+        "insufficient_or_conflicting_evidence_review"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "fe37538ec178d6805dbd7c2deb8909ae25440cc7c67554b64f1589ec9cfeb18e"
+    },
+    {
+      "config": "demos/first-party-browser-wallet.json",
+      "slug": "first-party-browser-wallet",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0"
+      ],
+      "assertionIds": [
+        "governed_claim",
+        "expected_credential_received_and_stored",
+        "presentation_authenticated",
+        "closed_wallet_session_rejected"
+      ],
+      "sourcePins": [
+        {
+          "entrypoint": "tests/scripts/audit-beta-first-party-browser-wallet.js",
+          "sha256": "0d36cdd94e0bf8165d091b17a5b60cfa5af6cf08587a2cdf510ab8aa94d75e97",
+          "declaredRevision": "${env.DEMO_FIRST_PARTY_DRIVER_REVISION}",
+          "shapeCheckRevision": "294ad0411901e30437a2d66fe0645bd012f5be24",
+          "liveEvidence": false
+        }
+      ],
+      "result": "PASS",
+      "configSha256": "97884a5f9fe09b915a339e87c754ddd70411c3e45bd90032df7da6b029a2c3b2"
+    },
+    {
+      "config": "demos/independent-wallet-interoperability.json",
+      "slug": "independent-wallet-interoperability",
+      "scenarioRevision": 2,
+      "classification": "INDEPENDENT_WALLET",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0"
+      ],
+      "assertionIds": [
+        "fresh_native_credential_received",
+        "canonical_signed_request_presented",
+        "presentation_authenticated",
+        "holder_cancel_no_session"
+      ],
+      "sourcePins": [
+        {
+          "entrypoint": "tests/scripts/audit-beta-independent-wallet-interoperability.js",
+          "sha256": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f",
+          "declaredRevision": "${env.DEMO_INDEPENDENT_DRIVER_REVISION}",
+          "shapeCheckRevision": "294ad0411901e30437a2d66fe0645bd012f5be24",
+          "liveEvidence": false
+        }
+      ],
+      "result": "PASS",
+      "configSha256": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00"
+    },
+    {
+      "config": "demos/membership-badge-login-expired-offer.json",
+      "slug": "membership-badge-login",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "assertionIds": [
+        "expired_offer_reissue"
+      ],
+      "sourcePins": [
+        {
+          "entrypoint": "tests/scripts/audit-beta-membership-support.js",
+          "sha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c",
+          "declaredRevision": "${env.DEMO_D05_SUPPORT_DRIVER_REVISION}",
+          "shapeCheckRevision": "294ad0411901e30437a2d66fe0645bd012f5be24",
+          "liveEvidence": true
+        }
+      ],
+      "result": "PASS",
+      "configSha256": "655cf220a793dea6cd68a7d8da3a3b94f97ed67c95bcd5ca435c4a98ae820385"
+    },
+    {
+      "config": "demos/membership-badge-login-untrusted-issuer.json",
+      "slug": "membership-badge-login",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "assertionIds": [
+        "issuer_not_trusted_no_session"
+      ],
+      "sourcePins": [
+        {
+          "entrypoint": "tests/scripts/audit-beta-membership-support.js",
+          "sha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c",
+          "declaredRevision": "${env.DEMO_D05_SUPPORT_DRIVER_REVISION}",
+          "shapeCheckRevision": "294ad0411901e30437a2d66fe0645bd012f5be24",
+          "liveEvidence": true
+        }
+      ],
+      "result": "PASS",
+      "configSha256": "b72af313c2cf860c218ba3bf4d08552e577f43e499576eada40279308c273c72"
+    },
+    {
+      "config": "demos/membership-badge-login.json",
+      "slug": "membership-badge-login",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "assertionIds": [
+        "governed_claim",
+        "conformant_open_badge_issuance",
+        "same_device_passwordless_login"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "7ffcfc5b13e5c42541fb201593894229bdaf19c05f06e69a3f35d5d579181d2c"
+    },
+    {
+      "config": "demos/offline-facility-verification.json",
+      "slug": "offline-facility-verification",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "provision_edge_trust",
+        "verify_offline",
+        "buffer_audit",
+        "restore_and_sync",
+        "expired_offline_trust_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "bd633ad7981870ebeb7f90ed0fd1322c217e1b4a3bfbdf4fac0a504e65fd5113"
+    },
+    {
+      "config": "demos/organization-primitives.json",
+      "slug": "organization-primitives",
+      "scenarioRevision": 2,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc",
+        "open-badges-3.0"
+      ],
+      "assertionIds": [
+        "configure_organization",
+        "configure_issuer_profiles",
+        "configure_trust_and_mip_primitives",
+        "unauthorized_administration_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "19fdc7f1171f6335876d3d0c6aa6f11a9c580358f02e07672186c5ec7177c948"
+    },
+    {
+      "config": "demos/passport-pre-boarding-clearance.json",
+      "slug": "passport-pre-boarding-clearance",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "passport_validation",
+        "pre_boarding_credential_issuance",
+        "rapid_gate_verification",
+        "untrusted_or_invalid_passport_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "4d920693fe251af02e2430ad6082f0bc53f35b1445cbc99d26bed5871716c679"
+    },
+    {
+      "config": "demos/physical-passport-issuance-evidence.json",
+      "slug": "physical-passport-issuance-evidence",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "https-webhooks"
+      ],
+      "assertionIds": [
+        "managed_csca_dsc_issuer_profiles",
+        "nine_step_passport_issuance_flow",
+        "simulator_bureau_job_correlated",
+        "signed_simulator_callback_verified",
+        "physical_claim_boundary_verified",
+        "physical_booklet_not_verified",
+        "unsigned_or_foreign_callback_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "b95c755b8f3f47d6bfcb65d50fd3af02561c0620bde5ba241398ba3f54eb8374"
+    },
+    {
+      "config": "demos/private-online-age-proof.json",
+      "slug": "private-online-age-proof",
+      "scenarioRevision": 2,
+      "classification": "INDEPENDENT_WALLET",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0"
+      ],
+      "assertionIds": [
+        "trusted_mdl_issuance",
+        "request_only_age_over_21",
+        "verify_issuer_trust_and_minimum_response",
+        "untrusted_issuer_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "77630d568b41e37c24f8c244b853fd441bb119607e2c793bd408114010cf944e"
+    },
+    {
+      "config": "demos/stable-issuer-identity-pluggable-kms.json",
+      "slug": "stable-issuer-identity-pluggable-kms",
+      "scenarioRevision": 1,
+      "classification": "FIRST_PARTY_CONTROL",
+      "protocols": [
+        "openid4vci-1.0",
+        "openid4vp-1.0",
+        "dcql-1.0",
+        "sd-jwt-vc"
+      ],
+      "assertionIds": [
+        "create_issuer_profile",
+        "issue_with_provider_a",
+        "switch_signing_provider",
+        "verify_same_did_identity",
+        "unpublished_signing_key_denied"
+      ],
+      "sourcePins": [],
+      "result": "PASS",
+      "configSha256": "c419f117d83715bb302442a6a7726d2ce23af1e18219f2cf493b77cd0070380e"
+    }
+  ],
+  "numberedCoverage": [
+    {
+      "demoId": "D-01",
+      "slug": "passport-pre-boarding-clearance",
+      "required": [
+        "passport_validation",
+        "pre_boarding_credential_issuance",
+        "rapid_gate_verification",
+        "untrusted_or_invalid_passport_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/passport-pre-boarding-clearance.json",
+          "scenarioRevision": 1,
+          "assertionId": "passport_validation",
+          "contractId": "passport_validation"
+        },
+        {
+          "config": "demos/passport-pre-boarding-clearance.json",
+          "scenarioRevision": 1,
+          "assertionId": "pre_boarding_credential_issuance",
+          "contractId": "pre_boarding_credential_issuance"
+        },
+        {
+          "config": "demos/passport-pre-boarding-clearance.json",
+          "scenarioRevision": 1,
+          "assertionId": "rapid_gate_verification",
+          "contractId": "rapid_gate_verification"
+        },
+        {
+          "config": "demos/passport-pre-boarding-clearance.json",
+          "scenarioRevision": 1,
+          "assertionId": "untrusted_or_invalid_passport_denied",
+          "contractId": "untrusted_or_invalid_passport_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-02",
+      "slug": "stable-issuer-identity-pluggable-kms",
+      "required": [
+        "create_issuer_profile",
+        "issue_with_provider_a",
+        "switch_signing_provider",
+        "verify_same_did_identity",
+        "unpublished_signing_key_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/stable-issuer-identity-pluggable-kms.json",
+          "scenarioRevision": 1,
+          "assertionId": "create_issuer_profile",
+          "contractId": "create_issuer_profile"
+        },
+        {
+          "config": "demos/stable-issuer-identity-pluggable-kms.json",
+          "scenarioRevision": 1,
+          "assertionId": "issue_with_provider_a",
+          "contractId": "issue_with_provider_a"
+        },
+        {
+          "config": "demos/stable-issuer-identity-pluggable-kms.json",
+          "scenarioRevision": 1,
+          "assertionId": "switch_signing_provider",
+          "contractId": "switch_signing_provider"
+        },
+        {
+          "config": "demos/stable-issuer-identity-pluggable-kms.json",
+          "scenarioRevision": 1,
+          "assertionId": "verify_same_did_identity",
+          "contractId": "verify_same_did_identity"
+        },
+        {
+          "config": "demos/stable-issuer-identity-pluggable-kms.json",
+          "scenarioRevision": 1,
+          "assertionId": "unpublished_signing_key_denied",
+          "contractId": "unpublished_signing_key_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {},
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-03",
+      "slug": "private-online-age-proof",
+      "required": [
+        "trusted_mdl_issuance",
+        "request_only_age_over_21",
+        "verify_issuer_trust_and_minimum_response",
+        "untrusted_issuer_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/private-online-age-proof.json",
+          "scenarioRevision": 2,
+          "assertionId": "trusted-mdl-issuance",
+          "contractId": "trusted_mdl_issuance"
+        },
+        {
+          "config": "demos/private-online-age-proof.json",
+          "scenarioRevision": 2,
+          "assertionId": "request-only-age-over-21",
+          "contractId": "request_only_age_over_21"
+        },
+        {
+          "config": "demos/private-online-age-proof.json",
+          "scenarioRevision": 2,
+          "assertionId": "verify-issuer-trust-and-minimum-response",
+          "contractId": "verify_issuer_trust_and_minimum_response"
+        },
+        {
+          "config": "demos/private-online-age-proof.json",
+          "scenarioRevision": 2,
+          "assertionId": "untrusted-issuer-denied",
+          "contractId": "untrusted_issuer_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "eudi": "REQUIRED_PASS",
+        "spruceid": "REQUIRED_PASS"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-04",
+      "slug": "employee-onboarding-secure-access",
+      "required": [
+        "approve_employee",
+        "issue_employee_credential",
+        "allow_active_access",
+        "suspended_employee_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/employee-onboarding-secure-access.json",
+          "scenarioRevision": 1,
+          "assertionId": "approve_employee",
+          "contractId": "approve_employee"
+        },
+        {
+          "config": "demos/employee-onboarding-secure-access.json",
+          "scenarioRevision": 1,
+          "assertionId": "issue_employee_credential",
+          "contractId": "issue_employee_credential"
+        },
+        {
+          "config": "demos/employee-onboarding-secure-access.json",
+          "scenarioRevision": 1,
+          "assertionId": "allow_active_access",
+          "contractId": "allow_active_access"
+        },
+        {
+          "config": "demos/employee-onboarding-secure-access.json",
+          "scenarioRevision": 1,
+          "assertionId": "suspended_employee_denied",
+          "contractId": "suspended_employee_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-05",
+      "slug": "membership-badge-login",
+      "required": [
+        "governed_claim",
+        "conformant_open_badge_issuance",
+        "same_device_passwordless_login",
+        "holder_cancel_no_session",
+        "issuer_not_trusted_no_session",
+        "expired_offer_reissue"
+      ],
+      "declarations": [
+        {
+          "config": "demos/membership-badge-login-expired-offer.json",
+          "scenarioRevision": 2,
+          "assertionId": "expired_offer_reissue",
+          "contractId": "expired_offer_reissue"
+        },
+        {
+          "config": "demos/membership-badge-login-untrusted-issuer.json",
+          "scenarioRevision": 2,
+          "assertionId": "issuer_not_trusted_no_session",
+          "contractId": "issuer_not_trusted_no_session"
+        },
+        {
+          "config": "demos/membership-badge-login.json",
+          "scenarioRevision": 2,
+          "assertionId": "governed_claim",
+          "contractId": "governed_claim"
+        },
+        {
+          "config": "demos/membership-badge-login.json",
+          "scenarioRevision": 2,
+          "assertionId": "conformant_open_badge_issuance",
+          "contractId": "conformant_open_badge_issuance"
+        },
+        {
+          "config": "demos/membership-badge-login.json",
+          "scenarioRevision": 2,
+          "assertionId": "same_device_passwordless_login",
+          "contractId": "same_device_passwordless_login"
+        },
+        {
+          "config": "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+          "scenarioRevision": null,
+          "assertionId": "holder_cancel_no_session",
+          "contractId": "holder_cancel_no_session",
+          "evidenceLane": "spruceid-same-device-cancel",
+          "captureDriver": "android",
+          "validator": "src/androidMembershipCancel.js"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "REQUIRED_PASS",
+        "eudi": "NOT_APPLICABLE_OPEN_BADGE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": [
+        "spruceid-same-device-happy",
+        "spruceid-same-device-cancel",
+        "spruceid-same-device-untrusted-issuer",
+        "spruceid-same-device-expired-offer"
+      ]
+    },
+    {
+      "demoId": "D-06",
+      "slug": "credential-lifecycle",
+      "required": [
+        "renew",
+        "suspend",
+        "reinstate",
+        "revoke",
+        "suspended_and_revoked_states_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/credential-lifecycle.json",
+          "scenarioRevision": 2,
+          "assertionId": "renew",
+          "contractId": "renew"
+        },
+        {
+          "config": "demos/credential-lifecycle.json",
+          "scenarioRevision": 2,
+          "assertionId": "suspend",
+          "contractId": "suspend"
+        },
+        {
+          "config": "demos/credential-lifecycle.json",
+          "scenarioRevision": 2,
+          "assertionId": "reinstate",
+          "contractId": "reinstate"
+        },
+        {
+          "config": "demos/credential-lifecycle.json",
+          "scenarioRevision": 2,
+          "assertionId": "revoke",
+          "contractId": "revoke"
+        },
+        {
+          "config": "demos/credential-lifecycle.json",
+          "scenarioRevision": 2,
+          "assertionId": "suspended_and_revoked_states_denied",
+          "contractId": "suspended_and_revoked_states_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-07",
+      "slug": "canvas-learning-achievement",
+      "required": [
+        "capture_canvas_evidence",
+        "governed_review",
+        "issue_open_badge",
+        "invalid_evidence_provenance_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/canvas-learning-achievement.json",
+          "scenarioRevision": 1,
+          "assertionId": "capture_canvas_evidence",
+          "contractId": "capture_canvas_evidence"
+        },
+        {
+          "config": "demos/canvas-learning-achievement.json",
+          "scenarioRevision": 1,
+          "assertionId": "governed_review",
+          "contractId": "governed_review"
+        },
+        {
+          "config": "demos/canvas-learning-achievement.json",
+          "scenarioRevision": 1,
+          "assertionId": "issue_open_badge",
+          "contractId": "issue_open_badge"
+        },
+        {
+          "config": "demos/canvas-learning-achievement.json",
+          "scenarioRevision": 1,
+          "assertionId": "invalid_evidence_provenance_denied",
+          "contractId": "invalid_evidence_provenance_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_OPEN_BADGE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-08",
+      "slug": "external-evidence-to-credential",
+      "required": [
+        "normalize_external_evidence",
+        "evaluate_policy",
+        "review_and_issue",
+        "insufficient_or_conflicting_evidence_review"
+      ],
+      "declarations": [
+        {
+          "config": "demos/external-evidence-to-credential.json",
+          "scenarioRevision": 1,
+          "assertionId": "normalize_external_evidence",
+          "contractId": "normalize_external_evidence"
+        },
+        {
+          "config": "demos/external-evidence-to-credential.json",
+          "scenarioRevision": 1,
+          "assertionId": "evaluate_policy",
+          "contractId": "evaluate_policy"
+        },
+        {
+          "config": "demos/external-evidence-to-credential.json",
+          "scenarioRevision": 1,
+          "assertionId": "review_and_issue",
+          "contractId": "review_and_issue"
+        },
+        {
+          "config": "demos/external-evidence-to-credential.json",
+          "scenarioRevision": 1,
+          "assertionId": "insufficient_or_conflicting_evidence_review",
+          "contractId": "insufficient_or_conflicting_evidence_review"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-09",
+      "slug": "offline-facility-verification",
+      "required": [
+        "provision_edge_trust",
+        "verify_offline",
+        "buffer_audit",
+        "restore_and_sync",
+        "expired_offline_trust_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/offline-facility-verification.json",
+          "scenarioRevision": 2,
+          "assertionId": "edge-trust-provisioned",
+          "contractId": "provision_edge_trust"
+        },
+        {
+          "config": "demos/offline-facility-verification.json",
+          "scenarioRevision": 2,
+          "assertionId": "offline-dtc-valid",
+          "contractId": "verify_offline"
+        },
+        {
+          "config": "demos/offline-facility-verification.json",
+          "scenarioRevision": 2,
+          "assertionId": "audit-buffered",
+          "contractId": "buffer_audit"
+        },
+        {
+          "config": "demos/offline-facility-verification.json",
+          "scenarioRevision": 2,
+          "assertionId": "audit-flushed-on-reconnect",
+          "contractId": "restore_and_sync"
+        },
+        {
+          "config": "demos/offline-facility-verification.json",
+          "scenarioRevision": 2,
+          "assertionId": "expired-trust-denied",
+          "contractId": "expired_offline_trust_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {
+        "spruceid": "QUALIFY_OR_NOT_APPLICABLE",
+        "eudi": "NOT_APPLICABLE_UNLESS_SUPPORTED"
+      },
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-10",
+      "slug": "organization-primitives",
+      "required": [
+        "configure_organization",
+        "configure_issuer_profiles",
+        "configure_trust_and_mip_primitives",
+        "unauthorized_administration_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/organization-primitives.json",
+          "scenarioRevision": 2,
+          "assertionId": "configure_organization",
+          "contractId": "configure_organization"
+        },
+        {
+          "config": "demos/organization-primitives.json",
+          "scenarioRevision": 2,
+          "assertionId": "configure_issuer_profiles",
+          "contractId": "configure_issuer_profiles"
+        },
+        {
+          "config": "demos/organization-primitives.json",
+          "scenarioRevision": 2,
+          "assertionId": "configure_trust_and_mip_primitives",
+          "contractId": "configure_trust_and_mip_primitives"
+        },
+        {
+          "config": "demos/organization-primitives.json",
+          "scenarioRevision": 2,
+          "assertionId": "unauthorized_administration_denied",
+          "contractId": "unauthorized_administration_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {},
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-11",
+      "slug": "external-admissions-gateway-webhooks",
+      "required": [
+        "gateway_only_summary",
+        "scoped_approval",
+        "signed_webhook_correlated",
+        "insufficient_scope_denied",
+        "invalid_signature_rejected",
+        "duplicate_event_ignored"
+      ],
+      "declarations": [
+        {
+          "config": "demos/external-admissions-duplicate-event.json",
+          "scenarioRevision": 2,
+          "assertionId": "gateway-only-summary",
+          "contractId": "gateway_only_summary"
+        },
+        {
+          "config": "demos/external-admissions-duplicate-event.json",
+          "scenarioRevision": 2,
+          "assertionId": "duplicate-event-ignored",
+          "contractId": "duplicate_event_ignored"
+        },
+        {
+          "config": "demos/external-admissions-gateway-webhooks.json",
+          "scenarioRevision": 2,
+          "assertionId": "gateway-only-summary",
+          "contractId": "gateway_only_summary"
+        },
+        {
+          "config": "demos/external-admissions-gateway-webhooks.json",
+          "scenarioRevision": 2,
+          "assertionId": "insufficient-scope-denied",
+          "contractId": "insufficient_scope_denied"
+        },
+        {
+          "config": "demos/external-admissions-gateway-webhooks.json",
+          "scenarioRevision": 2,
+          "assertionId": "scoped-approval",
+          "contractId": "scoped_approval"
+        },
+        {
+          "config": "demos/external-admissions-gateway-webhooks.json",
+          "scenarioRevision": 2,
+          "assertionId": "signed-webhook-correlated",
+          "contractId": "signed_webhook_correlated"
+        },
+        {
+          "config": "demos/external-admissions-insufficient-scope.json",
+          "scenarioRevision": 2,
+          "assertionId": "gateway-only-summary",
+          "contractId": "gateway_only_summary"
+        },
+        {
+          "config": "demos/external-admissions-insufficient-scope.json",
+          "scenarioRevision": 2,
+          "assertionId": "insufficient-scope-denied",
+          "contractId": "insufficient_scope_denied"
+        },
+        {
+          "config": "demos/external-admissions-invalid-signature.json",
+          "scenarioRevision": 2,
+          "assertionId": "gateway-only-summary",
+          "contractId": "gateway_only_summary"
+        },
+        {
+          "config": "demos/external-admissions-invalid-signature.json",
+          "scenarioRevision": 2,
+          "assertionId": "invalid-signature-rejected",
+          "contractId": "invalid_signature_rejected"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {},
+      "androidLanes": []
+    },
+    {
+      "demoId": "D-12",
+      "slug": "physical-passport-issuance-evidence",
+      "required": [
+        "managed_csca_dsc_issuer_profiles",
+        "nine_step_passport_issuance_flow",
+        "simulator_bureau_job_correlated",
+        "signed_simulator_callback_verified",
+        "physical_claim_boundary_verified",
+        "physical_booklet_not_verified",
+        "unsigned_or_foreign_callback_denied"
+      ],
+      "declarations": [
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "managed_csca_dsc_issuer_profiles",
+          "contractId": "managed_csca_dsc_issuer_profiles"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "nine_step_passport_issuance_flow",
+          "contractId": "nine_step_passport_issuance_flow"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "simulator_bureau_job_correlated",
+          "contractId": "simulator_bureau_job_correlated"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "signed_simulator_callback_verified",
+          "contractId": "signed_simulator_callback_verified"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "physical_claim_boundary_verified",
+          "contractId": "physical_claim_boundary_verified"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "physical_booklet_not_verified",
+          "contractId": "physical_booklet_not_verified"
+        },
+        {
+          "config": "demos/physical-passport-issuance-evidence.json",
+          "scenarioRevision": 1,
+          "assertionId": "unsigned_or_foreign_callback_denied",
+          "contractId": "unsigned_or_foreign_callback_denied"
+        }
+      ],
+      "missing": [],
+      "unknown": [],
+      "declarationCoverage": "COMPLETE",
+      "functionalStatus": "NOT_ESTABLISHED",
+      "editorialStatus": "NOT_ESTABLISHED",
+      "requiredWallets": {},
+      "androidLanes": []
+    }
+  ],
+  "manifestSha256": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1",
+  "alignmentSha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790"
+}

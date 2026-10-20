@@ -21,6 +21,7 @@ const {
   mockListApplicantApplicationsForProfile,
   mockSupersedeApplication,
   mockWalletPreferenceState,
+  mockAuthState,
   mockLocationState,
 } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
@@ -39,6 +40,7 @@ const {
   mockListApplicantApplicationsForProfile: vi.fn(),
   mockSupersedeApplication: vi.fn(),
   mockWalletPreferenceState: { walletIds: ['wallet-1'] as string[] },
+  mockAuthState: { organizationId: 'org-1' },
   mockLocationState: {
     params: { credentialType: undefined as string | undefined },
     location: {
@@ -92,7 +94,7 @@ vi.mock('../../hooks/useAuth', () => ({
       organization_name: 'Acme Org',
       roles: ['applicant'],
     },
-    organizationId: 'org-1',
+    organizationId: mockAuthState.organizationId,
   }),
 }));
 
@@ -127,8 +129,8 @@ vi.mock('../../hooks/useWalletPreferences', () => ({
 }));
 
 vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
-  default: ({ open, applicationId, offerData }: { open: boolean; applicationId: string; offerData: any }) => (
-    open ? <div data-testid="claim-credential-dialog">{applicationId}:{offerData?.offer_url}</div> : null
+  default: ({ open, applicationId, offerData, organizationId }: { open: boolean; applicationId: string; offerData: any; organizationId?: string }) => (
+    open ? <div data-testid="claim-credential-dialog" data-organization-id={organizationId}>{applicationId}:{offerData?.offer_url}</div> : null
   ),
 }));
 
@@ -226,6 +228,7 @@ describe('ApplicationForm', () => {
       offer_expires_at: '2026-03-17T00:00:00.000Z',
     });
     mockWalletPreferenceState.walletIds = ['wallet-1'];
+    mockAuthState.organizationId = 'org-1';
   });
 
   it('explains Canvas-only credential applications with launch context and completion checks', async () => {
@@ -340,8 +343,12 @@ describe('ApplicationForm', () => {
     expect(screen.queryByText('must-not-render')).not.toBeInTheDocument();
   });
 
-  it('queues a learner refresh and opens claim only when the server marks it available', async () => {
+  it.each([
+    { context: 'Canvas issuer organization', issuerOrganizationId: 'org-canvas-issuer', expectedOrganizationId: 'org-canvas-issuer' },
+    { context: 'authenticated organization fallback', issuerOrganizationId: undefined, expectedOrganizationId: 'org-1' },
+  ])('queues a learner refresh and opens a server-authorized claim in the $context', async ({ issuerOrganizationId, expectedOrganizationId }) => {
     mockLocationState.location = canvasApplicationLocationState();
+    mockLocationState.location.state.canvasLtiSession.organization_id = issuerOrganizationId;
     let queued = false;
     const readyStatus = {
       application_status: 'approved',
@@ -397,6 +404,7 @@ describe('ApplicationForm', () => {
     mockGet.mockResolvedValue(readyStatus);
     await user.click(screen.getByTestId('canvas-claim-action'));
     expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveAttribute('data-organization-id', expectedOrganizationId);
   });
 
   it('does not load org-scoped templates for Canvas LTI learners', async () => {
@@ -496,6 +504,25 @@ describe('ApplicationForm', () => {
       expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
       expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-1:');
     });
+  });
+
+  it('keeps one-click membership wallet selection in the application organization before an offer exists', async () => {
+    mockAuthState.organizationId = 'org-membership';
+    mockWalletPreferenceState.walletIds = [];
+    mockLocationState.location.state.credential.credential_type = 'open_badge';
+
+    const { user } = render(<ApplicationForm />);
+    await user.click(screen.getByTestId('credential-claim-action'));
+
+    const dialog = await screen.findByTestId('claim-credential-dialog');
+    expect(mockCreateApplication).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-membership',
+      application_template_id: 'app-template-1',
+    }));
+    expect(mockSubmitApplication).toHaveBeenCalledWith('application-1');
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+    expect(dialog).toHaveTextContent('application-1:');
+    expect(dialog).toHaveAttribute('data-organization-id', 'org-membership');
   });
 
   it('uploads required evidence through the same public API before browser submission', async () => {

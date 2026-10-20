@@ -19,10 +19,14 @@ def _load_audit_module():
 
 
 def _required_steps():
-    return [
+    # Report-contract fixtures only; actual ES256 response bytes are exercised
+    # by the native signing-capability suite and Python/CLI adapter test.
+    steps = [
         {"label": "auth-probe", "body_excerpt": "Dashboard"},
         {"label": "post-org-probe", "body_excerpt": "Dashboard"},
-        {"label": "kms-service-configured", "body_excerpt": "Key management"},
+        {"label": "kms-service-configured", "body_excerpt": "Key management", "signing_configuration": {
+            "organization_id": "org-fixture", "run_id": "fixture-run", "default_service_id": "service-fixture",
+        }},
         {"label": "issuer-identity-active", "body_excerpt": "Issuer identity"},
         {
             "label": "verifier-issuer-identity-active",
@@ -48,11 +52,29 @@ def _required_steps():
             "body_excerpt": "Administration denied",
         },
     ]
+    for index, (purpose, identity_label, proof_label) in enumerate([
+        ("vc_jwt_issuer", "issuer-identity-active", "issuer-signing-capability-verified"),
+        ("oid4vp_request_signing", "verifier-issuer-identity-active", "verifier-signing-capability-verified"),
+    ]):
+        identity = {"issuer_did": "did:web:issuer.unit.invalid:fixture", "key_purpose": purpose,
+                    "credential_format": "SD_JWT_VC", "algorithm": "ES256", "status": "active"}
+        next(step for step in steps if step["label"] == identity_label)["issuer_identity"] = identity
+        proof = {"schema": "marty.signing-capability/v1", "verified": True,
+                 "scope": "EXACT_PUBLIC_SERVICE_SIGNING_CAPABILITY_ONLY",
+                 "organization_id": "org-fixture", "run_id": "fixture-run", "service_id": "service-fixture",
+                 **{key: value for key, value in identity.items() if key != "status"}}
+        proof.update({key: str(index + 1) * 64 for key in (
+            "challenge_sha256", "key_binding_sha256", "public_key_sha256", "signature_sha256",
+            "service_response_sha256", "identity_response_sha256", "signing_response_sha256",
+        )})
+        steps.append({"label": proof_label, "signing_capability": proof})
+    return steps
 
 
 @pytest.mark.parametrize("record_video_env", [None, "0", "1"])
+@pytest.mark.parametrize("setup_failure", [False, True])
 def test_main_honors_recorder_video_mode_and_keeps_required_trace(
-    monkeypatch, tmp_path: Path, record_video_env: str | None,
+    monkeypatch, tmp_path: Path, record_video_env: str | None, setup_failure: bool,
 ) -> None:
     audit = _load_audit_module()
     events = []
@@ -63,6 +85,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
 
     class Trace:
         def start(self, **options):
+            events.append("trace-started")
             trace_options.append(options)
 
         def stop(self, *, path):
@@ -114,8 +137,9 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
         def attach_events(self):
             pass
 
-        def snapshot(self, *_args, **_kwargs):
-            pass
+        def snapshot(self, label, *_args, **_kwargs):
+            if label == "audit-exception":
+                self.steps.append({"label": label})
 
         def cleanup_created_api_keys(self):
             events.append("cleanup")
@@ -123,14 +147,21 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     monkeypatch.setattr(audit, "Audit", FixtureAudit)
     monkeypatch.setattr(audit, "sync_playwright", Playwright)
     monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit, "load_signing_inputs", lambda: {})
+    monkeypatch.setattr(audit, "require_created_organization", lambda *_args: "org-fixture")
     monkeypatch.setattr(audit, "fetch_json_from_page", lambda *_args: {})
     for name in [
         "log_in", "create_org", "create_key_service_if_possible", "create_issuer_identity",
         "create_trust_profile", "create_revocation_profile", "create_credential_template",
         "create_application_template", "create_policy_and_deployment", "create_flow",
-        "create_api_key", "verify_resource_inventory", "verify_unauthorized_administration_denied",
+        "create_api_key", "verify_issuer_signing_capabilities", "verify_resource_inventory", "verify_unauthorized_administration_denied",
     ]:
         monkeypatch.setattr(audit, name, lambda *_args, step=name: events.append(step))
+    if setup_failure:
+        def failed_registration(*_args):
+            events.append("create_key_service_if_possible")
+            raise ValueError("fixture registration rejected synthetic-test-password")
+        monkeypatch.setattr(audit, "create_key_service_if_possible", failed_registration)
     monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--record-video"])
     monkeypatch.setenv("TEST_VENDOR_EMAIL", "operator@example.test")
     monkeypatch.setenv("TEST_VENDOR_PASSWORD", "synthetic-test-password")
@@ -140,10 +171,29 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     else:
         monkeypatch.setenv("RECORD_VIDEO", record_video_env)
 
+    if setup_failure:
+        with pytest.raises(RuntimeError, match="fixture registration rejected") as failure:
+            audit.main()
+        assert "synthetic-test-password" not in str(failure.value)
+        assert "synthetic-test-password" not in (artifact_dir / "report.json").read_text()
+        report = json.loads((artifact_dir / "report.json").read_text())
+        assert report["releaseReady"] is False
+        assert report["release_checks"]["status"] == "blocked"
+        assert report["trace_coverage"]["status"] == "NOT_STARTED_SETUP_FAILED"
+        assert "trace-started" not in events
+        assert not (artifact_dir / "mip-primitives-management-trace.zip").exists()
+        assert "cleanup" in events and "browser-closed" in events
+        if functional:
+            assert "video-requested" not in events
+        return
+
     assert audit.main() == 0
     report = json.loads((artifact_dir / "report.json").read_text())
     assert report["releaseReady"] is True
     assert all(report["behaviorAssertions"].values())
+    assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
+    assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
+    assert report["trace_coverage"]["omitted"] == ["authentication", "organization-creation", "kms-service-registration"]
     assert events.index("verify_resource_inventory") < events.index("cleanup")
     assert events.index("verify_unauthorized_administration_denied") < events.index("cleanup")
     assert events.index("context-closed") < events.index("browser-closed")

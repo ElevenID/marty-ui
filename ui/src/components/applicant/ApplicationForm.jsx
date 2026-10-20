@@ -1282,6 +1282,7 @@ export default function ApplicationForm() {
 
             {/* CTA button */}
             <Button
+              data-testid="credential-claim-action"
               variant="contained"
               size="large"
               fullWidth
@@ -1313,6 +1314,7 @@ export default function ApplicationForm() {
           }}
           applicationId={applicationId}
           offerData={autoOfferData}
+          organizationId={applicationOrganizationId}
           autoOpenWallet={isOpenBadgeCredential}
         />
       </Container>
@@ -1402,7 +1404,7 @@ export default function ApplicationForm() {
           onClose={() => setClaimDialogOpen(false)}
           applicationId={applicationId || canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id}
           offerData={autoOfferData}
-          organizationId={canvasIssuerOrganizationId}
+          organizationId={applicationOrganizationId}
         />
       ) : null}
     </Container>

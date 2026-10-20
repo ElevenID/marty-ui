@@ -90,6 +90,29 @@ function claimResultsFromMipMessage(session = {}) {
   }, {});
 }
 
+// This inventory is produced after native mdoc authentication. Accepted policy
+// claims, requested claims, and an allow decision cannot substitute for it.
+function authenticatedMdocSummary(credentialResults) {
+  if (credentialResults.length !== 1) return {};
+  const credential = credentialResults[0];
+  const disclosures = credential?.authenticated_disclosures;
+  if (credential?.signature_valid !== true
+    || disclosures?.format !== 'mso_mdoc'
+    || disclosures.documents?.length !== 1) return {};
+  const document = disclosures.documents[0];
+  const namespaces = document?.namespaces;
+  if (!namespaces || typeof namespaces !== 'object' || Array.isArray(namespaces)) return {};
+  const lists = Object.values(namespaces);
+  if (lists.some((names) => !Array.isArray(names) || names.some((name) => typeof name !== 'string'))) return {};
+  return {
+    authenticatedDisclosedClaimNames: [...new Set(lists.flat())].sort(),
+    authenticatedDisclosureNamespaces: namespaces,
+    mdocDocumentType: document.doc_type,
+    issuerTrusted: credential.trust_check_passed === true,
+    credentialTemplateId: credential.credential_template_id,
+  };
+}
+
 export function extractVerificationSummary(session = {}) {
   const rawResult = asObject(session.result);
   const nestedResult = asObject(rawResult.result);
@@ -109,6 +132,13 @@ export function extractVerificationSummary(session = {}) {
     ...asArray(session.context_data?.credential_results),
   ];
   const firstCredential = credentialResults[0] || {};
+  const authoritativeCredentialResults = [
+    asArray(session.credential_results),
+    asArray(result.credential_results),
+    asArray(contextResult.credential_results),
+    asArray(session.context_data?.credential_results),
+  ].find((items) => items.length) || [];
+  const mdocSummary = authenticatedMdocSummary(authoritativeCredentialResults);
   const achievement = asObject(firstPresent(claims.achievement, claims.badge, claims.open_badge));
   const issuer = asObject(firstPresent(claims.issuer, claims.issuerProfile));
   const image = firstPresent(
@@ -141,6 +171,7 @@ export function extractVerificationSummary(session = {}) {
     rawResult.result ? statusValue(rawResult.result) === 'passed' : undefined,
   );
   const trustValidated = firstPresent(
+    mdocSummary.issuerTrusted,
     result.trust_validated,
     rawResult.trust_validated,
     rawResult.decision ? rawResult.decision === 'allow' : undefined,
@@ -160,6 +191,9 @@ export function extractVerificationSummary(session = {}) {
   );
 
   return {
+    ...mdocSummary,
+    verificationInstanceId: firstPresent(session.instance_id, session.id),
+    verificationDecision: firstPresent(result.decision, rawResult.decision, session.decision),
     passed: Boolean(passed),
     badgeName: firstPresent(
       achievement.name,
@@ -168,7 +202,7 @@ export function extractVerificationSummary(session = {}) {
       claims.name,
       firstCredential.credential_name,
       firstCredential.credential_template_name,
-      'Presented Credential',
+      mdocSummary.mdocDocumentType === 'org.iso.18013.5.1.mDL' ? 'Mobile driving licence' : 'Presented Credential',
     ),
     description: firstPresent(achievement.description, claims.description, firstCredential.description),
     image,
@@ -256,7 +290,17 @@ function VerificationResultSummary({ session }) {
   const hasCanvasMirror = Boolean(summary.canvasCredentialId || summary.canvasAccount || summary.canvasDeliveryId);
 
   return (
-    <Paper variant="outlined" sx={{ p: 2, borderRadius: 1 }} data-testid="verification-result-summary">
+    <Paper
+      variant="outlined"
+      sx={{ p: 2, borderRadius: 1 }}
+      data-testid="verification-result-summary"
+      data-disclosed-claim-names={summary.authenticatedDisclosedClaimNames
+        ? JSON.stringify(summary.authenticatedDisclosedClaimNames) : undefined}
+      data-issuer-trusted={summary.issuerTrusted === undefined ? undefined : String(summary.issuerTrusted)}
+      data-credential-template-id={summary.credentialTemplateId}
+      data-verification-instance-id={summary.verificationInstanceId}
+      data-verification-decision={summary.verificationDecision}
+    >
       <Stack spacing={2}>
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'flex-start', sm: 'center' }}>
           <Avatar
@@ -272,7 +316,8 @@ function VerificationResultSummary({ session }) {
               <Typography variant="h6" sx={{ fontWeight: 800, overflowWrap: 'anywhere' }}>
                 {summary.badgeName}
               </Typography>
-              <Chip size="small" label="Open Badge" variant="outlined" />
+              <Chip size="small" label={summary.mdocDocumentType === 'org.iso.18013.5.1.mDL'
+                ? 'mDL' : summary.mdocDocumentType ? 'mdoc' : 'Open Badge'} variant="outlined" />
               <Chip
                 size="small"
                 label={summary.passed ? 'Verified' : 'Not verified'}
@@ -295,6 +340,19 @@ function VerificationResultSummary({ session }) {
         ) : null}
 
         <Divider />
+
+        {summary.authenticatedDisclosedClaimNames ? (
+          <Box>
+            <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+              Authenticated disclosures
+            </Typography>
+            {Object.entries(summary.authenticatedDisclosureNamespaces).map(([namespace, names]) => (
+              <Typography key={namespace} variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+                {namespace}: {names.length ? names.join(', ') : 'No elements disclosed'}
+              </Typography>
+            ))}
+          </Box>
+        ) : null}
 
         <Stack spacing={1}>
           <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>

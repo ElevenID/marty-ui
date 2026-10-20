@@ -7,6 +7,7 @@ const test = require('node:test');
 
 const {
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
+  cancelOwnedIssuanceTransaction,
   cleanupApplicationCredential,
   compactObject,
   ensureActiveResource,
@@ -611,6 +612,82 @@ test('a successful HTTP status without confirmed mutation state is not successfu
   assert.equal(result.credentialRevoked, false);
   assert.equal(result.applicationWithdrawn, true);
   assert.deepEqual(result.failures, [{ operation: 'revoke', id: 'credential/1', status: 200 }]);
+});
+
+test('pending offer cancellation proves application ownership and exact revoked transaction readback', async () => {
+  const owned = ownedRun({ credentialId: null });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned) },
+    { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: { id: owned.transactionId, status: 'revoked' } },
+    { ok: true, status: 200, body: transaction(owned, { status: 'revoked' }) },
+  ]);
+  const result = await cancelOwnedIssuanceTransaction(page, owned, 'Owned demo offer cleanup');
+  assert.equal(result.ok, true);
+  assert.equal(result.scope, 'TRANSACTION_CANCELLATION_ONLY');
+  assert.equal(result.applicationId, owned.applicationId);
+  assert.deepEqual(owned.uncertainMutations, []);
+  assert.deepEqual(page.requests.slice(3).map(({ requestPath, requestOptions }) => [requestOptions.method || 'GET', requestPath]), [
+    ['POST', '/v1/issuance/transaction%2F1/revoke'],
+    ['GET', '/v1/issuance/transaction%2F1?organization_id=org%2F1'],
+  ]);
+});
+
+test('pending cancellation refuses foreign bindings and existing credential records before mutations', async () => {
+  const owned = ownedRun({ applicationId: null, credentialId: null });
+  for (const extra of [
+    { id: 'foreign-transaction' }, { organization_id: 'foreign-org' },
+    { credential_template_id: 'foreign-template' }, { application_id: 'foreign-application' },
+  ]) {
+    const page = fakePage([{ ok: true, status: 200, body: transaction(owned, extra) }]);
+    await assert.rejects(cancelOwnedIssuanceTransaction(page, owned, 'cleanup'), /exact owned/);
+    assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+  }
+  const page = fakePage([
+    { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+    { ok: true, status: 200, body: [credential(owned)] },
+  ]);
+  await assert.rejects(cancelOwnedIssuanceTransaction(page, owned, 'cleanup'), /credential exists/);
+  assert.equal(page.requests.length, 2);
+  assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+  const wrongRun = ownedRun({ credentialId: null });
+  const applicationPage = fakePage([{ ok: true, status: 200, body: application(wrongRun, {
+    integration_context: { demo_run_id: 'prior-run' },
+  }) }]);
+  await assert.rejects(cancelOwnedIssuanceTransaction(applicationPage, wrongRun, 'cleanup'), /does not match this run/);
+  assert.equal(applicationPage.requests.length, 1);
+});
+
+test('lost cancellation response is reconciled only by the exact public revoked readback', async () => {
+  for (const confirmed of [true, false]) {
+    const owned = ownedRun({ applicationId: null, credentialId: null });
+    const page = fakePage([
+      { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+      { ok: true, status: 200, body: [] },
+      { ok: false, status: 0, body: null },
+      { ok: true, status: 200, body: transaction(owned, {
+        status: 'revoked', ...(confirmed ? {} : { credential_template_id: 'foreign-template' }),
+      }) },
+    ]);
+    const result = await cancelOwnedIssuanceTransaction(page, owned, 'cleanup');
+    assert.equal(result.ok, confirmed);
+    assert.equal(result.responseStatus, 0);
+    assert.deepEqual(owned.uncertainMutations, confirmed ? [] : [{ operation: 'transaction_cancellation' }]);
+    assert.equal(page.requests.filter(({ requestOptions }) => requestOptions.method === 'POST').length, 1);
+  }
+});
+
+test('HTTP success with a pending readback cannot clear transaction cancellation uncertainty', async () => {
+  const owned = ownedRun({ applicationId: null, credentialId: null });
+  const page = fakePage([
+    { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: { id: owned.transactionId, status: 'revoked' } },
+    { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+  ]);
+  assert.equal((await cancelOwnedIssuanceTransaction(page, owned, 'cleanup')).ok, false);
+  assert.deepEqual(owned.uncertainMutations, [{ operation: 'transaction_cancellation' }]);
 });
 
 test('selectOrganization persists org mode before navigating and waits for UI restoration', async () => {

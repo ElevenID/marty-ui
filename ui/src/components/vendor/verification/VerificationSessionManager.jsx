@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Paper,
@@ -33,7 +33,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
-import { startVerificationFlow } from '../../../services/zkVerificationApi';
+import { startVerificationFlow, getVerificationFlowResult } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
 import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
 import PolicySelectStep from './steps/PolicySelectStep';
@@ -155,6 +155,16 @@ function VerificationSessionManager({ organizationId }) {
   // Detail drawer state
   const [detailSession, setDetailSession] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState(null);
+  const detailRequest = useRef(0);
+
+  useEffect(() => {
+    detailRequest.current += 1;
+    setDetailOpen(false);
+    setDetailSession(null);
+    return () => { detailRequest.current += 1; };
+  }, [organizationId]);
 
   // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -289,12 +299,31 @@ function VerificationSessionManager({ organizationId }) {
   // ── Detail handlers ───────────────────────────────────────────────────────
 
   const openDetail = async (session) => {
+    const request = ++detailRequest.current;
     setDetailSession(session);
     setDetailOpen(true);
-
+    setDetailError(null);
+    const needsResult = ['completed', 'failed'].includes(normalizeSessionStatus(session.status));
+    setDetailLoading(needsResult);
+    if (!needsResult) return;
+    try {
+      const result = await getVerificationFlowResult(session.session_id);
+      if (result?.instance_id !== session.session_id) {
+        throw new Error('Verification result belongs to a different session');
+      }
+      if (detailRequest.current !== request) return;
+      setDetailSession({ ...session, result });
+    } catch (err) {
+      if (detailRequest.current === request) {
+        setDetailError(err.message || 'Failed to load the verification result');
+      }
+    } finally {
+      if (detailRequest.current === request) setDetailLoading(false);
+    }
   };
 
   const closeDetail = () => {
+    detailRequest.current += 1;
     setDetailOpen(false);
     setDetailSession(null);
   };
@@ -325,7 +354,7 @@ function VerificationSessionManager({ organizationId }) {
             </TableRow>
           ) : (
             rows.map((session) => (
-              <TableRow key={session.session_id} hover>
+              <TableRow key={session.session_id} data-flow-instance-id={session.session_id} hover>
                 <TableCell>
                   <Tooltip title={formatSessionReference(session.session_id)}>
                     <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
@@ -553,7 +582,9 @@ function VerificationSessionManager({ organizationId }) {
                 </Box>
               )}
 
-              {normalizeSessionStatus(detailSession.status) !== 'pending' && (
+              {detailLoading && <CircularProgress size={24} aria-label="Loading verification result" />}
+              {detailError && <Alert severity="error">{detailError}</Alert>}
+              {!detailLoading && !detailError && normalizeSessionStatus(detailSession.status) !== 'pending' && (
                 <VerificationResultSummary session={detailSession} />
               )}
 

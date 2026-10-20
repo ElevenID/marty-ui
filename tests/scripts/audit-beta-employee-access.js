@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { chromium } = require('@playwright/test');
+const { acquireWalletSession } = require('./demo-wallet-session');
 
 const {
   ensureActiveRevocationProfile,
@@ -60,6 +61,7 @@ loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
 loadEnvFile(path.join(ROOT, '.env'));
 
 const BETA_ORIGIN = process.env.BETA_ORIGIN || 'https://beta.elevenidllc.com';
+const TEST_WALLET_ORIGIN = process.env.MARTY_TEST_WALLET_ORIGIN || 'http://127.0.0.1:8787';
 const ORG_ID = process.env.BETA_AUDIT_ORG_ID || DEFAULT_BETA_ORGANIZATION_ID;
 const SOURCE_TEMPLATE_ID = process.env.BETA_AUDIT_TEMPLATE_ID
   || DEFAULT_LIFECYCLE_SOURCE_TEMPLATE_ID;
@@ -446,6 +448,8 @@ async function main() {
     ownedResources,
     pageErrors: [],
     unexpectedResponses: [],
+    finalizationFailures: [],
+    releaseReady: false,
   };
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -456,15 +460,26 @@ async function main() {
   let adminContext;
   let applicantContext;
   let adminPage;
+  let adminVideo;
+  let walletVideo;
+  let walletSession;
+  let walletAcquisitionAttempted = false;
   let applicationId;
   let credentialId;
   let cleanupComplete = false;
+  let journeyComplete = false;
+  let journeyReady = false;
   try {
     adminContext = await browser.newContext({
       viewport: VIDEO_SIZE,
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    // receiveCredential uses this exact context. Establish ownership before
+    // any configuration, application or issuance mutation can begin.
+    walletAcquisitionAttempted = true;
+    walletSession = await acquireWalletSession(adminContext, { origin: TEST_WALLET_ORIGIN, runId: stamp });
+    report.walletSession = walletSession.evidence;
     applicantContext = await browser.newContext({ viewport: VIDEO_SIZE, ignoreHTTPSErrors: LOCAL_BETA_PROXY });
     const page = await adminContext.newPage();
     adminPage = page;
@@ -479,8 +494,8 @@ async function main() {
     };
     const walletPage = await adminContext.newPage();
     const applicantPage = await applicantContext.newPage();
-    const adminVideo = page.video();
-    const walletVideo = walletPage.video();
+    adminVideo = page.video();
+    walletVideo = walletPage.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
     page.on('response', (response) => {
       if (!response.url().startsWith(BETA_ORIGIN) || response.status() < 400) return;
@@ -622,7 +637,7 @@ async function main() {
     report.behaviorAssertions = employeeAccessBehaviorAssertions(report);
     report.cleanup = await cleanup(page, ownedResources);
     cleanupComplete = report.cleanup.ok === true;
-    report.releaseReady = Boolean(
+    journeyReady = Boolean(
       report.configuration.allActive
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && report.cleanup.credentialRevoked
@@ -631,23 +646,7 @@ async function main() {
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );
-    report.finishedAt = new Date().toISOString();
-    await applicantContext.close();
-    applicantContext = null;
-    await adminContext.close();
-    adminContext = null;
-    if (RECORD_VIDEO) {
-      report.recordings = {
-        application: path.relative(
-          ROOT,
-          await finalizeVideo(adminVideo, artifactDir, 'employee-onboarding-secure-access.webm'),
-        ),
-        wallet: path.relative(
-          ROOT,
-          await finalizeVideo(walletVideo, artifactDir, 'employee-onboarding-secure-access-wallet.webm'),
-        ),
-      };
-    }
+    journeyComplete = true;
   } catch (error) {
     report.error = redact(error.stack || error.message || String(error));
     report.releaseReady = false;
@@ -658,10 +657,38 @@ async function main() {
         .then((result) => { report.cleanup = result; })
         .catch((error) => { report.cleanupError = redact(error.message || String(error)); });
     }
-    if (report.cleanup?.ok !== true || report.cleanupError) report.releaseReady = false;
-    if (applicantContext) await applicantContext.close().catch(() => {});
-    if (adminContext) await adminContext.close().catch(() => {});
-    await browser.close().catch((error) => { report.closeError = redact(error.message); report.releaseReady = false; });
+    let walletClosed = false;
+    if (walletSession) {
+      try { await walletSession.close(); walletClosed = walletSession.evidence.closed === true; }
+      catch (error) {
+        report.finalizationFailures.push({ operation: 'wallet_session_close', error: redact(error.message || String(error)) });
+      }
+    } else if (walletAcquisitionAttempted) {
+      report.finalizationFailures.push({ operation: 'wallet_session_acquisition', outcome: 'UNCONFIRMED' });
+    }
+    // Session deletion needs the live browser context's cookie and run guard.
+    // Always finish it before closing contexts or finalizing their videos.
+    for (const [operation, context] of [['applicant_context_close', applicantContext], ['admin_context_close', adminContext]]) {
+      if (!context) continue;
+      try { await context.close(); }
+      catch (error) { report.finalizationFailures.push({ operation, error: redact(error.message || String(error)) }); }
+    }
+    if (RECORD_VIDEO && journeyComplete) {
+      try {
+        report.recordings = {
+          application: path.relative(ROOT, await finalizeVideo(adminVideo, artifactDir, 'employee-onboarding-secure-access.webm')),
+          wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'employee-onboarding-secure-access-wallet.webm')),
+        };
+      } catch (error) {
+        report.finalizationFailures.push({ operation: 'video_finalization', error: redact(error.message || String(error)) });
+      }
+    }
+    await browser.close().catch((error) => {
+      report.closeError = redact(error.message || String(error));
+      report.finalizationFailures.push({ operation: 'browser_close', error: report.closeError });
+    });
+    report.releaseReady = Boolean(journeyReady && walletClosed
+      && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
@@ -684,5 +711,6 @@ module.exports = {
   employeeFlowPayload,
   employeePolicyPayload,
   employeeTrustProfilePayload,
+  main,
   requireConfigurationBinding,
 };

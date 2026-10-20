@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 450;
+pub const EXPECTED_ROUTE_COUNT: usize = 453;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -1012,7 +1012,10 @@ mod tests {
     #[test]
     fn internal_proxy_routes_do_not_mutate_public_contract() {
         let contract = GatewayContract::load().expect("gateway contract");
-        assert_eq!(contract.route_table().expect("public").routes().len(), 450);
+        assert_eq!(
+            contract.route_table().expect("public").routes().len(),
+            EXPECTED_ROUTE_COUNT
+        );
         assert_eq!(
             contract
                 .runtime_route_table()
@@ -1142,6 +1145,49 @@ mod tests {
             .is_err(),
             "internal lifecycle status must not become a public gateway route"
         );
+    }
+
+    #[test]
+    fn offline_audit_routes_require_authenticated_organization_ingestion_scope() {
+        use crate::authorization::{api_key_allowed, authorize_api_key, resolve_action};
+        let org = "28d552e4-4a94-4fd6-9b60-55e5e9ccb1a3";
+        let base = format!("/v1/organizations/{org}/offline-verification-events");
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        for (method, path) in [
+            (HttpMethod::Get, base.clone()),
+            (HttpMethod::Post, base.clone()),
+            (
+                HttpMethod::Get,
+                format!("{base}/10b796cf-17c0-4f71-bd4e-2ec62089c0b2"),
+            ),
+        ] {
+            let route = route_for(&table, method, &path).expect("public audit ingestion route");
+            assert_eq!(route.route.upstream_service, "organizations");
+            assert!(route.route.auth_required);
+            let method_name = if method == HttpMethod::Get {
+                "GET"
+            } else {
+                "POST"
+            };
+            let permission =
+                resolve_action(method_name, &path).expect("explicit ingestion authorization");
+            assert_eq!(permission.permission, "audit:ingest");
+        }
+        assert!(api_key_allowed("audit:ingest", &["audit:write".into()]));
+        for scopes in [vec![], vec!["audit:read".into()], vec!["admin:full".into()]] {
+            assert!(!api_key_allowed("audit:ingest", &scopes));
+        }
+        assert!(authorize_api_key("audit:ingest", org, Some(org), &["audit:write".into()]).is_ok());
+        assert!(authorize_api_key(
+            "audit:ingest",
+            org,
+            Some("another-org"),
+            &["audit:write".into()]
+        )
+        .is_err());
     }
 
     #[test]

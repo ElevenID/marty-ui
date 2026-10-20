@@ -522,6 +522,11 @@
       "description": "Export audit logs"
     },
     {
+      "resource": "audit",
+      "action": "ingest",
+      "description": "Ingest privacy-minimized offline verification reports with a dedicated API key"
+    },
+    {
       "resource": "verification",
       "action": "view",
       "description": "View verification results"

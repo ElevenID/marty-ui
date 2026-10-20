@@ -480,6 +480,79 @@ async function findCurrentCredential(page, { waitFor, ...owned }) {
   ));
 }
 
+function requireOwnedTransaction(transaction, owned) {
+  for (const field of ['organizationId', 'credentialTemplateId', 'transactionId']) {
+    requireIdentifier(owned[field], field);
+  }
+  if (transaction?.id !== owned.transactionId
+      || transaction.organization_id !== owned.organizationId
+      || transaction.credential_template_id !== owned.credentialTemplateId
+      || (transaction.application_id || null) !== (owned.applicationId || null)) {
+    throw new Error('Issuance transaction does not match the exact owned organization, template, and application');
+  }
+  return transaction;
+}
+
+// The caller must retain this tuple from its own successful creation response;
+// template names, timestamps, and an arbitrary inventory selection are not
+// ownership. Application-backed callers additionally prove the run marker.
+// This deliberately cancels only an offer without an issued credential. Use
+// the canonical credential lifecycle cleanup for an existing credential.
+async function cancelOwnedIssuanceTransaction(page, owned, reason) {
+  requireOwnedTransaction({
+    id: owned.transactionId, organization_id: owned.organizationId,
+    credential_template_id: owned.credentialTemplateId,
+    application_id: owned.applicationId || null,
+  }, owned);
+  requireIdentifier(reason, 'Cancellation reason');
+  if (owned.credentialId) throw new Error('An owned issued credential requires credential lifecycle cleanup');
+  if (owned.applicationId) {
+    const applicationPath = `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}`;
+    requireOwnedApplication(await requireJson(page, applicationPath), owned);
+  }
+  const transactionPath = `/v1/issuance/${encodeURIComponent(owned.transactionId)}`;
+  const scopedPath = `${transactionPath}?organization_id=${encodeURIComponent(owned.organizationId)}`;
+  const transaction = requireOwnedTransaction(await requireJson(page, scopedPath), owned);
+  const records = await listResources(page, '/v1/issued-credentials', owned.organizationId);
+  requireOrganizationInventory(records, owned.organizationId, 'Issued credential inventory');
+  if (records.some((record) => record.flow_execution_id === owned.transactionId
+      || (owned.applicationId && record.application_id === owned.applicationId))) {
+    throw new Error('An issued credential exists for this transaction; use credential lifecycle cleanup');
+  }
+  const status = String(transaction.status || '').toLowerCase();
+  if (!['pending', 'authorized', 'failed', 'expired', 'revoked'].includes(status)) {
+    throw new Error('Owned transaction is not a cancellable pending or terminal offer');
+  }
+  const result = {
+    ok: status === 'revoked', transactionId: owned.transactionId,
+    organizationId: owned.organizationId, credentialTemplateId: owned.credentialTemplateId,
+    applicationId: owned.applicationId || null, status,
+    scope: 'TRANSACTION_CANCELLATION_ONLY', responseStatus: null,
+  };
+  if (result.ok) {
+    resolveApplicationMutation(owned, 'transaction_cancellation');
+    return result;
+  }
+  if (!(owned.uncertainMutations || []).some(({ operation }) => operation === 'transaction_cancellation')) {
+    markApplicationMutation(owned, 'transaction_cancellation');
+  }
+  const response = await browserJson(page, `${transactionPath}/revoke`, {
+    method: 'POST', body: JSON.stringify({ reason }),
+  }).catch(() => ({ ok: false, status: 0 }));
+  result.responseStatus = response.status;
+  // A lost POST response is not a reason to retry a mutation blindly. Confirm
+  // the actual public state with the same ownership tuple instead.
+  try {
+    const readback = requireOwnedTransaction(await requireJson(page, scopedPath), owned);
+    result.status = String(readback.status || '').toLowerCase();
+    result.ok = result.status === 'revoked';
+  } catch {
+    result.status = 'unconfirmed';
+  }
+  if (result.ok) resolveApplicationMutation(owned, 'transaction_cancellation');
+  return result;
+}
+
 async function cleanupApplicationCredential(page, owned, reason) {
   const result = {
     ok: false,
@@ -594,6 +667,7 @@ async function requireNoConflictingApplications(applicantPage, {
 module.exports = {
   DEFAULT_CREDENTIAL_RANKING_STRATEGY,
   browserJson,
+  cancelOwnedIssuanceTransaction,
   cleanupApplicationCredential,
   compactObject,
   createOwnedApplication,
@@ -608,6 +682,7 @@ module.exports = {
   requireJson,
   requireNoConflictingApplications,
   requireOwnedApplication,
+  requireOwnedTransaction,
   resolveActiveIssuerDid,
   safeErrorDetail,
   selectApplicationTransaction,

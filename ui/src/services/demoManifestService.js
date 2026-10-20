@@ -1,4 +1,5 @@
 import { DEMO_INDEX, DEMO_MANIFESTS } from '../generated/demoManifests.generated';
+import WALLET_SCHEMA from '../generated/demoWalletSchema.generated.json';
 
 const MANIFEST_ROOT = '/demos/manifests';
 const STACK_VERSION_PATTERN = /^\d{4}\.\d{2}\.\d+$/;
@@ -35,6 +36,32 @@ export class DemoManifestError extends Error {
 
 function assert(condition, message) {
   if (!condition) throw new DemoManifestError(message);
+}
+
+function validateWalletEvidence(wallet, label) {
+  assert(wallet && typeof wallet === 'object' && !Array.isArray(wallet), `${label}: invalid wallet evidence.`);
+  assert(WALLET_SCHEMA.required.every((field) => Object.hasOwn(wallet, field)), `${label}: required wallet evidence is missing.`);
+  // This flat public projection has only strings, nullable strings, enums and
+  // string lists. Read its fields and constraints from the publication schema;
+  // device/protocol telemetry stays in the separately retained evidence file.
+  Object.entries(wallet).forEach(([field, value]) => {
+    const rule = WALLET_SCHEMA.properties[field];
+    assert(rule, `${label}: unsupported wallet field ${field}.`);
+    const error = `${label}: invalid wallet ${field}.`;
+    if (rule.$ref === '#/$defs/stringList') {
+      assert(Array.isArray(value) && value.every((item) => typeof item === 'string' && item.length > 0), error);
+    } else if (rule.enum) {
+      assert(rule.enum.includes(value), error);
+    } else {
+      const types = Array.isArray(rule.type) ? rule.type : [rule.type];
+      assert(types.includes(value === null ? 'null' : typeof value), error);
+      if (typeof value === 'string') {
+        if (rule.minLength) assert(value.length >= rule.minLength, error);
+        if (rule.pattern) assert(new RegExp(rule.pattern).test(value), error);
+        if (rule.format === 'date-time') assert(/^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)), error);
+      }
+    }
+  });
 }
 
 function validatePublicationAttestation(attestation, expectedChecks, publishedAt, label) {
@@ -181,6 +208,8 @@ export function validateDemoManifest(manifest) {
       `${scenario.slug}: invalid recording classification.`,
     );
     assert(Array.isArray(scenario.revision_history), `${scenario.slug}: revision history is missing.`);
+    assert(Array.isArray(scenario.wallets), `${scenario.slug}: wallet evidence is missing.`);
+    scenario.wallets.forEach((wallet, index) => validateWalletEvidence(wallet, `${scenario.slug} wallet ${index + 1}`));
     assert(Array.isArray(scenario.assertions), `${scenario.slug}: evidence assertions are missing.`);
     scenario.assertions.forEach((item) => {
       assert(

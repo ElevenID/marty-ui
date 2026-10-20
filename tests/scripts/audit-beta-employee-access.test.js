@@ -14,6 +14,9 @@ const {
   requireConfigurationBinding,
 } = require('./audit-beta-employee-access');
 const { DEFAULT_BETA_ORGANIZATION_ID } = require('./beta-credential-contract');
+const { walletSessionDriverRegressions } = require('./demo-wallet-driver-test-helpers');
+
+walletSessionDriverRegressions('audit-beta-employee-access.js', 'D-04');
 
 function ownedRun(extra = {}) {
   return {

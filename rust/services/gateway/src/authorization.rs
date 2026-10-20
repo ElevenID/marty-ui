@@ -547,6 +547,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "audit",
         ),
         rule(
+            r"^/v1/organizations/[a-f0-9\-]{36}/offline-verification-events(?:/[^/]+)?$",
+            &[("GET", "audit:ingest"), ("POST", "audit:ingest")],
+            "audit",
+        ),
+        rule(
             r"^/v1/organizations/[a-f0-9\-]{36}/audit-events(?:/[^/]+)?$",
             &[("GET", "audit:view")],
             "audit",
@@ -874,6 +879,11 @@ pub fn skips_tenant_authorization(path: &str) -> bool {
 
 pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
+    // Offline event ingestion is an explicitly granted reporting capability;
+    // broad legacy keys and audit readers do not gain a new write boundary.
+    if required_permission == "audit:ingest" {
+        return scopes.contains("audit:write");
+    }
     // DSC issuance requires a tenant-bound human operator grant. API keys,
     // including broad legacy scopes, must not mint document certificates.
     if matches!(

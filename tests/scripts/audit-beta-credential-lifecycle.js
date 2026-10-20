@@ -2,13 +2,14 @@
 /* eslint-disable no-console */
 
 const fs = require('fs');
+const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
 const { createHash, randomUUID } = require('node:crypto');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
-const { browserJson, selectOrganization } = require('./beta-demo-resource-helpers');
+const { browserJson, cancelOwnedIssuanceTransaction, selectOrganization } = require('./beta-demo-resource-helpers');
 const { requireVerificationDecision } = require('./beta-demo-review-ui');
 const {
   VIDEO_SIZE,
@@ -306,51 +307,27 @@ async function selectOrg(page) {
   };
 }
 
-async function ensureActiveRevocationProfile(page, stamp) {
-  const existing = await page.evaluate(async (organizationId) => {
-    const response = await fetch(
-      `/v1/revocation-profiles?organization_id=${encodeURIComponent(organizationId)}`,
-      { credentials: 'include' },
-    );
-    const profiles = await response.json().catch(() => []);
-    const active = Array.isArray(profiles)
-      ? profiles.find((profile) => String(profile?.status || '').toUpperCase() === 'ACTIVE')
-      : null;
-    return active ? { ok: true, id: active.id, name: active.name, reused: true } : null;
-  }, ORG_ID);
-  if (existing) return existing;
-
-  await page.goto(`${BETA_ORIGIN}/console/org/trust/revocation/new`, {
-    waitUntil: 'domcontentloaded',
-    timeout: 60_000,
-  });
-  await page.getByTestId('revocationWizard.name').fill(`Lifecycle Status ${stamp}`);
-  const createResponsePromise = page.waitForResponse((response) => (
-    response.url().endsWith('/v1/revocation-profiles')
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
-  await page.getByTestId('revocationWizard.submit').click();
-  const createResponse = await createResponsePromise;
-  const created = await createResponse.json().catch(() => null);
-  if (!createResponse.ok() || !created?.id) {
-    return { ok: false, status: createResponse.status(), error: created?.detail || 'Profile creation failed' };
+async function ensureActiveRevocationProfile(page) {
+  // Revoked demo credentials still need their published status lists. Require
+  // an existing service profile instead of creating an untracked profile and
+  // either leaking it or deleting the status authority during cleanup.
+  const source = await browserJson(page, `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`);
+  if (!source.ok || source.body?.id !== SOURCE_TEMPLATE_ID || source.body?.organization_id !== ORG_ID) {
+    return { ok: false, error: 'Source template authority could not be established before status-profile selection' };
   }
-
-  const activateResponsePromise = page.waitForResponse((response) => (
-    response.url().endsWith(`/v1/revocation-profiles/${created.id}/activate`)
-    && response.request().method() === 'POST'
-  ), { timeout: 30_000 });
-  await page.getByRole('button', { name: /^activate$/i }).click();
-  const activateResponse = await activateResponsePromise;
-  const activated = await activateResponse.json().catch(() => null);
-  return {
-    ok: activateResponse.ok() && String(activated?.status || '').toUpperCase() === 'ACTIVE',
-    status: activateResponse.status(),
-    id: created.id,
-    name: created.name,
-    reused: false,
-    error: activateResponse.ok() ? null : activated?.detail || 'Profile activation failed',
-  };
+  const response = await browserJson(page, `/v1/revocation-profiles?organization_id=${encodeURIComponent(ORG_ID)}`);
+  if (!response.ok || !Array.isArray(response.body)) {
+    return { ok: false, status: response.status, error: 'Revocation Profile lookup failed' };
+  }
+  const configuredId = process.env.MARTY_LIFECYCLE_REVOCATION_PROFILE_ID || source.body.revocation_profile_id;
+  const active = response.body.filter((profile) => profile.organization_id === ORG_ID
+    && String(profile.status || '').toUpperCase() === 'ACTIVE');
+  const candidates = configuredId ? active.filter((profile) => profile.id === configuredId) : active;
+  if (candidates.length !== 1) {
+    return { ok: false, error: 'Select one existing active Revocation Profile with MARTY_LIFECYCLE_REVOCATION_PROFILE_ID before recording' };
+  }
+  return { ok: true, id: candidates[0].id, name: candidates[0].name, reused: true,
+    ownership: 'REFERENCE_ONLY', provisioning: 'PREEXISTING_ACTIVE_PROFILE' };
 }
 
 function trackOwnedMutation(ownedResources, operation, recordId) {
@@ -495,9 +472,8 @@ async function issueCredential(page, templateId, ownedResources, holder = lifecy
 }
 
 async function receiveCredential(walletPage, offerUri, expectedVct) {
-  await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-  const reset = await walletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
-  assert.ok(reset.ok(), 'Wallet reset failed');
+  await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
+  await resetIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await walletPage.reload({ waitUntil: 'domcontentloaded' });
   await maskProtocolField(walletPage, 'Credential offer URI', RECORD_VIDEO);
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
@@ -605,6 +581,7 @@ async function cleanupOwnedLifecycle(page, {
     revoked: [],
     alreadyRevoked: [],
     templateRetired: false,
+    cancelledTransactionIds: [],
     pendingTransactionIds: [],
     uncertainMutations: [...uncertainMutations],
     failures: [],
@@ -628,12 +605,11 @@ async function cleanupOwnedLifecycle(page, {
     ? await lifecycleCredentialInventory(page)
     : [];
   const owned = new Map();
+  const unclaimedTransactions = [];
   for (const transactionId of new Set(transactionIds)) {
     const record = selectIssuedCredential(records, templateId, transactionId);
     if (!record) {
-      // No cancellation endpoint is assumed. Keep unclaimed or undiscovered
-      // transactions explicit so partial cleanup cannot be reported complete.
-      result.pendingTransactionIds.push(transactionId);
+      unclaimedTransactions.push(transactionId);
       continue;
     }
     if (record.organization_id !== ORG_ID) {
@@ -651,6 +627,27 @@ async function cleanupOwnedLifecycle(page, {
   }
   // Validate every candidate before mutating any resource. Same-template
   // records from other transactions never enter this explicitly owned set.
+  for (const transactionId of unclaimedTransactions) {
+    const cancellation = {
+      organizationId: ORG_ID,
+      credentialTemplateId: templateId,
+      applicationId: null,
+      transactionId,
+      uncertainMutations: [],
+    };
+    const outcome = await cancelOwnedIssuanceTransaction(
+      page, cancellation, 'Lifecycle audit unclaimed offer cleanup',
+    ).catch(() => ({ ok: false, responseStatus: 0 }));
+    if (outcome.ok) {
+      result.cancelledTransactionIds.push(transactionId);
+    } else {
+      result.pendingTransactionIds.push(transactionId);
+      result.failures.push({ id: transactionId, operation: 'cancel_transaction', status: outcome.responseStatus });
+      result.uncertainMutations.push(...cancellation.uncertainMutations.map((mutation) => ({
+        ...mutation, transactionId,
+      })));
+    }
+  }
   for (const record of owned.values()) {
     if (String(record.status).toUpperCase() === 'REVOKED') {
       result.alreadyRevoked.push(record.id);
@@ -968,6 +965,7 @@ async function main() {
   let page;
   let applicationVideo;
   let walletVideo;
+  let walletSession;
   try {
     const input = await prepareLiveInputs(artifactDir, stamp, evidence);
     browser = await chromium.launch({
@@ -981,6 +979,8 @@ async function main() {
       ignoreHTTPSErrors: LOCAL_BETA_PROXY,
       ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
     });
+    walletSession = await acquireWalletSession(context, { origin: TEST_WALLET_ORIGIN, runId: stamp });
+    report.walletSession = walletSession.evidence;
     await installUiCandidateRoute(context, uiCandidate);
     page = await context.newPage();
     const recording = createLifecycleRecording(page, {
@@ -1231,6 +1231,14 @@ async function main() {
           report.cleanup = await cleanupOwnedLifecycle(page, ownedResources);
         } catch (error) {
           report.cleanup = { ok: false, error: redact(error.message || String(error)) };
+        }
+        if (walletSession) {
+          try {
+            await walletSession.close();
+          } catch (error) {
+            report.cleanup.ok = false;
+            report.cleanup.walletError = redact(error.message || String(error));
+          }
         }
         if (!report.cleanup.ok) {
           report.engineeringReady = false;

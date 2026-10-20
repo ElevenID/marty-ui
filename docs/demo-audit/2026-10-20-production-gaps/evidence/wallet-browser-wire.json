@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "result": "PASS",
+  "scope": "REAL_CHROME_TO_LOCAL_RUST_WALLET_SESSION_WIRING",
+  "binarySha256": "f5a85a4f44a1df3cc8ee339a7ba5b5cb6667f121423304d8679c950e6a5405da",
+  "browser": "155.0.8059.84",
+  "checks": [
+    "two separate Playwright cookie jars own distinct Rust sessions; cookie is HttpOnly",
+    "visible Reset sends the run header and only clears its owned Rust storage",
+    "tampered visible run ID is rejected with HTTP 403",
+    "lost browser cookie plus visible run ID returns HTTP 410 instead of resetting interactive storage",
+    "both owned sessions close through Rust API; closing A preserves B"
+  ],
+  "sessions": [
+    {
+      "implementation": "marty-core/marty-test-wallet",
+      "protocol": "isolated_sessions_v1",
+      "instanceId": "70214f2c-b79c-4422-8408-bcfebaa4e12a",
+      "sessionId": "d6d14783-12d2-48ff-9f21-457ef93b7df9",
+      "runId": "browser-wire-a",
+      "acquiredAt": "2026-10-20T03:41:38.718Z",
+      "closed": true,
+      "closedAt": "2026-10-20T03:41:39.269Z"
+    },
+    {
+      "implementation": "marty-core/marty-test-wallet",
+      "protocol": "isolated_sessions_v1",
+      "instanceId": "70214f2c-b79c-4422-8408-bcfebaa4e12a",
+      "sessionId": "3fcc93d4-5c32-4236-88de-87a49b12c94b",
+      "runId": "browser-wire-b",
+      "acquiredAt": "2026-10-20T03:41:38.725Z",
+      "closed": true,
+      "closedAt": "2026-10-20T03:41:39.280Z"
+    }
+  ],
+  "boundaries": [
+    "No real credential issuance or presentation",
+    "No signer or external service calls",
+    "No live production or independent-wallet qualification"
+  ]
+}

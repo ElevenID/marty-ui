@@ -13,6 +13,7 @@ const {
   createLifecycleRecording,
   dismissLifecycleUpdatedNotification,
   ensureLifecycleTemplate,
+  ensureActiveRevocationProfile,
   findCredentialRow,
   findIssuedCredential,
   findRenewedCredential,
@@ -524,10 +525,11 @@ test('cleanup validates every ownership link and organization before any mutatio
   noResources.assertDone();
 });
 
-test('an unclaimed transaction is reported as incomplete cleanup without touching a concurrent credential', async () => {
+test('an unreadable unclaimed transaction stays incomplete without touching a concurrent credential', async () => {
   const page = scriptedBrowser([
     { path: `/v1/credential-templates/${ownedTemplate.id}`, body: ownedTemplate },
     { path: credentialListPath, body: [credential('concurrent', 'other-transaction')] },
+    { path: `/v1/issuance/unclaimed-transaction?organization_id=${encodeURIComponent(organizationId)}`, status: 503 },
     { path: `/v1/credential-templates/${ownedTemplate.id}/deprecate`, method: 'POST', body: { ...ownedTemplate, status: 'DEPRECATED' } },
   ]);
   const cleanup = await cleanupOwnedLifecycle(page, { templateId: ownedTemplate.id, transactionIds: ['unclaimed-transaction'] });
@@ -535,6 +537,56 @@ test('an unclaimed transaction is reported as incomplete cleanup without touchin
   assert.equal(cleanup.templateRetired, true);
   assert.deepEqual(cleanup.revoked, []);
   assert.deepEqual(cleanup.pendingTransactionIds, ['unclaimed-transaction']);
+  page.assertDone();
+});
+
+test('cleanup cancels an exact owned unclaimed offer and confirms public state after a lost response', async () => {
+  const transactionId = 'unclaimed-transaction';
+  const transactionPath = `/v1/issuance/${transactionId}?organization_id=${encodeURIComponent(organizationId)}`;
+  const transaction = {
+    id: transactionId, organization_id: organizationId,
+    credential_template_id: ownedTemplate.id, application_id: null, status: 'pending',
+  };
+  const records = [credential('concurrent', 'other-transaction')];
+  const page = scriptedBrowser([
+    { path: `/v1/credential-templates/${ownedTemplate.id}`, body: ownedTemplate },
+    { path: credentialListPath, body: records },
+    { path: transactionPath, body: transaction },
+    { path: credentialListPath, body: records },
+    { path: `/v1/issuance/${transactionId}/revoke`, method: 'POST', error: new Error('Synthetic lost response') },
+    { path: transactionPath, body: { ...transaction, status: 'revoked' } },
+    { path: `/v1/credential-templates/${ownedTemplate.id}/deprecate`, method: 'POST', body: { ...ownedTemplate, status: 'DEPRECATED' } },
+  ]);
+  const cleanup = await cleanupOwnedLifecycle(page, { templateId: ownedTemplate.id, transactionIds: [transactionId] });
+  assert.equal(cleanup.ok, true);
+  assert.deepEqual(cleanup.cancelledTransactionIds, [transactionId]);
+  assert.deepEqual(cleanup.pendingTransactionIds, []);
+  assert.deepEqual(cleanup.uncertainMutations, []);
+  assert.deepEqual(cleanup.revoked, []);
+  page.assertDone();
+});
+
+test('unconfirmed transaction cancellation prevents lifecycle cleanup success', async () => {
+  const transactionId = 'unconfirmed-transaction';
+  const transactionPath = `/v1/issuance/${transactionId}?organization_id=${encodeURIComponent(organizationId)}`;
+  const transaction = {
+    id: transactionId, organization_id: organizationId,
+    credential_template_id: ownedTemplate.id, application_id: null, status: 'pending',
+  };
+  const page = scriptedBrowser([
+    { path: `/v1/credential-templates/${ownedTemplate.id}`, body: ownedTemplate },
+    { path: credentialListPath, body: [] },
+    { path: transactionPath, body: transaction },
+    { path: credentialListPath, body: [] },
+    { path: `/v1/issuance/${transactionId}/revoke`, method: 'POST', status: 503 },
+    { path: transactionPath, status: 503 },
+    { path: `/v1/credential-templates/${ownedTemplate.id}/deprecate`, method: 'POST', body: { ...ownedTemplate, status: 'DEPRECATED' } },
+  ]);
+  const cleanup = await cleanupOwnedLifecycle(page, { templateId: ownedTemplate.id, transactionIds: [transactionId] });
+  assert.equal(cleanup.ok, false);
+  assert.deepEqual(cleanup.cancelledTransactionIds, []);
+  assert.deepEqual(cleanup.pendingTransactionIds, [transactionId]);
+  assert.deepEqual(cleanup.uncertainMutations, [{ operation: 'transaction_cancellation', transactionId }]);
   page.assertDone();
 });
 
@@ -598,15 +650,40 @@ test('cleanup uncertainty invalidates live completion even when the journey was 
   assert.deepEqual(calls, ['closed', 'reported:false', 'evidence-closed']);
 });
 
-test('wallet reset failure prevents reload, offer entry and receipt', async () => {
+test('a wallet without an acquired run session cannot navigate, reset or receive a credential', async () => {
   const calls = [];
   const walletPage = {
+    context: () => ({}),
     goto: async () => calls.push('navigate'),
     request: { post: async () => { calls.push('reset'); return { ok: () => false }; } },
     reload: async () => assert.fail('Must not continue with a stale wallet'),
   };
-  await assert.rejects(receiveCredential(walletPage, 'fixture-offer', 'urn:example:employee'), /Wallet reset failed/);
-  assert.deepEqual(calls, ['navigate', 'reset']);
+  await assert.rejects(receiveCredential(walletPage, 'fixture-offer', 'urn:example:employee'), /run-owned Rust wallet session/);
+  assert.deepEqual(calls, []);
+});
+
+test('lifecycle status authority is read-only and must be active, tenant-owned and unambiguous', async () => {
+  const profilePath = `/v1/revocation-profiles?organization_id=${encodeURIComponent(organizationId)}`;
+  const profile = { id: 'active-profile', organization_id: organizationId, name: 'Status authority', status: 'ACTIVE' };
+  for (const profiles of [[], [profile, { ...profile, id: 'another-profile' }],
+    [{ ...profile, organization_id: 'foreign-org' }], [{ ...profile, status: 'DRAFT' }]]) {
+    const page = scriptedBrowser([
+      { path: `/v1/credential-templates/${sourceTemplateId}`, body: sourceTemplate },
+      { path: profilePath, body: profiles },
+    ]);
+    assert.equal((await ensureActiveRevocationProfile(page)).ok, false);
+    page.assertDone();
+    assert.ok(page.requests.every((request) => request.method === 'GET'));
+  }
+  const page = scriptedBrowser([
+    { path: `/v1/credential-templates/${sourceTemplateId}`, body: { ...sourceTemplate, revocation_profile_id: profile.id } },
+    { path: profilePath, body: [profile, { ...profile, id: 'unrelated-profile' }] },
+  ]);
+  const selected = await ensureActiveRevocationProfile(page);
+  assert.equal(selected.id, profile.id);
+  assert.equal(selected.reused, true);
+  assert.equal(selected.ownership, 'REFERENCE_ONLY');
+  page.assertDone();
 });
 
 test('acknowledged and sealed fixture values become actual issuance claims while retaining transaction ownership', async () => {

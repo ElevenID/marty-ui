@@ -643,8 +643,11 @@ function DemoScenarioDetail({ manifest, scenario }) {
               <Typography variant="subtitle2" fontWeight={750} sx={{ mb: 1 }}>Wallet evidence</Typography>
               <Stack spacing={1.5}>
                 {scenario.wallets.map((wallet) => (
-                  <Box key={`${wallet.implementation}-${wallet.build}`}>
+                  <Box key={JSON.stringify([wallet.implementation, wallet.build, wallet.deployment_mode, wallet.lane_id || null])}>
                     <Typography variant="body2" fontWeight={700}>{wallet.implementation}</Typography>
+                    {wallet.lane_id && (
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>Lane {wallet.lane_id}</Typography>
+                    )}
                     <Typography variant="caption" color="text.secondary" display="block">{wallet.classification.replaceAll('_', ' ')} / {wallet.result}</Typography>
                     <Typography variant="caption" color="text.secondary" display="block" sx={{ overflowWrap: 'anywhere' }}>Build {wallet.build}</Typography>
                   </Box>

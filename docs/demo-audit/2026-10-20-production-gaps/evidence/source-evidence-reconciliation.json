@@ -1,0 +1,3484 @@
+{
+  "schemaVersion": 1,
+  "reconciledAt": "2026-10-20T05:25:51.483396+00:00",
+  "scope": "Read-only comparison of retained verification source hashes against current code/config/documentation files; no product tests or runtime qualification.",
+  "repositories": {
+    "marty-ui": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "head": "294ad0411901e30437a2d66fe0645bd012f5be24",
+      "tree": "3536a52a5f80e2552a85a9290d63b994a7277b01",
+      "comparisonTarget": "CURRENT_FILESYSTEM_SOURCE_BYTES"
+    },
+    "marty-demo-recorder": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "head": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+      "tree": "edb591fdc8b54271c83b03060d5845fe796b64ac",
+      "comparisonTarget": "CURRENT_FILESYSTEM_SOURCE_BYTES"
+    },
+    "marty-core": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-core-demo-isolation",
+      "head": "adbc29d2511dead6082618b1b05e7d91e089feb1",
+      "tree": "c41eab96b287cb41f67a22187c78e93b80b0849b",
+      "comparisonTarget": "CURRENT_FILESYSTEM_SOURCE_BYTES"
+    },
+    "marty-verifier": {
+      "path": "/workspace/scratch/d8b5d3d3b0dd/marty-verifier-production-gaps",
+      "head": "25d2bf22e296dfd726a0295c414efee143db0105",
+      "tree": "35820703459efbb0821fb3e00f36b0d71d16acae",
+      "comparisonTarget": "CURRENT_FILESYSTEM_SOURCE_BYTES"
+    }
+  },
+  "records": {
+    "android-manifest-verification.json": {
+      "sha256": "f28bc2cd2bf28194aba06017f6bfe3e77a664da37c701328142e1f95b8c4eca9",
+      "recordedVerificationStatus": {
+        "field": "qualification",
+        "value": "LOCAL_SYNTHETIC_CONTRACT_CHECKS_ONLY"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/sources/marty-ui/files/0/sha256",
+          "source": "marty-ui:deploy-config/schemas/stack-demo-manifest.schema.json"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/1/sha256",
+          "source": "marty-ui:scripts/validate_demo_manifests.py"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/2/sha256",
+          "source": "marty-ui:tests/unit/test_demo_manifest_validation.py"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/3/sha256",
+          "source": "marty-ui:ui/scripts/generate-demo-manifest-module.mjs"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/4/sha256",
+          "source": "marty-ui:ui/src/components/pages/DemoPages.jsx"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/5/sha256",
+          "source": "marty-ui:ui/src/components/pages/DemoPages.test.tsx"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/6/sha256",
+          "source": "marty-ui:ui/src/generated/demoWalletSchema.generated.json"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/7/sha256",
+          "source": "marty-ui:ui/src/services/demoManifestService.js"
+        },
+        {
+          "pointer": "/sources/marty-ui/files/8/sha256",
+          "source": "marty-ui:ui/src/services/demoManifestService.test.ts"
+        },
+        {
+          "pointer": "/sources/marty-demo-recorder/files/6/sha256",
+          "source": "marty-demo-recorder:src/assertionCoverage.js"
+        },
+        {
+          "pointer": "/sources/marty-demo-recorder/files/9/sha256",
+          "source": "marty-demo-recorder:test/assertionCoverage.test.js"
+        }
+      ],
+      "mismatchedObservations": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 19
+    },
+    "catalog-verification.json": {
+      "sha256": "e997a90d6b3a2283d37017d6ea38b623c965af2d72841fce5a8d51be8c38c41e",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/rows/0/configSha256",
+          "source": "marty-demo-recorder:demos/canvas-learning-achievement.json"
+        },
+        {
+          "pointer": "/rows/1/configSha256",
+          "source": "marty-demo-recorder:demos/credential-lifecycle.json"
+        },
+        {
+          "pointer": "/rows/1/sourcePins/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js"
+        },
+        {
+          "pointer": "/rows/2/configSha256",
+          "source": "marty-demo-recorder:demos/employee-onboarding-secure-access.json"
+        },
+        {
+          "pointer": "/rows/3/configSha256",
+          "source": "marty-demo-recorder:demos/external-admissions-duplicate-event.json"
+        },
+        {
+          "pointer": "/rows/4/configSha256",
+          "source": "marty-demo-recorder:demos/external-admissions-gateway-webhooks.json"
+        },
+        {
+          "pointer": "/rows/5/configSha256",
+          "source": "marty-demo-recorder:demos/external-admissions-insufficient-scope.json"
+        },
+        {
+          "pointer": "/rows/6/configSha256",
+          "source": "marty-demo-recorder:demos/external-admissions-invalid-signature.json"
+        },
+        {
+          "pointer": "/rows/7/configSha256",
+          "source": "marty-demo-recorder:demos/external-evidence-to-credential.json"
+        },
+        {
+          "pointer": "/rows/8/configSha256",
+          "source": "marty-demo-recorder:demos/first-party-browser-wallet.json"
+        },
+        {
+          "pointer": "/rows/8/sourcePins/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-first-party-browser-wallet.js"
+        },
+        {
+          "pointer": "/rows/9/configSha256",
+          "source": "marty-demo-recorder:demos/independent-wallet-interoperability.json"
+        },
+        {
+          "pointer": "/rows/9/sourcePins/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-independent-wallet-interoperability.js"
+        },
+        {
+          "pointer": "/rows/10/configSha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login-expired-offer.json"
+        },
+        {
+          "pointer": "/rows/10/sourcePins/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-membership-support.js"
+        },
+        {
+          "pointer": "/rows/11/configSha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login-untrusted-issuer.json"
+        },
+        {
+          "pointer": "/rows/11/sourcePins/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-membership-support.js"
+        },
+        {
+          "pointer": "/rows/12/configSha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login.json"
+        },
+        {
+          "pointer": "/rows/13/configSha256",
+          "source": "marty-demo-recorder:demos/offline-facility-verification.json"
+        },
+        {
+          "pointer": "/rows/14/configSha256",
+          "source": "marty-demo-recorder:demos/organization-primitives.json"
+        },
+        {
+          "pointer": "/rows/15/configSha256",
+          "source": "marty-demo-recorder:demos/passport-pre-boarding-clearance.json"
+        },
+        {
+          "pointer": "/rows/16/configSha256",
+          "source": "marty-demo-recorder:demos/physical-passport-issuance-evidence.json"
+        },
+        {
+          "pointer": "/rows/17/configSha256",
+          "source": "marty-demo-recorder:demos/private-online-age-proof.json"
+        },
+        {
+          "pointer": "/rows/18/configSha256",
+          "source": "marty-demo-recorder:demos/stable-issuer-identity-pluggable-kms.json"
+        },
+        {
+          "pointer": "/manifestSha256",
+          "source": "marty-ui:ui/public/demos/manifests/2026.08.0.json"
+        },
+        {
+          "pointer": "/alignmentSha256",
+          "source": "marty-demo-recorder:demos/lifecycle-alignment.json"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 26
+    },
+    "core-wallet-verification.json": {
+      "sha256": "c4efea16749b3e79bf329d87b5569916f5fe1cf9c33f9978c5d5bc7c8d77f32f",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/source/sha256/marty-test-wallet~1src~1wallet_sessions.rs",
+          "source": "marty-core:marty-test-wallet/src/wallet_sessions.rs"
+        },
+        {
+          "pointer": "/source/sha256/marty-test-wallet~1src~1main.rs",
+          "source": "marty-core:marty-test-wallet/src/main.rs"
+        },
+        {
+          "pointer": "/source/sha256/marty-test-wallet~1src~1lib.rs",
+          "source": "marty-core:marty-test-wallet/src/lib.rs"
+        },
+        {
+          "pointer": "/source/sha256/marty-test-wallet~1static~1index.html",
+          "source": "marty-core:marty-test-wallet/static/index.html"
+        },
+        {
+          "pointer": "/source/sha256/marty-test-wallet~1README.md",
+          "source": "marty-core:marty-test-wallet/README.md"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 5
+    },
+    "d03-verification.json": {
+      "sha256": "27cdd9d233c368dafe7fbc833603fea08808ba3bf41a2fdbac0191ccd9acff0c",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1Cargo.toml",
+          "source": "marty-ui:rust/crates/release-evidence/Cargo.toml"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1lib.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/lib.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1age_proof.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/age_proof.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1age_proof_cli.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/age_proof_cli.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1tests~1age_proof.rs",
+          "source": "marty-ui:rust/crates/release-evidence/tests/age_proof.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1services~1presentation-policy~1src~1http_service.rs",
+          "source": "marty-ui:rust/services/presentation-policy/src/http_service.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1services~1presentation-policy~1tests~1http_service_behavior.rs",
+          "source": "marty-ui:rust/services/presentation-policy/tests/http_service_behavior.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1services~1gateway~1src~1flow_contract.rs",
+          "source": "marty-ui:rust/services/gateway/src/flow_contract.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1services~1zkVerificationApi.jsx",
+          "source": "marty-ui:ui/src/services/zkVerificationApi.jsx"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1vendor~1verification~1VerificationResultSummary.jsx",
+          "source": "marty-ui:ui/src/components/vendor/verification/VerificationResultSummary.jsx"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1vendor~1verification~1VerificationResultSummary.test.tsx",
+          "source": "marty-ui:ui/src/components/vendor/verification/VerificationResultSummary.test.tsx"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1vendor~1verification~1VerificationSessionManager.jsx",
+          "source": "marty-ui:ui/src/components/vendor/verification/VerificationSessionManager.jsx"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1vendor~1verification~1VerificationSessionManager.test.tsx",
+          "source": "marty-ui:ui/src/components/vendor/verification/VerificationSessionManager.test.tsx"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1audit-beta-private-age-proof.js",
+          "source": "marty-ui:tests/scripts/audit-beta-private-age-proof.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1audit-beta-private-age-proof.test.js",
+          "source": "marty-ui:tests/scripts/audit-beta-private-age-proof.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1beta-demo-resource-helpers.js",
+          "source": "marty-ui:tests/scripts/beta-demo-resource-helpers.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1privateAgeProofGateway.js",
+          "source": "marty-demo-recorder:src/privateAgeProofGateway.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1privateAgeProofGateway.test.js",
+          "source": "marty-demo-recorder:test/privateAgeProofGateway.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1private-online-age-proof.json",
+          "source": "marty-demo-recorder:demos/private-online-age-proof.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1transcripts~1private-online-age-proof.en.vtt",
+          "source": "marty-demo-recorder:demos/transcripts/private-online-age-proof.en.vtt"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1d03-fixture.example.json",
+          "source": "marty-demo-recorder:android/d03-fixture.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1d03-release-gateway.example.json",
+          "source": "marty-demo-recorder:android/d03-release-gateway.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1private-online-age-proof.runtime.example.json",
+          "source": "marty-demo-recorder:android/scenarios/private-online-age-proof.runtime.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d03-private-online-age-proof.md",
+          "source": "marty-demo-recorder:docs/d03-private-online-age-proof.md"
+        },
+        {
+          "pointer": "/compatibilityFollowup/sourceSha256/test~1privateAgeProofGateway.test.js",
+          "source": "marty-demo-recorder:test/privateAgeProofGateway.test.js"
+        }
+      ],
+      "mismatchedObservations": [
+        8,
+        9
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [
+        {
+          "pointer": "/validatorExecutable/sha256",
+          "sha256": "a9ee59561c8d7815316a9813f048e5a205eaea99ae0d11696bb04e546332e828",
+          "reason": "Local executable digest; outside the requested code/config source-file reconciliation. No deployed-build attestation is inferred."
+        }
+      ],
+      "sourceObservationCount": 27
+    },
+    "d05-verification.json": {
+      "sha256": "571654902d464280c12881014312f905903decb9eea450817c208ca3e701c0a9",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/repositories/marty-ui/files/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-membership-support.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/files/1/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-membership-support.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/files/2/sha256",
+          "source": "marty-ui:tests/scripts/beta-membership-support-contract.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/files/0/sha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/files/1/sha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login-expired-offer.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/files/2/sha256",
+          "source": "marty-demo-recorder:demos/membership-badge-login-untrusted-issuer.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/files/9/sha256",
+          "source": "marty-demo-recorder:src/assertionCoverage.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/files/12/sha256",
+          "source": "marty-demo-recorder:test/assertionCoverage.test.js"
+        },
+        {
+          "pointer": "/driverSource/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-membership-support.js"
+        }
+      ],
+      "mismatchedObservations": [
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 17
+    },
+    "d06-capture-verification.json": {
+      "sha256": "2708bb4dfeecff638568c27631aa5feb5266d993572df001a2547e85e7b55f24",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/source/files/0/sha256",
+          "source": "marty-demo-recorder:demos/credential-lifecycle.json"
+        },
+        {
+          "pointer": "/source/files/1/sha256",
+          "source": "marty-demo-recorder:test/functionalScenarioContracts.test.js"
+        },
+        {
+          "pointer": "/source/files/2/sha256",
+          "source": "marty-demo-recorder:docs/d06-lifecycle-capture.md"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/0/sha256",
+          "source": "marty-demo-recorder:src/externalQualification.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/1/sha256",
+          "source": "marty-demo-recorder:src/functionalRerun.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/2/sha256",
+          "source": "marty-demo-recorder:src/releaseBinding.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/3/sha256",
+          "source": "marty-demo-recorder:src/redaction.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/4/sha256",
+          "source": "marty-demo-recorder:src/externalLiveEvidence.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/5/sha256",
+          "source": "marty-demo-recorder:src/externalLiveEvidenceHelper.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/6/sha256",
+          "source": "marty-demo-recorder:src/maintenancePreflight.js"
+        },
+        {
+          "pointer": "/source/testedRecorderModules/7/sha256",
+          "source": "marty-demo-recorder:src/executionEvidence.js"
+        },
+        {
+          "pointer": "/source/uiDriver/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js"
+        },
+        {
+          "pointer": "/checks/2/fixedEntrypointSha256",
+          "source": "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js"
+        }
+      ],
+      "mismatchedObservations": [
+        18
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 14
+    },
+    "d09-narration-verification.json": {
+      "sha256": "aed43784c22588ca28f758555e5121e93454a65af0794767fd43ef936cd69426",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS_FOCUSED_CONTENT_CHECKS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/changedSources/0/sha256",
+          "source": "marty-demo-recorder:demos/offline-facility-verification.json"
+        },
+        {
+          "pointer": "/changedSources/1/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/offline-facility-verification.en.vtt"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/0/sha256",
+          "source": "marty-demo-recorder:demos/offline-facility-verification.hooks.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/1/sha256",
+          "source": "marty-demo-recorder:demos/offline-audit-client.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/2/sha256",
+          "source": "marty-demo-recorder:demos/offline-facility-verification.json"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/3/sha256",
+          "source": "marty-ui:rust/services/organization/src/offline_audit_store.rs"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/4/sha256",
+          "source": "marty-verifier:crates/marty-reporting/src/durable_ack.rs"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/5/sha256",
+          "source": "marty-verifier:crates/marty-reporting/src/reporter.rs"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/6/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/offline-facility-verification.en.vtt"
+        },
+        {
+          "pointer": "/transcript/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/offline-facility-verification.en.vtt"
+        }
+      ],
+      "mismatchedObservations": [
+        19
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [
+        {
+          "pointer": "/spokenCopyPolish/priorVerificationSha256",
+          "sha256": "cea8710b50545f85feb75d12f3f769782b6f56c2f5c64be7ec7721cad724c2ca",
+          "reason": "Checksum of a prior verification-record version, not current source bytes; the prior record version is not independently reverified here."
+        }
+      ],
+      "sourceObservationCount": 11
+    },
+    "d09-verification.json": {
+      "sha256": "7891a64c53141725f041cf5c059e0d805dde89f10d85d8fb8512cb19093c86b1",
+      "recordedVerificationStatus": {
+        "field": "qualification",
+        "value": "LOCAL_CONTRACTS_PASSED"
+      },
+      "matchedObservations": [],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [
+        {
+          "pointer": "/cross_repository_contract/canonical_event_sha256",
+          "sha256": "9ba68c00fdda57e68e46098d4732c9c112bbaa20b4cbbd3ad1a0b3fc01d3a4a8",
+          "reason": "Canonical event payload digest, not a source-file byte digest."
+        }
+      ],
+      "sourceObservationCount": 0,
+      "sourceHashBoundary": "No per-file source-hash observations are present in this record. Base-head or fixture-digest metadata does not establish a tested working-tree byte match."
+    },
+    "d10-verification.json": {
+      "sha256": "83d86922b00b3033ab961f92faabec10524beceb0092a3c31f957163d1dfcf23",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1Cargo.toml",
+          "source": "marty-ui:rust/crates/release-evidence/Cargo.toml"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1lib.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/lib.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1signing_capability.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/signing_capability.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1src~1signing_capability_cli.rs",
+          "source": "marty-ui:rust/crates/release-evidence/src/signing_capability_cli.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1tests~1signing_capability.rs",
+          "source": "marty-ui:rust/crates/release-evidence/tests/signing_capability.rs"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/rust~1crates~1release-evidence~1tests~1fixtures~1signing-capability-es256.json",
+          "source": "marty-ui:rust/crates/release-evidence/tests/fixtures/signing-capability-es256.json"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/scripts~1beta_org_console_audit.py",
+          "source": "marty-ui:scripts/beta_org_console_audit.py"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1test_beta_org_console_audit_release_checks.py",
+          "source": "marty-ui:tests/test_beta_org_console_audit_release_checks.py"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1test_beta_org_console_audit_signing.py",
+          "source": "marty-ui:tests/test_beta_org_console_audit_signing.py"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1console~1deploy~1keyManagementServiceCatalog.js",
+          "source": "marty-ui:ui/src/components/console/deploy/keyManagementServiceCatalog.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/ui~1src~1components~1console~1deploy~1keyManagementServiceCatalog.test.ts",
+          "source": "marty-ui:ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1organization-primitives.json",
+          "source": "marty-demo-recorder:demos/organization-primitives.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1functional-reruns.md",
+          "source": "marty-demo-recorder:docs/functional-reruns.md"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d10-signing-capability.md",
+          "source": "marty-demo-recorder:docs/d10-signing-capability.md"
+        }
+      ],
+      "mismatchedObservations": [
+        20
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [
+        {
+          "pointer": "/validatorExecutable/sha256",
+          "sha256": "7ef15e87d225beca06ba379a5255959cc732848ea47db3f9808cb5c1d00115ab",
+          "reason": "Local executable digest; outside the requested code/config source-file reconciliation. No deployed-build attestation is inferred."
+        }
+      ],
+      "sourceObservationCount": 15
+    },
+    "native-claim-organization-verification.json": {
+      "sha256": "e21017652ec0f01acec57bf2ff537b3dd79008174251fb69a0f04625dddfeeab",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/changedSources/0/sha256",
+          "source": "marty-ui:ui/src/components/applicant/ApplicationForm.jsx"
+        },
+        {
+          "pointer": "/changedSources/1/sha256",
+          "source": "marty-ui:ui/src/components/__tests__/ApplicationForm.test.tsx"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [
+        0,
+        1
+      ],
+      "externalPinnedSources": [],
+      "excludedDigests": [
+        {
+          "pointer": "/commands/0/logSha256",
+          "sha256": "89bc57e84d08a90947a99bc9be28f26542484cdc69b4951e6d8979a41485e7a5",
+          "reason": "Recorded command-log checksum, not a code/config source-file digest; command outcomes remain scoped to the original verification record."
+        },
+        {
+          "pointer": "/commands/1/logSha256",
+          "sha256": "d183756b3a001808e066de977457326d5a8ea5d22785d8ada645397dd63b8e91",
+          "reason": "Recorded command-log checksum, not a code/config source-file digest; command outcomes remain scoped to the original verification record."
+        }
+      ],
+      "sourceObservationCount": 2
+    },
+    "native-control-ui-verification.json": {
+      "sha256": "54f7c236bf5d44d77d7bbe4c91d7768d6b38874a647c4285df085069b47c5468",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "SOURCE_REVIEW_PASS_FOCUSED_TESTS_HAVE_MATCHING_BASELINE_FAILURES"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/changedSources/1/sha256",
+          "source": "marty-ui:ui/src/components/console/applicant/ClaimCredentialDialog.jsx"
+        }
+      ],
+      "mismatchedObservations": [
+        21
+      ],
+      "historicalComparisons": [
+        2,
+        3
+      ],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 2
+    },
+    "retained-independent-content-verification.json": {
+      "sha256": "33911893fa4cc8fca941031890fa08f5898fb816dd2c2381e52fcbb2da539d4d",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS_FOCUSED_CONTENT_CHECKS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/changedSources/0/sha256",
+          "source": "marty-ui:ui/public/demos/manifests/2026.08.0.json"
+        },
+        {
+          "pointer": "/changedSources/1/sha256",
+          "source": "marty-ui:ui/src/generated/demoManifests.generated.js"
+        },
+        {
+          "pointer": "/changedSources/2/sha256",
+          "source": "marty-demo-recorder:demos/lifecycle-alignment.json"
+        },
+        {
+          "pointer": "/changedSources/3/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/independent-wallet-interoperability.en.vtt"
+        },
+        {
+          "pointer": "/changedSources/4/sha256",
+          "source": "marty-demo-recorder:docs/independent-wallet-interoperability.md"
+        },
+        {
+          "pointer": "/changedSources/5/sha256",
+          "source": "marty-demo-recorder:docs/first-party-browser-wallet.md"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-independent-wallet-interoperability.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/1/sha256",
+          "source": "marty-ui:ui/src/components/applicant/ApplicationForm.jsx"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/2/sha256",
+          "source": "marty-ui:ui/src/components/console/applicant/ClaimCredentialDialog.jsx"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/3/sha256",
+          "source": "marty-demo-recorder:src/retainedIndependentWallet.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/4/sha256",
+          "source": "marty-demo-recorder:src/spruceMembershipFlow.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/5/sha256",
+          "source": "marty-demo-recorder:src/spruceMembershipBrowser.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/6/sha256",
+          "source": "marty-demo-recorder:src/androidReleaseGateway.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/7/sha256",
+          "source": "marty-demo-recorder:src/androidRecorder.js"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/8/sha256",
+          "source": "marty-demo-recorder:demos/independent-wallet-interoperability.json"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/9/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/independent-wallet-interoperability.en.vtt"
+        },
+        {
+          "pointer": "/reviewedImplementationSources/10/sha256",
+          "source": "marty-demo-recorder:src/retainedIndependentOverview.js"
+        },
+        {
+          "pointer": "/firstPartyReadmeFollowup/sha256",
+          "source": "marty-demo-recorder:docs/first-party-browser-wallet.md"
+        },
+        {
+          "pointer": "/transcript/sha256",
+          "source": "marty-demo-recorder:demos/transcripts/independent-wallet-interoperability.en.vtt"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 19
+    },
+    "retained-independent-native-verification.json": {
+      "sha256": "3e579ab05dce6c70f23b5b2b0ce283d79cbf15d7b5e8afa74bb9080d2cb34c8e",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS_LOCAL_IMPLEMENTATION_VERIFICATION"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1README.md",
+          "source": "marty-demo-recorder:android/README.md"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1retained-independent-fixture.example.json",
+          "source": "marty-demo-recorder:android/retained-independent-fixture.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1retained-independent-gateway.example.json",
+          "source": "marty-demo-recorder:android/retained-independent-gateway.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device.example.json",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-denial.example.json",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-untrusted-issuer.example.json",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-expired-offer.example.json",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-expired-offer.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1independent-wallet-interoperability.spruceid-happy.example.json",
+          "source": "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1independent-wallet-interoperability.spruceid-cancel.example.json",
+          "source": "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1independent-wallet-interoperability.json",
+          "source": "marty-demo-recorder:demos/independent-wallet-interoperability.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-native-lanes.md",
+          "source": "marty-demo-recorder:docs/d05-native-lanes.md"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-supporting-lanes.md",
+          "source": "marty-demo-recorder:docs/d05-supporting-lanes.md"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js",
+          "source": "marty-demo-recorder:src/androidManifestEvidence.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidMembershipCancel.js",
+          "source": "marty-demo-recorder:src/androidMembershipCancel.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidRecorder.js",
+          "source": "marty-demo-recorder:src/androidRecorder.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js",
+          "source": "marty-demo-recorder:src/androidReleaseGateway.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidScenarioFixture.js",
+          "source": "marty-demo-recorder:src/androidScenarioFixture.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1retainedIndependentOverview.js",
+          "source": "marty-demo-recorder:src/retainedIndependentOverview.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1retainedIndependentWallet.js",
+          "source": "marty-demo-recorder:src/retainedIndependentWallet.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1spruceMembershipBrowser.js",
+          "source": "marty-demo-recorder:src/spruceMembershipBrowser.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1spruceMembershipFlow.js",
+          "source": "marty-demo-recorder:src/spruceMembershipFlow.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidMembershipCancel.test.js",
+          "source": "marty-demo-recorder:test/androidMembershipCancel.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidRecorder.test.js",
+          "source": "marty-demo-recorder:test/androidRecorder.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1fixtures~1spruceMembership.js",
+          "source": "marty-demo-recorder:test/fixtures/spruceMembership.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1retainedIndependentOverview.test.js",
+          "source": "marty-demo-recorder:test/retainedIndependentOverview.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1retainedIndependentWallet.test.js",
+          "source": "marty-demo-recorder:test/retainedIndependentWallet.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1spruceMembershipFlow.test.js",
+          "source": "marty-demo-recorder:test/spruceMembershipFlow.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1audit-beta-independent-wallet-interoperability.js",
+          "source": "marty-ui:tests/scripts/audit-beta-independent-wallet-interoperability.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1compose.js",
+          "source": "marty-demo-recorder:src/compose.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1mediaQuality.js",
+          "source": "marty-demo-recorder:src/mediaQuality.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1preflight.js",
+          "source": "marty-demo-recorder:src/preflight.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1hashes.js",
+          "source": "marty-demo-recorder:src/hashes.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1externalQualification.js",
+          "source": "marty-demo-recorder:src/externalQualification.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1recorder.js",
+          "source": "marty-demo-recorder:src/recorder.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1config.js",
+          "source": "marty-demo-recorder:src/config.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1releaseBinding.js",
+          "source": "marty-demo-recorder:src/releaseBinding.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1privateAgeProofGateway.js",
+          "source": "marty-demo-recorder:src/privateAgeProofGateway.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1assertionCoverage.js",
+          "source": "marty-demo-recorder:src/assertionCoverage.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/test~1privateAgeProofGateway.test.js",
+          "source": "marty-demo-recorder:test/privateAgeProofGateway.test.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/test~1assertionCoverage.test.js",
+          "source": "marty-demo-recorder:test/assertionCoverage.test.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/ui~1public~1demos~1manifests~12026.08.0.json",
+          "source": "marty-ui:ui/public/demos/manifests/2026.08.0.json"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/ui~1src~1components~1applicant~1ApplicationForm.jsx",
+          "source": "marty-ui:ui/src/components/applicant/ApplicationForm.jsx"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/ui~1src~1components~1console~1applicant~1ClaimCredentialDialog.jsx",
+          "source": "marty-ui:ui/src/components/console/applicant/ClaimCredentialDialog.jsx"
+        },
+        {
+          "pointer": "/changedSourceHashes/0/sha256",
+          "source": "marty-demo-recorder:android/README.md"
+        },
+        {
+          "pointer": "/changedSourceHashes/1/sha256",
+          "source": "marty-demo-recorder:android/retained-independent-fixture.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/2/sha256",
+          "source": "marty-demo-recorder:android/retained-independent-gateway.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/3/sha256",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/4/sha256",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/5/sha256",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/6/sha256",
+          "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-expired-offer.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/7/sha256",
+          "source": "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/8/sha256",
+          "source": "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/9/sha256",
+          "source": "marty-demo-recorder:demos/independent-wallet-interoperability.json"
+        },
+        {
+          "pointer": "/changedSourceHashes/10/sha256",
+          "source": "marty-demo-recorder:docs/d05-native-lanes.md"
+        },
+        {
+          "pointer": "/changedSourceHashes/11/sha256",
+          "source": "marty-demo-recorder:docs/d05-supporting-lanes.md"
+        },
+        {
+          "pointer": "/changedSourceHashes/12/sha256",
+          "source": "marty-demo-recorder:src/androidManifestEvidence.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/13/sha256",
+          "source": "marty-demo-recorder:src/androidMembershipCancel.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/14/sha256",
+          "source": "marty-demo-recorder:src/androidRecorder.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/15/sha256",
+          "source": "marty-demo-recorder:src/androidReleaseGateway.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/16/sha256",
+          "source": "marty-demo-recorder:src/androidScenarioFixture.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/17/sha256",
+          "source": "marty-demo-recorder:src/retainedIndependentOverview.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/18/sha256",
+          "source": "marty-demo-recorder:src/retainedIndependentWallet.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/19/sha256",
+          "source": "marty-demo-recorder:src/spruceMembershipBrowser.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/20/sha256",
+          "source": "marty-demo-recorder:src/spruceMembershipFlow.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/21/sha256",
+          "source": "marty-demo-recorder:test/androidMembershipCancel.test.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/22/sha256",
+          "source": "marty-demo-recorder:test/androidRecorder.test.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/23/sha256",
+          "source": "marty-demo-recorder:test/fixtures/spruceMembership.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/24/sha256",
+          "source": "marty-demo-recorder:test/retainedIndependentOverview.test.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/25/sha256",
+          "source": "marty-demo-recorder:test/retainedIndependentWallet.test.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/26/sha256",
+          "source": "marty-demo-recorder:test/spruceMembershipFlow.test.js"
+        },
+        {
+          "pointer": "/changedSourceHashes/27/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-independent-wallet-interoperability.js"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11
+      ],
+      "excludedDigests": [
+        {
+          "pointer": "/verification/0/logSha256",
+          "sha256": "7d886be426b811dd32222055357811aac24c6335dca2d514f894d60846403e6a",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/1/logSha256",
+          "sha256": "4baf44e15446a0487606fee83ae70342d170f0526fcb95ed218f14e5bfdeb694",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/2/logSha256",
+          "sha256": "fef7f80fc8673bbd3aeb8de4698aa736d6138a27a0e82c4a1b6f96bc8ae6b7ef",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/3/logSha256",
+          "sha256": "bd9614c4f3ce2668221d0eacfbc9f0ef52f865fc4979c5b16910c9fee6f159eb",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/4/logSha256",
+          "sha256": "c0014237d02c6b400b4a9c99d3d50369ba37aa407dce80d4f1c66b6b5a81d0e6",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/5/logSha256",
+          "sha256": "41fa542ac048cb295e18b4d98d8e3fb15e2967604fcb5ab24be02e265e7817e9",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/verification/6/logSha256",
+          "sha256": "338e096408cb16b504081bb9a9ed177041b2e0ad19d80b1bbd36caa06bab121a",
+          "reason": "Retained focused-command log checksum, not a code/config source-file digest. The named outcome and local-only test scope remain in the original verification record."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/0/sha256",
+          "sha256": "abff833539c9f762b1ca7074b73a4bb7d84042a69eca19eb5524d0464d7fb450",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/1/sha256",
+          "sha256": "e6dce7faae85795ecea90596f136d50e5e3cade81693570923b631d60950168e",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/2/sha256",
+          "sha256": "4f68436a7635e11efff38430c757948b3b2f9e6b6b572c209d3f5232d470221e",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/3/sha256",
+          "sha256": "7d0c84a67e40ba6e1103e3d4bd3dca67dbb8959eb28bdb4d4f51502aae6c50d3",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/4/sha256",
+          "sha256": "f6259a9a9ae32ae83252de836b8f60cb6fbc6a1c03a0f1075df4abf6533a8f15",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        },
+        {
+          "pointer": "/syntheticMediaVerification/files/5/sha256",
+          "sha256": "e99f40f8942495e6f3207b09716937e34c5b63651357d730a68b1cdb1ad877ff",
+          "reason": "Generated synthetic-media/provenance/image/check-notice artifact checksum, not current code/config source bytes. This reconciliation does not rerun rendering or treat test colors as native-wallet footage."
+        }
+      ],
+      "sourceObservationCount": 71
+    },
+    "retained-wallet-verification.json": {
+      "sha256": "fd151b1b17d0dca770137616900011c0e3bcd6c4add42d63b0c3345dce5ba69e",
+      "recordedVerificationStatus": {
+        "field": "result",
+        "value": "PASS"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1audit-beta-first-party-browser-wallet.js",
+          "source": "marty-ui:tests/scripts/audit-beta-first-party-browser-wallet.js"
+        },
+        {
+          "pointer": "/repositories/marty-ui/sourceSha256/tests~1scripts~1verify-beta-credential-login.js",
+          "source": "marty-ui:tests/scripts/verify-beta-credential-login.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1first-party-browser-wallet.json",
+          "source": "marty-demo-recorder:demos/first-party-browser-wallet.json"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/demos~1transcripts~1first-party-browser-wallet.en.vtt",
+          "source": "marty-demo-recorder:demos/transcripts/first-party-browser-wallet.en.vtt"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1firstPartyBrowserWallet.test.js",
+          "source": "marty-demo-recorder:test/firstPartyBrowserWallet.test.js"
+        },
+        {
+          "pointer": "/repositories/marty-demo-recorder/alignmentEntry/sha256",
+          "source": "marty-demo-recorder:demos/lifecycle-alignment.json#scenario=first-party-browser-wallet"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/tests~1scripts~1demo-wallet-session.js",
+          "source": "marty-ui:tests/scripts/demo-wallet-session.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/tests~1scripts~1beta-credential-contract.js",
+          "source": "marty-ui:tests/scripts/beta-credential-contract.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/tests~1scripts~1verify-beta-waltid-acceptance.js",
+          "source": "marty-ui:tests/scripts/verify-beta-waltid-acceptance.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-core/sourceSha256/marty-test-wallet~1src~1main.rs",
+          "source": "marty-core:marty-test-wallet/src/main.rs"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-core/sourceSha256/marty-test-wallet~1src~1wallet_sessions.rs",
+          "source": "marty-core:marty-test-wallet/src/wallet_sessions.rs"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1externalQualification.js",
+          "source": "marty-demo-recorder:src/externalQualification.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1releaseBinding.js",
+          "source": "marty-demo-recorder:src/releaseBinding.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/src~1config.js",
+          "source": "marty-demo-recorder:src/config.js"
+        },
+        {
+          "pointer": "/dependencySourceReview/marty-demo-recorder/sourceSha256/docs~1lifecycle-presentation-profile.md",
+          "source": "marty-demo-recorder:docs/lifecycle-presentation-profile.md"
+        }
+      ],
+      "mismatchedObservations": [
+        22,
+        23
+      ],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 17
+    },
+    "wallet-adoption-verification.json": {
+      "sha256": "58b15ca4640eefe17f73ea045dfc2f4101593bf8fa778aa1068d111274388e3f",
+      "recordedVerificationStatus": {
+        "field": "status",
+        "value": "PASS_LOCAL_FOCUSED"
+      },
+      "matchedObservations": [
+        {
+          "pointer": "/changedSources/0/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-employee-access.js"
+        },
+        {
+          "pointer": "/changedSources/1/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-employee-access.test.js"
+        },
+        {
+          "pointer": "/changedSources/2/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-passport-clearance.js"
+        },
+        {
+          "pointer": "/changedSources/3/sha256",
+          "source": "marty-ui:tests/scripts/audit-beta-passport-clearance.test.js"
+        },
+        {
+          "pointer": "/changedSources/4/sha256",
+          "source": "marty-ui:tests/scripts/demo-wallet-driver-test-helpers.js"
+        },
+        {
+          "pointer": "/sharedSourceReused/sha256",
+          "source": "marty-ui:tests/scripts/demo-wallet-session.js"
+        }
+      ],
+      "mismatchedObservations": [],
+      "historicalComparisons": [],
+      "externalPinnedSources": [],
+      "excludedDigests": [],
+      "sourceObservationCount": 6
+    }
+  },
+  "sources": {
+    "marty-ui:deploy-config/schemas/stack-demo-manifest.schema.json": {
+      "repository": "marty-ui",
+      "path": "deploy-config/schemas/stack-demo-manifest.schema.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1b6bb99cf00ea8bd634c7048236dbfd592ded55d0b3073c5f7cc0107f45c90a3"
+    },
+    "marty-ui:scripts/validate_demo_manifests.py": {
+      "repository": "marty-ui",
+      "path": "scripts/validate_demo_manifests.py",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "a393616b877030fe59c379649bd4be72a196ac84b152b6e5e3c25e2d7969ef6d"
+    },
+    "marty-ui:tests/unit/test_demo_manifest_validation.py": {
+      "repository": "marty-ui",
+      "path": "tests/unit/test_demo_manifest_validation.py",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "7d7a1ad33b696452160e353ca44e0bce1888816576d7130fa900ff320efd5987"
+    },
+    "marty-ui:ui/scripts/generate-demo-manifest-module.mjs": {
+      "repository": "marty-ui",
+      "path": "ui/scripts/generate-demo-manifest-module.mjs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "fab6918abfe3a388c58230b2610d7e28332e7884ed1cfb6c497829040a500988"
+    },
+    "marty-ui:ui/src/components/pages/DemoPages.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/pages/DemoPages.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4b0606e644b76728bef6acf22ff5a0840c01b60a253c9a20a74c2377f21c5534"
+    },
+    "marty-ui:ui/src/components/pages/DemoPages.test.tsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/pages/DemoPages.test.tsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "9e67521868847068244f05f95e0ccd6be9a15d5e760ca2caadd7785ad3a71569"
+    },
+    "marty-ui:ui/src/generated/demoWalletSchema.generated.json": {
+      "repository": "marty-ui",
+      "path": "ui/src/generated/demoWalletSchema.generated.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "d9bb74797c73f6410d346e2e93646e372bef7331de8bfbbaa9c9d5ff05892bac"
+    },
+    "marty-ui:ui/src/services/demoManifestService.js": {
+      "repository": "marty-ui",
+      "path": "ui/src/services/demoManifestService.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1e23c6b43ea70845d5f946267c411df65bdc9a60b3f2cfd7a44a7cfa4e860a57"
+    },
+    "marty-ui:ui/src/services/demoManifestService.test.ts": {
+      "repository": "marty-ui",
+      "path": "ui/src/services/demoManifestService.test.ts",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5f3bdd78bd4beb53b806fa04118b0d8f5b5cdd95bdedd08bdb3b356def8c4904"
+    },
+    "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe"
+    },
+    "marty-demo-recorder:docs/d05-supporting-lanes.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d05-supporting-lanes.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012"
+    },
+    "marty-demo-recorder:src/androidManifestEvidence.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidManifestEvidence.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb"
+    },
+    "marty-demo-recorder:src/androidMembershipCancel.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidMembershipCancel.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6"
+    },
+    "marty-demo-recorder:src/androidRecorder.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidRecorder.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2"
+    },
+    "marty-demo-recorder:src/androidReleaseGateway.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidReleaseGateway.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2"
+    },
+    "marty-demo-recorder:src/assertionCoverage.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/assertionCoverage.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "29245c7a55d1ebff0f7a30e27ef7825db0237f010f178f6ce5d2ee3db8869efc"
+    },
+    "marty-demo-recorder:test/androidMembershipCancel.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/androidMembershipCancel.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2"
+    },
+    "marty-demo-recorder:test/androidRecorder.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/androidRecorder.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59"
+    },
+    "marty-demo-recorder:test/assertionCoverage.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/assertionCoverage.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "3b66b086f1a6629c5fe70a4398252d044d3ff7890a640635639c1f293a880dc2"
+    },
+    "marty-demo-recorder:demos/canvas-learning-achievement.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/canvas-learning-achievement.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6caa73ba77dc6a2afc7670c240c24efac6789f07713d212b4a53723aa922902f"
+    },
+    "marty-demo-recorder:demos/credential-lifecycle.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/credential-lifecycle.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "901bf27be050a0c21f71224271e29a375479a8433e69ce518fbba69b7468c570"
+    },
+    "marty-ui:tests/scripts/audit-beta-credential-lifecycle.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-credential-lifecycle.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6fd68013addaa9bf5dc003dcc98b27e3ffbb6dc138fa39c4d02042853e173cdf"
+    },
+    "marty-demo-recorder:demos/employee-onboarding-secure-access.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/employee-onboarding-secure-access.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "48eb90fc47502c195c286919000dfcab7d79a304d8a5d5cf52b4a336f6bd5660"
+    },
+    "marty-demo-recorder:demos/external-admissions-duplicate-event.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/external-admissions-duplicate-event.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "869fb4ce0c4994bcbe3fdbe4da0624212d8c8f940c11fbf069be298176ccfc50"
+    },
+    "marty-demo-recorder:demos/external-admissions-gateway-webhooks.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/external-admissions-gateway-webhooks.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6316235a08835e35572e41137d4195d5ace41278c18b80d3085eae8e6b99a7d2"
+    },
+    "marty-demo-recorder:demos/external-admissions-insufficient-scope.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/external-admissions-insufficient-scope.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "04dbb6f83303fe4613aaab4844ab5326d932c6a1d82287ba603d51a2e59dd474"
+    },
+    "marty-demo-recorder:demos/external-admissions-invalid-signature.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/external-admissions-invalid-signature.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f75a346aba3b51fb158f987125a9103861167536778361210f1282e9fe993359"
+    },
+    "marty-demo-recorder:demos/external-evidence-to-credential.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/external-evidence-to-credential.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "fe37538ec178d6805dbd7c2deb8909ae25440cc7c67554b64f1589ec9cfeb18e"
+    },
+    "marty-demo-recorder:demos/first-party-browser-wallet.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/first-party-browser-wallet.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "97884a5f9fe09b915a339e87c754ddd70411c3e45bd90032df7da6b029a2c3b2"
+    },
+    "marty-ui:tests/scripts/audit-beta-first-party-browser-wallet.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-first-party-browser-wallet.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0d36cdd94e0bf8165d091b17a5b60cfa5af6cf08587a2cdf510ab8aa94d75e97"
+    },
+    "marty-demo-recorder:demos/independent-wallet-interoperability.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/independent-wallet-interoperability.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "76d01c3fc2fd2fef50c24fbd00f81ab267f6bc893fe53a661cf2722b033ccb00"
+    },
+    "marty-ui:tests/scripts/audit-beta-independent-wallet-interoperability.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-independent-wallet-interoperability.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "99701e4de54da9b3af4600e964a99bdbc2da9d6fbe315d90392a03a7443a013f"
+    },
+    "marty-demo-recorder:demos/membership-badge-login-expired-offer.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/membership-badge-login-expired-offer.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "655cf220a793dea6cd68a7d8da3a3b94f97ed67c95bcd5ca435c4a98ae820385"
+    },
+    "marty-ui:tests/scripts/audit-beta-membership-support.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-membership-support.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "03c2fb044f3b0c78b534692e13d319777677c0d3b809d1cda3f809498b00458c"
+    },
+    "marty-demo-recorder:demos/membership-badge-login-untrusted-issuer.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/membership-badge-login-untrusted-issuer.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "b72af313c2cf860c218ba3bf4d08552e577f43e499576eada40279308c273c72"
+    },
+    "marty-demo-recorder:demos/membership-badge-login.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/membership-badge-login.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "7ffcfc5b13e5c42541fb201593894229bdaf19c05f06e69a3f35d5d579181d2c"
+    },
+    "marty-demo-recorder:demos/offline-facility-verification.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-facility-verification.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "bd633ad7981870ebeb7f90ed0fd1322c217e1b4a3bfbdf4fac0a504e65fd5113"
+    },
+    "marty-demo-recorder:demos/organization-primitives.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/organization-primitives.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "19fdc7f1171f6335876d3d0c6aa6f11a9c580358f02e07672186c5ec7177c948"
+    },
+    "marty-demo-recorder:demos/passport-pre-boarding-clearance.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/passport-pre-boarding-clearance.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4d920693fe251af02e2430ad6082f0bc53f35b1445cbc99d26bed5871716c679"
+    },
+    "marty-demo-recorder:demos/physical-passport-issuance-evidence.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/physical-passport-issuance-evidence.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "b95c755b8f3f47d6bfcb65d50fd3af02561c0620bde5ba241398ba3f54eb8374"
+    },
+    "marty-demo-recorder:demos/private-online-age-proof.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/private-online-age-proof.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "77630d568b41e37c24f8c244b853fd441bb119607e2c793bd408114010cf944e"
+    },
+    "marty-demo-recorder:demos/stable-issuer-identity-pluggable-kms.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/stable-issuer-identity-pluggable-kms.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c419f117d83715bb302442a6a7726d2ce23af1e18219f2cf493b77cd0070380e"
+    },
+    "marty-ui:ui/public/demos/manifests/2026.08.0.json": {
+      "repository": "marty-ui",
+      "path": "ui/public/demos/manifests/2026.08.0.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1"
+    },
+    "marty-demo-recorder:demos/lifecycle-alignment.json": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/lifecycle-alignment.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790"
+    },
+    "marty-core:marty-test-wallet/src/wallet_sessions.rs": {
+      "repository": "marty-core",
+      "path": "marty-test-wallet/src/wallet_sessions.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0dc0f8644a1c3e24f4e88fe2e37b59720d61d4945bffc4fda921ff06e8a69980"
+    },
+    "marty-core:marty-test-wallet/src/main.rs": {
+      "repository": "marty-core",
+      "path": "marty-test-wallet/src/main.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6d85865cb2b7c2aa2f2a6454732f993af0d6b28572c3fb1756ad0f3b659c61aa"
+    },
+    "marty-core:marty-test-wallet/src/lib.rs": {
+      "repository": "marty-core",
+      "path": "marty-test-wallet/src/lib.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c5a97ed1d6d40c00f379368b80c03c15743d525b7b233c28184f30b2454f4fa8"
+    },
+    "marty-core:marty-test-wallet/static/index.html": {
+      "repository": "marty-core",
+      "path": "marty-test-wallet/static/index.html",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "8b90916b02aa020324cc3108a685f9841bcbc8bebf4ffaa775f223d280fa7b1f"
+    },
+    "marty-core:marty-test-wallet/README.md": {
+      "repository": "marty-core",
+      "path": "marty-test-wallet/README.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "3ebf87f5fbfb1b056002f4d50352d0ba0322497a764b4fbf410811d2824dd5dc"
+    },
+    "marty-ui:rust/crates/release-evidence/Cargo.toml": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/Cargo.toml",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "96c4cb0cf9ff98258b00542b976b462c60bbf60623e5484761a5834ad4c95068"
+    },
+    "marty-ui:rust/crates/release-evidence/src/lib.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/src/lib.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "cf592193348ca0349cfdb6206ebac7d6d819b505fc2d1a3e2c1596f7fe36dbda"
+    },
+    "marty-ui:rust/crates/release-evidence/src/age_proof.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/src/age_proof.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "cdf580de9b3ba0be0cb4ea342f9b41ac06791df9d170e90b4ed4a3600681a2a4"
+    },
+    "marty-ui:rust/crates/release-evidence/src/age_proof_cli.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/src/age_proof_cli.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "646c5563cac8b618b0074e90476d6710fbe840f7a3f585d909a1461ffc065cd7"
+    },
+    "marty-ui:rust/crates/release-evidence/tests/age_proof.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/tests/age_proof.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "08235b58a7a31c949ebc291882a6a7e945e7290b4760833cbd6aff607035e71c"
+    },
+    "marty-ui:rust/services/presentation-policy/src/http_service.rs": {
+      "repository": "marty-ui",
+      "path": "rust/services/presentation-policy/src/http_service.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "31b4ec8eea2539a67865b6a60aeb512b2c3c2ca957710bf83228f5a7b8701239"
+    },
+    "marty-ui:rust/services/presentation-policy/tests/http_service_behavior.rs": {
+      "repository": "marty-ui",
+      "path": "rust/services/presentation-policy/tests/http_service_behavior.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "125afb3640f7b6260bacba28d1aecb353dab7c7ca580fd9f60ea6ec502f78eb2"
+    },
+    "marty-ui:rust/services/gateway/src/flow_contract.rs": {
+      "repository": "marty-ui",
+      "path": "rust/services/gateway/src/flow_contract.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e01e0d48deaf75578715d65c573fa1d79ca8f98e93fc187a61ef1f816d045d17"
+    },
+    "marty-ui:ui/src/services/zkVerificationApi.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/services/zkVerificationApi.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "09d2000d18cc58bcb23d4626e52cc9b3426ae8c9c975c248b1f0afb2d3ca6acc"
+    },
+    "marty-ui:ui/src/components/vendor/verification/VerificationResultSummary.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/vendor/verification/VerificationResultSummary.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "ce56825d6e4f07072240d47fab2bd400f5a9313bb77511c2e8be1b71aeae6a8f"
+    },
+    "marty-ui:ui/src/components/vendor/verification/VerificationResultSummary.test.tsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/vendor/verification/VerificationResultSummary.test.tsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "94d5b02fb3598b50dda237203c083a5ca2974de6d7c38ceb53f7db7fd98a2f4d"
+    },
+    "marty-ui:ui/src/components/vendor/verification/VerificationSessionManager.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/vendor/verification/VerificationSessionManager.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5930aa7920c4d3b3380adc39e6a0b4ab80b8c76f795bbe18933ac9866631e864"
+    },
+    "marty-ui:ui/src/components/vendor/verification/VerificationSessionManager.test.tsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/vendor/verification/VerificationSessionManager.test.tsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5f0f37cede73a2378cfc0420ae31438e88bd868ec2ed88e1d548d0b2e42b5959"
+    },
+    "marty-ui:tests/scripts/audit-beta-private-age-proof.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-private-age-proof.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "3346fae1da1810a23960f63dbd2d5bdb0b4563932a97862be3ce53e63897ad42"
+    },
+    "marty-ui:tests/scripts/audit-beta-private-age-proof.test.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-private-age-proof.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "77273710ccc025ba2816c379fffc0303bbc54eb2fbcabf82a89aabf837c1ab13"
+    },
+    "marty-ui:tests/scripts/beta-demo-resource-helpers.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/beta-demo-resource-helpers.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f8955b3d2965093007f09bfb489936969d756970af125857f9e00a112899bf5a"
+    },
+    "marty-demo-recorder:src/privateAgeProofGateway.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/privateAgeProofGateway.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "fab9c43e0b76c1fcccd4fa249f74fe6e173748f9ee48c887b139c9835b864c35"
+    },
+    "marty-demo-recorder:test/privateAgeProofGateway.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/privateAgeProofGateway.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "d768ea844a499547c5175e8413e5599e33ca2d512d837fddf6bb2757cc57ae50"
+    },
+    "marty-demo-recorder:demos/transcripts/private-online-age-proof.en.vtt": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/private-online-age-proof.en.vtt",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f83ac537aea7851d3c31691b81ef1656cb02a9579d5f9bca4b4ec29b1ebdf89e"
+    },
+    "marty-demo-recorder:android/d03-fixture.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/d03-fixture.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "a9f9222c6dbc7871aa399fba3a4185ab985e6bb73a521b673f7317b6989806a8"
+    },
+    "marty-demo-recorder:android/d03-release-gateway.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/d03-release-gateway.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "df93bce49350ed09d94f1c4d6b0f7924c5ea75ddb1e9cdf2fbb8e9fc6914e938"
+    },
+    "marty-demo-recorder:android/scenarios/private-online-age-proof.runtime.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/private-online-age-proof.runtime.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6cd0b53bcf3bd901ab644c36ee79d3ecd25d94d14972f0be6a530b98321eaad9"
+    },
+    "marty-demo-recorder:docs/d03-private-online-age-proof.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d03-private-online-age-proof.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "af394ebe0d267ee391a9d575a36197b11fc4838a1aeb29a5adb2bc603d07c4a0"
+    },
+    "marty-ui:tests/scripts/audit-beta-membership-support.test.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-membership-support.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4e09f26f0127f7498efecd03cf7470758b428bc3b603043b2bbe60c1e8f9744d"
+    },
+    "marty-ui:tests/scripts/beta-membership-support-contract.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/beta-membership-support-contract.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "8d0d37a3a62f57bc6f27e36d76f9680c7cf8b97b4b724d18bca76fe6849d8e02"
+    },
+    "marty-demo-recorder:test/functionalScenarioContracts.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/functionalScenarioContracts.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c4e279f747d798594cf20c3f05c5ffece87a1fe3525d1d4bae91f119cc517fa9"
+    },
+    "marty-demo-recorder:docs/d06-lifecycle-capture.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d06-lifecycle-capture.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "a1493eef3bf95e132947fe0ef22d3c5345cc8bebf90d7c4f489f806d7f9dab40"
+    },
+    "marty-demo-recorder:src/externalQualification.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/externalQualification.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "473c2f9fd02afbbd603ff6232649869dc0961d22b4b6099ab5c93d1d6371014d"
+    },
+    "marty-demo-recorder:src/functionalRerun.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/functionalRerun.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "66ee7eb38db01f25e302e8bfc8e2383a3be2677742ee9d716a0ecd12d61cdef5"
+    },
+    "marty-demo-recorder:src/releaseBinding.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/releaseBinding.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "799c990b1860d9b7f197c12374fb80420243960a68d8e634434687731b8a15b7"
+    },
+    "marty-demo-recorder:src/redaction.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/redaction.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "31b291374f83be5f39fbf5ba9378c0065af95dad30e5a2ffe0e4b41eeebc15ec"
+    },
+    "marty-demo-recorder:src/externalLiveEvidence.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/externalLiveEvidence.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "815663a04df09cdab22e0b3d97c0a776a51fb7a6d4e4a2351142905b7bbc8e7c"
+    },
+    "marty-demo-recorder:src/externalLiveEvidenceHelper.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/externalLiveEvidenceHelper.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1a8ec15dc70b35fb6bc276f035b5d709623b99fc17bbfd9d3867fe8222fc818d"
+    },
+    "marty-demo-recorder:src/maintenancePreflight.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/maintenancePreflight.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1f47243c08aedb9c5967ec260c286419fd895c9da98346f7d30c4699813cad24"
+    },
+    "marty-demo-recorder:src/executionEvidence.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/executionEvidence.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5928773f6529a8f9658e8732bdc095b03e4cdc0a977187c49017471ce6fa2d14"
+    },
+    "marty-demo-recorder:demos/transcripts/offline-facility-verification.en.vtt": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/offline-facility-verification.en.vtt",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "9a0cb94d0c0cad1c6da824950c20c419f88a533c94a284abc0a67094f11621bd"
+    },
+    "marty-demo-recorder:demos/offline-facility-verification.hooks.js": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-facility-verification.hooks.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "97768bc0297f4b893f95bf34991cd41a85760ec0462f412e85a646e6c692447a"
+    },
+    "marty-demo-recorder:demos/offline-audit-client.js": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-audit-client.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "bda1bbc9b3505d2366699b1631aa959229199d0844b83bfe4248dc5485664de4"
+    },
+    "marty-ui:rust/services/organization/src/offline_audit_store.rs": {
+      "repository": "marty-ui",
+      "path": "rust/services/organization/src/offline_audit_store.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4a8a7f0243f21bf4566e08a9f04c061d4fe27901d21c041c7bbd1994b46d47d7"
+    },
+    "marty-verifier:crates/marty-reporting/src/durable_ack.rs": {
+      "repository": "marty-verifier",
+      "path": "crates/marty-reporting/src/durable_ack.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c93c14752b944a84f6e56005d89c3609505f1657468bf0a11fce1000c4e5414d"
+    },
+    "marty-verifier:crates/marty-reporting/src/reporter.rs": {
+      "repository": "marty-verifier",
+      "path": "crates/marty-reporting/src/reporter.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "8d9779c661176c1d518ad019e34b3231d291c7ee87ef7b4d34037e36e966d31d"
+    },
+    "marty-ui:rust/crates/release-evidence/src/signing_capability.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/src/signing_capability.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "552567a32b7981e638d3327f1bea731a27d426a9b8674925eaaf131263eb8051"
+    },
+    "marty-ui:rust/crates/release-evidence/src/signing_capability_cli.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/src/signing_capability_cli.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e1d795a22d70d873dba35d65cc43b462158be54c955d6343eb8fdf37a325bb88"
+    },
+    "marty-ui:rust/crates/release-evidence/tests/signing_capability.rs": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/tests/signing_capability.rs",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c00c6fa00919b2a276c9203c65893117c5875e107267dfebd59c366dc0d067bb"
+    },
+    "marty-ui:rust/crates/release-evidence/tests/fixtures/signing-capability-es256.json": {
+      "repository": "marty-ui",
+      "path": "rust/crates/release-evidence/tests/fixtures/signing-capability-es256.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0c701331ee957a978ec2ce816bac4b30115aece622b3f67bb6f350767343fda9"
+    },
+    "marty-ui:scripts/beta_org_console_audit.py": {
+      "repository": "marty-ui",
+      "path": "scripts/beta_org_console_audit.py",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "eb7745ba19eceb40b0812995e38b29f774792c7803621de8a047043acd240f9d"
+    },
+    "marty-ui:tests/test_beta_org_console_audit_release_checks.py": {
+      "repository": "marty-ui",
+      "path": "tests/test_beta_org_console_audit_release_checks.py",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "b38ffa8838a10c3faff8f31a69756cf48471751e83b984c9b6723a7e5bc2a02b"
+    },
+    "marty-ui:tests/test_beta_org_console_audit_signing.py": {
+      "repository": "marty-ui",
+      "path": "tests/test_beta_org_console_audit_signing.py",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1228842ac8c6c39d32415f837e3f67b57f69422fa007aec9514f4770aaf307b2"
+    },
+    "marty-ui:ui/src/components/console/deploy/keyManagementServiceCatalog.js": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/console/deploy/keyManagementServiceCatalog.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "fb1f57354e74730c0de3ce377dab94c52b5f99db44f959b00f6c4986d4741675"
+    },
+    "marty-ui:ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/console/deploy/keyManagementServiceCatalog.test.ts",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c54f94678aea980bb5530c2750ec8677ba2d7c821486bcd9d2025020188bf999"
+    },
+    "marty-demo-recorder:docs/functional-reruns.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/functional-reruns.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0bcf84d938fe746b05839a0eec15b5b69d6e2970bb0fb44d093e64194933668a"
+    },
+    "marty-demo-recorder:docs/d10-signing-capability.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d10-signing-capability.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "1b66c5e5e04b87157a81e5a43f0add41900ce4721b4f1dc83005bab09c7ddc6c"
+    },
+    "marty-ui:ui/src/components/applicant/ApplicationForm.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0"
+    },
+    "marty-ui:ui/src/components/__tests__/ApplicationForm.test.tsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f5bea24478d1bbef4c09c3d675ee016dffac9f68805937ff8bacb79048f32086"
+    },
+    "marty-ui:ui/src/components/console/applicant/ClaimCredentialDialog.jsx": {
+      "repository": "marty-ui",
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "90974fd6391bab40b7bd14ae59fe8c7e36411a515d3836fa87d3ad8d8b5e201f"
+    },
+    "marty-ui:ui/src/generated/demoManifests.generated.js": {
+      "repository": "marty-ui",
+      "path": "ui/src/generated/demoManifests.generated.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "d91a7b665be67bf8a953fd5db3b99e3647317c838c8466ae3ed69cb18776732e"
+    },
+    "marty-demo-recorder:demos/transcripts/independent-wallet-interoperability.en.vtt": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/independent-wallet-interoperability.en.vtt",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5685635e98f48403656e5fb1ae49db1fdc698464c736a6ec7a23263704d632da"
+    },
+    "marty-demo-recorder:docs/independent-wallet-interoperability.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/independent-wallet-interoperability.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0710bd439475889ca628860a2ab587bdd7b7f58f5da1e9e8cd5ec5f17155375f"
+    },
+    "marty-demo-recorder:docs/first-party-browser-wallet.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/first-party-browser-wallet.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "984783378adf2cf504a3f2058997bf9e4ab22c6f59702347696d4d24d2f13892"
+    },
+    "marty-demo-recorder:src/retainedIndependentWallet.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentWallet.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e90c2a1dd94061c6e3340926890a900990328244c5a8fd8313532270b6eaecbc"
+    },
+    "marty-demo-recorder:src/spruceMembershipFlow.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipFlow.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4c439c14ab14e27c844f49afc1074ca9c44e24a8d73651062e83ca34f5c7a72e"
+    },
+    "marty-demo-recorder:src/spruceMembershipBrowser.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/spruceMembershipBrowser.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "8ebe08b8f89d24c9980bf1a86eafc46e76f1f33c77a76c1212af101019b03de2"
+    },
+    "marty-demo-recorder:src/retainedIndependentOverview.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/retainedIndependentOverview.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "09026dd4cb54b989a00e9744d6b8d5ee2eb04bd3d6043592f9943d222d51f5ac"
+    },
+    "marty-demo-recorder:android/README.md": {
+      "repository": "marty-demo-recorder",
+      "path": "android/README.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "01258c50f41b49093db9feaddbe7119c648fb762fce480a8b3485d2f0ba667fc"
+    },
+    "marty-demo-recorder:android/retained-independent-fixture.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/retained-independent-fixture.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "89446741124aa2fa7ea345b7293c83cd39350147c26370ee4f11a7b9a18ec9d0"
+    },
+    "marty-demo-recorder:android/retained-independent-gateway.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/retained-independent-gateway.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e6ed5ea0ab14005471118de82b3adf4234c23ade8cae960a15f865d25616ca00"
+    },
+    "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c7e698e701ced24034744478719e89e728914880bcb83f63c1c2da0fed2d297b"
+    },
+    "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-same-device-untrusted-issuer.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "417b125953882e420497b57a7cef5966c34bf10590bc5565efb2ae6d95da1637"
+    },
+    "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-expired-offer.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/membership-badge-login.spruceid-expired-offer.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "6827612c2aa74f7b5a18b6c9697ee2384413cad3bc55c151f85cfc526c9bd12d"
+    },
+    "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/independent-wallet-interoperability.spruceid-happy.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c1a97a9abed29703ed821d71005e2db23672942e0567fb7c001052289d793993"
+    },
+    "marty-demo-recorder:android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json": {
+      "repository": "marty-demo-recorder",
+      "path": "android/scenarios/independent-wallet-interoperability.spruceid-cancel.example.json",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "dd657471de96dbc7d1f4c16fd09f7911045026f7a56ec419cfafef8174d7f216"
+    },
+    "marty-demo-recorder:docs/d05-native-lanes.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/d05-native-lanes.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c8aaa9b0999a80c3775ba3990b6a6c0b3b9d3cc865cd3f10b14084a1150244cd"
+    },
+    "marty-demo-recorder:src/androidScenarioFixture.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/androidScenarioFixture.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "ee9aed7cb62bd2314681f3036e9c533c469864ad21edf514ecc3fa7232b85ec6"
+    },
+    "marty-demo-recorder:test/fixtures/spruceMembership.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/fixtures/spruceMembership.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4601c0ff5a65bdcc37d35edef444e8b19b6d9668a09e697e2498c2d9ca71cf3f"
+    },
+    "marty-demo-recorder:test/retainedIndependentOverview.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/retainedIndependentOverview.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "c6ea618d7cd8e8b6f1b35ed09c978d92ff389aa45bfab2546af891aaea4e9d5f"
+    },
+    "marty-demo-recorder:test/retainedIndependentWallet.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/retainedIndependentWallet.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "73ab2fff5bd60f0bab23fd2f15a9c023afe9dda88c71ac1c12bc07aa4514c108"
+    },
+    "marty-demo-recorder:test/spruceMembershipFlow.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/spruceMembershipFlow.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "03862f7cd949f56a9c707b41be0641342f71d10d06efa2579cd9f1097572b874"
+    },
+    "marty-demo-recorder:src/compose.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/compose.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e29c80adf7cf20fb8fd2d3209fb2b2c666c824e68fc799fde17494545b925985"
+    },
+    "marty-demo-recorder:src/mediaQuality.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/mediaQuality.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "acc1ee628550ee25ac621d8690fd83b6eab81befb3f207a11575e2b02ec96aaa"
+    },
+    "marty-demo-recorder:src/preflight.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/preflight.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5cd7f3fd476ef5e972c4b2028dd1b5a7c1ae4832ee9b635f26592d3f81768005"
+    },
+    "marty-demo-recorder:src/hashes.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/hashes.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "28760485b7a5ab50cd567226ac582a554b464ea3c6792dbb7cca1b4ca7ffceef"
+    },
+    "marty-demo-recorder:src/recorder.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/recorder.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "a2254fe2b945b8ba4df5a91b1a3fb691a2bc2de6e13a55167ddbdeac452f6b2f"
+    },
+    "marty-demo-recorder:src/config.js": {
+      "repository": "marty-demo-recorder",
+      "path": "src/config.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e1296db9e0dff8372d4ce1543a0818f2add2bcbb463059fb083ac841380b5430"
+    },
+    "marty-ui:tests/scripts/verify-beta-credential-login.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/verify-beta-credential-login.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "e0a300d3ac410f20654e8dab8dce31cc42887d11c049c76603a52a786acfab24"
+    },
+    "marty-demo-recorder:demos/transcripts/first-party-browser-wallet.en.vtt": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/first-party-browser-wallet.en.vtt",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "f3b97e99612201b46a2bdc630e28ccde8fd1e56f05a6dd073f81fee29c5f95f1"
+    },
+    "marty-demo-recorder:test/firstPartyBrowserWallet.test.js": {
+      "repository": "marty-demo-recorder",
+      "path": "test/firstPartyBrowserWallet.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "99d0ea0cd9c7b6a6ce7311e5f801db8a20f9a72d5acc72a5c475e09342739eee"
+    },
+    "marty-demo-recorder:demos/lifecycle-alignment.json#scenario=first-party-browser-wallet": {
+      "repository": "marty-demo-recorder",
+      "path": "demos/lifecycle-alignment.json",
+      "digestDomain": "SHA256_OF_UTF8_SORTED_COMPACT_JSON_SCENARIO_ENSURE_ASCII_FALSE",
+      "actualSha256": "8a7dfc41e3d6c15a812a582c418bc819223f6379fd7a511d4f9210fd348f304a",
+      "selector": {
+        "array": "scenarios",
+        "slug": "first-party-browser-wallet"
+      }
+    },
+    "marty-ui:tests/scripts/demo-wallet-session.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/demo-wallet-session.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "97486b4056e2f5497cd711cb743c392bccc510fea30c192fcfe0828b3ad69a21"
+    },
+    "marty-ui:tests/scripts/beta-credential-contract.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/beta-credential-contract.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "2f59be937e3ed8a154883eaf323a1f2f95728b3f9ec5fa3a5f8d1a6c6222186c"
+    },
+    "marty-ui:tests/scripts/verify-beta-waltid-acceptance.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/verify-beta-waltid-acceptance.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "0543995dc531ecc7ecb8aa477b4c174a8abf5f7ba074cd2506e04a31c36fcbc4"
+    },
+    "marty-demo-recorder:docs/lifecycle-presentation-profile.md": {
+      "repository": "marty-demo-recorder",
+      "path": "docs/lifecycle-presentation-profile.md",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "20b5c9171eacbae2f5971854cd8040417c999a93e9014b464acb00f5cd78574c"
+    },
+    "marty-ui:tests/scripts/audit-beta-employee-access.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-employee-access.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "dee62ac9d069b3b37d8802000753fe87e70aaa0048e343fdcb9e19431a42fd4e"
+    },
+    "marty-ui:tests/scripts/audit-beta-employee-access.test.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-employee-access.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "7a93bfb612932209cfdf2e5bf8ba867316991bf185bbc4dea171793790979a46"
+    },
+    "marty-ui:tests/scripts/audit-beta-passport-clearance.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-passport-clearance.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "5508b02b2eed0145fe7b739e221afa925345f8156684e351d50944baeabcba73"
+    },
+    "marty-ui:tests/scripts/audit-beta-passport-clearance.test.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/audit-beta-passport-clearance.test.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "4edb96719d5fe31b5dbdf9c2a6f8118b8ce9fac8f380461990fc3e1b3ac58746"
+    },
+    "marty-ui:tests/scripts/demo-wallet-driver-test-helpers.js": {
+      "repository": "marty-ui",
+      "path": "tests/scripts/demo-wallet-driver-test-helpers.js",
+      "digestDomain": "SHA256_OF_EXACT_FILE_BYTES",
+      "actualSha256": "77a91f39a5e2e8cb474a61c1efd0557856e0e85b5070b5b2dd580e4079125673"
+    }
+  },
+  "mismatches": [
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/0/sha256",
+      "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+      "expectedSha256": "56149400ac498122eb91bfb0eb0c4a0cdd5b888a5db6a066a867af6fb55cfc44",
+      "actualSha256": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-denial.example.json"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/4/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-denial.example.json"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/4/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/1/sha256",
+      "source": "marty-demo-recorder:docs/d05-supporting-lanes.md",
+      "expectedSha256": "2eec719614e5795b8e5386d748e851dbc230599fc3c7f4d2000188e6dbfb0e0d",
+      "actualSha256": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-supporting-lanes.md"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/11/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_NATIVE_BOUNDARY_DOCUMENTATION_FINGERPRINT",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-supporting-lanes.md"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/11/sha256"
+          }
+        ],
+        "scope": "The later native repair documents fresh issuance before cancel, explicit Chrome activation rather than an automatic callback, and the original pending request. It adds the separate native runbook link. Current document bytes are fingerprinted in the follow-up record.",
+        "limit": "This documentation follow-up does not rerun a browser/native journey or change the historical D05 test outcome. The actual focused native checks remain separately listed in that record."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/2/sha256",
+      "source": "marty-demo-recorder:src/androidManifestEvidence.js",
+      "expectedSha256": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96",
+      "actualSha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/12/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/12/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/3/sha256",
+      "source": "marty-demo-recorder:src/androidMembershipCancel.js",
+      "expectedSha256": "929b0a16000333c1b3f3bedbdea540e1a5e2a451c49538cd26b5ab956da149e7",
+      "actualSha256": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidMembershipCancel.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/13/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidMembershipCancel.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/13/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/4/sha256",
+      "source": "marty-demo-recorder:src/androidRecorder.js",
+      "expectedSha256": "e12d134570e371e20372a3037033153ebfffd7568d864c01ca835e586f9f4b56",
+      "actualSha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/7/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidRecorder.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/14/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidRecorder.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/14/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/5/sha256",
+      "source": "marty-demo-recorder:src/androidReleaseGateway.js",
+      "expectedSha256": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6",
+      "actualSha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/6/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/15/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/15/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/7/sha256",
+      "source": "marty-demo-recorder:test/androidMembershipCancel.test.js",
+      "expectedSha256": "b21ba31293f8997bb06268f3cf3eee316150abdc65ff40f5b99e3bc0f20495a2",
+      "actualSha256": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidMembershipCancel.test.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/21/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidMembershipCancel.test.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/21/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "android-manifest-verification.json",
+      "pointer": "/sources/marty-demo-recorder/files/8/sha256",
+      "source": "marty-demo-recorder:test/androidRecorder.test.js",
+      "expectedSha256": "26ca79fbae7712f97201f0b1fc87f542a56a31c8b029f86e1f2b51199b3f75ed",
+      "actualSha256": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidRecorder.test.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/22/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidRecorder.test.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/22/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d03-verification.json",
+      "pointer": "/compatibilityFollowup/sourceSha256/src~1androidManifestEvidence.js",
+      "source": "marty-demo-recorder:src/androidManifestEvidence.js",
+      "expectedSha256": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96",
+      "actualSha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/12/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/12/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/4"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d03-verification.json",
+      "pointer": "/compatibilityFollowup/sourceSha256/src~1androidReleaseGateway.js",
+      "source": "marty-demo-recorder:src/androidReleaseGateway.js",
+      "expectedSha256": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6",
+      "actualSha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/6/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/15/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/15/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/4"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/3/sha256",
+      "source": "marty-demo-recorder:docs/d05-supporting-lanes.md",
+      "expectedSha256": "2eec719614e5795b8e5386d748e851dbc230599fc3c7f4d2000188e6dbfb0e0d",
+      "actualSha256": "49e14b440c31c009672a50ce478c0c88c4153c54becab9207a5f0fc284e83012",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-supporting-lanes.md"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/11/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_NATIVE_BOUNDARY_DOCUMENTATION_FINGERPRINT",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1d05-supporting-lanes.md"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/11/sha256"
+          }
+        ],
+        "scope": "The later native repair documents fresh issuance before cancel, explicit Chrome activation rather than an automatic callback, and the original pending request. It adds the separate native runbook link. Current document bytes are fingerprinted in the follow-up record.",
+        "limit": "This documentation follow-up does not rerun a browser/native journey or change the historical D05 test outcome. The actual focused native checks remain separately listed in that record."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/4/sha256",
+      "source": "marty-demo-recorder:android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+      "expectedSha256": "56149400ac498122eb91bfb0eb0c4a0cdd5b888a5db6a066a867af6fb55cfc44",
+      "actualSha256": "dccf1d0d2f42801a0015ab5ca6bd9a80633a78511a0c12258d69b642c01bfbbe",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-denial.example.json"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/4/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/android~1scenarios~1membership-badge-login.spruceid-same-device-denial.example.json"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/4/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/5/sha256",
+      "source": "marty-demo-recorder:src/androidManifestEvidence.js",
+      "expectedSha256": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96",
+      "actualSha256": "47493cbf1cc9fa78bff24ddbf96b2fa46bf526eaa113c4ff366ef392d2ab1dfb",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/12/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidManifestEvidence.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/12/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/6/sha256",
+      "source": "marty-demo-recorder:src/androidMembershipCancel.js",
+      "expectedSha256": "929b0a16000333c1b3f3bedbdea540e1a5e2a451c49538cd26b5ab956da149e7",
+      "actualSha256": "f5dc166f850136aefb1282cb0df19760546ead61945c9575c73099649d9310f6",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidMembershipCancel.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/13/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidMembershipCancel.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/13/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/7/sha256",
+      "source": "marty-demo-recorder:src/androidRecorder.js",
+      "expectedSha256": "e12d134570e371e20372a3037033153ebfffd7568d864c01ca835e586f9f4b56",
+      "actualSha256": "2480fef183e90097f7e625289f67723cbb863d966fa038819be1ba8991015de2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/7/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidRecorder.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/14/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidRecorder.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/14/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/8/sha256",
+      "source": "marty-demo-recorder:src/androidReleaseGateway.js",
+      "expectedSha256": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6",
+      "actualSha256": "9c5c3436860236bf2e0f02fee0e84fcf6f8cd2fe42b6cd2b44da1031503044a2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/6/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/15/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/src~1androidReleaseGateway.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/15/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/10/sha256",
+      "source": "marty-demo-recorder:test/androidMembershipCancel.test.js",
+      "expectedSha256": "b21ba31293f8997bb06268f3cf3eee316150abdc65ff40f5b99e3bc0f20495a2",
+      "actualSha256": "14a7e322292831763df09b400e2d7e2367b0dfd319561c25b7d05a60e7025dc2",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidMembershipCancel.test.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/21/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidMembershipCancel.test.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/21/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d05-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/files/11/sha256",
+      "source": "marty-demo-recorder:test/androidRecorder.test.js",
+      "expectedSha256": "26ca79fbae7712f97201f0b1fc87f542a56a31c8b029f86e1f2b51199b3f75ed",
+      "actualSha256": "3fd6d1a91e46b74dffc37c823328d87acb44f95d61b84ffd5c9c92705cf11b59",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidRecorder.test.js"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/changedSourceHashes/22/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_SHARED_NATIVE_FLOW_FIX_AND_FOCUSED_CHECKS",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1androidRecorder.test.js"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/changedSourceHashes/22/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/0"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/1"
+          },
+          {
+            "record": "retained-independent-native-verification.json",
+            "pointer": "/verification/2"
+          }
+        ],
+        "scope": "The later native-flow record fingerprints these updated shared sources and records the actual focused checks after replacing aspirational controls and the incomplete cancel flow. The old hash remains an actual historical mismatch.",
+        "limit": "Only the exact commands listed in the follow-up establish reruns. Native-device operation, signing services, production compatibility and media qualification remain NOT_RUN."
+      }
+    },
+    {
+      "record": "d06-capture-verification.json",
+      "pointer": "/source/files/3/sha256",
+      "source": "marty-demo-recorder:demos/lifecycle-alignment.json",
+      "expectedSha256": "986a2e24f9b7bab073dcca152ce4c3a3640125686ee77d77ac8fd4d3a5af51bd",
+      "actualSha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "catalog-verification.json",
+          "pointer": "/alignmentSha256"
+        },
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/changedSources/2/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_METADATA_FINGERPRINT_WITH_READ_ONLY_FOLLOWUP",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-content-verification.json",
+            "pointer": "/changedSources/2/sha256"
+          },
+          {
+            "record": "catalog-verification.json",
+            "pointer": "/alignmentSha256"
+          }
+        ],
+        "scope": "Later independent-lane and related metadata edits changed this whole file. The later content/catalog records bind its current bytes and their read-only schema, locator, inventory or wording checks.",
+        "limit": "Metadata/wording checks do not rerun the earlier demo or transform its DRAFT/NOT_RUN/UNBOUND state into qualification. The earlier whole-plan bytes were not found in committed history; no equality of its old and current D06 entry is inferred from the digest."
+      }
+    },
+    {
+      "record": "d09-narration-verification.json",
+      "pointer": "/changedSources/2/sha256",
+      "source": "marty-demo-recorder:demos/lifecycle-alignment.json",
+      "expectedSha256": "7e7b3ba57bd5cab876eb6b724ebafb6d38b977bc51cfb4a0c2413e08a9540e03",
+      "actualSha256": "0e86fde70720722fc30e04449d3f4661d823966c69aa43f5260d1430af751790",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "catalog-verification.json",
+          "pointer": "/alignmentSha256"
+        },
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/changedSources/2/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_METADATA_FINGERPRINT_WITH_READ_ONLY_FOLLOWUP",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-content-verification.json",
+            "pointer": "/changedSources/2/sha256"
+          },
+          {
+            "record": "catalog-verification.json",
+            "pointer": "/alignmentSha256"
+          }
+        ],
+        "scope": "Later independent-lane and related metadata edits changed this whole file. The later content/catalog records bind its current bytes and their read-only schema, locator, inventory or wording checks.",
+        "limit": "Metadata/wording checks do not rerun the earlier demo or transform its DRAFT/NOT_RUN/UNBOUND state into qualification."
+      }
+    },
+    {
+      "record": "d10-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/sourceSha256/test~1functionalScenarioContracts.test.js",
+      "source": "marty-demo-recorder:test/functionalScenarioContracts.test.js",
+      "expectedSha256": "0005639db04807518d93776788a1c62521de7f8b13c681ebfe263e20b85b62bc",
+      "actualSha256": "c4e279f747d798594cf20c3f05c5ffece87a1fe3525d1d4bae91f119cc517fa9",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "d06-capture-verification.json",
+          "pointer": "/source/files/1/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_LATER_FOCUSED_TEST_RECORD",
+        "sourceEvidence": [
+          {
+            "record": "d06-capture-verification.json",
+            "pointer": "/source/files/1/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "d06-capture-verification.json",
+            "pointer": "/checks/0"
+          }
+        ],
+        "scope": "D06 changed this shared contract test file and reran all 10 named cases, retaining the other six existing cases. The real clean-Git/Node-IPC fixture check supersedes the old test-file digest.",
+        "limit": "This is adapter/source/artifact handling with a synthetic child; it does not establish D10 live signing or D06 browser functionality."
+      }
+    },
+    {
+      "record": "native-control-ui-verification.json",
+      "pointer": "/changedSources/0/sha256",
+      "source": "marty-ui:ui/src/components/applicant/ApplicationForm.jsx",
+      "expectedSha256": "1cb52cd1ea437b0b827db111192d9a849ee69994fe02ce28f9ae173d3d542eac",
+      "actualSha256": "2b0944ef344e839b6e095fec857683473af89f8bac276224015d0b03f178d5e0",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "native-claim-organization-verification.json",
+          "pointer": "/changedSources/0/sha256"
+        },
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/reviewedImplementationSources/1/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/ui~1src~1components~1applicant~1ApplicationForm.jsx"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_BY_LATER_COMPONENT_FIX_AND_FOCUSED_TEST_RECORD",
+        "sourceEvidence": [
+          {
+            "record": "native-claim-organization-verification.json",
+            "pointer": "/changedSources/0/sha256"
+          }
+        ],
+        "checkEvidence": [
+          {
+            "record": "native-claim-organization-verification.json",
+            "pointer": "/commands/1"
+          }
+        ],
+        "scope": "The later organization propagation fix fingerprints the current component and records nine passing ApplicationForm cases, including regressions reproduced against the earlier component.",
+        "limit": "The earlier two-component run remains historical: eight passed and five FocusTrap teardown cases failed identically at its baseline. The later ApplicationForm-only result does not make the separate dialog suite pass."
+      }
+    },
+    {
+      "record": "retained-wallet-verification.json",
+      "pointer": "/repositories/marty-ui/sourceSha256/ui~1public~1demos~1manifests~12026.08.0.json",
+      "source": "marty-ui:ui/public/demos/manifests/2026.08.0.json",
+      "expectedSha256": "68e78b9e66d712aefa1b8cd3e673f3c89729d006cda2148dd8e642cba748b0d1",
+      "actualSha256": "3e643f3b471daac620c670aa506c654fb7894b940744c83169775fb643a655f1",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "catalog-verification.json",
+          "pointer": "/manifestSha256"
+        },
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/changedSources/0/sha256"
+        },
+        {
+          "record": "retained-independent-native-verification.json",
+          "pointer": "/dependencySourceReview/marty-ui/sourceSha256/ui~1public~1demos~1manifests~12026.08.0.json"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_METADATA_FINGERPRINT_WITH_READ_ONLY_FOLLOWUP",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-content-verification.json",
+            "pointer": "/changedSources/0/sha256"
+          },
+          {
+            "record": "catalog-verification.json",
+            "pointer": "/manifestSha256"
+          }
+        ],
+        "scope": "Later independent-lane and related metadata edits changed this whole file. The later content/catalog records bind its current bytes and their read-only schema, locator, inventory or wording checks.",
+        "limit": "Metadata/wording checks do not rerun the earlier demo or transform its DRAFT/NOT_RUN/UNBOUND state into qualification."
+      }
+    },
+    {
+      "record": "retained-wallet-verification.json",
+      "pointer": "/repositories/marty-demo-recorder/sourceSha256/docs~1first-party-browser-wallet.md",
+      "source": "marty-demo-recorder:docs/first-party-browser-wallet.md",
+      "expectedSha256": "514f020fb2bafaf2eb57d749db22b64508b05eed5892ca9906e128fc209153b1",
+      "actualSha256": "984783378adf2cf504a3f2058997bf9e4ab22c6f59702347696d4d24d2f13892",
+      "result": "MISMATCH",
+      "matchingCurrentObservationsElsewhere": [
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/changedSources/5/sha256"
+        },
+        {
+          "record": "retained-independent-content-verification.json",
+          "pointer": "/firstPartyReadmeFollowup/sha256"
+        }
+      ],
+      "classification": {
+        "kind": "SUPERSEDED_METADATA_FINGERPRINT_WITH_READ_ONLY_FOLLOWUP",
+        "sourceEvidence": [
+          {
+            "record": "retained-independent-content-verification.json",
+            "pointer": "/changedSources/5/sha256"
+          },
+          {
+            "record": "retained-independent-content-verification.json",
+            "pointer": "/firstPartyReadmeFollowup/sha256"
+          }
+        ],
+        "scope": "Later independent-lane and related metadata edits changed this whole file. The later content/catalog records bind its current bytes and their read-only schema, locator, inventory or wording checks.",
+        "limit": "Metadata/wording checks do not rerun the earlier demo or transform its DRAFT/NOT_RUN/UNBOUND state into qualification."
+      }
+    }
+  ],
+  "historicalSourceComparisons": [
+    {
+      "record": "native-claim-organization-verification.json",
+      "pointer": "/changedSources/0/baseSha256",
+      "repository": "marty-ui",
+      "revision": "45b31c944b2cb8079c36718611345425dc1860fc",
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "digestDomain": "SHA256_OF_EXACT_GIT_BLOB_BYTES_AT_DECLARED_BASE_REVISION",
+      "expectedSha256": "1cb52cd1ea437b0b827db111192d9a849ee69994fe02ce28f9ae173d3d542eac",
+      "actualSha256": "1cb52cd1ea437b0b827db111192d9a849ee69994fe02ce28f9ae173d3d542eac",
+      "result": "MATCH_AT_RECORDED_BASE",
+      "boundary": "Explicit historical hash, not an assertion that these are current component bytes."
+    },
+    {
+      "record": "native-claim-organization-verification.json",
+      "pointer": "/changedSources/1/baseSha256",
+      "repository": "marty-ui",
+      "revision": "45b31c944b2cb8079c36718611345425dc1860fc",
+      "path": "ui/src/components/__tests__/ApplicationForm.test.tsx",
+      "digestDomain": "SHA256_OF_EXACT_GIT_BLOB_BYTES_AT_DECLARED_BASE_REVISION",
+      "expectedSha256": "7b019297fb4e7767d0261104f1dd8f8a3a2f1b4f20a667b03f496080b7fc2586",
+      "actualSha256": "7b019297fb4e7767d0261104f1dd8f8a3a2f1b4f20a667b03f496080b7fc2586",
+      "result": "MATCH_AT_RECORDED_BASE",
+      "boundary": "Explicit historical hash, not an assertion that these are current component bytes."
+    },
+    {
+      "record": "native-control-ui-verification.json",
+      "pointer": "/changedSources/0/baseSha256",
+      "repository": "marty-ui",
+      "revision": "e32058bd2309866235b2daeb1ea413c0c0d8f216",
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "digestDomain": "SHA256_OF_EXACT_GIT_BLOB_BYTES_AT_DECLARED_BASE_REVISION",
+      "expectedSha256": "85f4f960497c9ea6bf2cb7fd40277c37b888706be7403787b28757b91f680298",
+      "actualSha256": "85f4f960497c9ea6bf2cb7fd40277c37b888706be7403787b28757b91f680298",
+      "result": "MATCH_AT_RECORDED_BASE",
+      "boundary": "Explicit historical hash, not an assertion that these are current component bytes."
+    },
+    {
+      "record": "native-control-ui-verification.json",
+      "pointer": "/changedSources/1/baseSha256",
+      "repository": "marty-ui",
+      "revision": "e32058bd2309866235b2daeb1ea413c0c0d8f216",
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "digestDomain": "SHA256_OF_EXACT_GIT_BLOB_BYTES_AT_DECLARED_BASE_REVISION",
+      "expectedSha256": "fd259545ac11d07cf2a491fb527be2b06cfd0c6a73e8ac22c004f3fa9c7c059b",
+      "actualSha256": "fd259545ac11d07cf2a491fb527be2b06cfd0c6a73e8ac22c004f3fa9c7c059b",
+      "result": "MATCH_AT_RECORDED_BASE",
+      "boundary": "Explicit historical hash, not an assertion that these are current component bytes."
+    }
+  ],
+  "externalPinnedSourceComparisons": [
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/0/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt",
+      "recordedGitBlobSha": "323daea51f6b78706e44f4b44e6ad8c38d173cf9",
+      "recordedSha256": "5777af208993d39dfe5a7854fd3332569740944c7c592eadfd860c53a93e6b70",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VCIView.kt",
+      "actualSha256": "5777af208993d39dfe5a7854fd3332569740944c7c592eadfd860c53a93e6b70",
+      "actualGitBlobSha": "323daea51f6b78706e44f4b44e6ad8c38d173cf9",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/1/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt",
+      "recordedGitBlobSha": "e5acf1f8fef0fbf32f6719ae8d180a34aa5c797c",
+      "recordedSha256": "0b603b751c47f76c3dbb3b5af0dbdc27b5a421d3de21e9ca229638332a680f36",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/wallet/HandleOID4VPView.kt",
+      "actualSha256": "0b603b751c47f76c3dbb3b5af0dbdc27b5a421d3de21e9ca229638332a680f36",
+      "actualGitBlobSha": "e5acf1f8fef0fbf32f6719ae8d180a34aa5c797c",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/2/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt",
+      "recordedGitBlobSha": "206595d91adae5a0efc52ea6549e9fd9454e0ba1",
+      "recordedSha256": "d8c83dfda9b75172ae328755e473cd7c5882efa2348f666fc766729d76dabaab",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/credentials/AddToWalletView.kt",
+      "actualSha256": "d8c83dfda9b75172ae328755e473cd7c5882efa2348f666fc766729d76dabaab",
+      "actualGitBlobSha": "206595d91adae5a0efc52ea6549e9fd9454e0ba1",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/3/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt",
+      "recordedGitBlobSha": "e25ec2b1a30445ec831124cdd615758eae5e879c",
+      "recordedSha256": "db8737aa362eb729c168cbbb48b639c2d6854d03763b6848f8fa4cd5461ef8bc",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/MainActivity.kt",
+      "actualSha256": "db8737aa362eb729c168cbbb48b639c2d6854d03763b6848f8fa4cd5461ef8bc",
+      "actualGitBlobSha": "e25ec2b1a30445ec831124cdd615758eae5e879c",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/4/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt",
+      "recordedGitBlobSha": "30b7a4d1414f03b8086521fb4a1022d45d09253f",
+      "recordedSha256": "8a5a64330f8b34fb0b6f6e651af9caf99c965698dcd45ef1d64869fdacd92816",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/navigation/SetupNavGraph.kt",
+      "actualSha256": "8a5a64330f8b34fb0b6f6e651af9caf99c965698dcd45ef1d64869fdacd92816",
+      "actualGitBlobSha": "30b7a4d1414f03b8086521fb4a1022d45d09253f",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/5/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt",
+      "recordedGitBlobSha": "494282df6914da97d48e79f3b4e428dc908c82a7",
+      "recordedSha256": "da12d5ded5fb39b78c7e586de252c6186d6e175453db0aebf88a2f58cbcd222a",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/android/Showcase/src/main/java/com/spruceid/mobilesdkexample/utils/Utils.kt",
+      "actualSha256": "da12d5ded5fb39b78c7e586de252c6186d6e175453db0aebf88a2f58cbcd222a",
+      "actualGitBlobSha": "494282df6914da97d48e79f3b4e428dc908c82a7",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/6/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/Cargo.toml",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/Cargo.toml",
+      "recordedGitBlobSha": "d6d83ef414157bde30570654b5b0405ff0aaba80",
+      "recordedSha256": "9c74db24edb1e0b3eb8e05859e89e18a6aa1fa3efa20352b571672dbc0123e4f",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/Cargo.toml",
+      "actualSha256": "9c74db24edb1e0b3eb8e05859e89e18a6aa1fa3efa20352b571672dbc0123e4f",
+      "actualGitBlobSha": "d6d83ef414157bde30570654b5b0405ff0aaba80",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/7/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/src/oid4vp/holder.rs",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/holder.rs",
+      "recordedGitBlobSha": "5750e833b2d45ccbae0e1dd3c6cd0d69401ca973",
+      "recordedSha256": "f0d64ec50d8a4e48312f8188d26068e1025f31e9ecf9acab3fd5c97a918e9438",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/src/oid4vp/holder.rs",
+      "actualSha256": "f0d64ec50d8a4e48312f8188d26068e1025f31e9ecf9acab3fd5c97a918e9438",
+      "actualGitBlobSha": "5750e833b2d45ccbae0e1dd3c6cd0d69401ca973",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/8/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/src/oid4vp/permission_request.rs",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/permission_request.rs",
+      "recordedGitBlobSha": "5a72c8f7a9549eacfbc1fb9f6258e0cc5954f3be",
+      "recordedSha256": "e4163a72e682e32e772d635d595e95adef0a6d3f5c8df14f2e1cdb3fd0dd760f",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/src/oid4vp/permission_request.rs",
+      "actualSha256": "e4163a72e682e32e772d635d595e95adef0a6d3f5c8df14f2e1cdb3fd0dd760f",
+      "actualGitBlobSha": "5a72c8f7a9549eacfbc1fb9f6258e0cc5954f3be",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/9/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/src/oid4vp/presentation.rs",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vp/presentation.rs",
+      "recordedGitBlobSha": "69d796a9dce6e810fc6e1edaa84145707b91614f",
+      "recordedSha256": "5beeb3272f6f401d859b10f77e6f3c2af2f99adcfaf734785b2cf6b8b69e5b92",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/src/oid4vp/presentation.rs",
+      "actualSha256": "5beeb3272f6f401d859b10f77e6f3c2af2f99adcfaf734785b2cf6b8b69e5b92",
+      "actualGitBlobSha": "69d796a9dce6e810fc6e1edaa84145707b91614f",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/10/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/src/credential/format/jwt_vc.rs",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/credential/format/jwt_vc.rs",
+      "recordedGitBlobSha": "9d0145e6c2fd7a7b2d787ff9efaeef8ae0e9c9cf",
+      "recordedSha256": "a270f63005107f52d79a73d3d1a1f4fd8edfc0a4a5b128bcf15248978b440108",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/src/credential/format/jwt_vc.rs",
+      "actualSha256": "a270f63005107f52d79a73d3d1a1f4fd8edfc0a4a5b128bcf15248978b440108",
+      "actualGitBlobSha": "9d0145e6c2fd7a7b2d787ff9efaeef8ae0e9c9cf",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    },
+    {
+      "record": "retained-independent-native-verification.json",
+      "pointer": "/nativeSource/primarySources/11/sha256",
+      "repository": "spruceid/sprucekit-mobile",
+      "revision": "801a482c7bbd55fabbe5376f314dc40a05ec4c33",
+      "path": "rust/src/oid4vci/credential.rs",
+      "url": "https://github.com/spruceid/sprucekit-mobile/blob/801a482c7bbd55fabbe5376f314dc40a05ec4c33/rust/src/oid4vci/credential.rs",
+      "recordedGitBlobSha": "ebb005866386e67e98f6eabfff1bcd3211d592d4",
+      "recordedSha256": "301b2f3e975474d04d623ab70c5b04d36a34fd7860d945f445b39db037b822a5",
+      "classification": "PINNED_EXTERNAL_PRIMARY_SOURCE_NOT_AN_ACTIVE_MARTY_REPOSITORY",
+      "boundary": "Retained primary-source bytes are compared with the recorded SHA256 and Git blob ID. This does not re-query remote commit membership, establish a true checkout, verify an APK build, or establish native operation.",
+      "localPath": "native-spruce-source/rust/src/oid4vci/credential.rs",
+      "actualSha256": "301b2f3e975474d04d623ab70c5b04d36a34fd7860d945f445b39db037b822a5",
+      "actualGitBlobSha": "ebb005866386e67e98f6eabfff1bcd3211d592d4",
+      "result": "MATCH_RETAINED_SHA256_AND_GIT_BLOB"
+    }
+  ],
+  "counts": {
+    "records": 15,
+    "sourceObservations": 251,
+    "uniqueSourceDigestSubjects": 145,
+    "matchingObservations": 227,
+    "mismatchingObservations": 24,
+    "missingObservations": 0,
+    "historicalBaseMatches": 4,
+    "historicalMismatches": 0,
+    "externalPinnedSourceSubjects": 12,
+    "externalRetainedMatches": 12,
+    "externalRetainedMismatches": 0,
+    "differencesWithReviewedFollowup": 24,
+    "differencesWithoutReviewedFollowup": 0
+  },
+  "limits": [
+    "Matching means exact bytes or the record-defined canonical JSON domain. It does not prove tests beyond the retained command scope, source ancestry, a deployed binary, native-device operation, or media readiness.",
+    "Old mismatching hashes are retained unchanged; a later matching hash is not itself sufficient to infer a rerun. Any supersession requires the explicit later check and its limited scope.",
+    "Historical source-head fields identify the recorded baseline or checkpoint. Current heads above identify this comparison only; the delivery application proofs bind final commits and trees.",
+    "The D06 historical whole-plan bytes were not found in committed file history; no old/current D06 plan-entry equality is inferred from a full-file digest alone.",
+    "The recorder comparison uses the complete exact-blob source snapshot and its local audit history; upstream parent history was not imported. Current SHA values do not establish true upstream ancestry or replace delivery patch-application proofs."
+  ],
+  "comparisonConsistency": "HEADS_RECORDS_AND_OBSERVED_SOURCE_DIGESTS_UNCHANGED_DURING_COMPARISON"
+}

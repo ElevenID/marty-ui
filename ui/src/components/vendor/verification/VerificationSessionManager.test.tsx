@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@test/utils';
+import { act, render, screen, waitFor } from '@test/utils';
 import userEvent from '@testing-library/user-event';
 
 import VerificationSessionManager from './VerificationSessionManager';
@@ -7,12 +7,14 @@ import VerificationSessionManager from './VerificationSessionManager';
 const {
   mockListFlowExecutions,
   mockStartVerificationFlow,
+  mockGetVerificationFlowResult,
   mockListPublicIssuerIdentities,
   mockListPresentationPolicies,
   mockListFlows,
 } = vi.hoisted(() => ({
   mockListFlowExecutions: vi.fn(),
   mockStartVerificationFlow: vi.fn(),
+  mockGetVerificationFlowResult: vi.fn(),
   mockListPublicIssuerIdentities: vi.fn(),
   mockListPresentationPolicies: vi.fn(),
   mockListFlows: vi.fn(),
@@ -31,6 +33,7 @@ vi.mock('../../../services/flowsApi', () => ({
 
 vi.mock('../../../services/zkVerificationApi', () => ({
   startVerificationFlow: (...args: unknown[]) => mockStartVerificationFlow(...args),
+  getVerificationFlowResult: (...args: unknown[]) => mockGetVerificationFlowResult(...args),
 }));
 
 vi.mock('../../../services/signingKeysApi', () => ({
@@ -55,6 +58,7 @@ describe('VerificationSessionManager', () => {
     });
     mockListPresentationPolicies.mockResolvedValue([]);
     mockListFlows.mockResolvedValue([]);
+    mockGetVerificationFlowResult.mockReset();
   });
 
   it('lists OID4VP sessions from MIP flow instances', async () => {
@@ -138,6 +142,72 @@ describe('VerificationSessionManager', () => {
       'data-qr-value',
       requestUri,
     );
+  });
+
+  function completedSession() {
+    return {
+      id: 'age-session-1', organization_id: 'org-1', flow_type: 'oid4vp_presentation',
+      status: 'COMPLETED', created_at: '2026-10-20T12:00:00Z', updated_at: '2026-10-20T12:01:00Z',
+    };
+  }
+
+  function measuredResult() {
+    return {
+      instance_id: 'age-session-1', status: 'COMPLETED', result: 'passed', decision: 'allow',
+      verified_claims: { age_over_21: true }, credential_results: [{
+        credential_template_id: 'mdl-template-1', signature_valid: true, trust_check_passed: true,
+        authenticated_disclosures: { format: 'mso_mdoc', documents: [{
+          doc_type: 'org.iso.18013.5.1.mDL', namespaces: { 'org.iso.18013.5.1': ['age_over_21'] },
+        }] },
+      }],
+    };
+  }
+
+  async function openCompletedDetail() {
+    const user = userEvent.setup();
+    mockListFlowExecutions.mockResolvedValue([completedSession()]);
+    render(<VerificationSessionManager organizationId="org-1" />);
+    await user.click(await screen.findByRole('tab', { name: /history \(1\)/i }));
+    await user.click(screen.getByRole('button', { name: 'View session details' }));
+    return user;
+  }
+
+  it('loads the exact terminal result before showing authenticated disclosure evidence', async () => {
+    mockGetVerificationFlowResult.mockResolvedValue(measuredResult());
+    await openCompletedDetail();
+
+    expect(mockGetVerificationFlowResult).toHaveBeenCalledWith('age-session-1');
+    const summary = await screen.findByTestId('verification-result-summary');
+    expect(summary).toHaveAttribute('data-disclosed-claim-names', '["age_over_21"]');
+    expect(summary).toHaveAttribute('data-verification-instance-id', 'age-session-1');
+    expect(summary).toHaveAttribute('data-credential-template-id', 'mdl-template-1');
+    expect(summary).toHaveAttribute('data-issuer-trusted', 'true');
+  });
+
+  it.each(['foreign result', 'unavailable result'])('does not derive disclosure evidence from status after %s', async (failure) => {
+    if (failure === 'foreign result') {
+      mockGetVerificationFlowResult.mockResolvedValue({ ...measuredResult(), instance_id: 'other-session' });
+    } else {
+      mockGetVerificationFlowResult.mockRejectedValue(new Error('Result service unavailable'));
+    }
+    await openCompletedDetail();
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      failure === 'foreign result' ? 'different session' : 'Result service unavailable',
+    );
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
+  });
+
+  it('does not reopen or repopulate details when a closed result request finishes', async () => {
+    let resolveResult: (result: ReturnType<typeof measuredResult>) => void = () => {};
+    mockGetVerificationFlowResult.mockReturnValue(new Promise((resolve) => { resolveResult = resolve; }));
+    const user = await openCompletedDetail();
+    expect(screen.getByLabelText('Loading verification result')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Close' }));
+    await act(async () => { resolveResult(measuredResult()); });
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(screen.queryByTestId('verification-result-summary')).not.toBeInTheDocument();
   });
 
   it('starts verification with the organization issuer DID and no public profile ID', async () => {

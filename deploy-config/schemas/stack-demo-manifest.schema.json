@@ -280,6 +280,12 @@
               "build": { "type": "string", "minLength": 1 },
               "image_digest": { "type": ["string", "null"], "pattern": "^sha256:[a-f0-9]{64}$" },
               "apk_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" },
+              "lane_id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+              "evidence_sha256": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{64}$",
+                "description": "SHA-256 of the exact retained Android evidence report file bytes, including its reportSha256 field."
+              },
               "deployment_mode": { "enum": ["BROWSER", "SELF_HOSTED_BROWSER", "ANDROID_EMULATOR", "PHYSICAL_DEVICE", "INTERNAL_CONTROL"] },
               "classification": { "enum": ["FIRST_PARTY", "INDEPENDENT", "INTERNAL_CONTROL"] },
               "protocols": { "$ref": "#/$defs/stringList" },
