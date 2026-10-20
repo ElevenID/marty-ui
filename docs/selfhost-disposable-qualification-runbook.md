@@ -468,8 +468,9 @@ sudo python3 "$source_root/scripts/provision_selfhost_audit_identity.py" \
 # Later audit token refresh requires --refresh-token --identity-root
 # "$audit_identity_root" with the same org, slug, DID, state, output and project.
 # Before retiring the bootstrap root, check_selfhost_root_retirement.py now
-# requires --evidence-identity and --audit-identity as well as the existing
-# renewal and snapshot identities. Supply --audit-org-id "$MARTY_ORG_ID",
+# requires --evidence-identity, --audit-identity and
+# --snapshot-rotator-identity as well as the existing renewal and snapshot
+# identities. Supply --audit-org-id "$MARTY_ORG_ID",
 # --audit-org-slug "$MARTY_ORG_SLUG" and --audit-did "$SELFHOST_ISSUER_DID"
 # so it checks the live audit role against the exact seeded read policy.
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \

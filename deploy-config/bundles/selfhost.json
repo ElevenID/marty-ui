@@ -38,6 +38,7 @@
     "scripts/provision_selfhost_evidence_identity.py",
     "scripts/provision_selfhost_audit_identity.py",
     "scripts/selfhost_approle_rotation.py",
+    "scripts/provision_selfhost_snapshot_rotator.py",
     "scripts/export-selfhost-openbao.py",
     "scripts/start_selfhost_disposable_openbao.py",
     "scripts/stage_selfhost_keycloak_inputs.py",

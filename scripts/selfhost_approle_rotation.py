@@ -46,6 +46,7 @@ def rotate(
     login: Callable[[object, Path], str],
     validate: Callable[..., Path], read: Callable[[Path], str],
     write: Callable[[Path, str], None],
+    manager_login: Callable[[object], str] | None = None,
 ) -> None:
     identity = validate(identity, empty=False)
     output = validate(output, empty=True)
@@ -54,9 +55,10 @@ def rotate(
             or not _identity_name(output, spec.directory_prefix)):
         raise ValueError(f"replacement {spec.label} identity must be separate")
     old_token = login(bao, identity)
+    create_token = manager_login(bao) if manager_login is not None else old_token
     role_id = read(identity / spec.role_id_file).strip()
     old_secret = read(identity / spec.secret_id_file).strip()
-    new_secret = bao.request("POST", spec.secret_id_path, {}, token=old_token) \
+    new_secret = bao.request("POST", spec.secret_id_path, {}, token=create_token) \
         .get("data", {}).get("secret_id")
     if not isinstance(new_secret, str) or len(new_secret) < 20 or new_secret == old_secret:
         raise ValueError(f"replacement {spec.label} SecretID is invalid")
@@ -71,9 +73,10 @@ def rotate(
             for name in (spec.role_id_file, spec.secret_id_file):
                 (output / name).unlink(missing_ok=True)
             bao.request("POST", spec.secret_id_path + "/destroy",
-                        {"secret_id": new_secret}, token=old_token)
+                        {"secret_id": new_secret}, token=create_token)
+    destroy_token = manager_login(bao) if manager_login is not None else new_token
     bao.request("POST", spec.secret_id_path + "/destroy",
-                {"secret_id": old_secret}, token=new_token)
+                {"secret_id": old_secret}, token=destroy_token)
     require_revoked(bao, role_id, old_secret, spec)
 
 
@@ -81,6 +84,7 @@ def retire(
     bao, identity: Path, retired: Path, spec: RotationSpec,
     login: Callable[[object, Path], str],
     validate: Callable[..., Path], read: Callable[[Path], str],
+    manager_login: Callable[[object], str] | None = None,
 ) -> None:
     identity = validate(identity, empty=False)
     retired = validate(retired, empty=False)
@@ -93,6 +97,7 @@ def retire(
     old_secret = read(retired / spec.secret_id_file).strip()
     if old_role != role_id or old_secret == secret_id:
         raise ValueError(f"retired {spec.label} identity differs from active AppRole")
+    destroy_token = manager_login(bao) if manager_login is not None else token
     bao.request("POST", spec.secret_id_path + "/destroy",
-                {"secret_id": old_secret}, token=token)
+                {"secret_id": old_secret}, token=destroy_token)
     require_revoked(bao, old_role, old_secret, spec)

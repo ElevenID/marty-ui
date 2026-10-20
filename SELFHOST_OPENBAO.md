@@ -75,11 +75,30 @@ python scripts/provision_selfhost_snapshot_identity.py \
   --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
   --root-token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
   --output "$(realpath "$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR")"
+snapshot_rotator_dir="$(dirname "$SELFHOST_OPENBAO_STATE_DIR")/snapshot-rotator-identity"
+mkdir -m 700 -p "$snapshot_rotator_dir"
+python scripts/provision_selfhost_snapshot_rotator.py \
+  --mode bootstrap \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --root-token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --output "$(realpath "$snapshot_rotator_dir")"
 ```
 
 The role can only read `sys/storage/raft/snapshot`. Its identity can retrieve
 the complete encrypted KMS state, so protect it separately from routine renewal
-credentials. Subsequent exports need only this identity:
+credentials. The separate rotator can only create and destroy SecretIDs for the
+snapshot reader and its own role; it cannot read snapshots, sign, export keys,
+or create unrestricted tokens. To rotate the reader after root retirement, use
+`provision_selfhost_snapshot_rotator.py --mode rotate-reader --identity
+"$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR" --output "$next_reader_dir"
+--rotator-identity "$snapshot_rotator_dir"` with the same `--bao-addr` and
+`--bao-ca`. Validate the replacement export before retiring the old private
+directory. `--mode rotate-rotator` rotates the rotator's own SecretID; both
+roles have matching `retire-reader` and `retire-rotator` modes to complete an
+interrupted old-SecretID retirement. Keep active and replacement identities
+separately backed up until the old login is confirmed rejected. Subsequent
+exports need only the reader identity:
 
 ```bash
 python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local
@@ -103,8 +122,9 @@ The archive is not a direct replacement for the state directory: restoring `raft
 
 Before considering revocation of the initial root token, run
 `scripts/check_selfhost_root_retirement.py --help` and supply the active and
-rollback secret generations, their Compose env files, both scoped operator
-identities, the owned project and an owner-private snapshot export directory. It
+rollback secret generations, their Compose env files, the renewal and snapshot
+reader identities, the separate evidence, audit and snapshot rotator identities, the
+owned project and an owner-private snapshot export directory. It
 verifies all 21 renewable token scopes in
 **both** generations, the 13 static service/grant tokens in each generation,
 their live non-exportable signers and public certificates, rootless

@@ -33,6 +33,13 @@ from provision_selfhost_evidence_identity import rotate as rotate_evidence_ident
 from provision_selfhost_evidence_identity import require_revoked as evidence_revoked
 from provision_selfhost_evidence_identity import ROLE_ID_FILE as EVIDENCE_ROLE_ID_FILE
 from provision_selfhost_evidence_identity import SECRET_ID_FILE as EVIDENCE_SECRET_ID_FILE
+from provision_selfhost_snapshot_rotator import bootstrap as bootstrap_snapshot_rotator
+from provision_selfhost_snapshot_rotator import rotate_reader as rotate_snapshot_reader
+from provision_selfhost_snapshot_rotator import rotate_rotator as rotate_snapshot_rotator
+from provision_selfhost_snapshot_rotator import READER_ROTATION, ROTATOR_ROTATION
+from selfhost_approle_rotation import require_revoked as rotation_revoked
+from provision_selfhost_snapshot_identity import ROLE_ID_FILE as SNAPSHOT_ROLE_ID_FILE
+from provision_selfhost_snapshot_identity import SECRET_ID_FILE as SNAPSHOT_SECRET_ID_FILE
 from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
@@ -345,6 +352,9 @@ def run() -> None:
         )
         if provision.returncode:
             raise RuntimeError(f"Disposable snapshot identity failed: {provision.stderr[-800:]}")
+        snapshot_rotator = Path(public_ca_dir.name) / "snapshot-rotator-identity"
+        snapshot_rotator.mkdir(mode=0o700)
+        bootstrap_snapshot_rotator(evidence_bao, snapshot_rotator)
         root_file.unlink()
         exported = Path(public_ca_dir.name) / "exports"
         exported.mkdir(mode=0o700)
@@ -395,6 +405,28 @@ def run() -> None:
         if http_request(cold_base, "GET", f"transit/keys/{key_name}",
                         token=root, ca_file=ca_file)[0] != 403:
             raise RuntimeError("Revoked bootstrap root still has KMS access")
+        old_snapshot_rotator = snapshot_rotator
+        snapshot_rotator = Path(public_ca_dir.name) / "snapshot-rotator-identity-next"
+        snapshot_rotator.mkdir(mode=0o700)
+        rotate_snapshot_rotator(Bao(cold_base, ca_file, ""),
+                                old_snapshot_rotator, snapshot_rotator)
+        rotation_revoked(
+            Bao(cold_base, ca_file, ""),
+            (old_snapshot_rotator / ROTATOR_ROTATION.role_id_file).read_text().strip(),
+            (old_snapshot_rotator / ROTATOR_ROTATION.secret_id_file).read_text().strip(),
+            ROTATOR_ROTATION,
+        )
+        old_snapshot_reader = identity
+        identity = Path(public_ca_dir.name) / "snapshot-identity-next"
+        identity.mkdir(mode=0o700)
+        rotate_snapshot_reader(Bao(cold_base, ca_file, ""), old_snapshot_reader,
+                               identity, snapshot_rotator)
+        rotation_revoked(
+            Bao(cold_base, ca_file, ""),
+            (old_snapshot_reader / SNAPSHOT_ROLE_ID_FILE).read_text().strip(),
+            (old_snapshot_reader / SNAPSHOT_SECRET_ID_FILE).read_text().strip(),
+            READER_ROTATION,
+        )
         evidence_revoked(
             Bao(cold_base, ca_file, ""),
             (retired_evidence_identity / EVIDENCE_ROLE_ID_FILE).read_text().strip(),

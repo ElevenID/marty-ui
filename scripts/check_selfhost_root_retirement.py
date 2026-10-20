@@ -31,6 +31,7 @@ from provision_selfhost_audit_token import policy_for as audit_policy_for  # noq
 from provision_selfhost_snapshot_identity import (  # noqa: E402
     checked_login as snapshot_login, snapshot_origin,
 )
+from provision_selfhost_snapshot_rotator import checked_login as rotator_login  # noqa: E402
 from selfhost_openbao_client import Bao, require_renewal_authority  # noqa: E402
 from stage_selfhost_renewed_secrets import bounded_file, verify_generations  # noqa: E402
 
@@ -135,7 +136,8 @@ def audit(args: argparse.Namespace) -> Path:
             or not args.snapshot_export_dir.is_absolute()
             or not args.openbao_config.is_absolute()
             or not args.evidence_identity.is_absolute()
-            or not args.audit_identity.is_absolute()):
+            or not args.audit_identity.is_absolute()
+            or not args.snapshot_rotator_identity.is_absolute()):
         raise ValueError("root retirement audit inputs are invalid")
     snapshot_origin(args.bao_addr)
     rollback = args.rollback_secrets
@@ -154,6 +156,8 @@ def audit(args: argparse.Namespace) -> Path:
     checked_static_tokens(bao, active, args.minimum_token_ttl)
     checked_certificates(bao, rollback, active, args.minimum_token_ttl)
     snapshot_login(Bao(args.bao_addr, args.bao_ca, ""), args.snapshot_identity)
+    rotator_login(Bao(args.bao_addr, args.bao_ca, ""),
+                  args.snapshot_rotator_identity)
     evidence_login(Bao(args.bao_addr, args.bao_ca, ""), args.evidence_identity)
     audit_policy, _ = audit_policy_for(args.audit_org_id, args.audit_org_slug,
                                        args.audit_did)
@@ -187,7 +191,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("compose_file", "rollback_env", "active_env", "rollback_secrets",
                  "active_secrets", "bao_ca", "renewal_identity", "snapshot_identity",
-                 "evidence_identity", "audit_identity", "openbao_state_dir",
+                 "evidence_identity", "audit_identity", "snapshot_rotator_identity",
+                 "openbao_state_dir",
                  "snapshot_export_dir", "openbao_config"):
         parser.add_argument("--" + name.replace("_", "-"), required=True, type=Path)
     parser.add_argument("--project-name", required=True)
