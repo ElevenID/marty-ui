@@ -16,6 +16,8 @@ param(
 
     [string]$TunnelEnvFile,
 
+    [string]$TunnelTokenEnvFile,
+
     [string]$GeneratedEnvFile,
 
     [switch]$AllowOutsideMaintenanceWindow
@@ -115,6 +117,7 @@ function New-BetaDeployArguments {
         [switch]$EnablePassportNative,
         [switch]$EnableDidcommAuthcrypt,
         [string]$TunnelEnvFile,
+        [string]$TunnelTokenEnvFile,
         [string]$GeneratedEnvFile
     )
     $arguments = @{
@@ -132,6 +135,9 @@ function New-BetaDeployArguments {
     if ($EnableDidcommAuthcrypt) { $arguments.EnableDidcommAuthcrypt = $true }
     if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
         $arguments.TunnelEnvFile = $TunnelEnvFile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
+        $arguments.TunnelTokenEnvFile = $TunnelTokenEnvFile
     }
     if (-not [string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
         $arguments.GeneratedEnvFile = $GeneratedEnvFile
@@ -200,6 +206,7 @@ try {
         -EnablePassportNative:$EnablePassportNative `
         -EnableDidcommAuthcrypt:$EnableDidcommAuthcrypt `
         -TunnelEnvFile $TunnelEnvFile `
+        -TunnelTokenEnvFile $TunnelTokenEnvFile `
         -GeneratedEnvFile $GeneratedEnvFile
     & (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") @deployArguments
     $exitCode = 0

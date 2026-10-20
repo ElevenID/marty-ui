@@ -121,8 +121,21 @@ gh release download $releaseTag --repo ElevenID/marty-ui --dir $releaseArtifacts
   -OfficialStackRelease `
   -RecorderRevision $recorderRevision `
   -TunnelEnvFile "C:\beta-runtime\.env.tunnel.beta.local" `
+  -TunnelTokenEnvFile "C:\beta-runtime\private\connector-token.env" `
   -GeneratedEnvFile "C:\beta-runtime\.env.beta.generated.local"
 ```
+
+`TunnelTokenEnvFile` must contain only `TUNNEL_TOKEN=<active token>` and stay in a
+private, unlinked file outside OneDrive. Use the existing protected connector
+input from the last completed rotation; never copy an old token from a repository
+environment file. The runner verifies its access controls and exact match to the
+running beta connector, then binds the file fingerprint and container identity
+through the final pre-maintenance check. Missing, stale, changed or foreign
+credentials fail before maintenance. Planning reads these inputs but writes no
+override. Actual deployment adds a public-path-only Compose override that removes
+the old inline value and resolves the protected input file. Connector commands
+use the token environment rather than a secret argument. This does not rotate a
+token or restart the existing connector.
 
 The runner validates every release and source input twice, with the final check
 immediately before the maintenance window. It retains the existing preflight

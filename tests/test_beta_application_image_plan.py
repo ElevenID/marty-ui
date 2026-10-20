@@ -470,10 +470,20 @@ $loops=@($ast.FindAll({param($n) $n -is [Management.Automation.Language.ForEachS
     }
     profile_append = "(Join-Path $script:RepoRoot $profile)"
     assert set(attached) == {
+        "$betaTunnelOverride",
         "$releaseComposeFile",
         "$verificationImageOverride",
         profile_append,
     }
+    tunnel_calls = [item for item in commands if item["name"] == "Get-BetaTunnelInputBinding"]
+    binding = next(item for item in tunnel_calls if item["assignment"] == "$betaTunnelBinding")
+    private_render = next(item for item in tunnel_calls if "-OverrideOutput $betaTunnelOverride" in item["text"])
+    final_check = max((item for item in tunnel_calls if "-Expected $betaTunnelBinding" in item["text"]),
+                      key=lambda item: item["offset"])
+    assert binding["offset"] < private_render["offset"] < attached["$betaTunnelOverride"]["offset"]
+    assert attached["$betaTunnelOverride"]["offset"] < min(item["offset"] for item in commands if item["name"] == "Get-ComposeContainerId")
+    assert final_check["offset"] < one("Start-BetaMutation")["offset"]
+    assert "-OverrideOutput" not in final_check["text"]
     profile_loops = [
         item for item in report["loops"] if item["condition"] == "$didcommProfiles"
     ]
