@@ -3,6 +3,7 @@ param(
     [string]$Repository = "ElevenID/marty-ui",
     [string]$WslDistribution = "Ubuntu-24.04",
     [string]$RunnerDirectory = "~/actions-runner-canvas-oss",
+    [string]$DockerDesktopDataDiskPath = "$env:LOCALAPPDATA\Docker\wsl\disk\docker_data.vhdx",
     [ValidateSet("Canvas", "Passport")]
     [string]$Purpose = "Canvas"
 )
@@ -81,6 +82,12 @@ function Get-RepositoryRunners {
 }
 
 . (Join-Path $PSScriptRoot "runner-routing-label-policy.ps1")
+. (Join-Path $PSScriptRoot "runner-host-capacity-policy.ps1")
+
+if ($Purpose -eq "Canvas") {
+    $physicalCapacity = Get-CanvasDockerBackingCapacity -DataDiskPath $DockerDesktopDataDiskPath
+    Write-Host ('Docker Desktop backing volume has {0:N1} GiB free' -f ($physicalCapacity.physical_free_bytes / 1GB))
+}
 
 $installedDistributions = @(
     (Get-WslText @("--list", "--quiet")) -split "`r?`n" |
@@ -156,6 +163,10 @@ if (Test-Path -LiteralPath $markerPath) {
 $existingRunners = @(Get-RepositoryRunners)
 Assert-ExistingRunnerRouting $existingRunners $runnerLabel
 
+if ($Purpose -eq "Canvas") {
+    # Recheck after host/runner discovery, before creating a server-side registration.
+    $physicalCapacity = Get-CanvasDockerBackingCapacity -DataDiskPath $DockerDesktopDataDiskPath
+}
 $registrationToken = (& gh api --method POST "repos/$Repository/actions/runners/registration-token" --jq .token).Trim()
 if (-not $registrationToken) { throw "Could not obtain short-lived runner registration token" }
 
