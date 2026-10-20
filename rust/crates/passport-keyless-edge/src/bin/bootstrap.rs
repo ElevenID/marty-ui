@@ -762,8 +762,7 @@ async fn provision(
                 .ok_or("renewed TLS token TTL is invalid")?;
             if scopes.len() != 1
                 || scopes[0] != policy_name
-                || remaining < 3600
-                || remaining > 28800
+                || !(3600..=28800).contains(&remaining)
                 || data(&lookup, "orphan")?.as_bool() != Some(true)
                 || value(&lookup, "path")? != "auth/token/create/selfhost-renew-leaf"
             {
