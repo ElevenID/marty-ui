@@ -6,6 +6,22 @@ use thiserror::Error;
 use uuid::Uuid;
 
 const ACTIVE_ATTEMPT: &str = "active_issuance_attempt";
+const LAST_ATTEMPT: &str = "last_issuance_attempt_id";
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ClaimCapabilities {
+    pub oid4vci_wallet: bool,
+    pub delivery_destination_selection: bool,
+    pub canvas_credentials_mirror: bool,
+    pub offer_reuse: &'static str,
+}
+
+pub const CLAIM_CAPABILITIES: ClaimCapabilities = ClaimCapabilities {
+    oid4vci_wallet: true,
+    delivery_destination_selection: false,
+    canvas_credentials_mirror: false,
+    offer_reuse: "pending_until_consumed_or_expired",
+};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IssuanceOffer {
@@ -72,21 +88,61 @@ pub fn reserve_attempt(
 }
 
 pub fn complete_attempt(application: &mut Application, id: Uuid) -> Result<(), IssuanceError> {
-    let active_id = application
+    if !matches_active_attempt(application, id) {
+        return Err(IssuanceError::AttemptChanged);
+    }
+    application.system_data.remove(ACTIVE_ATTEMPT);
+    application
+        .system_data
+        .insert(LAST_ATTEMPT.into(), Value::String(id.to_string()));
+    Ok(())
+}
+
+pub fn matches_active_attempt(application: &Application, id: Uuid) -> bool {
+    application
         .system_data
         .get(ACTIVE_ATTEMPT)
         .and_then(Value::as_object)
         .and_then(|active| active.get("id"))
-        .and_then(Value::as_str);
-    if active_id != Some(id.to_string().as_str()) {
-        return Err(IssuanceError::AttemptChanged);
-    }
-    application.system_data.remove(ACTIVE_ATTEMPT);
-    application.system_data.insert(
-        "last_issuance_attempt_id".into(),
-        Value::String(id.to_string()),
-    );
-    Ok(())
+        .and_then(Value::as_str)
+        == Some(id.to_string().as_str())
+}
+
+pub fn matches_completed_offer(application: &Application, id: Uuid, offer: &IssuanceOffer) -> bool {
+    // A duplicate provider completion may arrive after the first caller saved
+    // the offer or a read reconciled it to claimed/expired. Return that current
+    // state only for the exact completed attempt and immutable offer binding.
+    // Never replay a late completion over a newer or malformed active attempt.
+    !application.system_data.contains_key(ACTIVE_ATTEMPT)
+        && application.system_data.get(LAST_ATTEMPT) == Some(&json!(id.to_string()))
+        && matches!(
+            application.status,
+            LifecycleStatus::Offered | LifecycleStatus::Credentialed
+        )
+        && offer.id.as_deref().is_some_and(|value| !value.is_empty())
+        && offer.has_offer()
+        && offer_identity(offer)
+            .iter()
+            .all(|(key, value)| application.system_data.get(key) == Some(value))
+}
+
+fn offer_identity(offer: &IssuanceOffer) -> Map<String, Value> {
+    [
+        ("issuance_transaction_id", json!(offer.id)),
+        ("credential_offer_uri", json!(offer.credential_offer_uri)),
+        ("credential_offer_uris", json!(offer.credential_offer_uris)),
+        (
+            "credential_offer_labels",
+            json!(offer.credential_offer_labels),
+        ),
+        ("offer_expires_at", json!(offer.expires_at)),
+        ("flow_instance_id", json!(offer.flow_instance_id)),
+        ("flow_definition_id", json!(offer.flow_definition_id)),
+        ("issuance_source", json!(offer.source)),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value))
+    .collect()
 }
 
 pub fn apply_offer(
@@ -105,50 +161,13 @@ pub fn apply_offer(
         return Err(IssuanceError::InvalidApplicationStatus(application.status));
     }
     complete_attempt(application, attempt_id)?;
-    insert_optional(
-        &mut application.system_data,
-        "issuance_transaction_id",
-        &offer.id,
-    );
-    insert_optional(
-        &mut application.system_data,
-        "credential_offer_uri",
-        &offer.credential_offer_uri,
-    );
-    insert_optional(
-        &mut application.system_data,
-        "offer_expires_at",
-        &offer.expires_at,
-    );
-    application.system_data.insert(
-        "credential_offer_uris".into(),
-        Value::Object(offer.credential_offer_uris.clone()),
-    );
-    application.system_data.insert(
-        "credential_offer_labels".into(),
-        Value::Object(offer.credential_offer_labels.clone()),
-    );
+    application.system_data.extend(offer_identity(offer));
     application
         .system_data
         .insert("offer_generated_at".into(), Value::String(now.to_rfc3339()));
     application.system_data.insert(
         "issuance_status".into(),
         Value::String(offer.status.clone()),
-    );
-    insert_optional(
-        &mut application.system_data,
-        "flow_instance_id",
-        &offer.flow_instance_id,
-    );
-    insert_optional(
-        &mut application.system_data,
-        "flow_definition_id",
-        &offer.flow_definition_id,
-    );
-    insert_optional(
-        &mut application.system_data,
-        "issuance_source",
-        &offer.source,
     );
     application.claim_state = ClaimState::OfferReady;
     application.claim_blocker = None;
@@ -303,13 +322,6 @@ fn advance_to_credentialed(
     }
     Ok(())
 }
-fn insert_optional(values: &mut Map<String, Value>, key: &str, value: &Option<String>) {
-    values.insert(
-        key.into(),
-        value.clone().map(Value::String).unwrap_or(Value::Null),
-    );
-}
-
 #[derive(Debug, Error)]
 pub enum IssuanceError {
     #[error("persisted issuance attempt state is invalid")]

@@ -1,0 +1,38 @@
+{"lane":"expired-offer","status":"BLOCKED","releaseReady":false,"stage":"preflight","failure":{"type":"TypeError","stage":"preflight","action":"Check explicit deployment, synthetic fixture, recording, credential and recorder IPC inputs in the recorder docs/d05-supporting-lanes.md."},"behaviorAssertions":{"expired_offer_gone":false,"cached_code_denied":false,"wallet_error_visible":false,"no_credential_on_denial":false,"fresh_reissue_received":false,"receipt_has_no_session":false,"trusted_login_recovery":false,"configuration_unchanged":false,"fixture_cleanup":false,"expired_offer_reissue":false}}
+✔ expired-offer preflight requires an explicit isolated short server TTL before any native issuance (9.603731ms)
+✔ fixture cannot smuggle provider secrets or replace the authorized foreign/trusted binding (1.458827ms)
+✔ fixture preflight consumes actual public identity tuples and ignores unrelated system catalog rows (3.003163ms)
+✔ login preflight rejects dynamic or already-trusted foreign issuer configuration without changing it (1.33457ms)
+✔ controller validates all fixture dependencies with GET only before creating an owned application (4.986969ms)
+✔ application issue resolves the exact transaction and reads admin detail rather than treating application id as transaction id (3.654203ms)
+✖ actual seven-day TTL mismatch remains blocked while exact owned offer is cancelled and history retained (5.10701ms)
+✔ partial approval failure still cleans the exact application and never invents a transaction (2.924834ms)
+✔ failed and expired unused transactions are publicly revoked with issuance history retained (2.838985ms)
+✔ lost expired-offer cancellation keeps cleanup incomplete until exact revoked readback clears uncertainty (2.158891ms)
+✔ lost creation response retains mutation uncertainty and cannot report fixture cleanup complete (1.631657ms)
+✔ natural expiry waits for the server 410 and has a strict maximum with no clock override (0.363508ms)
+✔ untrusted evidence requires the exact native instance and authenticated foreign signature with trust denial (1.230884ms)
+✔ actual login page Flow binding rejects changed org, policy, trust and request origin (0.690079ms)
+✔ aggregates require actual recovery, native trust result and cleanup in both no-video lanes (0.297378ms)
+✔ the sealed IPC fixture bytes are the actual validated inputs and changed bytes cannot proceed (1.821343ms)
+✔ runtime preflight requires explicit recorder provenance and rejects local UI substitution (0.997813ms)
+✔ a preflight-blocked functional run writes both JSON receipts without credentials or a recording claim (2.692675ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 17
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 58.775884
+
+✖ failing tests:
+
+test at tests/scripts/audit-beta-membership-support.test.js:192:1
+✖ actual seven-day TTL mismatch remains blocked while exact owned offer is cancelled and history retained (5.10701ms)
+  Error: Existing application 10000000-0000-4000-8000-000000000100 blocks this demo; resolve it explicitly before starting a new run
+      at requireNoConflictingApplications (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/tests/scripts/beta-demo-resource-helpers.js:709:15)
+      at async Object.issue (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/tests/scripts/audit-beta-membership-support.js:167:5)
+      at async TestContext.<anonymous> (/workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/tests/scripts/audit-beta-membership-support.test.js:204:23)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7)

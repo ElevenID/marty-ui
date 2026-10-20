@@ -1,0 +1,16 @@
+✔ D-04 acquires the receiver context before configuration and closes it before browser teardown (9.715841ms)
+✔ D-04 retains unknown wallet acquisition and refuses product actions or success (3.784259ms)
+✔ D-04 reports failed owned-wallet closure while still finalizing both contexts (2.966937ms)
+✔ D-04 configuration uses one exact employee credential across application, flow, and policy (1.395922ms)
+✔ D-04 configuration rejects drift between active release resources (0.514936ms)
+✔ D-04 configuration rejects semantic and approval-trigger drift (0.627154ms)
+✔ D-04 retains its created application ID when submission fails (1.370404ms)
+✔ D-04 releases its exact reviewer lock after lost acquisition or approval failure without issuing (1.589463ms)
+ℹ tests 8
+ℹ suites 0
+ℹ pass 8
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 54.098659

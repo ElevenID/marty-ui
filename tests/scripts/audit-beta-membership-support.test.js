@@ -62,6 +62,7 @@ function loginSetup(f) {
 
 function fakeService(f = fixture(), options = {}) {
   const requests = []; const applications = []; const transactions = []; const credentials = [];
+  const offers = new Map();
   const setups = [issuerSetup(f.trusted), issuerSetup(f.foreign)];
   const login = loginSetup(f);
   const reply = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, body });
@@ -97,21 +98,35 @@ function fakeService(f = fixture(), options = {}) {
       if (route === adminPath && method === 'GET') return reply(app);
       if (route === `/v1/me/applications/${app.id}/submit`) { app.status = 'SUBMITTED'; return reply(app); }
       if (route === `${adminPath}/approve`) { app.status = 'APPROVED'; return reply(app); }
-      if (route === `${adminPath}/withdraw`) { app.status = 'WITHDRAWN'; return reply(app); }
+      if (route === `${adminPath}/withdraw`) {
+        if (['APPROVED', 'OFFERED', 'CREDENTIALED', 'SUSPENDED'].includes(app.status)) {
+          return reply({ detail: 'Issuance reconciliation is required' }, 409);
+        }
+        app.status = 'WITHDRAWN'; return reply(app);
+      }
       if (route === `${adminPath}/issue`) {
         const transaction = { id: uuid(200 + transactions.length), organization_id: app.organization_id,
           credential_template_id: app.credential_template_id, application_id: app.id, status: 'pending',
           created_at: new Date(NOW).toISOString(), expires_at: new Date(NOW + (options.ttlSeconds || 60) * 1000).toISOString() };
         transactions.push(transaction); app.status = 'OFFERED'; app.offer_expires_at = transaction.expires_at;
         const offer = { credential_issuer: `${ORIGIN}/org/${app.organization_id}`, credential_configuration_ids: ['open_badge'],
-          grants: { [GRANT]: { 'pre-authorized_code': 'fixture-code-not-a-live-token' } } };
+          grants: { [GRANT]: { 'pre-authorized_code': `fixture-code-${transaction.id}` } } };
+        offers.set(transaction.id, offer);
         app.credential_offer_uri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify(offer))}`;
         return reply(app);
       }
     }
-    if (route === '/v1/issuance') return reply(transactions.map(({ expires_at, ...summary }) => summary));
+    if (route === '/v1/issuance') return reply(transactions.map(({ expires_at, issued_at, revoked_at, ...summary }) => ({
+      ...summary, expires_at: null, issued_at: null, revoked_at: null,
+    })));
     if (route === '/v1/issued-credentials') return reply(credentials);
+    for (const credential of credentials) {
+      if (route === `/v1/issued-credentials/${credential.id}/revoke`) {
+        credential.status = 'REVOKED'; return reply(credential);
+      }
+    }
     for (const tx of transactions) {
+      if (route === `/v1/issuance/offers/${tx.id}`) return reply(offers.get(tx.id));
       if (route === `/v1/issuance/${tx.id}`) return reply(tx);
       if (route === `/v1/issuance/${tx.id}/revoke`) { tx.status = 'revoked'; return reply({ id: tx.id, status: tx.status }); }
     }
@@ -120,7 +135,7 @@ function fakeService(f = fixture(), options = {}) {
   const page = { evaluate: (_callback, request) => endpoint(request) };
   const controller = createSupportController({ operator: page, applicantPage: page, fixture: f, lane: 'expired-offer', origin: ORIGIN,
     runId: uuid(20), waitFor: (probe) => probe() });
-  return { controller, requests, setups, login, applications, transactions, credentials, page };
+  return { controller, requests, setups, login, applications, transactions, credentials, offers, page };
 }
 
 test('expired-offer preflight requires an explicit isolated short server TTL before any native issuance', () => {
@@ -181,22 +196,189 @@ test('application issue resolves the exact transaction and reads admin detail ra
   assert.notEqual(result.owned.applicationId, result.owned.transactionId);
   assert.equal(result.transaction.expires_at, new Date(NOW + 60000).toISOString());
   assert.equal(result.owned.runId, `${uuid(20)}.expired-offer`);
-  assert.equal(service.requests.at(-1).path, `/v1/issuance/${uuid(200)}?organization_id=${uuid(1)}`);
+  assert.equal(service.requests.at(-2).path, `/v1/issuance/${uuid(200)}?organization_id=${uuid(1)}`);
+  assert.equal(service.requests.at(-1).path, `/v1/issuance/offers/${uuid(200)}`);
 });
 
-test('actual seven-day TTL mismatch remains blocked but exact owned transaction is cancelled and application withdrawn', async () => {
+test('actual seven-day TTL mismatch remains blocked while exact owned offer is cancelled and history retained', async () => {
   const f = fixture(); const service = fakeService(f, { ttlSeconds: 604800 }); await service.controller.preflight();
   const result = await service.controller.issue(f.trusted, 'expired-offer');
   assert.throws(() => expiryWindow(result.transaction, result.application, f.expiry, NOW + 1000), /Actual server offer TTL differs/);
   const cleanup = await service.controller.cleanupOne(result.owned);
   assert.equal(cleanup.ok, true); assert.equal(cleanup.cancellation.ok, true);
   assert.equal(service.transactions[0].status, 'revoked');
-  assert.equal(service.applications[0].status, 'WITHDRAWN');
-  assert.deepEqual(service.requests.filter((request) => request.method === 'POST').slice(-2).map((request) => request.path), [
-    `/v1/issuance/${uuid(200)}/revoke`, `/v1/organizations/${uuid(1)}/applicants/${uuid(100)}/withdraw`,
-  ]);
-  const replacement = await service.controller.issue(f.trusted, 'fresh-reissue');
+  assert.equal(service.applications[0].status, 'OFFERED');
+  assert.equal(cleanup.applicationHistoryPreserved, true);
+  assert.equal(cleanup.applicationWithdrawn, false);
+  assert.equal(service.requests.filter((request) => request.method === 'POST').at(-1).path, `/v1/issuance/${uuid(200)}/revoke`);
+  assert.ok(service.requests.every((request) => !request.path.endsWith('/withdraw')));
+  // A new application remains forbidden by the production duplicate guard.
+  const postCount = service.requests.filter(({ method }) => method === 'POST').length;
+  await assert.rejects(service.controller.issue(f.trusted, 'fresh-reissue'), /Existing application.*blocks this demo/);
+  assert.equal(service.requests.filter(({ method }) => method === 'POST').length, postCount);
+  const replacement = await service.controller.reissue(result, f.trusted);
   assert.equal(replacement.owned.transactionId, uuid(201));
+  assert.equal(replacement.owned.applicationId, result.owned.applicationId);
+  assert.equal(replacement.owned.runId, result.owned.runId);
+  assert.notEqual(replacement.offerUri, result.offerUri);
+  assert.equal(service.applications.length, 1);
+  assert.equal(service.controller.ownedApplications.length, 1);
+  assert.deepEqual(replacement.owned.retiredTransactions, [{
+    id: uuid(200), organization_id: uuid(1), credential_template_id: uuid(2), application_id: uuid(100),
+  }]);
+  const finalCleanup = await service.controller.cleanup();
+  assert.equal(finalCleanup.ok, true);
+  assert.equal(finalCleanup.applications[0].applicationHistoryPreserved, true);
+  assert.equal(service.transactions[0].status, 'revoked');
+  assert.equal(service.transactions[1].status, 'revoked');
+  assert.equal(service.applications[0].status, 'OFFERED');
+});
+
+test('same-application reissue rejects foreign, active, ambiguous, issued, or uncertain history before mutation', async () => {
+  const changes = {
+    foreignApplication: (service) => { service.applications[0].integration_context.demo_run_id = 'another-run'; },
+    foreignTransaction: (service) => { service.transactions[0].organization_id = uuid(90); },
+    activeTransaction: (service) => { service.transactions[0].status = 'pending'; },
+    issuedTransaction: (service) => { service.transactions[0].issued_at = new Date(NOW).toISOString(); },
+    missingTransaction: (service) => { service.transactions.length = 0; },
+    unknownTransaction: (service) => { service.transactions.push({ ...service.transactions[0], id: uuid(299), status: 'pending' }); },
+    issuedCredential: (service) => { service.credentials.push({ id: uuid(300), organization_id: uuid(1), application_id: uuid(100),
+      credential_template_id: uuid(2), flow_execution_id: uuid(200), status: 'ACTIVE' }); },
+    claimedApplication: (service) => { service.applications[0].claim_state = 'CLAIMED'; },
+    uncertainIssuance: (_service, issuance) => { issuance.owned.uncertainMutations.push({ operation: 'issuance' }); },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+    const issuance = await service.controller.issue(f.trusted, 'expired-offer');
+    assert.equal((await service.controller.cleanupOne(issuance.owned)).ok, true);
+    change(service, issuance);
+    const postCount = service.requests.filter(({ method }) => method === 'POST').length;
+    await assert.rejects(service.controller.reissue(issuance, f.trusted), undefined, name);
+    assert.equal(service.requests.filter(({ method }) => method === 'POST').length, postCount, name);
+  }
+  const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+  const issuance = await service.controller.issue(f.trusted, 'expired-offer');
+  await service.controller.cleanupOne(issuance.owned);
+  const before = service.requests.length;
+  await assert.rejects(service.controller.reissue({ ...issuance, owned: { ...issuance.owned } }, f.trusted), /captured by this controller/);
+  await assert.rejects(service.controller.reissue(issuance, f.foreign), /cannot change.*binding/);
+  assert.equal(service.requests.length, before);
+});
+
+test('reissued credential retirement preserves the same application and freshly proves the old canceled offer', async () => {
+  const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+  const expired = await service.controller.issue(f.trusted, 'expired-offer');
+  await service.controller.cleanupOne(expired.owned);
+  const recovery = await service.controller.reissue(expired, f.trusted);
+  service.transactions[1].status = 'issued';
+  service.applications[0].status = 'CREDENTIALED';
+  service.applications[0].claim_state = 'CLAIMED';
+  service.applications[0].issued_at = new Date(NOW).toISOString();
+  service.credentials.push({ id: uuid(300), organization_id: uuid(1), application_id: uuid(100),
+    credential_template_id: uuid(2), flow_execution_id: uuid(201), status: 'ACTIVE',
+    issuer_did: f.trusted.issuerDid, credential_format: f.trusted.credentialFormat });
+  assert.equal((await service.controller.issuedCredential(recovery, f.trusted)).transactionId, uuid(201));
+  const cleanup = await service.controller.cleanup();
+  assert.equal(cleanup.ok, true);
+  assert.equal(cleanup.applications.length, 1);
+  assert.equal(cleanup.applications[0].credentialRevoked, true);
+  assert.equal(cleanup.applications[0].applicationWithdrawn, false);
+  assert.equal(cleanup.applications[0].applicationHistoryPreserved, true);
+  assert.equal(service.transactions[0].status, 'revoked');
+  assert.equal(service.credentials[0].status, 'REVOKED');
+  assert.equal(service.applications[0].status, 'CREDENTIALED');
+  assert.ok(service.requests.every(({ path }) => !path.endsWith('/withdraw')));
+});
+
+test('lost reissue responses recover only through one exact new transaction and preserve unresolved uncertainty', async () => {
+  for (const createTransaction of [true, false]) {
+    const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+    const expired = await service.controller.issue(f.trusted, 'expired-offer');
+    await service.controller.cleanupOne(expired.owned);
+    const original = service.page.evaluate;
+    service.page.evaluate = async (callback, request) => {
+      if (request.requestOptions.method === 'POST' && request.requestPath.endsWith('/issue')) {
+        if (createTransaction) await original(callback, request);
+        throw new Error('Lost reissue response');
+      }
+      return original(callback, request);
+    };
+    await assert.rejects(service.controller.reissue(expired, f.trusted), /Lost reissue response/);
+    const current = service.controller.ownedApplications[0];
+    assert.equal(current.applicationId, expired.owned.applicationId);
+    assert.equal(current.transactionId, null);
+    assert.deepEqual(current.uncertainMutations, [{ operation: 'issuance' }]);
+    const cleanup = await service.controller.cleanup();
+    assert.equal(cleanup.ok, createTransaction);
+    assert.deepEqual(current.uncertainMutations, createTransaction ? [] : [{ operation: 'issuance' }]);
+    assert.equal(service.transactions[0].status, 'revoked');
+    assert.equal(service.applications[0].status, 'OFFERED');
+    if (createTransaction) assert.equal(service.transactions[1].status, 'revoked');
+  }
+});
+
+test('a stale returned offer or reused old transaction cannot qualify same-application recovery', async () => {
+  for (const createTransaction of [true, false]) {
+    const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+    const expired = await service.controller.issue(f.trusted, 'expired-offer');
+    await service.controller.cleanupOne(expired.owned);
+    const original = service.page.evaluate;
+    service.page.evaluate = async (callback, request) => {
+      if (request.requestOptions.method === 'POST' && request.requestPath.endsWith('/issue')) {
+        if (createTransaction) await original(callback, request);
+        return { ok: true, status: 200, body: { ...service.applications[0], credential_offer_uri: expired.offerUri } };
+      }
+      return original(callback, request);
+    };
+    await assert.rejects(service.controller.reissue(expired, f.trusted));
+    const cleanup = await service.controller.cleanup();
+    assert.equal(cleanup.ok, createTransaction);
+    assert.equal(service.applications.length, 1);
+    assert.equal(service.applications[0].status, 'OFFERED');
+  }
+});
+
+test('retained transaction history is revalidated before any later cleanup mutation', async () => {
+  const changes = {
+    active: (service) => { service.transactions[0].status = 'pending'; },
+    foreign: (service) => { service.transactions[0].application_id = uuid(99); },
+    issued: (service) => { service.transactions[0].issued_at = new Date(NOW).toISOString(); },
+    credential: (service) => { service.credentials.push({ id: uuid(300), organization_id: uuid(1), application_id: uuid(100),
+      credential_template_id: uuid(2), flow_execution_id: uuid(200), status: 'ACTIVE' }); },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+    const expired = await service.controller.issue(f.trusted, 'expired-offer');
+    await service.controller.cleanupOne(expired.owned);
+    await service.controller.reissue(expired, f.trusted);
+    change(service);
+    const postCount = service.requests.filter(({ method }) => method === 'POST').length;
+    const cleanup = await service.controller.cleanup();
+    assert.equal(cleanup.ok, false, name);
+    assert.equal(service.requests.filter(({ method }) => method === 'POST').length, postCount, name);
+    assert.equal(service.transactions[1].status, 'pending', name);
+  }
+});
+
+test('reissue preserves ambiguity when an unknown additional transaction appears during the mutation', async () => {
+  const f = fixture(); const service = fakeService(f); await service.controller.preflight();
+  const expired = await service.controller.issue(f.trusted, 'expired-offer');
+  await service.controller.cleanupOne(expired.owned);
+  const original = service.page.evaluate;
+  service.page.evaluate = async (callback, request) => {
+    const response = await original(callback, request);
+    if (request.requestOptions.method === 'POST' && request.requestPath.endsWith('/issue')) {
+      service.transactions.push({ ...service.transactions[1], id: uuid(299) });
+    }
+    return response;
+  };
+  await assert.rejects(service.controller.reissue(expired, f.trusted), /multiple issuance transactions/);
+  const current = service.controller.ownedApplications[0];
+  assert.equal(current.transactionId, null);
+  assert.deepEqual(current.uncertainMutations, [{ operation: 'issuance' }]);
+  const postCount = service.requests.filter(({ method }) => method === 'POST').length;
+  assert.equal((await service.controller.cleanup()).ok, false);
+  assert.equal(service.requests.filter(({ method }) => method === 'POST').length, postCount);
 });
 
 test('partial approval failure still cleans the exact application and never invents a transaction', async () => {
@@ -210,17 +392,18 @@ test('partial approval failure still cleans the exact application and never inve
   assert.ok(service.requests.every((request) => !request.path.endsWith('/revoke')));
 });
 
-test('failed and expired unused transactions are publicly revoked before withdrawal or reissue', async () => {
+test('failed and expired unused transactions are publicly revoked with issuance history retained', async () => {
   for (const status of ['failed', 'expired']) {
     const f = fixture(); const service = fakeService(f); await service.controller.preflight();
     const issuance = await service.controller.issue(f.trusted, status);
     service.transactions[0].status = status;
     const cleanup = await service.controller.cleanupOne(issuance.owned);
     assert.equal(cleanup.ok, true); assert.equal(cleanup.cancellation.status, 'revoked');
-    assert.equal(service.applications[0].status, 'WITHDRAWN');
-    assert.deepEqual(service.requests.filter((request) => request.method === 'POST').slice(-2).map((request) => request.path), [
-      `/v1/issuance/${uuid(200)}/revoke`, `/v1/organizations/${uuid(1)}/applicants/${uuid(100)}/withdraw`,
-    ]);
+    assert.equal(service.applications[0].status, 'OFFERED');
+    assert.equal(cleanup.applicationHistoryPreserved, true);
+    assert.equal(cleanup.applicationWithdrawn, false);
+    assert.equal(service.requests.filter((request) => request.method === 'POST').at(-1).path, `/v1/issuance/${uuid(200)}/revoke`);
+    assert.ok(service.requests.every((request) => !request.path.endsWith('/withdraw')));
   }
 });
 
@@ -234,7 +417,7 @@ test('lost expired-offer cancellation keeps cleanup incomplete until exact revok
   const blocked = await service.controller.cleanup();
   assert.equal(blocked.ok, false);
   assert.deepEqual(issuance.owned.uncertainMutations, [{ operation: 'transaction_cancellation' }]);
-  assert.equal(service.applications[0].status, 'WITHDRAWN');
+  assert.equal(service.applications[0].status, 'OFFERED');
   loseRevoke = false;
   const resolved = await service.controller.cleanup();
   assert.equal(resolved.ok, true);

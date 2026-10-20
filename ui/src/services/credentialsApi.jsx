@@ -220,10 +220,19 @@ export const getIssuanceSessionStatus = async (transactionId) => {
   }
 };
 
+/** Preserve the same invite fields for claim responses and read-only application refreshes. */
+export const normalizeApplicationOffer = (data) => ({
+  ...data,
+  offer_url: data.credential_offer_uri || data.offer_url || null,
+  expires_at: data.offer_expires_at || data.expires_at || null,
+  status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
+});
+
 /**
- * Generate (or refresh) the issuance offer for an application.
- * Uses the applicant issue endpoint, which now delegates issuance strictly
- * through flow orchestration (no direct issuance fallback).
+ * Acquire the server-governed issuance offer for an application.
+ * The native claim endpoint reuses an unexpired pending offer and delegates
+ * renewal through flow orchestration. It accepts an empty options object;
+ * holder destination and Canvas mirror selection are not implemented there.
  *
  * @param {string} applicationId
  * @returns {Promise<{offer_url: string, expires_at: string|null, status: string}>}
@@ -231,15 +240,7 @@ export const getIssuanceSessionStatus = async (transactionId) => {
 export const generateIssuanceOffer = async (applicationId, options = {}) => {
   try {
     const response = await apiClient.post(`/v1/me/applications/${applicationId}/claim`, options || {});
-    const data = response.data;
-    // Normalise to the shape OID4VCIInviteDisplay / IssuingSection expect
-    return {
-      offer_url: data.credential_offer_uri || data.offer_url || null,
-      expires_at: data.offer_expires_at || data.expires_at || null,
-      status: data.status || (data.credential_offer_uri || data.offer_url ? 'active' : 'pending'),
-      // Pass through in case callers want raw fields too
-      ...data,
-    };
+    return normalizeApplicationOffer(response.data);
   } catch (error) {
     throw handleApiError(error);
   }

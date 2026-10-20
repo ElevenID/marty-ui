@@ -469,9 +469,19 @@ export default function ApplicationForm() {
 
     let alive = true;
     let timer = null;
+    let reading = false;
+    let refreshAfterRead = false;
     const activeStatuses = new Set(['queued', 'running', 'retrying']);
 
     async function loadCanvasEvidenceStatus() {
+      if (!alive) return;
+      if (reading) {
+        refreshAfterRead = true;
+        return;
+      }
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+      reading = true;
       try {
         const status = await getCurrentCanvasLtiEvidenceStatus();
         if (!alive) return;
@@ -482,15 +492,31 @@ export default function ApplicationForm() {
         }
       } catch (err) {
         if (alive) {
+          // A return from a wallet is not a receipt. Drop the old claim action
+          // when the server cannot confirm the current application state.
+          setCanvasEvidenceStatus(null);
           setCanvasSyncError(err?.message || 'Canvas evidence status could not be loaded.');
+        }
+      } finally {
+        reading = false;
+        if (alive && refreshAfterRead) {
+          refreshAfterRead = false;
+          loadCanvasEvidenceStatus();
         }
       }
     }
 
+    const onBrowserReturn = () => {
+      if (document.visibilityState !== 'hidden') loadCanvasEvidenceStatus();
+    };
     loadCanvasEvidenceStatus();
+    window.addEventListener('focus', onBrowserReturn);
+    document.addEventListener('visibilitychange', onBrowserReturn);
     return () => {
       alive = false;
       if (timer) window.clearTimeout(timer);
+      window.removeEventListener('focus', onBrowserReturn);
+      document.removeEventListener('visibilitychange', onBrowserReturn);
     };
   }, [
     isCanvasLtiApplication,
@@ -728,6 +754,13 @@ export default function ApplicationForm() {
     setApplicationId(boundApplicationId);
     setAutoOfferData(null);
     setClaimDialogOpen(true);
+  };
+
+  const handleCanvasClaimClose = () => {
+    setClaimDialogOpen(false);
+    // Reload the read-only projection, including a canceled or unfinished
+    // handoff, without queuing another evidence job or generating an offer.
+    setCanvasSyncPollVersion((version) => version + 1);
   };
 
   const handleUseExistingApplication = () => {
@@ -1401,7 +1434,7 @@ export default function ApplicationForm() {
       {isCanvasLtiApplication ? (
         <ClaimCredentialDialog
           open={claimDialogOpen}
-          onClose={() => setClaimDialogOpen(false)}
+          onClose={handleCanvasClaimClose}
           applicationId={applicationId || canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id}
           offerData={autoOfferData}
           organizationId={applicationOrganizationId}

@@ -1,0 +1,33 @@
+{"lane":"expired-offer","status":"BLOCKED","releaseReady":false,"stage":"preflight","failure":{"type":"TypeError","stage":"preflight","action":"Check explicit deployment, synthetic fixture, recording, credential and recorder IPC inputs in the recorder docs/d05-supporting-lanes.md."},"behaviorAssertions":{"expired_offer_gone":false,"cached_code_denied":false,"wallet_error_visible":false,"no_credential_on_denial":false,"fresh_reissue_received":false,"receipt_has_no_session":false,"trusted_login_recovery":false,"configuration_unchanged":false,"fixture_cleanup":false,"expired_offer_reissue":false}}
+✔ expired-offer preflight requires an explicit isolated short server TTL before any native issuance (5.044636ms)
+✔ fixture cannot smuggle provider secrets or replace the authorized foreign/trusted binding (0.899474ms)
+✔ fixture preflight consumes actual public identity tuples and ignores unrelated system catalog rows (1.798508ms)
+✔ login preflight rejects dynamic or already-trusted foreign issuer configuration without changing it (0.947958ms)
+✔ controller validates all fixture dependencies with GET only before creating an owned application (8.879912ms)
+✔ application issue resolves the exact transaction and reads admin detail rather than treating application id as transaction id (4.541779ms)
+✔ actual seven-day TTL mismatch remains blocked while exact owned offer is cancelled and history retained (6.385265ms)
+✔ same-application reissue rejects foreign, active, ambiguous, issued, or uncertain history before mutation (17.914467ms)
+✔ reissued credential retirement preserves the same application and freshly proves the old canceled offer (4.540498ms)
+✔ lost reissue responses recover only through one exact new transaction and preserve unresolved uncertainty (2.717172ms)
+✔ a stale returned offer or reused old transaction cannot qualify same-application recovery (2.900358ms)
+✔ retained transaction history is revalidated before any later cleanup mutation (4.62905ms)
+✔ reissue preserves ambiguity when an unknown additional transaction appears during the mutation (2.261675ms)
+✔ partial approval failure still cleans the exact application and never invents a transaction (1.141769ms)
+✔ failed and expired unused transactions are publicly revoked with issuance history retained (1.883496ms)
+✔ lost expired-offer cancellation keeps cleanup incomplete until exact revoked readback clears uncertainty (1.236401ms)
+✔ lost creation response retains mutation uncertainty and cannot report fixture cleanup complete (1.097513ms)
+✔ natural expiry waits for the server 410 and has a strict maximum with no clock override (0.316106ms)
+✔ untrusted evidence requires the exact native instance and authenticated foreign signature with trust denial (1.092666ms)
+✔ actual login page Flow binding rejects changed org, policy, trust and request origin (0.705332ms)
+✔ aggregates require actual recovery, native trust result and cleanup in both no-video lanes (0.211909ms)
+✔ the sealed IPC fixture bytes are the actual validated inputs and changed bytes cannot proceed (2.882891ms)
+✔ runtime preflight requires explicit recorder provenance and rejects local UI substitution (0.688246ms)
+✔ a preflight-blocked functional run writes both JSON receipts without credentials or a recording claim (1.735964ms)
+ℹ tests 24
+ℹ suites 0
+ℹ pass 24
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 85.721414

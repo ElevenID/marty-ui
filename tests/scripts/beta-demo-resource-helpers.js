@@ -418,11 +418,73 @@ function selectApplicationTransaction(records, owned) {
   return transaction;
 }
 
-async function readApplicationTransaction(page, owned) {
-  return selectApplicationTransaction(
-    await listResources(page, '/v1/issuance', owned.organizationId),
-    owned,
-  );
+async function readApplicationTransaction(page, owned, { detail = false } = {}) {
+  let records = await listResources(page, '/v1/issuance', owned.organizationId);
+  if (owned.retiredTransactions !== undefined) {
+    if (!Array.isArray(owned.retiredTransactions)) throw new Error('Retired transaction history must be an explicit collection');
+    const credentials = await listResources(page, '/v1/issued-credentials', owned.organizationId);
+    requireOrganizationInventory(records, owned.organizationId, 'Issuance transaction inventory');
+    requireOrganizationInventory(credentials, owned.organizationId, 'Issued credential inventory');
+    const retiredIds = new Set();
+    for (const previous of owned.retiredTransactions) {
+      const previousScope = { ...owned, transactionId: previous?.id };
+      requireOwnedTransaction(previous, previousScope);
+      if (previous.id === owned.transactionId || retiredIds.has(previous.id)) {
+        throw new Error('Retired transaction history repeats a current or previous transaction');
+      }
+      const matches = records.filter((record) => record.id === previous.id);
+      if (matches.length !== 1) throw new Error('Retired transaction history is missing or ambiguous');
+      requireOwnedTransaction(matches[0], previousScope);
+      const readback = requireOwnedTransaction(await requireJson(page,
+        `/v1/issuance/${encodeURIComponent(previous.id)}?organization_id=${encodeURIComponent(owned.organizationId)}`), previousScope);
+      if (String(readback.status || '').toLowerCase() !== 'revoked' || readback.issued_at
+          || credentials.some((credential) => credential.flow_execution_id === previous.id)) {
+        throw new Error('Retired transaction is not an exact revoked unused offer');
+      }
+      retiredIds.add(previous.id);
+    }
+    // Only this explicit, freshly proved unused history is excluded. The
+    // original selector still rejects every unknown additional transaction.
+    records = records.filter((record) => !retiredIds.has(record.id));
+  }
+  const transaction = selectApplicationTransaction(records, owned);
+  if (!detail || !transaction) return transaction;
+  // The public inventory intentionally projects issued_at/expires_at as null.
+  // Only this exact authenticated detail can prove an offer was unused.
+  return requireOwnedTransaction(await requireJson(page,
+    `/v1/issuance/${encodeURIComponent(transaction.id)}?organization_id=${encodeURIComponent(owned.organizationId)}`),
+  { ...owned, transactionId: transaction.id });
+}
+
+async function prepareOwnedApplicationReissue(page, owned) {
+  requireApplicationScope(owned);
+  if (owned.credentialId || owned.uncertainMutations?.length) {
+    throw new Error('Reissue requires an exact unused offer with no uncertain mutations');
+  }
+  const application = requireOwnedApplication(await requireJson(page,
+    `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}`), owned);
+  if (String(application.status || '').toUpperCase() !== 'OFFERED'
+      || application.issued_at || String(application.claim_state || '').toUpperCase() === 'CLAIMED') {
+    throw new Error('Reissue requires the preserved application of an unused offer');
+  }
+  const transaction = await readApplicationTransaction(page, owned, { detail: true });
+  if (!transaction || !owned.transactionId || transaction.id !== owned.transactionId
+      || String(transaction.status || '').toLowerCase() !== 'revoked' || transaction.issued_at) {
+    throw new Error('Reissue requires exact revoked transaction readback');
+  }
+  if (selectCurrentCredential(await listResources(page, '/v1/issued-credentials', owned.organizationId), owned)) {
+    throw new Error('An issued credential cannot be retired as an unused offer');
+  }
+  return {
+    ...owned,
+    transactionId: null,
+    credentialId: null,
+    uncertainMutations: [],
+    retiredTransactions: [...(owned.retiredTransactions || []), {
+      id: transaction.id, organization_id: transaction.organization_id,
+      application_id: transaction.application_id, credential_template_id: transaction.credential_template_id,
+    }],
+  };
 }
 
 function recordApplicationTransaction(owned, transaction) {
@@ -558,6 +620,9 @@ async function cleanupApplicationCredential(page, owned, reason) {
     ok: false,
     credentialRevoked: false,
     applicationWithdrawn: false,
+    applicationHistoryPreserved: false,
+    applicationStatus: null,
+    transactionRevoked: false,
     pendingTransactionIds: [],
     uncertainMutations: [...(owned.uncertainMutations || [])],
     failures: [],
@@ -585,43 +650,91 @@ async function cleanupApplicationCredential(page, owned, reason) {
         throw new Error('Owned credential has an unknown lifecycle status');
       }
       owned.credentialId = credential.id;
-    } else if (!['failed', 'expired', 'revoked'].includes(String(transaction.status).toLowerCase())) {
-      result.pendingTransactionIds.push(transaction.id);
     }
   } else if (['OFFERED', 'CREDENTIALED'].includes(String(application.status).toUpperCase())) {
     result.failures.push({ operation: 'locate_issuance', status: 0 });
   }
   // Establish every binding before mutating any resource. A response from an
   // unrelated run must never authorize even one revoke or withdrawal.
-  if (credential) {
-    if (String(credential.status).toUpperCase() === 'REVOKED') {
-      result.credentialRevoked = true;
+  if (transaction) {
+    let revokeResponse = null;
+    if (credential && String(credential.status).toUpperCase() !== 'REVOKED') {
+      if (!(owned.uncertainMutations || []).some(({ operation }) => operation === 'credential_revocation')) {
+        markApplicationMutation(owned, 'credential_revocation');
+      }
+      revokeResponse = await browserJson(page, `/v1/issued-credentials/${encodeURIComponent(credential.id)}/revoke`, {
+        method: 'POST', body: JSON.stringify({ reason }),
+      }).catch(() => ({ ok: false, status: 0 }));
+    }
+
+    // Issuance history is retained even after credential/offer revocation.
+    // Withdrawal cannot establish remote retirement and Rust rejects it once
+    // issuance may have started. Confirm the entire owned tuple after mutation;
+    // neither a successful POST nor a 409 withdrawal would be sufficient.
+    try {
+      const currentTransaction = await readApplicationTransaction(page, owned, { detail: !credential });
+      if (!currentTransaction) throw new Error('Owned transaction disappeared during retirement');
+      const currentCredential = selectCurrentCredential(
+        await listResources(page, '/v1/issued-credentials', owned.organizationId), owned,
+      );
+      const currentApplication = requireOwnedApplication(await requireJson(page, applicationPath), owned);
+      result.applicationStatus = String(currentApplication.status || '').toUpperCase();
+      result.applicationHistoryPreserved = ['APPROVED', 'OFFERED', 'CREDENTIALED', 'SUSPENDED']
+        .includes(result.applicationStatus);
+      if (!result.applicationHistoryPreserved) {
+        result.failures.push({ operation: 'preserve_application_history', id: owned.applicationId, status: 200 });
+      }
+      const transactionStatus = String(currentTransaction.status || '').toLowerCase();
+      if (credential) {
+        result.credentialRevoked = currentCredential?.id === credential.id
+          && String(currentCredential.status).toUpperCase() === 'REVOKED';
+        if (result.credentialRevoked) resolveApplicationMutation(owned, 'credential_revocation');
+        if (!['issued', 'revoked'].includes(transactionStatus)) result.pendingTransactionIds.push(owned.transactionId);
+      } else {
+        const missingIssuedCredential = currentCredential === null && (
+          result.applicationStatus === 'CREDENTIALED'
+          || String(currentApplication.claim_state || '').toUpperCase() === 'CLAIMED'
+          || Boolean(currentApplication.issued_at)
+          || Boolean(currentTransaction.issued_at)
+        );
+        result.transactionRevoked = transactionStatus === 'revoked' && currentCredential === null && !missingIssuedCredential;
+        if (!result.transactionRevoked) result.pendingTransactionIds.push(owned.transactionId);
+        if (missingIssuedCredential) {
+          result.failures.push({ operation: 'locate_credential', id: owned.applicationId, status: 200 });
+        }
+        if (currentCredential) {
+          // Retain a newly observed exact ID for a subsequent owned cleanup;
+          // this pass has not revoked it and cannot report completion.
+          owned.credentialId = currentCredential.id;
+          result.failures.push({ operation: 'late_credential', id: currentCredential.id, status: 200 });
+        }
+      }
+    } catch {
+      result.failures.push({ operation: 'retirement_readback', id: owned.applicationId, status: 0 });
+    }
+    if (credential && !result.credentialRevoked) {
+      result.failures.push({ operation: 'revoke', id: credential.id, status: revokeResponse?.status || 0 });
+    }
+  } else {
+    if (String(application.status).toUpperCase() === 'WITHDRAWN') {
+      result.applicationWithdrawn = true;
+      result.applicationStatus = 'WITHDRAWN';
     } else {
-      const response = await browserJson(page, `/v1/issued-credentials/${encodeURIComponent(credential.id)}/revoke`, {
+      const response = await browserJson(page, `${applicationPath}/withdraw`, {
         method: 'POST', body: JSON.stringify({ reason }),
       }).catch(() => ({ ok: false, status: 0 }));
       try {
-        result.credentialRevoked = response.ok
-          && selectCurrentCredential([response.body], owned)?.id === credential.id
-          && String(response.body.status).toUpperCase() === 'REVOKED';
-      } catch { result.credentialRevoked = false; }
-      if (!result.credentialRevoked) result.failures.push({ operation: 'revoke', id: credential.id, status: response.status });
+        const current = requireOwnedApplication(await requireJson(page, applicationPath), owned);
+        result.applicationStatus = String(current.status || '').toUpperCase();
+        result.applicationWithdrawn = result.applicationStatus === 'WITHDRAWN';
+      } catch { result.applicationWithdrawn = false; }
+      if (!result.applicationWithdrawn) result.failures.push({ operation: 'withdraw', id: owned.applicationId, status: response.status });
     }
   }
-  if (String(application.status).toUpperCase() === 'WITHDRAWN') {
-    result.applicationWithdrawn = true;
-  } else {
-    const response = await browserJson(page, `${applicationPath}/withdraw`, {
-      method: 'POST', body: JSON.stringify({ reason }),
-    }).catch(() => ({ ok: false, status: 0 }));
-    try {
-      result.applicationWithdrawn = response.ok
-        && requireOwnedApplication(response.body, owned).status === 'WITHDRAWN';
-    } catch { result.applicationWithdrawn = false; }
-    if (!result.applicationWithdrawn) result.failures.push({ operation: 'withdraw', id: owned.applicationId, status: response.status });
-  }
   result.uncertainMutations = [...(owned.uncertainMutations || [])];
-  result.ok = result.applicationWithdrawn
+  result.ok = (transaction
+    ? result.applicationHistoryPreserved && (credential ? result.credentialRevoked : result.transactionRevoked)
+    : result.applicationWithdrawn)
     && result.failures.length === 0
     && result.pendingTransactionIds.length === 0
     && result.uncertainMutations.length === 0;
@@ -678,6 +791,8 @@ module.exports = {
   governedIssuerTrustProfilePayload,
   listResources,
   issueOwnedApplication,
+  prepareOwnedApplicationReissue,
+  readApplicationTransaction,
   requestedClaim,
   requireJson,
   requireNoConflictingApplications,

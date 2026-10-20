@@ -55,6 +55,7 @@ function fakePage(responses) {
       requests.push(request);
       const response = responses.shift();
       if (!response) throw new Error(`Unexpected request to ${request.requestPath}`);
+      if (response instanceof Error) throw response;
       return response;
     },
   };
@@ -537,7 +538,7 @@ test('missing, ambiguous, cross-organization, or changed ownership is rejected b
   assert.throws(() => selectApplicationTransaction([transaction(owned, { organization_id: 'foreign-org' })], owned), /outside.*organization/);
 });
 
-test('cleanup can recover an uncertain issuance only through its exact created application', async () => {
+test('cleanup recovers an uncertain issuance and preserves its application after exact revocation readback', async () => {
   const owned = ownedRun({ transactionId: null, credentialId: null, uncertainMutations: [{ operation: 'issuance' }] });
   const page = fakePage([
     { ok: true, status: 200, body: application(owned) },
@@ -546,12 +547,16 @@ test('cleanup can recover an uncertain issuance only through its exact created a
       credential(owned), credential(owned, { id: 'newer-unrelated', application_id: 'other-application', flow_execution_id: 'other-transaction' }),
     ] },
     { ok: true, status: 200, body: credential(owned, { status: 'REVOKED' }) },
-    { ok: true, status: 200, body: application(owned, { status: 'WITHDRAWN' }) },
+    { ok: true, status: 200, body: [transaction(owned)] },
+    { ok: true, status: 200, body: [credential(owned, { status: 'REVOKED' })] },
+    { ok: true, status: 200, body: application(owned, { status: 'CREDENTIALED' }) },
   ]);
   const result = await cleanupApplicationCredential(page, owned, 'release qualification cleanup');
   assert.equal(result.ok, true);
   assert.equal(result.credentialRevoked, true);
-  assert.equal(result.applicationWithdrawn, true);
+  assert.equal(result.applicationWithdrawn, false);
+  assert.equal(result.applicationHistoryPreserved, true);
+  assert.equal(result.applicationStatus, 'CREDENTIALED');
   assert.equal(owned.transactionId, 'transaction/1');
   assert.equal(owned.credentialId, 'credential/1');
   assert.deepEqual(owned.uncertainMutations, []);
@@ -560,7 +565,9 @@ test('cleanup can recover an uncertain issuance only through its exact created a
     ['GET', '/v1/issuance?organization_id=org%2F1'],
     ['GET', '/v1/issued-credentials?organization_id=org%2F1'],
     ['POST', '/v1/issued-credentials/credential%2F1/revoke'],
-    ['POST', '/v1/organizations/org%2F1/applicants/application%2F1/withdraw'],
+    ['GET', '/v1/issuance?organization_id=org%2F1'],
+    ['GET', '/v1/issued-credentials?organization_id=org%2F1'],
+    ['GET', '/v1/organizations/org%2F1/applicants/application%2F1'],
   ]);
 });
 
@@ -574,11 +581,14 @@ test('an outstanding offer, uncertain creation, or unconfirmed reviewer lock pre
     { ok: true, status: 200, body: application(owned) },
     { ok: true, status: 200, body: [transaction(owned, { status: 'pending' })] },
     { ok: true, status: 200, body: [] },
-    { ok: true, status: 200, body: application(owned, { status: 'WITHDRAWN' }) },
+    { ok: true, status: 200, body: [transaction(owned, { status: 'pending' })] },
+    { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: application(owned) },
   ]);
   const result = await cleanupApplicationCredential(page, owned, 'cleanup');
   assert.equal(result.ok, false);
-  assert.equal(result.applicationWithdrawn, true);
+  assert.equal(result.applicationWithdrawn, false);
   assert.deepEqual(result.pendingTransactionIds, ['transaction/1']);
   assert.ok(page.requests.every(({ requestPath }) => !requestPath.endsWith('/revoke')));
 
@@ -590,6 +600,7 @@ test('an outstanding offer, uncertain creation, or unconfirmed reviewer lock pre
   const lockPage = fakePage([
     { ok: true, status: 200, body: application(locked, { status: 'SUBMITTED' }) },
     { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: application(locked, { status: 'WITHDRAWN' }) },
     { ok: true, status: 200, body: application(locked, { status: 'WITHDRAWN' }) },
   ]);
   const lockCleanup = await cleanupApplicationCredential(lockPage, locked, 'cleanup');
@@ -605,13 +616,153 @@ test('a successful HTTP status without confirmed mutation state is not successfu
     { ok: true, status: 200, body: [transaction(owned)] },
     { ok: true, status: 200, body: [credential(owned)] },
     { ok: true, status: 200, body: {} },
-    { ok: true, status: 200, body: application(owned, { status: 'WITHDRAWN' }) },
+    { ok: true, status: 200, body: [transaction(owned)] },
+    { ok: true, status: 200, body: [credential(owned)] },
+    { ok: true, status: 200, body: application(owned) },
   ]);
   const result = await cleanupApplicationCredential(page, owned, 'cleanup');
   assert.equal(result.ok, false);
   assert.equal(result.credentialRevoked, false);
-  assert.equal(result.applicationWithdrawn, true);
+  assert.equal(result.applicationWithdrawn, false);
+  assert.equal(result.applicationHistoryPreserved, true);
   assert.deepEqual(result.failures, [{ operation: 'revoke', id: 'credential/1', status: 200 }]);
+});
+
+test('lost credential revoke response is resolved only by exact REVOKED readback', async () => {
+  for (const status of ['REVOKED', 'ACTIVE']) {
+    const owned = ownedRun();
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned) },
+      { ok: true, status: 200, body: [transaction(owned)] },
+      { ok: true, status: 200, body: [credential(owned)] },
+      new Error('Lost revoke response'),
+      { ok: true, status: 200, body: [transaction(owned)] },
+      { ok: true, status: 200, body: [credential(owned, { status })] },
+      { ok: true, status: 200, body: application(owned) },
+    ]);
+    const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+    assert.equal(result.ok, status === 'REVOKED');
+    assert.equal(result.credentialRevoked, status === 'REVOKED');
+    assert.equal(result.applicationWithdrawn, false);
+    assert.deepEqual(owned.uncertainMutations, status === 'REVOKED' ? [] : [{ operation: 'credential_revocation' }]);
+    assert.deepEqual(page.requests.filter(({ requestOptions }) => requestOptions.method).map(({ requestPath }) => requestPath), [
+      '/v1/issued-credentials/credential%2F1/revoke',
+    ]);
+  }
+});
+
+test('revoked unused offers retain exact application history without a withdrawal', async () => {
+  const owned = ownedRun({ credentialId: null });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned) },
+    { ok: true, status: 200, body: [transaction(owned, { status: 'revoked' })] },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: [transaction(owned, { status: 'revoked' })] },
+    { ok: true, status: 200, body: transaction(owned, { status: 'revoked' }) },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: application(owned, { claim_state: 'EXPIRED' }) },
+  ]);
+  const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+  assert.equal(result.ok, true);
+  assert.equal(result.transactionRevoked, true);
+  assert.equal(result.credentialRevoked, false);
+  assert.equal(result.applicationHistoryPreserved, true);
+  assert.equal(result.applicationWithdrawn, false);
+  assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+});
+
+test('credential retirement cannot hide a withdrawn, foreign, or unknown application readback', async () => {
+  for (const change of [
+    { status: 'WITHDRAWN' }, { status: 'UNKNOWN' },
+    { organization_id: 'foreign-org' }, { integration_context: { demo_run_id: 'foreign-run' } },
+  ]) {
+    const owned = ownedRun();
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned) },
+      { ok: true, status: 200, body: [transaction(owned)] },
+      { ok: true, status: 200, body: [credential(owned, { status: 'REVOKED' })] },
+      { ok: true, status: 200, body: [transaction(owned)] },
+      { ok: true, status: 200, body: [credential(owned, { status: 'REVOKED' })] },
+      { ok: true, status: 200, body: application(owned, change) },
+    ]);
+    const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+    assert.equal(result.ok, false);
+    assert.equal(result.applicationHistoryPreserved, false);
+    assert.equal(result.applicationWithdrawn, false);
+    assert.ok(result.failures.length > 0);
+    assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+  }
+});
+
+test('retirement readback rejects late transactions or credentials and unresolved terminal offers', async () => {
+  for (const status of ['pending', 'authorized', 'failed', 'expired', 'issued', 'unknown']) {
+    const owned = ownedRun({ credentialId: null });
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned) },
+      { ok: true, status: 200, body: [transaction(owned, { status })] },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: [transaction(owned, { status })] },
+      { ok: true, status: 200, body: transaction(owned, { status }) },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: application(owned) },
+    ]);
+    const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+    assert.equal(result.ok, false, status);
+    assert.deepEqual(result.pendingTransactionIds, [owned.transactionId], status);
+    assert.equal(result.applicationWithdrawn, false);
+    assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+  }
+  const owned = ownedRun({ credentialId: null });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned) },
+    { ok: true, status: 200, body: [transaction(owned, { status: 'revoked' })] },
+    { ok: true, status: 200, body: [] },
+    { ok: true, status: 200, body: [transaction(owned, { status: 'issued' })] },
+    { ok: true, status: 200, body: transaction(owned, { status: 'issued' }) },
+    { ok: true, status: 200, body: [credential(owned)] },
+    { ok: true, status: 200, body: application(owned) },
+  ]);
+  const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+  assert.equal(result.ok, false);
+  assert.equal(result.credentialRevoked, false);
+  assert.equal(result.transactionRevoked, false);
+  assert.ok(result.failures.length > 0);
+  assert.ok(page.requests.every(({ requestOptions }) => !requestOptions.method));
+  for (const issuedMarker of ['application', 'transaction-detail']) {
+    const missing = ownedRun({ credentialId: null });
+    const missingPage = fakePage([
+      { ok: true, status: 200, body: application(missing) },
+      { ok: true, status: 200, body: [transaction(missing, { status: 'revoked', issued_at: null })] },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: [transaction(missing, { status: 'revoked', issued_at: null })] },
+      { ok: true, status: 200, body: transaction(missing, { status: 'revoked',
+        issued_at: issuedMarker === 'transaction-detail' ? '2026-10-20T00:00:00Z' : null }) },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: application(missing, issuedMarker === 'application'
+        ? { status: 'CREDENTIALED', claim_state: 'CLAIMED' } : {}) },
+    ]);
+    const absentCredential = await cleanupApplicationCredential(missingPage, missing, 'cleanup');
+    assert.equal(absentCredential.ok, false, issuedMarker);
+    assert.equal(absentCredential.transactionRevoked, false, issuedMarker);
+    assert.deepEqual(absentCredential.failures, [{ operation: 'locate_credential', id: missing.applicationId, status: 200 }]);
+    assert.ok(missingPage.requests.some(({ requestPath }) => requestPath === '/v1/issuance/transaction%2F1?organization_id=org%2F1'));
+  }
+});
+
+test('an approved application with unknown issuance cannot turn a Rust withdrawal conflict into cleanup', async () => {
+  const owned = ownedRun({ transactionId: null, credentialId: null });
+  const page = fakePage([
+    { ok: true, status: 200, body: application(owned, { status: 'APPROVED' }) },
+    { ok: true, status: 200, body: [] },
+    { ok: false, status: 409, body: { detail: 'Issuance reconciliation is required' } },
+    { ok: true, status: 200, body: application(owned, { status: 'APPROVED' }) },
+  ]);
+  const result = await cleanupApplicationCredential(page, owned, 'cleanup');
+  assert.equal(result.ok, false);
+  assert.equal(result.applicationWithdrawn, false);
+  assert.equal(result.applicationHistoryPreserved, false);
+  assert.deepEqual(result.failures, [{ operation: 'withdraw', id: owned.applicationId, status: 409 }]);
+  assert.deepEqual(result.uncertainMutations, []);
 });
 
 test('pending offer cancellation proves application ownership and exact revoked transaction readback', async () => {

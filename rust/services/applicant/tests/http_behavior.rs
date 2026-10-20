@@ -8,14 +8,18 @@ use marty_applicant::{
     issuance::IssuanceOffer,
     service::{
         ApplicationEvent, ApplicationTemplate, EventPublisher, FlowProvider, MemoryPersistence,
-        MmfApprovalAuthorizer, ProviderError, TemplateProvider,
+        MmfApprovalAuthorizer, ProviderError, StorePersistence, TemplateProvider,
     },
-    Applicant, Application,
+    store::StoreDocument,
+    Applicant, Application, LifecycleStatus,
 };
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+use tokio::sync::{Notify, RwLock};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -69,20 +73,561 @@ impl EventPublisher for Events {
 }
 
 fn app() -> axum::Router {
-    let service = marty_applicant::service::ApplicantService::with_persistence(
-        Arc::new(RwLock::new(Default::default())),
-        Arc::new(Templates),
+    app_with_store(StoreDocument::default()).0
+}
+
+fn app_with_store(
+    store: StoreDocument,
+) -> (
+    axum::Router,
+    Arc<marty_applicant::service::ApplicantService>,
+) {
+    app_with_issuance(store, "http://127.0.0.1:1".into())
+}
+
+fn app_with_issuance(
+    store: StoreDocument,
+    issuance_url: String,
+) -> (
+    axum::Router,
+    Arc<marty_applicant::service::ApplicantService>,
+) {
+    app_with_dependencies(
+        store,
+        issuance_url,
         Arc::new(Flow),
-        Arc::new(MmfApprovalAuthorizer::new().unwrap()),
-        Arc::new(Events),
         Arc::new(MemoryPersistence),
+    )
+}
+
+fn app_with_dependencies(
+    store: StoreDocument,
+    issuance_url: String,
+    flow: Arc<dyn FlowProvider>,
+    persistence: Arc<dyn StorePersistence>,
+) -> (
+    axum::Router,
+    Arc<marty_applicant::service::ApplicantService>,
+) {
+    let service = Arc::new(
+        marty_applicant::service::ApplicantService::with_persistence(
+            Arc::new(RwLock::new(store)),
+            Arc::new(Templates),
+            flow,
+            Arc::new(MmfApprovalAuthorizer::new().unwrap()),
+            Arc::new(Events),
+            persistence,
+        ),
     );
-    router(HttpState {
-        service: Arc::new(service),
-        issuance_url: "http://127.0.0.1:1".into(),
+    let app = router(HttpState {
+        service: service.clone(),
+        issuance_url,
         issuance_api_key: None,
         client: reqwest::Client::new(),
+    });
+    (app, service)
+}
+
+fn withdrawal_store(status: LifecycleStatus) -> StoreDocument {
+    let now = chrono::Utc::now();
+    let mut applicant = Applicant::new("issuer-org".into(), "holder@example.com".into(), now);
+    applicant.id = "applicant-1".into();
+    applicant.user_id = Some("user-1".into());
+    let application: Application = serde_json::from_value(json!({
+        "id":"application-1", "applicant_id":applicant.id,
+        "organization_id":"issuer-org", "application_template_id":"template-1",
+        "credential_template_id":"credential-template-1", "status":status,
+        "created_at":now, "updated_at":now
+    }))
+    .unwrap();
+    StoreDocument {
+        applicants: vec![applicant],
+        applications: vec![application],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn claim_rejects_unsupported_options_and_malformed_json_before_mutation() {
+    let cases = [
+        (
+            r#"{"canvas_credentials_consent":true}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            r#"{"canvas_credentials_consent":false}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            r#"{"delivery_destination_ids":["canvas-destination"]}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            r#"{"delivery_destination_ids":[]}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            r#"{"canvas_credentials_consent":null}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            r#"{"arbitrary":"do-not-echo-this-value"}"#,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            "[]",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        (
+            "null",
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "CLAIM_OPTIONS_UNSUPPORTED",
+        ),
+        ("{", StatusCode::BAD_REQUEST, "INVALID_CLAIM_JSON"),
+    ];
+    for (request_body, status, code) in cases {
+        let before = withdrawal_store(LifecycleStatus::Approved);
+        let (app, service) = app_with_store(before.clone());
+        let response = app
+            .oneshot(
+                Request::post("/v1/me/applications/application-1/claim")
+                    .header("x-user-id", "user-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status, "{request_body}");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["detail"]["error"], code);
+        assert!(!String::from_utf8_lossy(&body).contains("do-not-echo-this-value"));
+        assert_eq!(*service.store().read().await, before);
+    }
+}
+
+#[tokio::test]
+async fn claim_checks_holder_ownership_before_reporting_body_errors() {
+    for (user, expected) in [
+        (None, StatusCode::UNAUTHORIZED),
+        (Some("other-user"), StatusCode::FORBIDDEN),
+    ] {
+        let before = withdrawal_store(LifecycleStatus::Approved);
+        let (app, service) = app_with_store(before.clone());
+        let mut request = Request::post("/v1/me/applications/application-1/claim")
+            .header("content-type", "application/json");
+        if let Some(user) = user {
+            request = request.header("x-user-id", user);
+        }
+        let response = app
+            .oneshot(request.body(Body::from("{")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+        assert_eq!(*service.store().read().await, before);
+    }
+}
+
+#[tokio::test]
+async fn claim_reuses_the_pending_offer_and_reports_real_read_only_capabilities() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let observed_reads = reads.clone();
+    let issuer = axum::Router::new().route(
+        "/v1/issuance/transactions/transaction-1",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let reads = observed_reads.clone();
+            async move {
+                assert_eq!(headers["x-organization-id"], "issuer-org");
+                reads.fetch_add(1, Ordering::SeqCst);
+                axum::Json(json!({"id":"transaction-1", "status":"pending"}))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, issuer).await.unwrap() });
+    let mut before = withdrawal_store(LifecycleStatus::Offered);
+    before.applications[0].claim_state = marty_applicant::ClaimState::OfferReady;
+    before.applications[0].system_data = json!({
+        "issuance_transaction_id":"transaction-1", "issuance_status":"pending",
+        "credential_offer_uri":"openid-credential-offer://canonical-existing-offer",
+        "offer_expires_at":(chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339()
     })
+    .as_object()
+    .unwrap()
+    .clone();
+    let (app, service) = app_with_issuance(before.clone(), origin);
+    let expected_capabilities = json!({
+        "oid4vci_wallet":true, "delivery_destination_selection":false,
+        "canvas_credentials_mirror":false, "offer_reuse":"pending_until_consumed_or_expired"
+    });
+    for body in ["", "{}"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::post("/v1/me/applications/application-1/claim")
+                    .header("x-user-id", "user-1")
+                    .header("content-type", "application/json")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(
+            value["credential_offer_uri"],
+            "openid-credential-offer://canonical-existing-offer"
+        );
+        assert_eq!(value["claim_capabilities"], expected_capabilities);
+        assert_eq!(*service.store().read().await, before);
+    }
+    let response = app
+        .oneshot(
+            Request::get("/v1/me/applications/application-1")
+                .header("x-user-id", "user-1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(value["claim_capabilities"], expected_capabilities);
+    assert_eq!(reads.load(Ordering::SeqCst), 3);
+    assert_eq!(*service.store().read().await, before);
+    server.abort();
+}
+
+struct ReplacementOffer(IssuanceOffer);
+
+#[async_trait]
+impl FlowProvider for ReplacementOffer {
+    async fn issue(
+        &self,
+        _: &Application,
+        _: &Applicant,
+        _: &Map<String, Value>,
+        _: Uuid,
+    ) -> Result<IssuanceOffer, ProviderError> {
+        Ok(self.0.clone())
+    }
+}
+
+#[derive(Default)]
+struct PersistenceCount(AtomicUsize);
+
+impl StorePersistence for PersistenceCount {
+    fn persist(&self, _: &StoreDocument) -> Result<(), ProviderError> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+async fn reconcile_delayed_transaction(status: &'static str, reissue: bool) {
+    let entered = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    let read_entered = entered.clone();
+    let read_resume = resume.clone();
+    let issuer = axum::Router::new().route(
+        "/v1/issuance/transactions/transaction-1",
+        axum::routing::get(move |headers: axum::http::HeaderMap| {
+            let entered = read_entered.clone();
+            let resume = read_resume.clone();
+            async move {
+                assert_eq!(headers["x-organization-id"], "issuer-org");
+                entered.notify_one();
+                resume.notified().await;
+                axum::Json(json!({
+                    "id":"transaction-1", "status":status,
+                    "issued_at":chrono::Utc::now().to_rfc3339()
+                }))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let origin = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, issuer).await.unwrap() });
+    let mut initial = withdrawal_store(LifecycleStatus::Offered);
+    let expiry = (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339();
+    initial.applications[0].claim_state = marty_applicant::ClaimState::OfferReady;
+    initial.applications[0].system_data = json!({
+        "issuance_transaction_id":"transaction-1", "issuance_status":"pending",
+        "credential_offer_uri":"openid-credential-offer://old-offer",
+        "offer_expires_at":expiry
+    })
+    .as_object()
+    .unwrap()
+    .clone();
+    let replacement = IssuanceOffer {
+        id: Some("transaction-2".into()),
+        credential_offer_uri: Some("openid-credential-offer://replacement-offer".into()),
+        credential_offer_uris: Map::new(),
+        credential_offer_labels: Map::new(),
+        expires_at: Some(expiry),
+        status: "pending".into(),
+        flow_instance_id: Some("replacement-flow-instance".into()),
+        flow_definition_id: Some("flow-definition-1".into()),
+        source: Some("flow".into()),
+    };
+    let persistence = Arc::new(PersistenceCount::default());
+    let (app, service) = app_with_dependencies(
+        initial,
+        origin,
+        Arc::new(ReplacementOffer(replacement.clone())),
+        persistence.clone(),
+    );
+    let reading = tokio::spawn(
+        app.clone().oneshot(
+            Request::get("/v1/me/applications/application-1")
+                .header("x-user-id", "user-1")
+                .body(Body::empty())
+                .unwrap(),
+        ),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    if reissue {
+        let response = app
+            .oneshot(
+                Request::post("/v1/organizations/issuer-org/applicants/application-1/issue")
+                    .header("x-user-id", "operator-1")
+                    .header("x-organization-id", "issuer-org")
+                    .header("x-org-permissions", "issuance:initiate")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            service.store().read().await.applications[0].system_data["issuance_transaction_id"],
+            "transaction-2"
+        );
+    }
+    let before = service.store().read().await.clone();
+    let writes = persistence.0.load(Ordering::SeqCst);
+    resume.notify_one();
+    let response = tokio::time::timeout(std::time::Duration::from_secs(5), reading)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    server.abort();
+    assert_eq!(response.status(), StatusCode::OK);
+    let value: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    if reissue {
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.load(Ordering::SeqCst), writes);
+        assert_eq!(
+            value["credential_offer_uri"],
+            json!(replacement.credential_offer_uri)
+        );
+        assert_eq!(value["status"], "OFFERED");
+        assert_eq!(value["claim_state"], "OFFER_READY");
+        assert!(value["claim_blocker"].is_null());
+        assert!(value["issued_at"].is_null());
+    } else {
+        let current = service.store().read().await;
+        assert_eq!(
+            current.applications[0].system_data["issuance_transaction_id"],
+            "transaction-1"
+        );
+        assert_eq!(
+            current.applications[0].system_data["issuance_status"],
+            status
+        );
+        assert_eq!(persistence.0.load(Ordering::SeqCst), writes + 1);
+        if status == "issued" {
+            assert_eq!(value["status"], "CREDENTIALED");
+            assert_eq!(value["claim_state"], "CLAIMED");
+            assert!(current.applications[0].issued_at.is_some());
+            assert_eq!(current.applicants[0].status, LifecycleStatus::Credentialed);
+        } else {
+            assert_eq!(value["status"], "OFFERED");
+            assert_eq!(value["claim_state"], "EXPIRED");
+            assert_eq!(value["claim_blocker"]["code"], "ISSUANCE_REVOKED");
+        }
+    }
+}
+
+#[tokio::test]
+async fn issuance_reconciliation_discards_old_revoked_response_after_reissue() {
+    reconcile_delayed_transaction("revoked", true).await;
+}
+
+#[tokio::test]
+async fn issuance_reconciliation_discards_old_issued_response_after_reissue() {
+    reconcile_delayed_transaction("issued", true).await;
+}
+
+#[tokio::test]
+async fn issuance_reconciliation_applies_current_transaction_responses() {
+    for status in ["revoked", "issued"] {
+        reconcile_delayed_transaction(status, false).await;
+    }
+}
+
+#[tokio::test]
+async fn withdrawal_routes_preserve_authentication_authority_and_tenant_boundaries() {
+    let before = withdrawal_store(LifecycleStatus::Draft);
+    let (app, service) = app_with_store(before.clone());
+    let organization_path = "/v1/organizations/issuer-org/applicants/application-1/withdraw";
+    let cases = [
+        (
+            organization_path,
+            None,
+            None,
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            organization_path,
+            Some("reviewer-1"),
+            Some("issuer-org"),
+            None,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            organization_path,
+            Some("reviewer-1"),
+            Some("other-org"),
+            Some("application:review"),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            "/v1/organizations/other-org/applicants/application-1/withdraw",
+            Some("reviewer-1"),
+            Some("other-org"),
+            Some("application:review"),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            "/v1/me/applications/application-1/withdraw",
+            None,
+            None,
+            None,
+            StatusCode::UNAUTHORIZED,
+        ),
+        (
+            "/v1/me/applications/application-1/withdraw",
+            Some("other-user"),
+            None,
+            None,
+            StatusCode::FORBIDDEN,
+        ),
+    ];
+    for (path, user, organization, permissions, expected) in cases {
+        let mut request = Request::post(path).header("content-type", "application/json");
+        for (name, value) in [
+            ("x-user-id", user),
+            ("x-organization-id", organization),
+            ("x-org-permissions", permissions),
+        ] {
+            if let Some(value) = value {
+                request = request.header(name, value);
+            }
+        }
+        let response = app
+            .clone()
+            .oneshot(request.body(Body::from("{}")).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            expected,
+            "{path}, user={user:?}, organization={organization:?}"
+        );
+        assert_eq!(*service.store().read().await, before);
+    }
+}
+
+#[tokio::test]
+async fn withdrawal_routes_return_conflict_for_issuance_without_lifecycle_side_effects() {
+    for organization in [false, true] {
+        for status in [
+            LifecycleStatus::Approved,
+            LifecycleStatus::Offered,
+            LifecycleStatus::Credentialed,
+            LifecycleStatus::Suspended,
+        ] {
+            let before = withdrawal_store(status);
+            let (app, service) = app_with_store(before.clone());
+            let path = if organization {
+                "/v1/organizations/issuer-org/applicants/application-1/withdraw"
+            } else {
+                "/v1/me/applications/application-1/withdraw"
+            };
+            let response = app
+                .oneshot(
+                    Request::post(path)
+                        .header("content-type", "application/json")
+                        .header("x-user-id", "user-1")
+                        .header("x-organization-id", "issuer-org")
+                        .header("x-org-permissions", "application:review")
+                        .body(Body::from("{}"))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                response.status(),
+                StatusCode::CONFLICT,
+                "organization={organization}, status={status:?}"
+            );
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(
+                body["detail"],
+                "Issuance must be reconciled before withdrawing this application"
+            );
+            assert_eq!(*service.store().read().await, before);
+        }
+    }
+}
+
+#[tokio::test]
+async fn organization_withdrawal_still_accepts_an_unissued_application_under_review() {
+    let (app, service) = app_with_store(withdrawal_store(LifecycleStatus::UnderReview));
+    let response = app
+        .oneshot(
+            Request::post("/v1/organizations/issuer-org/applicants/application-1/withdraw")
+                .header("content-type", "application/json")
+                .header("x-user-id", "reviewer-1")
+                .header("x-organization-id", "issuer-org")
+                .header("x-org-permissions", "application:review")
+                .body(Body::from(
+                    json!({"reason":"Duplicate review request"}).to_string(),
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+    assert_eq!(body["id"], "application-1");
+    assert_eq!(body["status"], "WITHDRAWN");
+    let state = service.store().read().await;
+    assert_eq!(
+        state.applications[0].system_data["withdrawal_reason"],
+        "Duplicate review request"
+    );
+    assert_eq!(state.applicants[0].status, LifecycleStatus::Draft);
 }
 
 #[derive(Deserialize)]

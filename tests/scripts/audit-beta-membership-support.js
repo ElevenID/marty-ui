@@ -11,8 +11,9 @@ const { createHash } = require('node:crypto');
 const {
   browserJson, cancelOwnedIssuanceTransaction, cleanupApplicationCredential,
   createOwnedApplication, findCurrentCredential, issueOwnedApplication, listResources,
+  prepareOwnedApplicationReissue, readApplicationTransaction,
   requireJson, requireNoConflictingApplications, requireOwnedApplication, requireOwnedTransaction,
-  selectApplicationTransaction, selectCurrentCredential, submitOwnedApplication,
+  selectCurrentCredential, submitOwnedApplication,
 } = require('./beta-demo-resource-helpers');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet, walletOrigin } = require('./demo-wallet-session');
 const { VIDEO_SIZE, createArtifactDir, finalizeVideo, maskProtocolField, showStep } = require('./demo-recording');
@@ -177,12 +178,17 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
       `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}/approve`,
       { method: 'POST', body: JSON.stringify({ notes: 'Authorized synthetic D05 supporting-lane fixture' }) }), owned);
     assert.equal(approved.status, 'APPROVED');
+    return completeIssue(owned, binding);
+  }
+
+  async function completeIssue(owned, binding) {
     const result = await issueOwnedApplication(operator, owned, 'Issue owned D05 membership credential');
     onOwned(ownedApplications);
     // The public list is a summary and omits expires_at. Read the exact scoped
     // detail for authoritative expiry and ownership, including expired offers.
     const transaction = requireOwnedTransaction(await requireJson(operator,
       `/v1/issuance/${encodeURIComponent(owned.transactionId)}?organization_id=${encodeURIComponent(owned.organizationId)}`), owned);
+    assert.equal(String(transaction.status || '').toLowerCase(), 'pending', 'The new owned offer must still be pending');
     assert.equal(typeof result.issued.credential_offer_uri, 'string', 'Application issuance must expose its real offer');
     const offerUri = result.issued.credential_offer_uri;
     const parsed = new URL(offerUri);
@@ -190,8 +196,37 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
     const offer = JSON.parse(parsed.searchParams.get('credential_offer'));
     assert.equal(offer?.credential_issuer, `${origin}/org/${binding.organizationId}`);
     assert.deepEqual(offer.credential_configuration_ids, [binding.credentialConfigurationId]);
-    assert.ok(typeof offer.grants?.[GRANT]?.['pre-authorized_code'] === 'string');
+    assert.ok(typeof offer.grants?.[GRANT]?.['pre-authorized_code'] === 'string'
+      && offer.grants[GRANT]['pre-authorized_code'].length > 0);
+    // The application DTO omits its transaction ID. Bind its returned offer to
+    // the exact discovered transaction, rather than accepting a stale app URI.
+    // This public offer route proves contents only; the detail above proves
+    // current pending status independently.
+    const publicOffer = await requireJson(operator, `/v1/issuance/offers/${encodeURIComponent(owned.transactionId)}`);
+    assert.equal(publicOffer.credential_issuer, offer.credential_issuer);
+    assert.deepEqual(publicOffer.credential_configuration_ids, offer.credential_configuration_ids);
+    assert.deepEqual(publicOffer.grants, offer.grants);
     return { owned, application: result.issued, transaction, offerUri, offer };
+  }
+
+  async function reissue(issuance, binding) {
+    assert.ok(initialHash, 'Read-only fixture preflight must complete before reissue');
+    const index = ownedApplications.indexOf(issuance?.owned);
+    assert.ok(index >= 0, 'Reissue must use the application captured by this controller');
+    const previous = issuance.owned;
+    for (const key of ['organizationId', 'credentialTemplateId', 'applicationTemplateId']) {
+      assert.equal(previous[key], binding[key], 'Reissue cannot change the owned issuer or template binding');
+    }
+    const owned = await prepareOwnedApplicationReissue(operator, previous);
+    // Retain ownership before the next mutation. A lost /issue response keeps
+    // its uncertainty and historical tuple available for exact cleanup.
+    ownedApplications[index] = owned;
+    onOwned(ownedApplications);
+    const result = await completeIssue(owned, binding);
+    assert.notEqual(result.owned.transactionId, previous.transactionId, 'Reissue must create a new transaction');
+    assert.notEqual(result.offer.grants[GRANT]['pre-authorized_code'], issuance.offer.grants[GRANT]['pre-authorized_code'],
+      'Reissue cannot reuse the canceled pre-authorized code');
+    return result;
   }
 
   async function issuedCredential(issuance, binding) {
@@ -215,7 +250,7 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
     if (owned.applicationId) {
       requireOwnedApplication(await requireJson(operator,
         `/v1/organizations/${encodeURIComponent(owned.organizationId)}/applicants/${encodeURIComponent(owned.applicationId)}`), owned);
-      const transaction = selectApplicationTransaction(await listResources(operator, '/v1/issuance', owned.organizationId), owned);
+      const transaction = await readApplicationTransaction(operator, owned);
       if (transaction) {
         owned.transactionId = transaction.id;
         const credential = selectCurrentCredential(await listResources(operator, '/v1/issued-credentials', owned.organizationId), owned);
@@ -248,7 +283,7 @@ function createSupportController({ operator, applicantPage, fixture, lane, origi
     const afterHash = hash(stableConfiguration(await configuration()));
     return { ok: afterHash === initialHash, beforeSha256: initialHash, afterSha256: afterHash };
   }
-  return { preflight, issue, issuedCredential, noIssuedCredential, cleanupOne, cleanup, invariantReadback, ownedApplications };
+  return { preflight, issue, reissue, issuedCredential, noIssuedCredential, cleanupOne, cleanup, invariantReadback, ownedApplications };
 }
 
 async function walletInventory(context, session) {
@@ -436,9 +471,9 @@ async function main(lane = process.argv[2], env = process.env) {
       await step(walletPage, '2. Expired receipt is rejected',
         'The real wallet displays a receipt error. The server and this owned wallet session contain no credential from the expired offer.');
       report.observed.expiredOfferCleanup = await controller.cleanupOne(expired.owned);
-      assert.equal(report.observed.expiredOfferCleanup.ok, true, 'Expired offer must be cancelled and its owned application withdrawn before reissue');
+      assert.equal(report.observed.expiredOfferCleanup.ok, true, 'Expired offer cancellation and retained application history must be confirmed before reissue');
       report.stage = 'fresh_reissue';
-      recovery = await controller.issue(fixture.trusted, 'fresh-reissue');
+      recovery = await controller.reissue(expired, fixture.trusted);
       assert.notEqual(recovery.owned.transactionId, expired.owned.transactionId);
     } else {
       report.stage = 'foreign_issuance';

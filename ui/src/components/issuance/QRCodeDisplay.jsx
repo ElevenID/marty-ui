@@ -88,6 +88,7 @@ const QRCodeDisplay = ({
   openLink = null,
   openLinkLabel = 'Open in Wallet',
   onOpenLink = null,
+  openingWallet = false,
   size = 256,
   title = 'Scan with Wallet',
   instructions = 'Open your digital wallet app and scan this QR code to receive your credential.',
@@ -406,7 +407,7 @@ const QRCodeDisplay = ({
                   size="small"
                   startIcon={<PhoneAndroidIcon />}
                   onClick={handleOpenLink}
-                  disabled={isExpired}
+                  disabled={isExpired || openingWallet}
                 >
                   {openLinkLabel}
                 </Button>

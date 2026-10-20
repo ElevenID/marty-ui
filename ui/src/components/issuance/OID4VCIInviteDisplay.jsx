@@ -22,6 +22,8 @@
  *   loading       {boolean}     — whether a regeneration is in progress
  *   title         {string}      — optional QR title override
  *   instructions  {string}      — optional instruction text override
+ *   active        {boolean}     — disables handoff as soon as the containing view closes
+ *   requestScopeKey {string}    — stable identity for the containing application/offer attempt
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -32,7 +34,7 @@ import {
   resolvePreferredWalletId,
   resolveWalletTransportArtifact,
 } from '../../services/walletTransportService';
-import { buildWalletOpenLink } from '../../services/walletRegistryApi';
+import useWalletOpenLink from '../../hooks/useWalletOpenLink';
 
 /**
  * Fallback labels for known wallet IDs when no display_name comes from the
@@ -53,21 +55,6 @@ const FALLBACK_WALLET_LABELS = {
 const walletLabel = (id, labels = {}) => labels[id] || FALLBACK_WALLET_LABELS[id] || id;
 
 const DEFAULT_TAB = '__default__';
-const PROTOCOL_ONLY_OPEN_LINK = /^(openid-credential-offer|openid4vp|haip-vci|haip-vp):/i;
-
-function chooseWalletOpenUri(walletOpenUri, fallbackOpenLink) {
-  if (!walletOpenUri) return fallbackOpenLink;
-  if (
-    fallbackOpenLink &&
-    fallbackOpenLink !== walletOpenUri &&
-    PROTOCOL_ONLY_OPEN_LINK.test(walletOpenUri) &&
-    !PROTOCOL_ONLY_OPEN_LINK.test(fallbackOpenLink)
-  ) {
-    return fallbackOpenLink;
-  }
-  return walletOpenUri;
-}
-
 export default function OID4VCIInviteDisplay({
   offerData,
   onRegenerate,
@@ -77,6 +64,8 @@ export default function OID4VCIInviteDisplay({
   showDefaultWalletTab = true,
   title,
   instructions,
+  active = true,
+  requestScopeKey = null,
 }) {
   const rawOfferUris = useMemo(() => offerData?.credential_offer_uris || {}, [offerData]);
   const offerUris = useMemo(() => {
@@ -101,6 +90,40 @@ export default function OID4VCIInviteDisplay({
     });
   }, [initialWallet, walletOptionsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Per-wallet offer URIs and template-provided labels from the backend
+  const offerLabels = offerData?.credential_offer_labels || {};
+  const hasPerWalletUris = walletIds.length > 0;
+  const defaultUri = offerData?.offer_url || offerData?.credential_offer_uri || '';
+  const canShowDefaultTab = showDefaultWalletTab && Boolean(defaultUri);
+  const showWalletTabs = hasPerWalletUris && (walletIds.length > 1 || canShowDefaultTab);
+  // A changed allowlist is effective during this render; do not briefly route
+  // through the previous wallet while the tab-selection effect catches up.
+  const activeWallet = selectedWallet === DEFAULT_TAB && canShowDefaultTab
+    ? DEFAULT_TAB : walletIds.includes(selectedWallet) ? selectedWallet : initialWallet;
+
+  // Resolve the URI to display for the currently selected tab
+  const activeUri =
+    activeWallet === DEFAULT_TAB
+      ? defaultUri
+      : offerUris[activeWallet] || defaultUri;
+  const selectedTransportArtifact = resolveWalletTransportArtifact(
+    offerData?.transport_artifacts || offerData?.wallet_transport_artifacts,
+    activeWallet === DEFAULT_TAB ? null : activeWallet,
+  );
+  const transport = selectedTransportArtifact || createCredentialOfferTransport({
+    offerUri: activeUri,
+    wallet: offerData?.wallet_registry?.[activeWallet] || offerData?.wallets_by_id?.[activeWallet],
+    walletId: activeWallet === DEFAULT_TAB ? '' : activeWallet,
+  });
+  const { openingWallet, openWallet } = useWalletOpenLink({
+    active: active && Boolean(offerData) && !loading,
+    requestScopeKey,
+    walletId: activeWallet === DEFAULT_TAB ? '' : activeWallet,
+    innerUri: transport.innerUri,
+    platform: transport.platform,
+    fallbackOpenLink: transport.openUri || transport.innerUri || activeUri,
+  });
+
   if (loading && !offerData) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
@@ -108,47 +131,7 @@ export default function OID4VCIInviteDisplay({
       </Box>
     );
   }
-
   if (!offerData) return null;
-
-  // Per-wallet offer URIs and template-provided labels from the backend
-  const offerLabels = offerData.credential_offer_labels || {};
-  const hasPerWalletUris = walletIds.length > 0;
-  const defaultUri = offerData.offer_url || offerData.credential_offer_uri || '';
-  const canShowDefaultTab = showDefaultWalletTab && Boolean(defaultUri);
-  const showWalletTabs = hasPerWalletUris && (walletIds.length > 1 || canShowDefaultTab);
-
-  // Resolve the URI to display for the currently selected tab
-  const activeUri =
-    selectedWallet === DEFAULT_TAB
-      ? defaultUri
-      : offerUris[selectedWallet] || defaultUri;
-  const selectedTransportArtifact = resolveWalletTransportArtifact(
-    offerData.transport_artifacts || offerData.wallet_transport_artifacts,
-    selectedWallet === DEFAULT_TAB ? null : selectedWallet,
-  );
-  const transport = selectedTransportArtifact || createCredentialOfferTransport({
-    offerUri: activeUri,
-    wallet: offerData.wallet_registry?.[selectedWallet] || offerData.wallets_by_id?.[selectedWallet],
-    walletId: selectedWallet === DEFAULT_TAB ? '' : selectedWallet,
-  });
-  const handleOpenLink = async (fallbackOpenLink) => {
-    const walletId = selectedWallet === DEFAULT_TAB ? '' : selectedWallet;
-    if (!walletId || !transport.innerUri) {
-      window.location.href = fallbackOpenLink;
-      return;
-    }
-
-    try {
-      const response = await buildWalletOpenLink(walletId, {
-        innerUri: transport.innerUri,
-        platform: transport.platform,
-      });
-      window.location.href = chooseWalletOpenUri(response?.open_uri, fallbackOpenLink);
-    } catch {
-      window.location.href = fallbackOpenLink;
-    }
-  };
 
   const expiresAt = offerData.expires_at || null;
   const createdAt = offerData.created_at || null;
@@ -163,7 +146,7 @@ export default function OID4VCIInviteDisplay({
     <Box>
       {showWalletTabs && (
         <Tabs
-          value={selectedWallet}
+          value={activeWallet}
           onChange={(_, value) => setSelectedWallet(value)}
           sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}
         >
@@ -179,7 +162,8 @@ export default function OID4VCIInviteDisplay({
         qrValue={transport.qrUri || transport.innerUri || activeUri}
         copyValue={transport.copyUri || transport.innerUri || activeUri}
         openLink={transport.openUri || transport.innerUri || activeUri}
-        onOpenLink={handleOpenLink}
+        onOpenLink={openWallet}
+        openingWallet={openingWallet || !active || loading}
         expiresAt={expiresAt}
         createdAt={createdAt}
         status={status}
@@ -189,9 +173,9 @@ export default function OID4VCIInviteDisplay({
         title={title || 'Scan to claim credential'}
         instructions={
           instructions ||
-          (selectedWallet === DEFAULT_TAB
+          (activeWallet === DEFAULT_TAB
             ? 'Scan this QR code with any OID4VCI-compatible digital wallet to receive the credential.'
-            : `Scan this QR code with the ${walletLabel(selectedWallet, offerLabels)} app to receive the credential.`)
+            : `Scan this QR code with the ${walletLabel(activeWallet, offerLabels)} app to receive the credential.`)
         }
       />
     </Box>

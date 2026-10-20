@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@test/utils';
+import { act, fireEvent, render, screen, waitFor } from '@test/utils';
 
 import ApplicationForm from '../applicant/ApplicationForm';
 import { storeCanvasLtiSession } from '../../services/canvasLtiExperience';
@@ -129,8 +129,13 @@ vi.mock('../../hooks/useWalletPreferences', () => ({
 }));
 
 vi.mock('../console/applicant/ClaimCredentialDialog', () => ({
-  default: ({ open, applicationId, offerData, organizationId }: { open: boolean; applicationId: string; offerData: any; organizationId?: string }) => (
-    open ? <div data-testid="claim-credential-dialog" data-organization-id={organizationId}>{applicationId}:{offerData?.offer_url}</div> : null
+  default: ({ open, onClose, applicationId, offerData, organizationId }: { open: boolean; onClose: () => void; applicationId: string; offerData: any; organizationId?: string }) => (
+    open ? (
+      <div data-testid="claim-credential-dialog" data-organization-id={organizationId}>
+        {applicationId}:{offerData?.offer_url}
+        <button onClick={onClose}>Close claim dialog</button>
+      </div>
+    ) : null
   ),
 }));
 
@@ -174,6 +179,24 @@ function canvasApplicationLocationState() {
         created: true,
       },
     },
+  };
+}
+
+function canvasClaimStatus(claimed = false) {
+  return {
+    application_status: claimed ? 'claimed' : 'approved',
+    sync: { status: 'succeeded' },
+    evidence: {
+      required_count: 1,
+      current_authoritative_count: 1,
+      verified_authoritative_count: 1,
+      verified_required_count: 1,
+      status: 'verified',
+    },
+    policy: { status: 'permitted' },
+    claim: claimed
+      ? { status: 'claimed', unsigned: false, available: false }
+      : { status: 'ready_to_claim', unsigned: true, available: true },
   };
 }
 
@@ -405,6 +428,98 @@ describe('ApplicationForm', () => {
     await user.click(screen.getByTestId('canvas-claim-action'));
     expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
     expect(screen.getByTestId('claim-credential-dialog')).toHaveAttribute('data-organization-id', expectedOrganizationId);
+  });
+
+  it('refreshes Canvas claim status after closing the dialog without issuing again', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+
+    mockGet.mockResolvedValue(canvasClaimStatus(true));
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    expect(await screen.findByTestId('canvas-claim-complete')).toHaveTextContent('This Canvas badge has been claimed.');
+    expect(screen.queryByTestId('canvas-claim-action')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it.each(['focus', 'visibilitychange'])('refreshes the current Canvas claim on browser %s return', async (event) => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+
+    mockGet.mockResolvedValue(canvasClaimStatus(true));
+    fireEvent(event === 'focus' ? window : document, new Event(event));
+
+    expect(await screen.findByTestId('canvas-claim-complete')).toBeInTheDocument();
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-1');
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('does not treat closing a canceled wallet claim as successful issuance', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+    const readsBeforeClose = mockGet.mock.calls.length;
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(readsBeforeClose));
+    expect(screen.getByTestId('canvas-ready-to-claim')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+  });
+
+  it('clears stale Canvas claim availability when the return status read fails', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const { user } = render(<ApplicationForm />);
+    await user.click(await screen.findByTestId('canvas-claim-action'));
+
+    mockGet.mockRejectedValue(new Error('Canvas launch session expired. Reopen from Canvas.'));
+    await user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+
+    expect(await screen.findByTestId('canvas-evidence-sync-error')).toHaveTextContent('Canvas launch session expired. Reopen from Canvas.');
+    expect(screen.queryByTestId('canvas-ready-to-claim')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-authoritative-evidence-verified')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
+  });
+
+  it('discards a late claim read after leaving the Canvas application and removes return listeners', async () => {
+    mockLocationState.location = canvasApplicationLocationState();
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const first = render(<ApplicationForm />);
+    await first.user.click(await screen.findByTestId('canvas-claim-action'));
+
+    let finishOldRead!: (value: ReturnType<typeof canvasClaimStatus>) => void;
+    mockGet.mockImplementation(() => new Promise((resolve) => { finishOldRead = resolve; }));
+    const readsBeforeClose = mockGet.mock.calls.length;
+    await first.user.click(screen.getByRole('button', { name: 'Close claim dialog' }));
+    await waitFor(() => expect(mockGet.mock.calls.length).toBeGreaterThan(readsBeforeClose));
+    first.unmount();
+    const readsAfterUnmount = mockGet.mock.calls.length;
+    fireEvent(window, new Event('focus'));
+    fireEvent(document, new Event('visibilitychange'));
+    expect(mockGet).toHaveBeenCalledTimes(readsAfterUnmount);
+
+    mockLocationState.location = canvasApplicationLocationState();
+    mockLocationState.location.state.canvasLtiBootstrap.application_id = 'application-canvas-2';
+    mockGet.mockResolvedValue(canvasClaimStatus());
+    const second = render(<ApplicationForm />);
+    await second.user.click(await screen.findByTestId('canvas-claim-action'));
+    await act(async () => { finishOldRead(canvasClaimStatus(true)); });
+
+    expect(screen.getByTestId('claim-credential-dialog')).toHaveTextContent('application-canvas-2');
+    expect(screen.getByTestId('canvas-ready-to-claim')).toBeInTheDocument();
+    expect(screen.queryByTestId('canvas-claim-complete')).not.toBeInTheDocument();
+    expect(mockPost).not.toHaveBeenCalled();
   });
 
   it('does not load org-scoped templates for Canvas LTI learners', async () => {

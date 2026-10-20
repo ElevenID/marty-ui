@@ -714,7 +714,7 @@ async function main() {
       && Object.values(report.behaviorAssertions).every((passed) => passed === true)
       && cleanupComplete
       && report.cleanup.credentialRevoked
-      && report.cleanup.applicationWithdrawn
+      && report.cleanup.applicationHistoryPreserved
       && report.pageErrors.length === 0
       && report.unexpectedResponses.length === 0
     );
