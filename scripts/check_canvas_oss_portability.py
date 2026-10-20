@@ -161,6 +161,20 @@ def validate_lock(lock: dict[str, Any]) -> None:
     _require(topology.get("host_runtime_processes") is False, "Acceptance must not start host runtime processes")
 
 
+def validate_operator_configuration_assets(root: Path) -> None:
+    generator = (root / "scripts/canvas-oss/generate-runtime-config.mjs").read_text(encoding="utf-8")
+    contract = (root / "scripts/canvas-oss/runtime-config-contract.mjs").read_text(encoding="utf-8")
+    _require(
+        "import { CANVAS_ORIGIN, KEY_NAMES, renderRuntimeConfiguration, validateRuntimeConfiguration } from './runtime-config-contract.mjs';" in generator
+        and "const files=renderRuntimeConfiguration({" in generator
+        and "validateRuntimeConfiguration(files);" in generator
+        and "Object.entries(files)" in generator,
+        "Canvas operator generator is not bound to its shared renderer and validator",
+    )
+    _require("File.read(ENV.fetch('POSTGRES_PASSWORD_FILE')).strip" in contract,
+             "Canvas database config does not read its secret file")
+
+
 def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT) -> None:
     driver = lock["contract_driver"]
     base_image = lock["image"]["base_image"]
@@ -171,7 +185,7 @@ def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT
     workflow = (root / ".github/workflows/canvas-oss-portability.yml").read_text(encoding="utf-8")
     image_workflow = (root / ".github/workflows/canvas-oss-image.yml").read_text(encoding="utf-8")
     source_policy = json.loads((root / "docker/canvas-oss/source-policy.json").read_text(encoding="utf-8"))
-    database_config = (root / "scripts/canvas-oss/generate-runtime-config.mjs").read_text(encoding="utf-8")
+    validate_operator_configuration_assets(root)
     _require("\n  canvas-contract:\n" in compose, "Canvas contract Compose service is missing")
     _require("\n  canvas-continuity-monitor:\n" in compose, "Canvas continuity monitor Compose service is missing")
     _require(f"dockerfile: {driver['dockerfile']}" in compose, "Canvas contract Compose Dockerfile differs from the lock")
@@ -183,7 +197,6 @@ def validate_execution_assets(lock: dict[str, Any], root: Path = REPOSITORY_ROOT
     _require("POSTGRES_PASSWORD: ${" not in compose, "Canvas PostgreSQL password is exposed through container environment")
     _require("POSTGRES_PASSWORD_FILE: /run/secrets/canvas_postgres_password" in compose, "Canvas PostgreSQL secret file is missing")
     _require(compose.count("pull_policy: never") >= 2, "Contract and monitor services must refuse registry pulls")
-    _require("File.read(ENV.fetch('POSTGRES_PASSWORD_FILE')).strip" in database_config, "Canvas database config does not read its secret file")
     _require("FROM ${CANVAS_OSS_PLAYWRIGHT_IMAGE}" in dockerfile, "Contract Dockerfile does not consume the locked Playwright image")
     _require("npm audit --audit-level=high" in dockerfile, "Contract image does not fail on high-severity npm advisories")
     _require(package_manifest.get("dependencies") == {"@playwright/test": "1.63.0"}, "Contract package manifest is not Playwright-only")
