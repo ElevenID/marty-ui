@@ -59,6 +59,13 @@ async function main() {
   }
   try {
     report.deployment = await deployment();
+    // This exact recorder checkout is already bound by the parent and helper
+    // handshake. The imported report remains a prerequisite, never an assertion.
+    const { loadCanvasPortabilityAttestation } = require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'));
+    const prerequisite = loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
+    assert.equal(prerequisite.summary.marty_release_version, report.deployment.marker);
+    assert.equal(prerequisite.summary.marty_source_id, report.deployment.source);
+    report.prerequisite = prerequisite.summary;
     const input = { schemaVersion: 1, scenario, runId: randomUUID(),
       grades: [95, 40, 95], organizationId: process.env.CANVAS_OSS_ORGANIZATION_ID };
     save('canvas-run-input.json', input);
@@ -213,5 +220,9 @@ async function main() {
   }
   if (!complete) process.exitCode = 1;
 }
-if (require.main === module) main().catch(() => { process.stderr.write('Canvas capture initialization failed.\n'); process.exitCode = 1; });
+if (require.main === module) main().catch(error => {
+  const code = /^[A-Za-z0-9_]{1,80}$/.test(error.code || '') ? error.code : 'INITIALIZATION_FAILED';
+  process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
+  process.exitCode = 1;
+});
 module.exports = { main };
