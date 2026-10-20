@@ -150,14 +150,19 @@ journey window: the custody signer and audit tokens expire within **one hour**
 of issuance. Mint them immediately before the installed journey and leave
 enough time for its image pull, build, startup, and public test. A slow run may
 still fail on expiry; never extend token TTL or treat that failure as an
-installed pass. The audit helper does not overwrite an existing token, so
-retrying after expiry requires a new disposable OpenBao state and private root.
+installed pass. The initial audit helper refuses to overwrite a token. Matching
+source revisions with the evidence and audit AppRole helpers below can refresh
+both one-hour tokens through their separate scoped identities, including after
+root revocation; earlier released previews without those helpers require a new
+disposable OpenBao state and private root after expiry.
 Also check the effective expiry of workload TLS credentials, which OpenBao may cap,
 and complete the journey before the earliest expiration. Do not keep the stack
-running afterward. A new session requires teardown and
-fresh disposable OpenBao state and secret roots, followed by a new install and
-bootstrap. The current helpers deliberately do not rotate live Keycloak or
-workload TLS files in place.
+running afterward. For this released-preview installer path, a new session
+requires teardown and fresh disposable OpenBao state and secret roots. The
+separate source-level [renewal procedure](selfhost-renewal-activation.md) can
+stage Keycloak and workload TLS credentials into a new generation and recreate
+an owned KMS-only project, but it is not yet an installed preview acceptance
+or a supported cutover procedure.
 
 New source revisions offer an optional `--with-operator-password` staging flag.
 If the matching checkout's `stage_selfhost_disposable_preview.py --help` lists

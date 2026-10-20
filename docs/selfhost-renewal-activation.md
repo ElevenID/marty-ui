@@ -1,8 +1,11 @@
 # Self-host KMS credential renewal candidate
 
-This source-level procedure is for an isolated KMS-only installation. It has
-not crossed a real credential-expiry boundary and is not yet a supported
-continuous-runtime or public cutover procedure. Keep the old generation until
+This source-level procedure is for an isolated KMS-only installation. A
+disposable HTTPS/Raft probe has crossed the one-hour evidence and audit token
+expiry boundary and recovered both with their separate scoped identities. The
+full installed two-generation business journey has not crossed that boundary;
+this is not yet a supported continuous-runtime or public cutover procedure.
+Keep the old generation until
 the renewed installation passes its business and custody journeys. Neither
 generation may contain local private keys.
 
@@ -46,10 +49,13 @@ the named `selfhost-renew-leaf` role. Retire root only after the active and
 rollback generations have been replaced by independently qualified orphan
 tokens, the public journey and custody scans pass, and a separate rootless
 restore/recovery rehearsal passes. The current command does not retire root.
-The separate OpenBao `openbao-bootstrap` service also still uses the initial
-root token to unseal and re-provision on restart. Split its unseal/restart path
-from one-time provisioning and prove a rootless cold restart before root
-revocation; isolating `db-migrate` alone does not close that dependency.
+The ordinary restart path uses `openbao-unseal`, which reads the separately
+protected unseal key and never reads the root token. `openbao-bootstrap` is
+confined to the explicit `kms-init` profile for one-time provisioning and must
+not run during ordinary restart or renewal. A disposable root-revoked cold
+copy passed, but a full installed rootless restart and coordinated rollback
+remain required before live root retirement. Preserve the original unseal
+material separately from Raft snapshots for recovery.
 
 Stage the workload TLS set with the Rust `selfhost-renew` profile against the
 existing Raft OpenBao issuer and version-one Transit signers. Stage the
