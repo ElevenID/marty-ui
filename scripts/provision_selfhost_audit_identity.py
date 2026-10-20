@@ -15,6 +15,10 @@ from activate_selfhost_renewed_secrets import private_file  # noqa: E402
 from provision_selfhost_audit_token import POLICY, policy_for  # noqa: E402
 from provision_selfhost_renewal_identity import write_private  # noqa: E402
 from provision_selfhost_snapshot_identity import snapshot_origin  # noqa: E402
+from selfhost_approle_rotation import (  # noqa: E402
+    RotationSpec, require_revoked as require_secret_revoked,
+    retire as retire_secret_id, rotate as rotate_secret_id,
+)
 from selfhost_openbao_client import Bao  # noqa: E402
 from stage_selfhost_renewed_secrets import private_empty_or_source  # noqa: E402
 
@@ -25,6 +29,8 @@ OPERATOR_POLICY = "selfhost-audit-operator"
 LEAF_ROLE = "selfhost-audit-leaf"
 ROLE_ID_FILE = "audit-role-id"
 SECRET_ID_FILE = "audit-secret-id"
+ROTATION = RotationSpec(AUTH_MOUNT, APPROLE, ROLE_ID_FILE, SECRET_ID_FILE,
+                        "audit-identity", "audit")
 OPERATOR_ACL = "\n".join((
     f'path "auth/token/create/{LEAF_ROLE}" {{ capabilities = ["update"] }}',
     f'path "auth/token/roles/{LEAF_ROLE}" {{ capabilities = ["read"] }}',
@@ -177,66 +183,19 @@ def mint(bao: Bao, identity: Path, policy: str,
 
 
 def require_revoked(bao: Bao, role_id: str, secret_id: str) -> None:
-    try:
-        bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
-            "role_id": role_id, "secret_id": secret_id,
-        }, authenticate=False)
-    except HTTPError as error:
-        if error.code in (400, 403):
-            return
-        raise
-    raise ValueError("retired audit AppRole credential remains usable")
+    require_secret_revoked(bao, role_id, secret_id, ROTATION)
 
 
 def rotate(bao: Bao, identity: Path, output: Path, policy: str) -> None:
-    identity = private_empty_or_source(identity, empty=False)
-    output = private_empty_or_source(output, empty=True)
-    if (identity == output or identity.parent != output.parent
-            or not re.fullmatch(r"audit-identity(?:-[a-z0-9-]{1,80})?",
-                                identity.name)
-            or not re.fullmatch(r"audit-identity(?:-[a-z0-9-]{1,80})?",
-                                output.name)):
-        raise ValueError("replacement audit identity must be separate")
-    old_token = checked_login(bao, identity, policy)
-    role_id = private_file(identity / ROLE_ID_FILE).strip()
-    old_secret = private_file(identity / SECRET_ID_FILE).strip()
-    path = f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id"
-    new_secret = bao.request("POST", path, {}, token=old_token) \
-        .get("data", {}).get("secret_id")
-    if not isinstance(new_secret, str) or len(new_secret) < 20 or new_secret == old_secret:
-        raise ValueError("replacement audit SecretID is invalid")
-    staged = False
-    try:
-        write_private(output / ROLE_ID_FILE, role_id)
-        write_private(output / SECRET_ID_FILE, new_secret)
-        new_token = checked_login(bao, output, policy)
-        staged = True
-    finally:
-        if not staged:
-            for name in (ROLE_ID_FILE, SECRET_ID_FILE):
-                (output / name).unlink(missing_ok=True)
-            bao.request("POST", path + "/destroy", {"secret_id": new_secret},
-                        token=old_token)
-    bao.request("POST", path + "/destroy", {"secret_id": old_secret},
-                token=new_token)
-    require_revoked(bao, role_id, old_secret)
+    rotate_secret_id(bao, identity, output, ROTATION,
+                     lambda client, path: checked_login(client, path, policy),
+                     private_empty_or_source, private_file, write_private)
 
 
 def retire(bao: Bao, identity: Path, retired: Path, policy: str) -> None:
-    identity = private_empty_or_source(identity, empty=False)
-    retired = private_empty_or_source(retired, empty=False)
-    if identity == retired:
-        raise ValueError("retired audit identity must be separate")
-    token = checked_login(bao, identity, policy)
-    role_id = private_file(identity / ROLE_ID_FILE).strip()
-    secret_id = private_file(identity / SECRET_ID_FILE).strip()
-    old_role = private_file(retired / ROLE_ID_FILE).strip()
-    old_secret = private_file(retired / SECRET_ID_FILE).strip()
-    if old_role != role_id or old_secret == secret_id:
-        raise ValueError("retired audit identity differs from active AppRole")
-    bao.request("POST", f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy",
-                {"secret_id": old_secret}, token=token)
-    require_revoked(bao, old_role, old_secret)
+    retire_secret_id(bao, identity, retired, ROTATION,
+                     lambda client, path: checked_login(client, path, policy),
+                     private_empty_or_source, private_file)
 
 
 def main() -> int:
