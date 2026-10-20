@@ -248,6 +248,15 @@ def checked_certificate_lifetime(certificate: str, minimum_ttl: int) -> None:
         raise ValueError("renewed certificate is outside the required validity overlap")
 
 
+def checked_certificate_chain(path: Path, issuer: str) -> None:
+    result = subprocess.run(
+        ["openssl", "verify", "-CAfile", "/dev/stdin", str(path)],
+        input=issuer.encode("ascii"), capture_output=True, timeout=10, check=False,
+    )
+    if result.returncode != 0:
+        raise ValueError("renewed certificate is not signed by its OpenBao issuer")
+
+
 def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> None:
     if (set(TLS_CERT_BY_ROLE) != set(KEY_NAMES)
             or set(TLS_CERT_BY_ROLE.values()) != SELFHOST_CERT_FILES - {"workload_identity_ca_cert"}):
@@ -277,8 +286,10 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
             public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
             if not isinstance(public_key, str):
                 raise ValueError("workload signer public key is absent")
-            certificate = (root / cert_name).read_text(encoding="ascii")
+            certificate_path = root / cert_name
+            certificate = certificate_path.read_text(encoding="ascii")
             checked_certificate_lifetime(certificate, minimum_ttl)
+            checked_certificate_chain(certificate_path, issuers["workload_identity_ca_cert"])
             if certificate_public_key_der(certificate) != public_key_der(public_key):
                 raise ValueError("workload certificate differs from its remote signer")
         for realm in REALMS:
@@ -292,8 +303,10 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
             public_key = metadata.get("keys", {}).get("1", {}).get("public_key")
             if not isinstance(public_key, str):
                 raise ValueError("Keycloak signer public key is absent")
-            certificate = (root / f"keycloak_{realm}_rs256_cert").read_text(encoding="ascii")
+            certificate_path = root / f"keycloak_{realm}_rs256_cert"
+            certificate = certificate_path.read_text(encoding="ascii")
             checked_certificate_lifetime(certificate, minimum_ttl)
+            checked_certificate_chain(certificate_path, issuers["keycloak"])
             if certificate_public_key_der(certificate) != public_key_der(public_key):
                 raise ValueError("Keycloak certificate differs from its remote signer")
 
