@@ -253,7 +253,7 @@ function requireComposeExecutionBoundary() {
   requireCondition(/^sha256:[0-9a-f]{64}$/.test(imageId), 'contract_image_id_invalid', 'Contract image ID is not immutable.');
   requireCondition(/^[0-9a-f]{40}$/.test(sourceSha), 'contract_source_invalid', 'Contract driver source SHA is invalid.');
   requireCondition(
-    /^mcr\.microsoft\.com\/playwright:v1\.56\.0-jammy@sha256:[0-9a-f]{64}$/.test(baseImage),
+    /^mcr\.microsoft\.com\/playwright:v1\.63\.0-noble@sha256:[0-9a-f]{64}$/.test(baseImage),
     'playwright_base_unpinned',
     'Playwright base image is not the locked immutable reference.',
   );
