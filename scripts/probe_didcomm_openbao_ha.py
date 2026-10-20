@@ -17,11 +17,22 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 IMAGE = os.environ.get("MARTY_OPENBAO_PROBE_IMAGE", "marty-openbao-ha-probe:local")
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def docker_host_path(path: Path) -> str:
+    """Translate an opt-in WSL /mnt path for Docker Desktop bind mounts."""
+    host_mnt = os.environ.get("MARTY_OPENBAO_PROBE_HOST_MNT")
+    if not host_mnt:
+        return str(path)
+    source = PurePosixPath(str(path).replace("\\", "/"))
+    if not source.is_absolute() or not source.is_relative_to("/mnt"):
+        raise ValueError("Docker host path must be under the WSL /mnt root")
+    return str(PurePosixPath(host_mnt) / source.relative_to("/mnt"))
 
 
 def prepare_image() -> None:

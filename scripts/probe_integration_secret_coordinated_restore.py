@@ -27,6 +27,7 @@ from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
     docker,
+    docker_host_path,
     prepare_image,
     request,
     require_status,
@@ -269,10 +270,11 @@ def build_rust() -> Path:
             record_preparation_timing(phase, status, started)
             if cache_available:
                 cache_available = record_preparation_cache(phase)
-    binary = (
-        rust
-        / "target/debug"
-        / ("marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys")
+    target = Path(os.environ.get("CARGO_TARGET_DIR", rust / "target"))
+    if not target.is_absolute():
+        target = rust / target
+    binary = target / "debug" / (
+        "marty-signing-keys.exe" if os.name == "nt" else "marty-signing-keys"
     )
     if not binary.is_file():
         raise RuntimeError("Candidate Signing Keys binary is missing")
@@ -363,7 +365,7 @@ def start_bao(name: str, volume: str, ca_file: Path) -> str:
         "-v",
         f"{volume}:/bao/data",
         "-v",
-        f"{config}:/bao/config/openbao.hcl:ro",
+        f"{docker_host_path(config)}:/bao/config/openbao.hcl:ro",
         IMAGE,
         "server",
         "-config=/bao/config/openbao.hcl",
@@ -397,11 +399,11 @@ def bootstrap_bao(name: str, state: str, runtime: str, *, expect_refusal: bool =
             "-v",
             f"{runtime}:/bao/runtime",
             "-v",
-            f"{ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-init.sh')}:/scripts/openbao-init.sh:ro",
             "-v",
-            f"{ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-selfhost-init.sh')}:/scripts/openbao-selfhost-init.sh:ro",
             "-v",
-            f"{ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
+            f"{docker_host_path(ROOT / 'docker/openbao-haip-workload-policy.hcl')}:/scripts/openbao-haip-workload-policy.hcl:ro",
             "--entrypoint",
             "/bin/sh",
             IMAGE,
@@ -682,34 +684,52 @@ def flow_haip_phase(
             "MARTY_TEST_SIGNING_KEYS_URL"
         ].replace("127.0.0.1", "host.docker.internal")
         container_environment["MARTY_TEST_HAIP_FLOW_INPUT"] = f"/out/{input_path.name}"
-        result = subprocess.run(
-            [
-                "docker",
-                "run",
-                "--rm",
-                "--add-host",
-                "host.docker.internal:host-gateway",
-                "--label",
-                "marty.disposable=kms-coordinated-restore",
-                "-v",
-                f"{ROOT / 'openbao/didcomm-authcrypt'}:/src:ro",
-                "-v",
-                f"{input_path.parent}:/out",
-                "-w",
-                "/src",
-                "-e",
-                "MARTY_TEST_SIGNING_KEYS_URL",
-                "-e",
-                "MARTY_TEST_SIGNING_KEYS_API_KEY",
-                "-e",
-                "MARTY_TEST_HAIP_FLOW_INPUT",
-                GO_IMAGE,
-                *go_test,
-            ],
-            env=container_environment,
-            timeout=300,
-            check=False,
+        inherited = container_environment.get("WSLENV", "")
+        forwarded = ("MARTY_TEST_SIGNING_KEYS_URL", "MARTY_TEST_SIGNING_KEYS_API_KEY",
+                     "MARTY_TEST_HAIP_FLOW_INPUT")
+        container_environment["WSLENV"] = ":".join(
+            part for part in (inherited, *forwarded) if part
         )
+        output_volume = f"kms-restore-haip-output-{uuid.uuid4().hex[:12]}"
+        docker("volume", "create", "--label",
+               "marty.disposable=kms-coordinated-restore", output_volume)
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--add-host",
+                    "host.docker.internal:host-gateway",
+                    "--label",
+                    "marty.disposable=kms-coordinated-restore",
+                    "-v",
+                    f"{docker_host_path(ROOT / 'openbao/didcomm-authcrypt')}:/src:ro",
+                    "-v",
+                    f"{output_volume}:/out",
+                    "-w",
+                    "/src",
+                    "-e",
+                    "MARTY_TEST_SIGNING_KEYS_URL",
+                    "-e",
+                    "MARTY_TEST_SIGNING_KEYS_API_KEY",
+                    "-e",
+                    "MARTY_TEST_HAIP_FLOW_INPUT",
+                    GO_IMAGE,
+                    *go_test,
+                ],
+                env=container_environment,
+                timeout=300,
+                check=False,
+            )
+            if result.returncode == 0:
+                response = docker("run", "--rm", "-v", f"{output_volume}:/out:ro",
+                                  "--entrypoint", "/bin/cat", GO_IMAGE,
+                                  f"/out/{input_path.name}")
+                input_path.write_text(response + "\n", encoding="utf-8")
+        finally:
+            subprocess.run(["docker", "volume", "rm", "-f", output_volume],
+                           capture_output=True, timeout=30, check=False)
     if result.returncode or not input_path.is_file():
         raise RuntimeError("Disposable Go holder HAIP response generation failed")
     for target, database in (
@@ -953,20 +973,16 @@ def run() -> None:
                 manifest = json.loads(bundle.read("manifest.json"))
             if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:
                 raise RuntimeError("Coordinated OpenBao snapshot hash mismatch")
-            docker(
-                "exec",
-                pg_name,
-                "pg_dump",
-                "-Fc",
-                "-U",
-                "postgres",
-                "-d",
-                DATABASE,
-                "-f",
-                "/tmp/kms.dump",
-            )
             dump = temp / "kms.dump"
-            docker("cp", f"{pg_name}:/tmp/kms.dump", str(dump))
+            with dump.open("wb") as stream:
+                saved = subprocess.run(
+                    ["docker", "exec", pg_name, "pg_dump", "-Fc", "-U",
+                     "postgres", "-d", DATABASE],
+                    stdout=stream, stderr=subprocess.PIPE, timeout=120,
+                    check=False,
+                )
+            if saved.returncode or not dump.stat().st_size:
+                raise RuntimeError("Disposable pg_dump failed")
             docker("rm", "-f", pg_name)
             containers.remove(pg_name)
             docker("stop", bao_name)
@@ -974,24 +990,13 @@ def run() -> None:
 
             containers.append(pg_name)
             restored_database_url, _ = start_postgres(pg_name, restored_pg)
-            docker("cp", str(dump), f"{pg_name}:/tmp/kms.dump")
-            restored = subprocess.run(
-                [
-                    "docker",
-                    "exec",
-                    pg_name,
-                    "pg_restore",
-                    "-U",
-                    "postgres",
-                    "-d",
-                    DATABASE,
-                    "/tmp/kms.dump",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=120,
-                check=False,
-            )
+            with dump.open("rb") as stream:
+                restored = subprocess.run(
+                    ["docker", "exec", "-i", pg_name, "pg_restore", "-U",
+                     "postgres", "-d", DATABASE],
+                    stdin=stream, capture_output=True, text=True,
+                    timeout=120, check=False,
+                )
             if restored.returncode:
                 raise RuntimeError(
                     f"Disposable pg_restore failed: {restored.stderr[-1200:]}"
