@@ -50,6 +50,16 @@ qualification or authorize selective skips.
 
 For remaining A0 work, enumerate each group's scenario obligations and non-Cargo input closure in a reusable manifest before activating selection. The groups above deliberately remain broad where ownership has not yet been proven.
 
+The Flow, self-host and two Canvas acceptance targets now add a second Rust
+source view to their run-bound records: the Rustc depfile adjacent to the
+unique Cargo executable in the fresh same-run target directory, with its exact in-checkout source/embedded-file hashes and
+depfile hash. This observes the compiled test target, including nested modules
+that the bounded first-hop scan cannot discover. This is diagnostic evidence,
+not authenticated provenance or complete closure: it does not cover dependency
+crates' source graph or runtime provisioning, cannot guarantee coverage of
+generated files, and does not establish assertion reachability. Local runs without the Cargo artifact manifest remain
+`local_unrecorded`; no selector consumes the depfile record.
+
 The contracts lane records Cargo `compiler-artifact` events for its exact
 workspace build. Both the workflow's executable preparation and the database
 runner resolve the ten Issuance Canvas PostgreSQL targets plus the proof-nonce
