@@ -133,3 +133,15 @@ and checks a current v2 Raft snapshot with the separate snapshot identity. The
 audit does not revoke the root or establish coordinated backup provenance, CA rollover,
 or an expiry-crossing business journey. Retain the root until those separate
 gates have passed on a fresh installation.
+
+For the eventual retirement, use the verified HTTPS `auth/token/revoke`
+endpoint with the initial root token as the target, then require a denied
+lookup of that token and a fresh scoped AppRole login, snapshot export, and
+active-plus-rollback audit before removing the stale `root.token` file from
+the active owned state and excluding it from future backups. In a separate
+cold-copy rehearsal, revoking that token through `auth/token/revoke` succeeded
+and the root lookup returned 403;
+`auth/token/revoke-self` returned 500 and left it valid. This procedure does
+not replace the fresh-install, session, CA, and release gates above. Keep the
+unseal material under separate custody: revoking the root token does not
+unseal OpenBao or replace a Raft recovery test.
