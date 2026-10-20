@@ -53,6 +53,7 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
+. (Join-Path $PSScriptRoot "beta-native-probes.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-tunnel-configuration.ps1")
@@ -1497,18 +1498,18 @@ try {
     )
     $ready = $false
     foreach ($attempt in 1..60) {
-        docker exec $copyContainer pg_isready -U postgres | Out-Null
-        if ($LASTEXITCODE -eq 0) { $ready = $true; break }
+        $probe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyContainer, 'pg_isready', '-U', 'postgres')
+        if ($probe.exit_code -eq 0) { $ready = $true; break }
         Start-Sleep -Seconds 2
     }
     if (-not $ready) { throw "Rehearsal PostgreSQL did not become ready" }
     $redisReady = $false
     $openBaoReady = $false
     foreach ($attempt in 1..60) {
-        $redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping 2>$null
-        if ($LASTEXITCODE -eq 0 -and $redisPing -eq "PONG") { $redisReady = $true }
-        docker exec $copyOpenBaoContainer bao status -address=https://127.0.0.1:8200 -ca-cert=/tmp/bao-tls/vault-ca.pem 2>$null | Out-Null
-        if ($LASTEXITCODE -eq 0) { $openBaoReady = $true }
+        $redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')
+        if ($redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG') { $redisReady = $true }
+        $baoProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyOpenBaoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/tmp/bao-tls/vault-ca.pem')
+        if ($baoProbe.exit_code -eq 0) { $openBaoReady = $true }
         if ($redisReady -and $openBaoReady) { break }
         Start-Sleep -Seconds 2
     }
