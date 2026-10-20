@@ -218,8 +218,8 @@ This is the state you should preserve for reboot recovery, host migration, and f
 The standalone OpenBao deployment keeps its Raft state, KMS-owned TLS identity and recovery material in `SELFHOST_OPENBAO_STATE_DIR`.
 
 - Keep that directory on durable storage
-- Treat it as production-secret material because it contains init, root-token, and unseal-key data
-- Use `SELFHOST_OPENBAO_EXPORT_DIR` to stage export archives created with `python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local`
+- Treat it as production-secret material because the Raft snapshot contains the complete KMS custody state; hold unseal material separately
+- Provision the separate snapshot-read-only AppRole once as described in `SELFHOST_OPENBAO.md`, then use `SELFHOST_OPENBAO_EXPORT_DIR` to stage archives created with `python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local`
 
 See [SELFHOST_OPENBAO.md](SELFHOST_OPENBAO.md) for the compose file and recovery flow.
 

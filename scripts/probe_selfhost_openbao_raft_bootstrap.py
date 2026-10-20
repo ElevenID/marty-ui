@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import ssl
 import subprocess
 import sys
@@ -23,6 +24,8 @@ from probe_didcomm_openbao_ha import (
     require_status as http_require_status,
     wait_for,
 )
+
+DOCKER_ROOT = Path(os.environ.get("MARTY_OPENBAO_PROBE_HOST_ROOT", str(ROOT)))
 
 
 def volume_file(volume: str, path: str) -> str:
@@ -49,7 +52,7 @@ def server_digest(volume: str) -> str:
 
 
 def start_node(name: str, volume: str, ca_file: Path) -> str:
-    config = ROOT / "docker/openbao-selfhost.hcl"
+    config = DOCKER_ROOT / "docker/openbao-selfhost.hcl"
     docker(
         "run", "-d", "--name", name,
         "--label", "marty.disposable=kms-selfhost-probe",
@@ -139,11 +142,11 @@ def run() -> None:
                 "-v",
                 f"{runtime}:/bao/runtime",
                 "-v",
-                f"{ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-init.sh'}:/scripts/openbao-init.sh:ro",
                 "-v",
-                f"{ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-selfhost-init.sh'}:/scripts/openbao-selfhost-init.sh:ro",
                 "-v",
-                f"{ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
+                f"{DOCKER_ROOT / 'docker/openbao-haip-workload-policy.hcl'}:/scripts/openbao-haip-workload-policy.hcl:ro",
                 "--entrypoint",
                 "/bin/sh",
                 IMAGE,
@@ -163,7 +166,10 @@ def run() -> None:
             timeout=60, check=False,
         )
         if repeated.returncode == 0 or "requires fresh, uninitialized Raft state" not in repeated.stderr:
-            raise RuntimeError("Initialized OpenBao accepted privileged bootstrap again")
+            raise RuntimeError(
+                "Initialized OpenBao bootstrap refusal differed: "
+                f"exit={repeated.returncode}, stderr={repeated.stderr[-300:]}"
+            )
         published_ca = docker(
             "run", "--rm", "-v", f"{runtime}:/bao/runtime:ro",
             "--entrypoint", "/bin/cat", IMAGE,
@@ -236,20 +242,33 @@ def run() -> None:
         host_state.mkdir()
         (host_state / "tls").mkdir()
         (host_state / "tls" / "ca.crt").write_bytes(ca_file.read_bytes())
-        for name in ("selfhost-init.json", "root.token", "unseal.key"):
-            (host_state / name).write_text(
-                volume_file(state, name), encoding="utf-8"
-            )
+        root_file = host_state / "root.token"
+        root_file.write_text(volume_file(state, "root.token"), encoding="utf-8")
+        root_file.chmod(0o600)
+        identity = Path(public_ca_dir.name) / "snapshot-identity"
+        identity.mkdir(mode=0o700)
+        provision = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/provision_selfhost_snapshot_identity.py"),
+             "--bao-addr", base, "--bao-ca", str(host_state / "tls" / "ca.crt"),
+             "--root-token-file", str(root_file), "--output", str(identity)],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if provision.returncode:
+            raise RuntimeError(f"Disposable snapshot identity failed: {provision.stderr[-800:]}")
+        root_file.unlink()
         exported = Path(public_ca_dir.name) / "exports"
+        exported.mkdir(mode=0o700)
         result = subprocess.run(
             [sys.executable, str(ROOT / "scripts/export-selfhost-openbao.py"),
              "--state-dir", str(host_state), "--export-dir", str(exported),
-             "--bao-url", base],
+             "--bao-url", base, "--snapshot-identity-dir", str(identity)],
             capture_output=True, text=True, timeout=300, check=False,
         )
         if result.returncode:
             raise RuntimeError(f"Disposable HTTPS Raft export failed: {result.stderr[-800:]}")
         with zipfile.ZipFile(next(exported.glob("*.zip"))) as bundle:
+            if any(name.startswith("recovery/") for name in bundle.namelist()):
+                raise RuntimeError("Raft archive leaked root or unseal recovery material")
             snapshot = bundle.read("raft.snap")
             manifest = json.loads(bundle.read("manifest.json"))
         if hashlib.sha256(snapshot).hexdigest() != manifest["snapshot_sha256"]:
@@ -279,6 +298,27 @@ def run() -> None:
         if cold(cold_base, "GET", "didcomm/haip/keys/tenant_a/flow_a/versions/"
                 f"{haip_version}", root)["data"]["version"] != haip_version:
             raise RuntimeError("Cold Raft state copy lost HAIP key version")
+
+        # The dedicated snapshot identity must survive revocation of the
+        # original bootstrap root on the copied Raft state.
+        cold(cold_base, "POST", "auth/token/revoke-self", root)
+        if http_request(cold_base, "GET", f"transit/keys/{key_name}",
+                        token=root, ca_file=ca_file)[0] != 403:
+            raise RuntimeError("Revoked bootstrap root still has KMS access")
+        rootless_exports = Path(public_ca_dir.name) / "rootless-exports"
+        rootless_exports.mkdir(mode=0o700)
+        rootless = subprocess.run(
+            [sys.executable, str(ROOT / "scripts/export-selfhost-openbao.py"),
+             "--state-dir", str(host_state), "--export-dir", str(rootless_exports),
+             "--bao-url", cold_base, "--snapshot-identity-dir", str(identity)],
+            capture_output=True, text=True, timeout=300, check=False,
+        )
+        if rootless.returncode:
+            raise RuntimeError(f"Rootless Raft export failed: {rootless.stderr[-800:]}")
+        with zipfile.ZipFile(next(rootless_exports.glob("*.zip"))) as bundle:
+            if (bundle.read("raft.snap") == b"" or
+                    any(name.startswith("recovery/") for name in bundle.namelist())):
+                raise RuntimeError("Rootless Raft archive is invalid")
 
         # A fresh node has its own TLS CA; a Raft snapshot never exports that
         # node-local private identity into the application or archive.

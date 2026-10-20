@@ -8,7 +8,8 @@ Use this checklist for the workstation-local production self-host setup and for 
 - [ ] `SELFHOST_STATE_DIR` is outside the workspace
 - [ ] `SELFHOST_BACKUP_DIR` exists for staged backups and export archives
 - [ ] `SELFHOST_OPENBAO_STATE_DIR` is outside the workspace
-- [ ] `SELFHOST_OPENBAO_EXPORT_DIR` exists for OpenBao export archives
+- [ ] `SELFHOST_OPENBAO_EXPORT_DIR` exists with mode 0700 for OpenBao export archives
+- [ ] `SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR` exists with mode 0700 and holds only the separately scoped snapshot AppRole credentials
 - [ ] `SELFHOST_STATE_DIR/postgres` exists
 - [ ] `SELFHOST_STATE_DIR/redis` exists
 - [ ] `SELFHOST_STATE_DIR/applicant` exists
@@ -33,6 +34,7 @@ Use this checklist for the workstation-local production self-host setup and for 
 - [ ] `.env.selfhost.production.local` points `SELFHOST_BACKUP_DIR` at the backup/export directory
 - [ ] `.env.selfhost.production.local` points `SELFHOST_OPENBAO_STATE_DIR` at the external OpenBao state directory
 - [ ] `.env.selfhost.production.local` points `SELFHOST_OPENBAO_EXPORT_DIR` at the external OpenBao export directory
+- [ ] `.env.selfhost.production.local` points `SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR` at the external snapshot identity directory
 - [ ] `PUBLIC_DOMAIN`, `PUBLIC_API_URL`, and `UI_BASE_URL` are set for the production hostname
 - [ ] `CREDENTIAL_LOGIN_POLICY_ID=50000000-0000-0000-0000-000000000004` is set for Open Badge sign-in
 - [ ] `BAO_ADDR` points at the operator-managed external Vault/OpenBao endpoint
@@ -52,5 +54,5 @@ Use this checklist for the workstation-local production self-host setup and for 
 - [ ] The operator understands that bind-mounted state under `SELFHOST_STATE_DIR` survives reboot and ordinary Docker cleanup
 - [ ] The operator understands that bind-mounted OpenBao state under `SELFHOST_OPENBAO_STATE_DIR` survives reboot and ordinary Docker cleanup
 - [ ] A backup procedure exists for copying `SELFHOST_STATE_DIR` into `SELFHOST_BACKUP_DIR`
-- [ ] `python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local` succeeds and the resulting archive is protected like production secrets
+- [ ] The separate snapshot-read-only AppRole is provisioned, `python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local` succeeds, and the resulting archive is protected like production secrets without root or unseal files
 - [ ] A future cloud migration plan exists for transferring `SELFHOST_STATE_DIR`, `SELFHOST_OPENBAO_STATE_DIR`, `.env.selfhost.production.local`, and the secret directory through a secure channel

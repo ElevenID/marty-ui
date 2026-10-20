@@ -5,10 +5,11 @@ This is the standalone external OpenBao setup for the workstation-local self-hos
 ## Paths
 
 - `SELFHOST_OPENBAO_STATE_DIR` stores OpenBao Raft data and recovery material
-- `SELFHOST_OPENBAO_EXPORT_DIR` stores zipped export archives created with `scripts/export-selfhost-openbao.py`
+- `SELFHOST_OPENBAO_EXPORT_DIR` is an owner-only (0700) directory for Raft archives
+- `SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR` holds a separate snapshot-read-only AppRole RoleID and SecretID (0700 directory, 0600 files)
 - `SELFHOST_SECRET_DIR/openbao_service_token` is the runtime token the main self-host stack consumes
 
-The OpenBao state directory contains highly sensitive material, including the initial root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them. The root token is still needed by several initial provisioning and snapshot helpers; retirement of that token remains a separate hardening gate.
+The OpenBao state directory contains highly sensitive material, including the initial root token, the unseal key, and OpenBao's own TLS CA and listener private keys. Treat that directory like a top-tier secret. Application containers receive only the public `openbao_tls_ca_cert` and scoped tokens; do not mount the OpenBao state directory into them. The root token is still needed by initial provisioning helpers; retirement of that token remains a separate hardening gate. Snapshot export uses its own AppRole, not the root token or the renewal AppRole.
 
 ## Start The Standalone OpenBao Stack
 
@@ -53,7 +54,24 @@ The recovery material lives under `SELFHOST_OPENBAO_STATE_DIR`.
 
 ## Export
 
-To create a portable OpenBao recovery archive:
+To prepare portable OpenBao recovery archives:
+
+After the one-time OpenBao bootstrap, create an owner-only snapshot identity
+directory and provision its dedicated AppRole once. Use absolute paths for these
+private inputs:
+
+```bash
+mkdir -m 700 -p "$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR" "$SELFHOST_OPENBAO_EXPORT_DIR"
+python scripts/provision_selfhost_snapshot_identity.py \
+  --bao-addr "https://127.0.0.1:$SELFHOST_OPENBAO_HOST_PORT" \
+  --bao-ca "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt")" \
+  --root-token-file "$(realpath "$SELFHOST_OPENBAO_STATE_DIR/root.token")" \
+  --output "$(realpath "$SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR")"
+```
+
+The role can only read `sys/storage/raft/snapshot`. Its identity can retrieve
+the complete encrypted KMS state, so protect it separately from routine renewal
+credentials. Subsequent exports need only this identity:
 
 ```bash
 python scripts/export-selfhost-openbao.py --env-file .env.selfhost.production.local
@@ -68,10 +86,9 @@ make selfhost-prod-openbao-export
 The command requests an authenticated Raft snapshot from the running local OpenBao API. It writes a zip archive under `SELFHOST_OPENBAO_EXPORT_DIR` containing:
 
 - `raft.snap`, the OpenBao Raft snapshot
-- `recovery/selfhost-init.json`, `recovery/root.token`, and `recovery/unseal.key`
 - the current `openbao-selfhost.hcl`
 - a manifest with the snapshot SHA-256
 
 The exporter verifies the loopback HTTPS server with `SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt`. It does not include OpenBao's TLS private keys in the archive. A cold snapshot restore on a new node must establish a new TLS identity and redistribute its public CA before application traffic resumes. Copying the entire stopped state directory retains the existing TLS identity; protect that copy as KMS key material.
 
-The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. Because the archive contains root-token and unseal-key material, protect it like production secrets.
+The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure and separately held original unseal material. It contains neither the root token nor unseal key. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. The snapshot still contains the complete KMS custody state; protect it like production secrets.

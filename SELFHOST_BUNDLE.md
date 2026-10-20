@@ -13,6 +13,7 @@ This bundle is the image-based distribution for the open-source self-host stack.
 - `scripts/generate_selfhost_disposable_credentials.py` for seventeen local-only disposable text credentials; it does not generate KMS, workload TLS, or integration secrets
 - `scripts/provision_selfhost_keycloak_kms.py` and its small HTTPS client for seven disposable Keycloak remote-key inputs; these require an already-running HTTPS OpenBao with the DIDComm plugin
 - `scripts/provision_selfhost_disposable_tls.py` and its public-output validator for 31 keyless workload TLS inputs; it uses the exact locked services image and a separate disposable OpenBao project
+- `scripts/provision_selfhost_snapshot_identity.py` and `scripts/export-selfhost-openbao.py` for a separate snapshot-read-only AppRole and rootless Raft archives; keep unseal material outside the archive
 - the runtime `docker/*` and `scripts/*` files still mounted by the compose stack
 
 ## Image contract
