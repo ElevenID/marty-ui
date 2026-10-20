@@ -61,6 +61,62 @@ PACKAGED_RUNTIME_PRODUCERS = {
             ),
         ),
     },
+    "marty-keyless-grpc-bridge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "envoy-issuance-bridge",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-keyless-grpc-bridge --bin marty-keyless-grpc-bridge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-keyless-grpc-bridge /usr/local/bin/marty-keyless-grpc-bridge",
+            ),
+            (
+                "docker-compose.base.yml",
+                '    entrypoint: ["/usr/local/bin/marty-keyless-grpc-bridge"]',
+            ),
+        ),
+    },
+    "marty-passport-keyless-edge": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "passport/oidf-keyless-edges",
+        "witnesses": (
+            (
+                "scripts/build-rust-service-binaries.sh",
+                "-p marty-passport-keyless-edge --bin marty-passport-keyless-edge --bin marty-passport-tls-bootstrap --bin marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-keyless-edge /usr/local/bin/marty-passport-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-oidf-keyless-edge /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+            (
+                "services/Dockerfile",
+                "COPY --from=rust-service-builder /build/rust/target/release/marty-passport-tls-bootstrap /usr/local/bin/marty-passport-tls-bootstrap",
+            ),
+            (
+                "scripts/passport_supported_provisioning_producer.py",
+                '"--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",',
+            ),
+            (
+                "docker-compose.passport-supported-disposable.yml",
+                "    entrypoint: [/usr/local/bin/marty-passport-keyless-edge]",
+            ),
+            (
+                "docker-compose.profile.oidf.yml",
+                "        SERVICE_NAME: oidf-keyless-edge",
+            ),
+            (
+                "services/entrypoint.sh",
+                "\texec /usr/local/bin/marty-oidf-keyless-edge",
+            ),
+        ),
+    },
     "marty-canvas-demo-seed": {
         "consumer_kind": "packaged-executable/runtime",
         "consumer": "db-migrate",
