@@ -3980,6 +3980,8 @@ class AffectedRustPlannerTests(unittest.TestCase):
                 "rust/Cargo.lock",
                 "rust/third_party/ssi-jwt/src/lib.rs",
                 "rust/deleted-crate/fixture.json",
+                "rust/acceptance/support/base_runtime_redis.rs",
+                "rust/acceptance/support/didcomm_gateway_replay.rs",
                 "contracts/canvas-worker-oracle.json",
                 "proto/candidate.proto",
                 "services/Dockerfile",

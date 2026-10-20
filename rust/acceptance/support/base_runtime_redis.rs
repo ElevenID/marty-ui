@@ -1,4 +1,5 @@
-// Exact-owned base-profile Redis dependency, never an operator Redis URL.
+// Shared Flow/Canvas acceptance fixture: exact-owned base-profile Redis,
+// never an operator Redis URL.
 // Uses the existing Docker fixture command/inspection boundary. The base image
 // tag is resolved locally to an immutable image ID before container creation;
 // this is runtime evidence, not authenticated release provenance.

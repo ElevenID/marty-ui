@@ -21,6 +21,8 @@ contracts/python-value-fast-obligations.json
 contracts/canvas-renewal-profile-obligations.json
 
 rust/**/target
+rust/acceptance/support/base_runtime_redis.rs
+rust/acceptance/support/didcomm_gateway_replay.rs
 rust/**/.git
 rust/**/*.log
 rust/**/.env*

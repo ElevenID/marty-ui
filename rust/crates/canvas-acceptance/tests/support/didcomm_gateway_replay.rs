@@ -1,4 +1,4 @@
-include!("../../../../services/issuance/tests/support/didcomm_gateway_replay.rs");
+include!("../../../../acceptance/support/didcomm_gateway_replay.rs");
 
 #[test]
 fn native_selection_is_unchanged_and_legacy_control_changes_only_direct_owner() {
