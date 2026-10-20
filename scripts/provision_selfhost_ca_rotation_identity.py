@@ -13,14 +13,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
+import tempfile
 from urllib.error import HTTPError
-
-from cryptography import x509
-from cryptography.exceptions import InvalidSignature
-from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.x509.oid import NameOID
 
 sys.dont_write_bytecode = True
 from activate_selfhost_renewed_secrets import private_file  # noqa: E402
@@ -42,6 +39,43 @@ TOKEN_FILE = "ca-rotation-operator-token"
 POLICY_NAMES_FILE = "ca-rotation-leaf-policies.json"
 # Pre-authorized exact mount names; a mid-path `*` is not an OpenBao ACL glob.
 VERSIONS = range(2, 9)
+
+
+def checked_issuer_certificate(certificate: str, kind: str, version: int) -> None:
+    """Verify the public CA response with OpenSSL before accepting its issuer."""
+    encoded = certificate.encode("ascii")
+    if not re.fullmatch(
+            r"-----BEGIN CERTIFICATE-----\n(?:[A-Za-z0-9+/=]+\n)+"
+            r"-----END CERTIFICATE-----\n?", certificate):
+        raise RuntimeError("CA replacement certificate is not one PEM certificate")
+
+    def openssl(*arguments: str, input_bytes: bytes | None = encoded) -> str:
+        result = subprocess.run(
+            ["openssl", *arguments], input=input_bytes, capture_output=True,
+            timeout=10, check=False,
+        )
+        if result.returncode:
+            raise RuntimeError("CA replacement certificate failed OpenSSL validation")
+        return result.stdout.decode("ascii")
+
+    name = f"CN=Marty self-host {kind} CA v{version}"
+    names = openssl("x509", "-noout", "-subject", "-issuer", "-nameopt", "RFC2253")
+    if names.splitlines() != [f"subject={name}", f"issuer={name}"]:
+        raise RuntimeError("CA replacement certificate differs from reviewed issuer")
+    constraints = openssl("x509", "-noout", "-ext", "basicConstraints")
+    if [line.strip() for line in constraints.splitlines()] != [
+            "X509v3 Basic Constraints: critical", "CA:TRUE"]:
+        raise RuntimeError("CA replacement lacks CA basic constraints")
+    public = openssl("x509", "-pubkey", "-noout")
+    key = openssl("pkey", "-pubin", "-text", "-noout", input_bytes=public.encode("ascii"))
+    if "Public-Key: (256 bit)" not in key or "ASN1 OID: prime256v1" not in key:
+        raise RuntimeError("CA replacement certificate has an unexpected public key")
+    with tempfile.TemporaryDirectory(prefix="selfhost-ca-verify-") as directory:
+        path = Path(directory) / "issuer.pem"
+        path.write_bytes(encoded)
+        openssl("verify", "-x509_strict", "-check_ss_sig", "-no_check_time",
+                "-purpose", "any",
+                "-CAfile", str(path), str(path), input_bytes=None)
 
 
 def rotation_acl(names: list[str]) -> str:
@@ -204,25 +238,7 @@ def stage_issuer(bao: Bao, identity: Path, output: Path,
             or not certificate.startswith("-----BEGIN CERTIFICATE-----\n")
             or "PRIVATE KEY" in certificate or len(certificate) > 64 * 1024):
         raise RuntimeError("CA replacement exported or omitted key material")
-    parsed = x509.load_pem_x509_certificate(certificate.encode("ascii"))
-    common_names = parsed.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
-    public_key = parsed.public_key()
-    try:
-        is_ca = parsed.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
-    except x509.ExtensionNotFound as error:
-        raise RuntimeError("CA replacement lacks basic constraints") from error
-    if (len(common_names) != 1
-            or common_names[0].value != f"Marty self-host {kind} CA v{version}"
-            or parsed.issuer != parsed.subject
-            or not isinstance(public_key, ec.EllipticCurvePublicKey)
-            or not isinstance(public_key.curve, ec.SECP256R1)
-            or not is_ca):
-        raise RuntimeError("CA replacement certificate differs from reviewed issuer")
-    try:
-        public_key.verify(parsed.signature, parsed.tbs_certificate_bytes,
-                          ec.ECDSA(parsed.signature_hash_algorithm))
-    except InvalidSignature as error:
-        raise RuntimeError("CA replacement signature is invalid") from error
+    checked_issuer_certificate(certificate, kind, version)
     live = bao.request("GET", f"{mount}/cert/ca", token=token).get("data", {})
     if live.get("certificate") != certificate:
         raise RuntimeError("CA replacement differs from its mounted issuer")

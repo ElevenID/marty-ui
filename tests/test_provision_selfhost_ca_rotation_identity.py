@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 import sys
@@ -59,3 +60,22 @@ def test_replacement_issuer_rejects_ordinary_renewal_or_root_authority() -> None
                          ("selfhost-kms-renewal", "auth/selfhost-renew/login")):
         with pytest.raises(ValueError, match="scoped AppRole"):
             require_ca_rotation_authority(Authority(policy, path))
+
+
+def test_public_ca_certificate_verification_rejects_wrong_or_tampered_issuer() -> None:
+    certificate = (Path(__file__).parent / "fixtures" /
+                   "selfhost_ca_issuer_public.pem").read_text(encoding="ascii")
+    rotation.checked_issuer_certificate(certificate, "workload", 2)
+    with pytest.raises(RuntimeError, match="reviewed issuer"):
+        rotation.checked_issuer_certificate(certificate, "keycloak", 2)
+    with pytest.raises(RuntimeError, match="one PEM"):
+        rotation.checked_issuer_certificate(certificate + certificate, "workload", 2)
+
+    header, encoded = certificate.split("\n", 1)
+    payload, footer = encoded.split("-----END CERTIFICATE-----", 1)
+    der = bytearray(base64.b64decode(payload))
+    der[-1] ^= 1  # Keep the certificate parseable while invalidating its signature.
+    tampered = (header + "\n" + base64.encodebytes(der).decode("ascii") +
+                "-----END CERTIFICATE-----" + footer)
+    with pytest.raises(RuntimeError, match="OpenSSL validation"):
+        rotation.checked_issuer_certificate(tampered, "workload", 2)
