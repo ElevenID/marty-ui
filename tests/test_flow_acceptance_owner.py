@@ -66,18 +66,23 @@ def test_shared_fixtures_keep_canvas_unit_tests_once_and_release_scope():
     assert "features" not in canvas_manifest
     assert "features" not in flow_manifest
     redis = (
-        ROOT / "rust/services/issuance/tests/support/base_runtime_redis.rs"
+        ROOT / "rust/acceptance/support/base_runtime_redis.rs"
     ).read_text()
     gateway = (
-        ROOT / "rust/services/issuance/tests/support/didcomm_gateway_replay.rs"
+        ROOT / "rust/acceptance/support/didcomm_gateway_replay.rs"
     ).read_text()
     redis_owner = (CANVAS / "tests/support/base_runtime_redis.rs").read_text()
     gateway_owner = (CANVAS / "tests/support/didcomm_gateway_replay.rs").read_text()
+    flow_owner = (FLOW / "tests/flow_published_schema_contract.rs").read_text()
     assert "fn ping_cleanup_failure_is_terminal_not_readiness_retry" not in redis
     assert "fn ping_cleanup_failure_is_terminal_not_readiness_retry" in redis_owner
     assert "fn native_selection_is_unchanged" not in gateway
     assert "fn native_selection_is_unchanged" in gateway_owner
     assert "include!(" in redis_owner and "include!(" in gateway_owner
+    assert 'include!("../../../../acceptance/support/base_runtime_redis.rs")' in redis_owner
+    assert '#[path = "../../../acceptance/support/base_runtime_redis.rs"]' in flow_owner
+    assert 'include!("../../../../acceptance/support/didcomm_gateway_replay.rs")' in gateway_owner
+    assert '#[path = "../../../acceptance/support/didcomm_gateway_replay.rs"]' in flow_owner
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     assert "-p marty-flow-acceptance" in workflow
     assert "--test flow_published_schema_contract" in workflow

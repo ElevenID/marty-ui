@@ -1180,7 +1180,7 @@ def test_verified_flow_test_sources_select_only_flow_on_pr(tmp_path: Path) -> No
     for paths in (
         [flow_tests[0], "docs/architecture-feedback-improvement-plan.md"],
         [flow_tests[1], "rust/crates/flow-acceptance/Cargo.toml"],
-        [flow_tests[-1], "rust/services/issuance/tests/support/base_runtime_redis.rs"],
+        [flow_tests[-1], "rust/acceptance/support/base_runtime_redis.rs"],
         ["rust/crates/flow-acceptance/tests/support/unreviewed.rs"],
         [flow_tests[2] + "\nother"],
     ):
