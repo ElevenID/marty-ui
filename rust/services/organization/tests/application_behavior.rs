@@ -144,7 +144,10 @@ fn creation_defaults_owner_and_catalog_match_the_language_neutral_contract() {
     assert_eq!(plan.owner.status, case.expected.owner_status);
     assert_eq!(plan.permissions.len(), case.expected.permission_count);
     for key in case.expected.required_permission_keys {
-        assert!(plan.permissions.contains_key(&key), "missing permission {key}");
+        assert!(
+            plan.permissions.contains_key(&key),
+            "missing permission {key}"
+        );
     }
 }
 
