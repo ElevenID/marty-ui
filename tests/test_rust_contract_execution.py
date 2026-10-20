@@ -1438,6 +1438,62 @@ def test_canvas_obligation_declares_kms_and_tier_names_without_values() -> None:
         assert item["owner"] == "scripts/ci/run-published-canvas-contracts.sh"
 
 
+def test_canvas_published_images_bind_exact_digest_and_selected_registry(
+    monkeypatch,
+) -> None:
+    pins = json.loads(
+        (ROOT / "contracts/canvas-worker-consumer-range-oracle.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    postgres = pins["observed_postgres_image"]
+    probe = pins["observed_image"]
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for selected, expected in (
+        (postgres, "canonical"),
+        (f"mirror.gcr.io/library/{postgres}", "digest_preserving_mirror"),
+    ):
+        monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", selected)
+        evidence = INVENTORY.canvas_published_image_inputs()
+        assert evidence["postgres_reference"] == postgres
+        assert evidence["probe_reference"] == probe
+        assert evidence["postgres_selection"] == expected
+        assert evidence["pin_source_sha256"] == INVENTORY.digest(
+            ROOT / evidence["pin_source"]
+        )
+        assert evidence["source_closure"] == "incomplete"
+
+
+def test_canvas_published_image_selection_fails_closed_without_leaking_value(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    for selected in ("", "postgres:latest", "private-token@sha256:" + "0" * 64):
+        monkeypatch.setenv("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", selected)
+        with pytest.raises(ValueError, match="canvas_published_postgres_selection_drift") as error:
+            INVENTORY.canvas_published_image_inputs()
+        if selected:
+            assert selected not in str(error.value)
+
+
+def test_canvas_published_image_pin_changes_require_review(tmp_path, monkeypatch) -> None:
+    source = ROOT / "contracts/canvas-worker-consumer-range-oracle.json"
+    destination = tmp_path / "contracts/canvas-worker-consumer-range-oracle.json"
+    destination.parent.mkdir()
+    pins = json.loads(source.read_text(encoding="utf-8"))
+    pins["observed_postgres_image"] = "postgres:latest"
+    destination.write_text(json.dumps(pins), encoding="utf-8")
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="canvas_published_image_pin_drift"):
+        INVENTORY.canvas_published_image_inputs()
+
+
+def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="canvas_published_image_pin_drift"):
+        INVENTORY.canvas_published_image_inputs()
+
+
 def test_canvas_composition_inventory_never_records_the_kms_token(
     real_obligation_harness, monkeypatch, capsys
 ) -> None:

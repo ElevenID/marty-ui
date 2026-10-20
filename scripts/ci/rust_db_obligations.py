@@ -134,6 +134,43 @@ def digest(path: Path) -> str:
     return checksum.hexdigest()
 
 
+def canvas_published_image_inputs() -> dict[str, object]:
+    """Record the two immutable published-image inputs without environment data."""
+    path = "contracts/canvas-worker-consumer-range-oracle.json"
+    pin_path = ROOT / path
+    try:
+        if pin_path.is_symlink() or not pin_path.is_file():
+            raise ValueError("missing or linked pin source")
+        pins = json.loads(pin_path.read_text(encoding="utf-8"))
+        postgres = pins["observed_postgres_image"]
+        probe = pins["observed_image"]
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as error:
+        raise ValueError("canvas_published_image_pin_drift") from error
+    image = re.compile(r"[a-z0-9./_-]+@sha256:[a-f0-9]{64}\Z")
+    if not all(isinstance(value, str) and image.fullmatch(value)
+               for value in (postgres, probe)):
+        raise ValueError("canvas_published_image_pin_drift")
+    selected = os.environ.get("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE")
+    if selected == postgres:
+        selection = "canonical"
+    elif selected == f"mirror.gcr.io/library/{postgres}":
+        selection = "digest_preserving_mirror"
+    elif os.environ.get("GITHUB_ACTIONS") == "true":
+        # The runner must have pulled one of the exact references before any
+        # Canvas case executes. Never publish an arbitrary environment value.
+        raise ValueError("canvas_published_postgres_selection_drift")
+    else:
+        selection = "unverified_local"
+    return {
+        "pin_source": path,
+        "pin_source_sha256": digest(pin_path),
+        "postgres_reference": postgres,
+        "postgres_selection": selection,
+        "probe_reference": probe,
+        "source_closure": "incomplete",
+    }
+
+
 def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
     """The dispatch owner's declared inputs; environment values never leave it."""
     postgres = "ISSUANCE_POSTGRES_TEST_URL"
@@ -1411,6 +1448,7 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             evidence["canvas_qualification_mode"] = (
                 "full" if qualification == "1" else "routine"
             )
+            evidence["published_image_inputs"] = canvas_published_image_inputs()
             if name == "canvas_worker_acceptance":
                 tiers = {
                     variable: os.environ.get(variable)
