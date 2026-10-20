@@ -865,6 +865,55 @@ class AffectedRustPlannerTests(unittest.TestCase):
                             all(item["present"] for item in edge["witnesses"])
                         )
 
+    def test_service_image_binary_crates_have_packaged_runtime_edges(self) -> None:
+        metadata = planner.cargo_metadata()
+        build_script = (ROOT / "scripts/build-rust-service-binaries.sh").read_text(
+            encoding="utf-8"
+        )
+        built_packages = set(re.findall(r"-p (marty-[a-z0-9-]+)\b", build_script))
+        image_source = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+        shipped_binaries = set(
+            re.findall(
+                r"COPY --from=rust-service-builder /build/rust/target/release/"
+                r"(marty-[a-z0-9-]+) /usr/local/bin/marty-[a-z0-9-]+",
+                image_source,
+            )
+        )
+        self.assertTrue(
+            {
+                "marty-canvas-sandbox",
+                "marty-keyless-grpc-bridge",
+                "marty-passport-keyless-edge",
+            }.issubset(built_packages)
+        )
+        crate_binaries = [
+            (package["name"], target["src_path"])
+            for package in metadata["packages"]
+            if package["id"] in metadata["workspace_members"]
+            and package["name"] in built_packages
+            and Path(package["manifest_path"]).parent.parent
+            == ROOT / "rust" / "crates"
+            for target in package["targets"]
+            if "bin" in target["kind"] and target["name"] in shipped_binaries
+        ]
+        self.assertTrue(crate_binaries)
+        for producer, source in crate_binaries:
+            relative = Path(source).relative_to(ROOT).as_posix()
+            with self.subTest(producer=producer, source=relative):
+                result = planner.plan([relative], metadata, ROOT)
+                self.assertTrue(result["all"])
+                self.assertIn("packaged-executable/runtime", result["reason"])
+                edges = [
+                    edge
+                    for edge in result["observed_packaged_runtime_consumers"]
+                    if edge["producer"] == producer
+                ]
+                self.assertEqual(len(edges), 1)
+                self.assertTrue(edges[0]["witnesses"])
+                self.assertTrue(
+                    all(witness["present"] for witness in edges[0]["witnesses"])
+                )
+
     def test_packaged_witness_reader_is_bounded_and_closes_owned_descriptor(
         self,
     ) -> None:
