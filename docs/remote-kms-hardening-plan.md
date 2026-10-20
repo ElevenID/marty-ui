@@ -8,43 +8,25 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current handoff gate (2026-10-19 UTC): Core #355, Credentials #313, grouped
-native UI hardening #1192 and subsequent custody, restore, signing-route,
-publisher-source and Canvas repairs are merged. Protected UI main and the
-annotated `v1.1.258` tag identify source
-`2983a67bd48f74f262ab885d63e7e6f7d77898fa`. Full exact-main
-[CI 39187798412](https://github.com/ElevenID/marty-ui/actions/runs/39187798412),
-[claim 39190868378](https://github.com/ElevenID/marty-ui/actions/runs/39190868378),
-and resumed [Stack release 39193161779](https://github.com/ElevenID/marty-ui/actions/runs/39193161779)
-passed. The [public v1.1.258 release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.258),
-its signed transaction, prepared self-host bundle and public helper passed
-exact-run/source binding, checksum and attestation checks. On this 16 GiB
-Docker Desktop host, one isolated fresh Raft-backed install passed 28-service
-readiness, public issue/present/verify/revoke, Keycloak issuance/refresh,
-Transit-signed custody evidence, both database custody scans and owned
-teardown. Its coordinated cold-copy restore in new projects passed the
-released-source restored-journey verifier and owned teardown. The production
-website remained online and returned HTTP 200. Local resource observers saw
-no OOM events during these tests; sampled peaks do not prove the 32 GiB
-runbook target or a general 16 GiB support minimum. These are passing local
-installed and restored diagnostic journeys against a signed release; both
-reports explicitly remain unqualified. They do not prove production cutover
-or cloud/device custody acceptance. Replace the two old installations
-fresh, with no migration; provision real AWS/Azure/GCP credentials and a
-physical wallet/device for the remaining acceptance checks. The milestone
-table below contains historical status; use the dated evidence log and live
-run/PR states for the latest gate.
-
-Current next gate: close the continuous-runtime credential lifecycle before
-fresh beta or self-host cutover. The released self-host helper issues
-short-lived Keycloak signer/JWE tokens and certificates plus workload TLS
-certificates/tokens, and explicitly cannot renew them in place. The passing
-local journey therefore cannot support a continuously running website. Build
-and qualify non-exportable remote renewal with overlapping trust, a controlled
-service reload/restart, expiry and KMS-loss refusal, and coordinated Raft/data
-recovery; then reassess the 16 GiB resource envelope and perform fresh
-replacements on this machine. Provider and physical-device access remains
-unprovisioned.
+Current handoff gate (2026-10-20 UTC): Core #355, Credentials #313 and the
+grouped native UI custody, recovery, renewal and rootless CA-rotation changes
+are merged. The remaining installed-qualification and release-source batch is
+[UI PR #1446](https://github.com/ElevenID/marty-ui/pull/1446), head
+`b4d8fbe9907ed0a499dfb2107ae2067126dfc1d7`. Its exact-head
+[CI 39505402981](https://github.com/ElevenID/marty-ui/actions/runs/39505402981)
+passed all 23 jobs and the four other PR checks passed. It is in the protected
+merge queue; its candidate `8a973836a70f1cb21151ec3bf0d6fd1cc5fd4bef`
+has five merge-group workflows pending. A preceding queue group had a Cargo
+git-fetch SSL/network failure, so the candidate may be regenerated. Require
+the actual merge and successful protected checks on the final candidate,
+followed by separate exact-main full CI, no-write release claim, promoted tag,
+signed `v1.1.261` release, exact installed business/session/expiry journey,
+and fresh replacement/cutover or rollback proof. The two old installations
+can be replaced fresh without data migration. Work on this 16 GiB machine
+must keep the production Docker website intact; passing smaller-host diagnostics
+alone do not establish a general supported memory minimum. Real AWS/Azure/GCP
+and physical wallet/device access remains unprovisioned. The milestone table
+below is historical; dated evidence and live PR/run states govern this gate.
 
 Stopped-worker review (2026-10-19 UTC): A fresh inventory of the local KMS
 worktrees and repository roots found no recent uncommitted production KMS
