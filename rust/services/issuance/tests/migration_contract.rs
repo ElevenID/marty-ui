@@ -67,7 +67,7 @@ struct Coverage {
     proof_nonce_behavior_contract: Upstream,
     credential_admission_behavior_contract: Upstream,
     credential_signing_behavior_contract: Upstream,
-    canvas_lti_behavior_contract: Upstream,
+    canvas_lti_behavior_contract: OwnedBehaviorContract,
     canvas_oauth_behavior_contract: Upstream,
     canvas_management_behavior_contract: Upstream,
     canvas_mirror_behavior_contract: SourceBehaviorContract,
@@ -95,6 +95,14 @@ struct Upstream {
     path: String,
     commit: String,
     sha256: String,
+}
+
+#[derive(Deserialize)]
+struct OwnedBehaviorContract {
+    repository: String,
+    path: String,
+    sha256: String,
+    upstream: Upstream,
 }
 
 #[derive(Deserialize)]
@@ -872,12 +880,19 @@ pub fn validate_embedded_contract() -> Result<CoverageSummary, MmfError> {
         "invalid credential signing provenance",
     )?;
     require(
-        coverage.canvas_lti_behavior_contract.repository == "ElevenID/marty-credentials"
+        coverage.canvas_lti_behavior_contract.repository == "ElevenID/marty-ui"
             && coverage.canvas_lti_behavior_contract.path
                 == "contracts/issuance-canvas-lti-foundation.json"
-            && coverage.canvas_lti_behavior_contract.commit.len() == 40
+            && coverage.canvas_lti_behavior_contract.upstream.repository
+                == "ElevenID/marty-credentials"
+            && coverage.canvas_lti_behavior_contract.upstream.path
+                == "contracts/issuance-canvas-lti-foundation.json"
+            && coverage.canvas_lti_behavior_contract.upstream.sha256
+                == "abfa1773c5dcc44101e099c89b2ac11070607dc54fc3dd16e909e216c302add2"
+            && coverage.canvas_lti_behavior_contract.upstream.commit.len() == 40
             && coverage
                 .canvas_lti_behavior_contract
+                .upstream
                 .commit
                 .chars()
                 .all(|character| character.is_ascii_hexdigit()),

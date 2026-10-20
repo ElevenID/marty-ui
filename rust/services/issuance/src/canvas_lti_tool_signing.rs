@@ -175,7 +175,7 @@ impl IssuerDidCanvasLtiToolJwtSigner {
             .and_then(Value::as_object)
             .cloned()
             .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
-        if private_jwk_members(&public_jwk).next().is_some() {
+        if contains_private_signing_material(&public_jwk) {
             return Err(CanvasLtiToolSigningError::PrivateKeyMaterial);
         }
         if !verification_method_id.starts_with(&format!("{issuer_did}#"))
@@ -313,12 +313,30 @@ fn normalize_method_id(issuer_did: &str, method_id: &str) -> Option<String> {
 }
 
 fn valid_public_rsa_jwk(jwk: &Map<String, Value>) -> bool {
-    private_jwk_members(jwk).next().is_none()
+    !contains_private_signing_material(jwk)
         && jwk.get("kty").and_then(Value::as_str) == Some("RSA")
         && valid_rsa_algorithm(jwk.get("alg"))
         && valid_rsa_use(jwk.get("use"))
         && non_empty_string(jwk, "n")
         && non_empty_string(jwk, "e")
+}
+
+fn contains_private_signing_material(jwk: &Map<String, Value>) -> bool {
+    // Preserve the retired Python LTI profile's aliases, including empty/null
+    // members. Generic metadata scanning has different null-value semantics.
+    private_jwk_members(jwk).next().is_some()
+        || [
+            "rsa_d",
+            "private_key",
+            "private_key_pem",
+            "private_jwk",
+            "private_jwk_json",
+            "privateKey",
+            "privateKeyPem",
+            "secret_key",
+        ]
+        .iter()
+        .any(|member| jwk.contains_key(*member))
 }
 
 fn non_empty_string(jwk: &Map<String, Value>, member: &str) -> bool {

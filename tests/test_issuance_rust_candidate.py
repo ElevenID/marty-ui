@@ -331,7 +331,7 @@ def test_frozen_surface_provenance_and_coverage_are_complete() -> None:
         == coverage["canvas_lti_behavior_contract"]["sha256"]
     )
     assert (
-        coverage["canvas_lti_behavior_contract"]["commit"]
+        coverage["canvas_lti_behavior_contract"]["upstream"]["commit"]
         == "82945b2ad4a12aef03389d754f2eb4ed32cb1b18"
     )
     assert canvas_lti["schema"] == "marty.issuance-canvas-lti-foundation/v1"
