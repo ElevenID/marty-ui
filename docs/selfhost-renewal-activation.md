@@ -119,7 +119,9 @@ The command validates the generation, both live token sets, exact scoped
 policies and signer/JWE access, current certificate validity, each leaf's
 public key against its version-one non-exportable Transit signer, both live
 issuers, and the Compose model before changing the
-owned project. It recreates only that project, checks all expected services
+owned project. Both generations must contain every file-backed Compose secret,
+including secrets from optional profiles, before recreation starts. It recreates
+only that project, checks all expected services
 and renewed secret mounts, and writes a private result report. On failure
 after recreation starts, it attempts to recreate the prior **KMS-only**
 generation and reports `rolled_back`; a failed rollback is an incident that

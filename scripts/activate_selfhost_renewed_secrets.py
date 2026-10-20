@@ -32,7 +32,8 @@ from selfhost_openbao_client import (  # noqa: E402
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import PURPOSES, REALMS, jwe_policy, signing_policy  # noqa: E402
 from stage_selfhost_renewed_secrets import (  # noqa: E402
-    RENEWED_TOKEN_FILES, public_trust_overlap, verify_generations,
+    RENEWED_TOKEN_FILES, bounded_file, entries, public_trust_overlap,
+    verify_generations,
 )
 
 
@@ -112,6 +113,20 @@ def require_rootless_migration(model: dict) -> None:
     initializer = services.get("kms-initialize", {})
     if not isinstance(initializer, dict) or initializer.get("profiles") != ["kms-init"]:
         raise ValueError("privileged KMS initializer must be opt-in")
+
+
+def checked_compose_secret_files(model: dict, generation: Path) -> None:
+    """Prove every rendered secret, including optional profiles, has a real file."""
+    secrets = model.get("secrets")
+    if not isinstance(secrets, dict) or not secrets:
+        raise ValueError("owned Compose secrets model is invalid")
+    files = entries(generation)
+    if not secrets.keys() <= files.keys():
+        raise ValueError("owned Compose secret is missing from the generation")
+    for name, value in secrets.items():
+        if (not isinstance(value, dict) or value.get("file") != str(generation / name)):
+            raise ValueError("owned Compose secret binding is invalid")
+        bounded_file(files[name], allow_empty=True)
 
 
 def run_json(command: list[str], *, cwd: Path) -> object:
@@ -498,9 +513,8 @@ def activate(args: argparse.Namespace) -> dict:
         raise ValueError("owned Compose model is invalid")
     for model in (old_model, new_model):
         require_rootless_migration(model)
-    for name, value in new_model.get("secrets", {}).items():
-        if "file" in value and value["file"] != str(args.renewed_secrets / name):
-            raise ValueError("renewed Compose secret binding is invalid")
+    checked_compose_secret_files(old_model, args.current_secrets)
+    checked_compose_secret_files(new_model, args.renewed_secrets)
     normalized = json.loads(json.dumps(new_model))
     for name, value in normalized.get("secrets", {}).items():
         if "file" in value:

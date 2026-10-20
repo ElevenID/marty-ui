@@ -20,7 +20,8 @@ import zipfile
 
 sys.dont_write_bytecode = True
 from activate_selfhost_renewed_secrets import (  # noqa: E402
-    PROJECT, checked_certificates, checked_env, checked_overlap_mounts,
+    PROJECT, checked_certificates, checked_compose_secret_files, checked_env,
+    checked_overlap_mounts,
     checked_tokens, compose_args,
     healthy, owned_service_closure, require_rootless_migration, run_json,
     secret_mounts, statuses,
@@ -110,14 +111,7 @@ def checked_model(command: list[str], cwd: Path, secrets: Path) -> dict:
     if not isinstance(model, dict):
         raise ValueError("owned Compose model is invalid")
     require_rootless_migration(model)
-    secrets_model = model.get("secrets", {})
-    if not isinstance(secrets_model, dict):
-        raise ValueError("owned Compose secrets model is invalid")
-    for name, value in secrets_model.items():
-        if not isinstance(value, dict):
-            raise ValueError("owned Compose secret binding is invalid")
-        if "file" in value and value["file"] != str(secrets / name):
-            raise ValueError("owned Compose secret binding differs from generation")
+    checked_compose_secret_files(model, secrets)
     return model
 
 

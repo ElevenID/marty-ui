@@ -217,6 +217,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     )
     monkeypatch.setattr(activation, "verify_generations", lambda *_, **__: (81, 39))
     monkeypatch.setattr(activation, "checked_env", lambda *_: ["KEY_NAME=version-one"])
+    monkeypatch.setattr(activation, "checked_compose_secret_files", lambda *_: None)
     monkeypatch.setattr(activation, "private_file", lambda *_: "operator-token-long-enough")
     monkeypatch.setattr(activation, "Bao", lambda *_: object())
     monkeypatch.setattr(activation, "require_renewal_authority", lambda *_: None)
@@ -317,6 +318,23 @@ def test_ca_overlap_certificate_preflight_binds_each_generation_to_its_issuer(
         activation.checked_certificates(primary, old, new, 3600,
                                         replacement=(ReusedKeycloakIssuer(replacement=True),
                                                      "workload-pki-v5", "keycloak-pki-v5"))
+
+
+def test_compose_secret_preflight_requires_all_rendered_files(tmp_path: Path) -> None:
+    root = tmp_path / "generation"
+    root.mkdir()
+    (root / "workload_identity_ca_cert").write_text("public certificate")
+    model = {"secrets": {
+        "workload_identity_ca_cert": {"file": str(root / "workload_identity_ca_cert")},
+        "cloudflare_tunnel_token": {"file": str(root / "cloudflare_tunnel_token")},
+    }}
+    with pytest.raises(ValueError, match="missing from the generation"):
+        activation.checked_compose_secret_files(model, root)
+    (root / "cloudflare_tunnel_token").write_text("disposable test value")
+    activation.checked_compose_secret_files(model, root)
+    model["secrets"]["cloudflare_tunnel_token"]["file"] = str(tmp_path / "elsewhere")
+    with pytest.raises(ValueError, match="binding is invalid"):
+        activation.checked_compose_secret_files(model, root)
 
 
 @pytest.mark.parametrize("workload,keycloak", [
