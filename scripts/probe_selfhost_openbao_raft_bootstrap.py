@@ -549,7 +549,8 @@ def run() -> None:
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
         fresh = partial(http_require_status, ca_file=snapshot_ca)
         initialized = fresh(snapshot_base, "POST", "sys/init", "",
-                            {"secret_shares": 1, "secret_threshold": 1})
+                            {"secret_shares": 1, "secret_threshold": 1},
+                            timeout=30)
         fresh(snapshot_base, "POST", "sys/unseal", "",
               {"key": initialized["keys_base64"][0]})
         restore_request = urllib.request.Request(
