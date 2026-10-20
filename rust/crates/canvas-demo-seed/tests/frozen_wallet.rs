@@ -110,10 +110,14 @@ async fn claim_sequence_uses_current_issuer_contracts() {
     let nonce_response = nonce_contract["success"]["body"].clone();
     let stub = Stub {
         responses: Mutex::new(VecDeque::from(vec![
-            Ok(json!({"grants": {"urn:ietf:params:oauth:grant-type:pre-authorized_code": {"pre-authorized_code": "offer-code"}}})),
+            Ok(
+                json!({"grants": {"urn:ietf:params:oauth:grant-type:pre-authorized_code": {"pre-authorized_code": "offer-code"}}}),
+            ),
             Ok(token_response.clone()),
             Ok(nonce_response.clone()),
-            Ok(json!({"credentials": [{"format": "dc+sd-jwt", "credential": "header.payload.signature"}], "notification_id": "notify-1"})),
+            Ok(
+                json!({"credentials": [{"format": "dc+sd-jwt", "credential": "header.payload.signature"}], "notification_id": "notify-1"}),
+            ),
         ])),
         operations: Mutex::new(Vec::new()),
         proofs: Mutex::new(Vec::new()),
@@ -193,7 +197,10 @@ async fn missing_or_unavailable_nonce_stops_before_holder_proof_and_credential_r
             .is_err());
         let operations = stub.operations.lock().unwrap();
         assert_eq!(operations.len(), 3);
-        assert_eq!(operations[2]["url"], "http://localhost:8000/v1/issuance/nonce");
+        assert_eq!(
+            operations[2]["url"],
+            "http://localhost:8000/v1/issuance/nonce"
+        );
         assert!(stub.proofs.lock().unwrap().is_empty());
     }
 }
@@ -207,7 +214,9 @@ async fn failed_credential_response_cannot_report_a_wallet_claim() {
         let stub = Stub {
             responses: Mutex::new(VecDeque::from(vec![
                 Ok(json!({"pre-authorized_code": "offer-code"})),
-                Ok(json!({"access_token": "test-access-token", "token_type": "Bearer", "expires_in": 1800})),
+                Ok(
+                    json!({"access_token": "test-access-token", "token_type": "Bearer", "expires_in": 1800}),
+                ),
                 Ok(json!({"c_nonce": "fresh-nonce"})),
                 credential_response,
             ])),
