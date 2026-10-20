@@ -84,6 +84,17 @@ errors without changing the caller's failure policy. Its temporary OpenBao CA
 is read through `exec` and accepted only as a public PEM certificate; Docker's
 archive API cannot retrieve that tmpfs file on the beta host.
 
+For a failed cutover whose application state is unchanged,
+`recover-unchanged-local-beta.ps1` can inspect the retained quiesced backup and
+the exact prior container set. It holds the host deployment mutex, checks volume
+identities and backup hashes, compares both databases with native dumps while
+preserving SQL/data bytes, and checks the applicant store. With `-Apply` it starts
+only those stopped prior containers, verifies their health and original local/
+tunneled API/UI bindings, then clears the pending marker. It restores no database
+and modifies no KMS state. A changed database, image, owner, volume or active job
+requires investigation and forward repair instead. Keep the original failed
+cutover and recovery receipts; recovery is not an updated-beta qualification.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and
