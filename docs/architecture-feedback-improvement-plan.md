@@ -449,6 +449,14 @@ This does not establish nested-module or runtime-input closure, nor prove that
 all future Rust module syntaxes are recognized. It does not change acceptance
 selection or the required CI lanes.
 
+The Canvas first-hop inventory landed in
+[#1439](https://github.com/ElevenID/marty-ui/pull/1439) as
+`c084fc0fe4c06da59fad5e3261290482d1301c19`; the Flow/self-host extension
+landed in [#1440](https://github.com/ElevenID/marty-ui/pull/1440) as
+`537884a37e2387a85a72caa08d611318fe234732`. Both are diagnostic input
+visibility, not evidence of complete source closure, changed CI selection, or
+a measured turnaround reduction.
+
 The next A0 slice records the Rust compiler depfile adjacent to each of the
 four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
 file inputs without relying on a second hand-maintained module list. A local
