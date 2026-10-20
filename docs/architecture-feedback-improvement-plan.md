@@ -489,6 +489,15 @@ explicitly enabled. The source-backed planner tests check the routes, grant
 origin and production key bindings. This changes no live selector, and A3
 non-Cargo closure remains open.
 
+The October 20 shadow-planner audit found a packaged runtime edge absent from
+Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or
+embedded pages previously returned only that crate, although the binary is
+built and shipped by the sandbox image, service images, and Canvas profile.
+The planner now records six source-backed packaging/use witnesses and keeps
+these inputs broad even if a witness disappears. This corrects shadow evidence
+only; live CI selection and its required checks are unchanged. No speedup is
+claimed until the full non-Cargo graph is qualified.
+
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
 full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
