@@ -78,8 +78,27 @@ def public_trust_overlap(old_ca: bytes, new_ca: bytes) -> bytes:
     return old_ca.rstrip(b"\n") + b"\n" + new_ca.rstrip(b"\n") + b"\n"
 
 
-def verify_generations(current: Path, candidate: Path, *, ca_overlap: bool = False) -> tuple[int, int]:
+def retired_public_trust(bundle: bytes) -> bytes:
+    """Return only the replacement issuer from an exact two-cert bundle."""
+    marker = b"-----BEGIN CERTIFICATE-----\n"
+    split = bundle.find(marker, len(marker))
+    if split < 0:
+        raise ValueError("CA retirement requires an exact two-issuer public bundle")
+    old_ca, new_ca = bundle[:split], bundle[split:]
+    try:
+        canonical = public_trust_overlap(old_ca, new_ca)
+    except ValueError as error:
+        raise ValueError("CA retirement requires an exact two-issuer public bundle") from error
+    if bundle != canonical:
+        raise ValueError("CA retirement requires an exact two-issuer public bundle")
+    return new_ca
+
+
+def verify_generations(current: Path, candidate: Path, *, ca_overlap: bool = False,
+                       ca_retire: bool = False) -> tuple[int, int]:
     """Require a complete KMS-only successor with identical static inputs."""
+    if ca_overlap and ca_retire:
+        raise ValueError("CA overlap and trust retirement are separate ceremonies")
     current = private_empty_or_source(current, empty=False)
     candidate = private_empty_or_source(candidate, empty=False)
     if current == candidate:
@@ -94,7 +113,8 @@ def verify_generations(current: Path, candidate: Path, *, ca_overlap: bool = Fal
         after = bounded_file(new[name], allow_empty=name not in RENEWED_FILES)
         if stat.S_IMODE(old[name].stat().st_mode) != stat.S_IMODE(new[name].stat().st_mode):
             raise ValueError("secret generation file mode changed")
-        should_change = name in RENEWED_FILES and (name != CA_FILE or ca_overlap)
+        should_change = (name == CA_FILE if ca_retire else
+                         name in RENEWED_FILES and (name != CA_FILE or ca_overlap))
         if (before != after) != should_change:
             raise ValueError("secret generation changed the wrong input")
         if name == CA_FILE and ca_overlap:
@@ -102,12 +122,40 @@ def verify_generations(current: Path, candidate: Path, *, ca_overlap: bool = Fal
             if (PEM_CERT.fullmatch(before) is None or not after.startswith(prefix)
                     or after != public_trust_overlap(before, after[len(prefix):])):
                 raise ValueError("CA overlap bundle is not the exact old and new public issuers")
+        if name == CA_FILE and ca_retire and after != retired_public_trust(before):
+            raise ValueError("CA retirement did not remove only the old public issuer")
         changed += should_change
         if name in RENEWED_TOKEN_FILES:
             token_values.append(after)
     if len(set(token_values)) != len(token_values):
         raise ValueError("renewed scopes share a token")
     return len(old), changed
+
+
+def write_generation(active: dict[str, Path], payloads: dict[str, bytes],
+                     current: Path, output: Path, *, ca_overlap: bool = False,
+                     ca_retire: bool = False) -> int:
+    created: list[Path] = []
+    try:
+        for name, value in sorted(payloads.items()):
+            old_mode = stat.S_IMODE(active[name].stat().st_mode)
+            if old_mode not in (0o400, 0o440, 0o444, 0o600, 0o640, 0o644):
+                raise ValueError("active secret file has unsupported mode")
+            destination = output / name
+            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            created.append(destination)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(value)
+                stream.flush()
+                os.fchmod(stream.fileno(), old_mode)
+                os.fsync(stream.fileno())
+        verify_generations(current, output, ca_overlap=ca_overlap, ca_retire=ca_retire)
+    except Exception:
+        for path in reversed(created):
+            path.unlink(missing_ok=True)
+        raise
+    return len(payloads)
 
 
 def stage(current: Path, tls: Path, keycloak: Path, output: Path, *, ca_overlap: bool = False) -> int:
@@ -152,42 +200,47 @@ def stage(current: Path, tls: Path, keycloak: Path, output: Path, *, ca_overlap:
     if len(set(tokens)) != len(tokens):
         raise ValueError("renewed scopes share a token")
 
-    created: list[Path] = []
-    try:
-        for name, value in sorted(payloads.items()):
-            old_mode = stat.S_IMODE(active[name].stat().st_mode)
-            if old_mode not in (0o400, 0o440, 0o444, 0o600, 0o640, 0o644):
-                raise ValueError("active secret file has unsupported mode")
-            destination = output / name
-            fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL
-                         | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            created.append(destination)
-            with os.fdopen(fd, "wb") as stream:
-                stream.write(value)
-                stream.flush()
-                os.fchmod(stream.fileno(), old_mode)
-                os.fsync(stream.fileno())
-        verify_generations(current, output, ca_overlap=ca_overlap)
-    except Exception:
-        for path in reversed(created):
-            path.unlink(missing_ok=True)
-        raise
-    return len(payloads)
+    return write_generation(active, payloads, current, output, ca_overlap=ca_overlap)
+
+
+def stage_retired_trust(current: Path, output: Path) -> int:
+    current = private_empty_or_source(current, empty=False)
+    output = private_empty_or_source(output, empty=True)
+    if current == output or output.stat().st_uid != os.getuid():
+        raise ValueError("CA retirement generation directories are invalid")
+    active = entries(current)
+    if not RENEWED_FILES <= active.keys():
+        raise ValueError("active generation lacks a renewable input")
+    payloads = {name: bounded_file(path, allow_empty=name not in RENEWED_FILES)
+                for name, path in active.items()}
+    payloads[CA_FILE] = retired_public_trust(payloads[CA_FILE])
+    return write_generation(active, payloads, current, output, ca_retire=True)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("current", "tls", "keycloak", "output"):
+    for name in ("current", "output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
-    parser.add_argument("--ca-overlap", action="store_true")
+    for name in ("tls", "keycloak"):
+        parser.add_argument(f"--{name}", type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--ca-overlap", action="store_true")
+    mode.add_argument("--ca-retire", action="store_true")
     args = parser.parse_args()
     try:
-        count = stage(args.current, args.tls, args.keycloak, args.output,
-                      ca_overlap=args.ca_overlap)
+        if args.ca_retire:
+            if args.tls is not None or args.keycloak is not None:
+                raise ValueError("CA retirement does not replace leaves or scoped tokens")
+            count = stage_retired_trust(args.current, args.output)
+        else:
+            if args.tls is None or args.keycloak is None:
+                raise ValueError("leaf renewal requires both scoped producer outputs")
+            count = stage(args.current, args.tls, args.keycloak, args.output,
+                          ca_overlap=args.ca_overlap)
     except (OSError, ValueError) as error:
         print(f"self-host secret generation failed: {error}", file=sys.stderr)
         return 2
-    print(f"Staged {count} unchanged and renewed secret inputs for controlled recreation")
+    print(f"Staged {count} secret inputs for controlled recreation")
     return 0
 
 

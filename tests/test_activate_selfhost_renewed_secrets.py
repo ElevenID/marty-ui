@@ -319,6 +319,23 @@ def test_ca_overlap_certificate_preflight_binds_each_generation_to_its_issuer(
                                         replacement=(ReusedKeycloakIssuer(replacement=True),
                                                      "workload-pki-v5", "keycloak-pki-v5"))
 
+    (old / "workload_identity_ca_cert").write_text(old_workload + new_workload)
+    (new / "workload_identity_ca_cert").write_text(new_workload)
+    chains.clear()
+    lifetimes = []
+    monkeypatch.setattr(activation, "checked_certificate_lifetime",
+                        lambda cert, _ttl: lifetimes.append(cert))
+    activation.checked_certificates(primary, old, new, 3600,
+                                    replacement=(ca, "workload-pki-v5", "keycloak-pki-v5"),
+                                    retiring=True)
+    assert old_workload not in lifetimes and old_keycloak not in lifetimes
+    assert chains.count(("old", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
+    assert chains.count(("new", new_workload)) == len(activation.TLS_CERT_BY_ROLE)
+    assert chains.count(("old", new_keycloak)) == len(activation.REALMS)
+    assert chains.count(("new", new_keycloak)) == len(activation.REALMS)
+    with pytest.raises(ValueError, match="requires live replacement issuers"):
+        activation.checked_certificates(primary, old, new, 3600, retiring=True)
+
 
 def test_compose_secret_preflight_requires_all_rendered_files(tmp_path: Path) -> None:
     root = tmp_path / "generation"

@@ -108,6 +108,7 @@ access to the same isolated project, invoke
 --bao-ca <absolute OpenBao CA file>
 --bao-token-file <absolute private renewal-operator token file>
 --ca-overlap (flag; only for a replacement issuer generation)
+--ca-retire (flag; only for the later public trust-retirement generation)
 --workload-pki-mount <workload-pki-v2 through workload-pki-v8; overlap only>
 --keycloak-pki-mount <keycloak-pki-v2 through keycloak-pki-v8; overlap only>
 --ca-rotation-token-file <private scoped CA-rotation token; overlap only>
@@ -136,5 +137,17 @@ names to the root-retirement audit as well. The audit logs into the already
 provisioned CA-rotation AppRole and verifies the old and new live issuers,
 each generation's leaf chain, and unchanged version-one Transit signers.
 The overlap keeps the old public CA trusted for a bounded rollback. It is not
-trust retirement: remove old trust only through a later separately tested
-generation after sessions and rollback obligations are discharged.
+trust retirement. Once the overlap generation is active, all owned services
+mount only new-issuer leaves, and the old-only rollback obligation has ended,
+create an empty private output directory and run the same assembler with
+`--current <overlap generation> --output <new directory> --ca-retire` (without
+`--tls` or `--keycloak`). It copies the generation unchanged except for removing
+the old **public** workload CA from its exact two-issuer bundle. Activate that
+generation using `--ca-retire`, both replacement mount names, and the scoped
+CA-rotation token; the current overlap generation remains the KMS-only rollback
+target. The root-retirement audit accepts the same `--ca-retire` mode. The
+command checks that both generations' leaves chain to the replacement issuers
+and the remote signer versions stay fixed. Complete the separate browser-session
+and expiry-crossing checks before accepting trust retirement. Do not wait for
+the old leaf certificates to expire before refreshing the active eight-hour
+leaves and tokens: a stale active generation will fail this preflight.

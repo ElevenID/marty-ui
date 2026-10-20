@@ -176,9 +176,14 @@ def audit(args: argparse.Namespace) -> Path:
     snapshot_origin(args.bao_addr)
     rollback = args.rollback_secrets
     active = args.active_secrets
-    checked_overlap_mounts(args.ca_overlap, args.workload_pki_mount,
+    ca_retire = getattr(args, "ca_retire", False)
+    if args.ca_overlap and ca_retire:
+        raise ValueError("CA overlap and trust retirement are separate ceremonies")
+    ca_change = args.ca_overlap or ca_retire
+    checked_overlap_mounts(ca_change, args.workload_pki_mount,
                            args.keycloak_pki_mount)
-    verify_generations(rollback, active, ca_overlap=args.ca_overlap)
+    verify_generations(rollback, active, ca_overlap=args.ca_overlap,
+                       ca_retire=ca_retire)
     if checked_env(args.rollback_env, rollback) != checked_env(args.active_env, active):
         raise ValueError("active and rollback Compose env differ beyond secret generation")
 
@@ -192,12 +197,13 @@ def audit(args: argparse.Namespace) -> Path:
                    require_orphan_old=True, require_orphan_new=True)
     checked_static_tokens(bao, rollback, args.minimum_token_ttl)
     checked_static_tokens(bao, active, args.minimum_token_ttl)
-    if args.ca_overlap:
+    if ca_change:
         ca_bao = Bao(args.bao_addr, args.bao_ca, ca_token)
         require_ca_rotation_authority(ca_bao)
         checked_certificates(bao, rollback, active, args.minimum_token_ttl,
                              replacement=(ca_bao, args.workload_pki_mount,
-                                          args.keycloak_pki_mount))
+                                          args.keycloak_pki_mount),
+                             retiring=ca_retire)
     else:
         checked_certificates(bao, rollback, active, args.minimum_token_ttl)
     snapshot_login(Bao(args.bao_addr, args.bao_ca, ""), args.snapshot_identity)
@@ -250,7 +256,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--audit-org-slug", required=True)
     parser.add_argument("--audit-did", required=True)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)
-    parser.add_argument("--ca-overlap", action="store_true")
+    ca_mode = parser.add_mutually_exclusive_group()
+    ca_mode.add_argument("--ca-overlap", action="store_true")
+    ca_mode.add_argument("--ca-retire", action="store_true")
     parser.add_argument("--workload-pki-mount")
     parser.add_argument("--keycloak-pki-mount")
     return parser

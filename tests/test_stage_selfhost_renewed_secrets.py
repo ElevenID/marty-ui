@@ -14,7 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from passport_remote_tls import SELFHOST_TLS_FILES  # noqa: E402
 from provision_selfhost_disposable_tls import KEY_METADATA_FILE, KEY_NAMES  # noqa: E402
 from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa: E402
-from stage_selfhost_renewed_secrets import public_trust_overlap, stage, verify_generations  # noqa: E402
+from stage_selfhost_renewed_secrets import (  # noqa: E402
+    public_trust_overlap, retired_public_trust, stage, stage_retired_trust,
+    verify_generations,
+)
 
 
 OLD_CA = b"-----BEGIN CERTIFICATE-----\nT0xE\n-----END CERTIFICATE-----\n"
@@ -23,9 +26,13 @@ NEW_CA = b"-----BEGIN CERTIFICATE-----\nTkVX\n-----END CERTIFICATE-----\n"
 
 def test_public_trust_overlap_accepts_exactly_two_distinct_public_certs() -> None:
     assert public_trust_overlap(OLD_CA, NEW_CA) == OLD_CA + NEW_CA
+    assert retired_public_trust(OLD_CA + NEW_CA) == NEW_CA
     for invalid in (OLD_CA, OLD_CA + NEW_CA, b"-----BEGIN PRIVATE KEY-----\nYWJj\n"):
         with pytest.raises(ValueError, match="two distinct single public certificates"):
             public_trust_overlap(OLD_CA, invalid)
+    for invalid in (OLD_CA, NEW_CA + OLD_CA + NEW_CA, OLD_CA + NEW_CA + b"garbage"):
+        with pytest.raises(ValueError, match="two-issuer public bundle"):
+            retired_public_trust(invalid)
 
 
 def test_assembly_ships_with_its_shared_producers() -> None:
@@ -105,6 +112,23 @@ def test_stage_ca_overlap_keeps_old_trust_and_adds_exact_new_issuer(generation) 
     (output / "workload_identity_ca_cert").write_bytes(NEW_CA + OLD_CA)
     with pytest.raises(ValueError, match="old and new public issuers"):
         verify_generations(current, output, ca_overlap=True)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX secret generation contract")
+def test_retirement_changes_only_the_public_trust_file(generation) -> None:
+    current, tls, keycloak, overlap = generation
+    (current / "workload_identity_ca_cert").write_bytes(OLD_CA)
+    (tls / "workload_identity_ca_cert").write_bytes(NEW_CA)
+    stage(current, tls, keycloak, overlap, ca_overlap=True)
+    retired = current.parent / "retired"
+    retired.mkdir(mode=0o700)
+    count = stage_retired_trust(overlap, retired)
+    assert verify_generations(overlap, retired, ca_retire=True) == (count, 1)
+    assert (retired / "workload_identity_ca_cert").read_bytes() == NEW_CA
+    assert all((overlap / name).read_bytes() == (retired / name).read_bytes()
+               for name in {p.name for p in overlap.iterdir()} - {"workload_identity_ca_cert"})
+    with pytest.raises(ValueError, match="wrong input"):
+        verify_generations(overlap, retired)
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX secret generation contract")

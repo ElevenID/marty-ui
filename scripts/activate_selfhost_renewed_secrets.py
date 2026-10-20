@@ -285,7 +285,10 @@ def checked_certificate_chain(path: Path, issuer: str) -> None:
 
 
 def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
-                         *, replacement: tuple[Bao, str, str] | None = None) -> None:
+                         *, replacement: tuple[Bao, str, str] | None = None,
+                         retiring: bool = False) -> None:
+    if retiring and replacement is None:
+        raise ValueError("CA trust retirement requires live replacement issuers")
     if (set(TLS_CERT_BY_ROLE) != set(KEY_NAMES)
             or set(TLS_CERT_BY_ROLE.values()) != SELFHOST_CERT_FILES - {"workload_identity_ca_cert"}):
         raise ValueError("self-host TLS role and certificate inventory drifted")
@@ -306,17 +309,25 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
         }
         if new_issuers["keycloak"] == issuers["keycloak"]:
             raise ValueError("replacement Keycloak issuer did not change")
-    for issuer in (*issuers.values(), *new_issuers.values()):
-        if not isinstance(issuer, str):
-            raise ValueError("renewed OpenBao issuer is absent")
+    if any(not isinstance(issuer, str)
+           for issuer in (*issuers.values(), *new_issuers.values())):
+        raise ValueError("renewed OpenBao issuer is absent")
+    for issuer in (new_issuers.values() if retiring else
+                   (*issuers.values(), *new_issuers.values())):
         checked_certificate_lifetime(issuer, minimum_ttl)
-    for root, active_issuers in ((old, issuers), (new, new_issuers)):
+    old_ca = issuers["workload_identity_ca_cert"]
+    new_ca = new_issuers["workload_identity_ca_cert"]
+    bundle = (public_trust_overlap(old_ca.encode("ascii"), new_ca.encode("ascii"))
+              .decode("ascii") if replacement is not None else old_ca)
+    if retiring:
+        generations = ((old, new_issuers, bundle),
+                       (new, new_issuers, new_ca.rstrip("\n") + "\n"))
+    elif replacement is not None:
+        generations = ((old, issuers, old_ca), (new, new_issuers, bundle))
+    else:
+        generations = ((old, issuers, old_ca), (new, issuers, old_ca))
+    for root, active_issuers, expected_ca in generations:
         workload_ca = (root / "workload_identity_ca_cert").read_text(encoding="ascii")
-        expected_ca = (public_trust_overlap(
-            issuers["workload_identity_ca_cert"].encode("ascii"),
-            new_issuers["workload_identity_ca_cert"].encode("ascii")).decode("ascii")
-            if replacement is not None and root == new
-            else issuers["workload_identity_ca_cert"])
         if workload_ca != expected_ca:
             raise ValueError("workload issuer differs from the mounted trust anchor")
         for role, cert_name in TLS_CERT_BY_ROLE.items():
@@ -470,14 +481,18 @@ def activate(args: argparse.Namespace) -> dict:
             or args.report.name in ("renewed-compose.log", "rollback-compose.log")):
         raise ValueError("activation report destination is invalid")
     ca_overlap = getattr(args, "ca_overlap", False)
+    ca_retire = getattr(args, "ca_retire", False)
     workload_mount = getattr(args, "workload_pki_mount", None)
     keycloak_mount = getattr(args, "keycloak_pki_mount", None)
     ca_token_file = getattr(args, "ca_rotation_token_file", None)
-    checked_overlap_mounts(ca_overlap, workload_mount, keycloak_mount)
-    if ca_overlap != bool(ca_token_file):
-        raise ValueError("CA overlap requires CA authority")
+    if ca_overlap and ca_retire:
+        raise ValueError("CA overlap and trust retirement are separate ceremonies")
+    ca_change = ca_overlap or ca_retire
+    checked_overlap_mounts(ca_change, workload_mount, keycloak_mount)
+    if ca_change != bool(ca_token_file):
+        raise ValueError("CA change requires scoped CA authority")
     count, changed = verify_generations(args.current_secrets, args.renewed_secrets,
-                                        ca_overlap=ca_overlap)
+                                        ca_overlap=ca_overlap, ca_retire=ca_retire)
     if checked_env(args.current_env, args.current_secrets) != checked_env(
             args.renewed_env, args.renewed_secrets):
         raise ValueError("renewed Compose env changed non-secret configuration")
@@ -489,7 +504,7 @@ def activate(args: argparse.Namespace) -> dict:
     bao = Bao(args.bao_addr, args.bao_ca, operator_token)
     require_renewal_authority(bao)
     replacement = None
-    if ca_overlap:
+    if ca_change:
         ca_token = private_file(ca_token_file).strip()
         ca_bao = Bao(args.bao_addr, args.bao_ca, ca_token)
         require_ca_rotation_authority(ca_bao)
@@ -501,7 +516,8 @@ def activate(args: argparse.Namespace) -> dict:
                              args.minimum_token_ttl)
     else:
         checked_certificates(bao, args.current_secrets, args.renewed_secrets,
-                             args.minimum_token_ttl, replacement=replacement)
+                             args.minimum_token_ttl, replacement=replacement,
+                             retiring=ca_retire)
     old = compose_args(args.project_name, args.current_env, args.compose_file,
                        args.compose_override)
     new = compose_args(args.project_name, args.renewed_env, args.compose_file,
@@ -537,6 +553,7 @@ def activate(args: argparse.Namespace) -> dict:
                                     new_model)
         report = {"schema": "marty.selfhost-renewal-activation/v1",
                   "result": "activated", "project": args.project_name,
+                  "ca_mode": ("retired" if ca_retire else "overlap" if ca_overlap else "unchanged"),
                   "secret_files": count, "renewed_files": changed,
                   "services": len(services), "secret_mounts": mount_count}
         write_report(args.report, report)
@@ -561,7 +578,9 @@ def main() -> int:
     parser.add_argument("--compose-override", type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--bao-addr", required=True)
-    parser.add_argument("--ca-overlap", action="store_true")
+    ca_mode = parser.add_mutually_exclusive_group()
+    ca_mode.add_argument("--ca-overlap", action="store_true")
+    ca_mode.add_argument("--ca-retire", action="store_true")
     parser.add_argument("--workload-pki-mount")
     parser.add_argument("--keycloak-pki-mount")
     parser.add_argument("--ca-rotation-token-file", type=Path)
