@@ -219,7 +219,7 @@ def audit(args: argparse.Namespace) -> Path:
     return export_current_snapshot(args)
 
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("compose_file", "rollback_env", "active_env", "rollback_secrets",
                  "active_secrets", "bao_ca", "renewal_identity", "snapshot_identity",
@@ -234,7 +234,11 @@ def main() -> int:
     parser.add_argument("--audit-org-slug", required=True)
     parser.add_argument("--audit-did", required=True)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
     try:
         archive = audit(args)
     except (OSError, ValueError, RuntimeError, HTTPError, subprocess.SubprocessError,

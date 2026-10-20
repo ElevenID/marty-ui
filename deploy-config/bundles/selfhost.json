@@ -33,6 +33,7 @@
     "scripts/activate_selfhost_renewed_secrets.py",
     "scripts/provision_selfhost_renewal_identity.py",
     "scripts/check_selfhost_root_retirement.py",
+    "scripts/retire_selfhost_bootstrap_root.py",
     "scripts/provision_selfhost_snapshot_identity.py",
     "scripts/provision_selfhost_custody_signer.py",
     "scripts/provision_selfhost_evidence_identity.py",

@@ -120,6 +120,10 @@ The exporter verifies the loopback HTTPS server with `SELFHOST_OPENBAO_STATE_DIR
 
 The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure and separately held original unseal material. It contains neither the root token nor unseal key. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. The snapshot still contains the complete KMS custody state; protect it like production secrets.
 
+After force restore, start the `openbao-unseal` sidecar and wait for OpenBao
+to be healthy before starting application migrations. The restore seals the
+node even if its temporary fresh-cluster key unsealed it beforehand.
+
 Before considering revocation of the initial root token, run
 `scripts/check_selfhost_root_retirement.py --help` and supply the active and
 rollback secret generations, their Compose env files, the renewal and snapshot
@@ -134,14 +138,15 @@ audit does not revoke the root or establish coordinated backup provenance, CA ro
 or an expiry-crossing business journey. Retain the root until those separate
 gates have passed on a fresh installation.
 
-For the eventual retirement, use the verified HTTPS `auth/token/revoke`
-endpoint with the initial root token as the target, then require a denied
-lookup of that token and a fresh scoped AppRole login, snapshot export, and
-active-plus-rollback audit before removing the stale `root.token` file from
-the active owned state and excluding it from future backups. In a separate
-cold-copy rehearsal, revoking that token through `auth/token/revoke` succeeded
-and the root lookup returned 403;
-`auth/token/revoke-self` returned 500 and left it valid. This procedure does
-not replace the fresh-install, session, CA, and release gates above. Keep the
-unseal material under separate custody: revoking the root token does not
-unseal OpenBao or replace a Raft recovery test.
+After those gates, `scripts/retire_selfhost_bootstrap_root.py` takes the same
+arguments as the audit. It runs the complete audit and scoped snapshot export,
+requires the owner-private `root.token` inside the supplied OpenBao state,
+revokes that exact token through the verified HTTPS `auth/token/revoke` endpoint,
+checks that its lookup is denied, reruns the complete rootless audit, then
+removes the stale root-token file from active state. If interrupted after
+revocation, it can be repeated to complete the post-check and file removal.
+Exclude the stale root-token file from future backups. In a separate cold-copy
+rehearsal, `auth/token/revoke` succeeded and the root lookup returned 403;
+`auth/token/revoke-self` returned 500 and left it valid. Keep the unseal material
+under separate custody: revoking the root token does not unseal OpenBao or
+replace a Raft recovery test.
