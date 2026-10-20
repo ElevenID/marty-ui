@@ -5698,6 +5698,7 @@ mod tests {
             }
             let body = match request.path.as_str() {
                 path if path.contains("presentation-policies") && path.ends_with("/evaluate") => {
+                    assert_eq!(request.header("x-service-token"), Some("s".repeat(32).as_str()));
                     br#"{"decision":"allow","result":"passed"}"#.to_vec()
                 }
                 "/v1/compliance-profiles/system/discoverable" => serde_json::to_vec(&json!({
