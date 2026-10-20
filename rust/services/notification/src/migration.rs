@@ -54,9 +54,11 @@ pub async fn migrate(
     sqlx::raw_sql(include_str!("../migrations/0001_notification_schema.sql"))
         .execute(&mut *transaction)
         .await?;
-    sqlx::raw_sql(include_str!("../migrations/0002_webhook_delivery_correlation.sql"))
-        .execute(&mut *transaction)
-        .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_webhook_delivery_correlation.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())

@@ -36,7 +36,9 @@ fn migration_has_one_explicit_compatible_head() {
 fn correlation_migration_is_applied_and_validated() {
     let source = include_str!("../src/migration.rs");
     let sql = include_str!("../migrations/0002_webhook_delivery_correlation.sql");
-    assert!(source.contains("include_str!(\"../migrations/0002_webhook_delivery_correlation.sql\")"));
+    let compact_source: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(compact_source
+        .contains("include_str!(\"../migrations/0002_webhook_delivery_correlation.sql\")"));
     assert!(source.contains("webhook delivery correlation column is missing"));
     assert!(sql.contains("ADD COLUMN IF NOT EXISTS correlation_id varchar(64)"));
 }
