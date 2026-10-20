@@ -189,7 +189,7 @@ def _bundle_text(path: Path, maximum: int) -> str:
 def render_tls_env_fragment(bundle: Path, metadata: dict[str, object]) -> str:
     """Map verified bootstrap roles to only the required shipped KMS env pairs."""
     example = _bundle_text(bundle / ".env.selfhost.production.example", 16 * 1024)
-    compose = _bundle_text(bundle / "docker-compose.yml", 256 * 1024)
+    compose = _bundle_text(bundle / "docker-compose.yml", 128 * 1024)
     example_values: dict[str, str] = {}
     for line in example.splitlines():
         if "_TLS_KMS_KEY_" not in line or line.lstrip().startswith("#"):

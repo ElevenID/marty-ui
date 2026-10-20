@@ -365,7 +365,12 @@ fn pin_openbao_compose(source: &str, image: &str) -> Result<String> {
     if services.len() != 4 {
         return Err("OpenBao Compose service set changed".into());
     }
-    for name in ["openbao-tls-init", "openbao", "openbao-unseal", "openbao-bootstrap"] {
+    for name in [
+        "openbao-tls-init",
+        "openbao",
+        "openbao-unseal",
+        "openbao-bootstrap",
+    ] {
         let service = services
             .get_mut(serde_yaml::Value::String(name.into()))
             .and_then(serde_yaml::Value::as_mapping_mut)
@@ -505,6 +510,13 @@ pub fn relativize(text: &str, stage: &Path) -> Result<String> {
                         key,
                         value
                     );
+                } else if scalar.starts_with('/')
+                    || (scalar.len() >= 3
+                        && scalar.as_bytes()[0].is_ascii_alphabetic()
+                        && scalar.as_bytes()[1] == b':'
+                        && scalar.as_bytes()[2] == b'/')
+                {
+                    return Err("Rendered path escapes staged bundle".into());
                 }
             }
         }

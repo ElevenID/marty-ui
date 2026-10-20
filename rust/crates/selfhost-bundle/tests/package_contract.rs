@@ -502,6 +502,20 @@ fn folded_and_list_first_paths_preserve_required_selectors_and_sibling_fields() 
 }
 
 #[test]
+fn rendered_host_paths_outside_stage_are_rejected() {
+    for key in ["file: ", "source: ", "- source: "] {
+        for path in [
+            "/other-stage/scripts/start.sh",
+            r"C:\other-stage\scripts\start.sh",
+            r"\\wsl.localhost\Ubuntu-24.04\other-stage\scripts\start.sh",
+        ] {
+            let input = format!("{key}{}\n", serde_json::to_string(path).unwrap());
+            assert!(marty_selfhost_bundle::relativize(&input, Path::new("/stage")).is_err());
+        }
+    }
+}
+
+#[test]
 fn operator_bind_directories_keep_file_semantics_without_weakening_path_validation() {
     for key in ["file: ", "source: ", "- source: "] {
         for selector in [
