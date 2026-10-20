@@ -1,0 +1,21 @@
+{
+  "state": "UNRECORDED_VC_API_FUNCTIONAL_PAIR_REVIEW_PASS",
+  "release_marker": "beta-v259-vc-api-auth-1e6d88b82163",
+  "manifest_sha256": "7f4965015a6c0dff5575d62d1cf756ba89785a1768a26b96450dbfa112a5bf15",
+  "driver_revision": "aab0d1f9aa00b7e2a84f13e8662a4fc432d7168a",
+  "driver_entrypoint": "tests/scripts/audit-beta-direct-vc-api.js",
+  "driver_sha256": "a87b1ea3b3ac35349b901a11242f108a4e5c64078e441e7912f3c879a0076202",
+  "reports": [
+    {
+      "path": "audits/demo-audit-20261018/direct-vc-di-functional-attempts/attempt-1f74314f-11cd-449d-ba43-e18cb942ca44.json",
+      "sha256": "ebcd6249bdc82fc3d3893ab92f682db9377e61e39939b11ac392dc8886c7a411",
+      "attempt_id": "1f74314f-11cd-449d-ba43-e18cb942ca44"
+    },
+    {
+      "path": "audits/demo-audit-20261018/direct-vc-di-functional-attempts/attempt-b1c97967-f2c9-4ed2-bb9c-c234031d6f92.json",
+      "sha256": "54464ac7cf2f63f97997ee05fb5cc1378f8a944a637d90fa0c443ef2e68a0576",
+      "attempt_id": "b1c97967-f2c9-4ed2-bb9c-c234031d6f92"
+    }
+  ],
+  "boundary": "A separate program checked reports and source bytes; no independent human/agent review, primary demo capture, or portfolio-wide qualification is claimed."
+}
