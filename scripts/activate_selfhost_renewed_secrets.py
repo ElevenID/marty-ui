@@ -232,8 +232,11 @@ def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int) -> No
 
 
 def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int,
-                   *, require_orphan_new: bool) -> None:
-    for root in (old, new):
+                   *, require_orphan_new: bool,
+                   require_orphan_old: bool = False) -> None:
+    for root, require_orphan in ((old, require_orphan_old or
+                                 (old == new and require_orphan_new)),
+                                 (new, require_orphan_new)):
         for name in sorted(RENEWED_TOKEN_FILES):
             token = (root / name).read_text(encoding="ascii").strip()
             response = bao.request("POST", "auth/token/lookup", {"token": token})
@@ -243,7 +246,7 @@ def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int,
                     or type(data.get("ttl")) is not int or data["ttl"] < minimum_ttl
                     or data["ttl"] > 8 * 60 * 60):
                 raise ValueError("renewed OpenBao token has invalid scope or lifetime")
-            if (require_orphan_new and root == new
+            if (require_orphan
                     and (data.get("orphan") is not True
                          or data.get("path") != "auth/token/create/selfhost-renew-leaf")):
                 raise ValueError("renewed OpenBao token still depends on bootstrap root")

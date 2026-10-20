@@ -32,6 +32,7 @@
     "scripts/stage_selfhost_renewed_secrets.py",
     "scripts/activate_selfhost_renewed_secrets.py",
     "scripts/provision_selfhost_renewal_identity.py",
+    "scripts/check_selfhost_root_retirement.py",
     "scripts/provision_selfhost_snapshot_identity.py",
     "scripts/export-selfhost-openbao.py",
     "scripts/start_selfhost_disposable_openbao.py",

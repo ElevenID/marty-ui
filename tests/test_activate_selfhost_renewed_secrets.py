@@ -82,6 +82,29 @@ def test_activation_rejects_leaf_tokens_still_dependent_on_bootstrap_root(
                                   require_orphan_new=True)
 
 
+def test_root_retirement_rejects_root_child_in_rollback_generation(
+    tmp_path: Path,
+) -> None:
+    token_name = sorted(activation.RENEWED_TOKEN_FILES)[0]
+    rollback, active = tmp_path / "rollback", tmp_path / "active"
+    rollback.mkdir()
+    active.mkdir()
+    (rollback / token_name).write_text("root-child-token", encoding="ascii")
+
+    class RootChildBao:
+        def request(self, method, path, body=None, *, token=None):
+            assert (method, path, body) == (
+                "POST", "auth/token/lookup", {"token": "root-child-token"},
+            )
+            return {"data": {"policies": ["selfhost-exact-policy"],
+                             "ttl": 7200, "orphan": False,
+                             "path": "auth/token/create/selfhost-renew-leaf"}}
+
+    with pytest.raises(ValueError, match="depends on bootstrap root"):
+        activation.checked_tokens(RootChildBao(), rollback, active, 3600,
+                                  require_orphan_new=True, require_orphan_old=True)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
 def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
     old, new = tmp_path / "old", tmp_path / "new"

@@ -100,3 +100,16 @@ The command requests an authenticated Raft snapshot from the running local OpenB
 The exporter verifies the loopback HTTPS server with `SELFHOST_OPENBAO_STATE_DIR/tls/ca.crt`. It does not include OpenBao's TLS private keys in the archive. A cold snapshot restore on a new node must establish a new TLS identity and redistribute its public CA before application traffic resumes. Copying the entire stopped state directory retains the existing TLS identity; protect that copy as KMS key material.
 
 The archive is not a direct replacement for the state directory: restoring `raft.snap` requires the OpenBao Raft snapshot restore procedure and separately held original unseal material. It contains neither the root token nor unseal key. A disposable recovery test initialized an empty replacement Raft node, force-restored the archive snapshot, restarted it, and unsealed it with the original recovery key; it recovered Transit ciphertext and versioned plugin keys. Use force restore only on a clean replacement cluster. Coordinated application-database recovery and qualification with the published release image remain release gates. The snapshot still contains the complete KMS custody state; protect it like production secrets.
+
+Before considering revocation of the initial root token, run
+`scripts/check_selfhost_root_retirement.py --help` and supply the active and
+rollback secret generations, their Compose env files, both scoped operator
+identities, the owned project and an owner-private snapshot export directory. It
+verifies all 21 renewable token scopes in
+**both** generations, the 13 static service/grant tokens in each generation,
+their live non-exportable signers and public certificates, rootless
+ordinary migration, and the healthy active project's secret mounts. It creates
+and checks a current v2 Raft snapshot with the separate snapshot identity. The
+audit does not revoke the root or establish coordinated backup provenance, CA rollover,
+or an expiry-crossing business journey. Retain the root until those separate
+gates have passed on a fresh installation.

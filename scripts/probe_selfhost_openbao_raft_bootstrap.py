@@ -15,6 +15,7 @@ import zipfile
 from functools import partial
 from pathlib import Path
 
+from check_selfhost_root_retirement import STATIC_KMS_TOKENS, checked_static_tokens
 from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
@@ -24,6 +25,7 @@ from probe_didcomm_openbao_ha import (
     require_status as http_require_status,
     wait_for,
 )
+from selfhost_openbao_client import Bao
 
 DOCKER_ROOT = Path(os.environ.get("MARTY_OPENBAO_PROBE_HOST_ROOT", str(ROOT)))
 
@@ -187,6 +189,19 @@ def run() -> None:
         root = volume_file(state, "root.token")
         if len(root) < 16:
             raise RuntimeError("Disposable bootstrap did not retain its root token")
+        static_root = Path(public_ca_dir.name) / "static-token-audit"
+        static_root.mkdir(mode=0o700)
+        default_runtime_names = {
+            "openbao_service_token": "credential-service.token",
+            "notification_openbao_token": "notification-webhook-service.token",
+            "haip_kms_token": "haip-kms.token",
+        }
+        for name in STATIC_KMS_TOKENS:
+            (static_root / name).write_text(
+                volume_file(runtime, default_runtime_names.get(name, name)),
+                encoding="ascii",
+            )
+        checked_static_tokens(Bao(base, ca_file, root), static_root, 3600)
         leader = require_status(base, "GET", "sys/leader", root)
         if leader.get("is_self") is not True:
             raise RuntimeError("Disposable self-host Raft node is not active")
