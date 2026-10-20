@@ -130,7 +130,10 @@ def statuses(command: list[str], *, cwd: Path) -> list[dict]:
     return parsed
 
 
-def healthy(items: list[dict], services: set[str]) -> bool:
+def healthy(items: list[dict], services: set[str], model: dict) -> bool:
+    declared = model.get("services")
+    if not isinstance(declared, dict) or not services <= declared.keys():
+        return False
     by_service = {item.get("Service"): item for item in items}
     if set(by_service) != services or len(items) != len(services):
         return False
@@ -140,8 +143,16 @@ def healthy(items: list[dict], services: set[str]) -> bool:
         if item["Service"] in COMPLETED_SERVICES:
             if state != "exited" or item.get("ExitCode") != 0:
                 return False
-        elif state != "running" or health not in ("", "healthy"):
-            return False
+        else:
+            spec = declared[item["Service"]]
+            if not isinstance(spec, dict):
+                return False
+            check = spec.get("healthcheck")
+            if check is not None and not isinstance(check, dict):
+                return False
+            expected_health = "" if check is None or check.get("disable") is True else "healthy"
+            if state != "running" or health != expected_health:
+                return False
     return True
 
 
@@ -346,7 +357,7 @@ def checked_tokens(bao: Bao, old: Path, new: Path, minimum_ttl: int,
                     raise ValueError("Keycloak JWE token cannot read its exact versioned key")
 
 
-def recreate(command: list[str], services: set[str], *, cwd: Path,
+def recreate(command: list[str], services: set[str], model: dict, *, cwd: Path,
              log_file: Path) -> list[dict]:
     deadline = time.monotonic() + STARTUP_SECONDS
     fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -362,7 +373,7 @@ def recreate(command: list[str], services: set[str], *, cwd: Path,
                            check=False)
             try:
                 items = statuses(command, cwd=cwd)
-                if healthy(items, services):
+                if healthy(items, services, model):
                     return items
             except (RuntimeError, ValueError):
                 pass
@@ -442,11 +453,12 @@ def activate(args: argparse.Namespace) -> dict:
     if (not all(isinstance(name, str) for name in services)
             or not owned_service_closure(declared, services)
             or not {"keycloak", "gateway", "signing-keys", "postgres"} <= services
-            or not healthy(baseline, services)):
+            or not healthy(baseline, services, old_model)):
         raise ValueError("owned KMS-only project is not healthy before renewal")
     secret_mounts(args.project_name, args.current_secrets, services, old_model)
     try:
-        recreate(new, services, cwd=cwd, log_file=args.log_dir / "renewed-compose.log")
+        recreate(new, services, new_model, cwd=cwd,
+                 log_file=args.log_dir / "renewed-compose.log")
         mount_count = secret_mounts(args.project_name, args.renewed_secrets, services,
                                     new_model)
         report = {"schema": "marty.selfhost-renewal-activation/v1",
@@ -456,7 +468,8 @@ def activate(args: argparse.Namespace) -> dict:
         write_report(args.report, report)
     except Exception:
         try:
-            recreate(old, services, cwd=cwd, log_file=args.log_dir / "rollback-compose.log")
+            recreate(old, services, old_model, cwd=cwd,
+                     log_file=args.log_dir / "rollback-compose.log")
             secret_mounts(args.project_name, args.current_secrets, services, old_model)
         except Exception as error:
             raise RuntimeError("renewal failed and KMS-only rollback failed") from error

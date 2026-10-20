@@ -27,17 +27,32 @@ def test_compose_override_is_part_of_both_generation_commands(tmp_path: Path) ->
 
 
 def test_health_requires_all_expected_roles_and_zero_exit_jobs() -> None:
+    model = {"services": {"keycloak": {"healthcheck": {"test": ["CMD", "true"]}},
+                          "db-migrate": {}}}
     states = [
         {"Service": "keycloak", "State": "running", "Health": "healthy"},
         {"Service": "db-migrate", "State": "exited", "ExitCode": 0},
     ]
-    assert activation.healthy(states, {"keycloak", "db-migrate"})
-    assert not activation.healthy(states, {"keycloak"})
+    assert activation.healthy(states, {"keycloak", "db-migrate"}, model)
+    assert not activation.healthy(states, {"keycloak"}, model)
     states[1]["ExitCode"] = 1
-    assert not activation.healthy(states, {"keycloak", "db-migrate"})
+    assert not activation.healthy(states, {"keycloak", "db-migrate"}, model)
     states[1]["ExitCode"] = 0
     states[0] = {"Service": "keycloak", "State": "exited", "ExitCode": 0}
-    assert not activation.healthy(states, {"keycloak", "db-migrate"})
+    assert not activation.healthy(states, {"keycloak", "db-migrate"}, model)
+
+
+def test_health_rejects_missing_declared_check_and_accepts_disabled_check() -> None:
+    model = {"services": {"gateway": {"healthcheck": {"test": ["CMD", "true"]}},
+                          "canvas-sync-worker": {"healthcheck": {"disable": True}}}}
+    states = [{"Service": "gateway", "State": "running", "Health": ""},
+              {"Service": "canvas-sync-worker", "State": "running", "Health": ""}]
+    services = {"gateway", "canvas-sync-worker"}
+    assert not activation.healthy(states, services, model)
+    states[0]["Health"] = "healthy"
+    assert activation.healthy(states, services, model)
+    states[1]["Health"] = "healthy"
+    assert not activation.healthy(states, services, model)
 
 
 def test_owned_service_closure_only_omits_named_optional_edge_roles() -> None:
@@ -207,7 +222,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     monkeypatch.setattr(activation, "require_renewal_authority", lambda *_: None)
     monkeypatch.setattr(activation, "checked_tokens", lambda *_, **__: None)
     monkeypatch.setattr(activation, "checked_certificates", lambda *_: None)
-    old_model = {"services": {name: {} for name in
+    old_model = {"services": {name: {"healthcheck": {"test": ["CMD", "true"]}} for name in
                             ("keycloak", "gateway", "signing-keys", "postgres")},
                  "secrets": {"sample": {"file": str(old / "sample")}}}
     old_model["services"]["db-migrate"] = {
@@ -224,7 +239,7 @@ def test_failed_activation_recreates_prior_kms_only_generation(tmp_path: Path,
     monkeypatch.setattr(activation, "secret_mounts", lambda *_: 184)
     calls = []
 
-    def recreate(command, services, **_):
+    def recreate(command, services, model, **_):
         calls.append(command)
         if str(args.renewed_env) in command:
             raise RuntimeError("controlled new-generation failure")
