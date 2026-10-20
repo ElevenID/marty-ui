@@ -153,16 +153,33 @@ def secret_mounts(project: str, secret_root: Path, services: set[str]) -> int:
     if len(ids) != len(services):
         raise RuntimeError("owned project container count changed")
     inspected = run_json(["docker", "inspect", *ids], cwd=secret_root)
-    if not isinstance(inspected, list):
+    if (not isinstance(inspected, list) or len(inspected) != len(ids)
+            or not all(isinstance(item, dict) and isinstance(item.get("Mounts"), list)
+                       for item in inspected)):
         raise RuntimeError("owned project mounts are invalid")
-    prefix = str(secret_root) + "/"
-    mounts = [mount for item in inspected for mount in item.get("Mounts", [])
-              if mount.get("Destination", "").startswith("/run/secrets/")]
-    if len(mounts) < len(RENEWED_TOKEN_FILES) or any(
-        not mount.get("Source", "").startswith(prefix) for mount in mounts
-    ):
-        raise RuntimeError("owned project secret mount differs from generation")
-    return len(mounts)
+    names: set[str] = set()
+    mount_count = 0
+    for item in inspected:
+        seen: set[str] = set()
+        for mount in item["Mounts"]:
+            if not isinstance(mount, dict):
+                raise RuntimeError("owned project mounts are invalid")
+            target = mount.get("Destination", "")
+            if not isinstance(target, str):
+                raise RuntimeError("owned project mounts are invalid")
+            if not target.startswith("/run/secrets/"):
+                continue
+            mount_count += 1
+            name = target.removeprefix("/run/secrets/")
+            if (not name or "/" in name or name in seen
+                    or mount.get("Source") != str(secret_root / name)
+                    or mount.get("RW") is not False):
+                raise RuntimeError("owned project secret mount differs from generation")
+            seen.add(name)
+        names.update(seen)
+    if not RENEWED_TOKEN_FILES <= names:
+        raise RuntimeError("owned project renewal token mounts are incomplete")
+    return mount_count
 
 
 def checked_certificate_lifetime(certificate: str, minimum_ttl: int) -> None:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 import pytest
@@ -118,6 +120,41 @@ def test_env_pair_changes_only_generation_path(tmp_path: Path) -> None:
     assert activation.checked_env(old_env, old) == activation.checked_env(new_env, new)
     new_env.write_text(f"SELFHOST_SECRET_DIR={new}\nKEY_NAME=version-two\n")
     assert activation.checked_env(old_env, old) != activation.checked_env(new_env, new)
+
+
+def test_secret_mounts_require_exact_read_only_generation_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "generation"
+    names = sorted(activation.RENEWED_TOKEN_FILES)
+    mounts = [{"Destination": f"/run/secrets/{name}",
+               "Source": str(root / name), "RW": False}
+              for name in names]
+    inspected = [{"Mounts": mounts}, {"Mounts": [dict(mounts[0])]}]
+    monkeypatch.setattr(activation.subprocess, "run", lambda *_args, **_kwargs:
+                        subprocess.CompletedProcess([], 0, "a" * 12 + "\n" + "b" * 12, ""))
+    monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs: inspected)
+    assert activation.secret_mounts("marty-selfhost-probe", root,
+                                    {"gateway", "auth"}) == len(names) + 1
+
+    for changed in (
+        lambda entries: entries[0]["Mounts"][0].update(
+            Source=str(root / names[1])),
+        lambda entries: entries[0]["Mounts"][0].update(RW=True),
+        lambda entries: entries[0]["Mounts"].pop(),
+    ):
+        broken = deepcopy(inspected)
+        changed(broken)
+        monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs: broken)
+        with pytest.raises(RuntimeError, match="secret mount|token mounts"):
+            activation.secret_mounts("marty-selfhost-probe", root,
+                                     {"gateway", "auth"})
+
+    monkeypatch.setattr(activation, "run_json", lambda *_args, **_kwargs:
+                        [{"Mounts": "invalid"}, inspected[1]])
+    with pytest.raises(RuntimeError, match="project mounts are invalid"):
+        activation.secret_mounts("marty-selfhost-probe", root,
+                                 {"gateway", "auth"})
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX activation contract")
