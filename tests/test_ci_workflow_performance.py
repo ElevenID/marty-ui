@@ -5132,7 +5132,7 @@ def test_closed_pull_request_cache_cleanup_uses_reviewed_shared_owner() -> None:
     step = cleanup["steps"][0]
     assert step["uses"] == (
         "ElevenID/.github/actions/cleanup-ci-caches@"
-        "38ba2bdada295672765bf600203604884323f14a"
+        "3883ccbf1f612a43a746db1d9321015d561efeb1"
     )
     assert step["with"] == {
         "max-deletions": "2000",
