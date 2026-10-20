@@ -25,6 +25,9 @@ from activate_selfhost_renewed_secrets import (  # noqa: E402
     secret_mounts, statuses,
 )
 from provision_selfhost_renewal_identity import checked_login as renewal_login  # noqa: E402
+from provision_selfhost_evidence_identity import checked_login as evidence_login  # noqa: E402
+from provision_selfhost_audit_identity import checked_login as audit_login  # noqa: E402
+from provision_selfhost_audit_token import policy_for as audit_policy_for  # noqa: E402
 from provision_selfhost_snapshot_identity import (  # noqa: E402
     checked_login as snapshot_login, snapshot_origin,
 )
@@ -130,7 +133,9 @@ def audit(args: argparse.Namespace) -> Path:
             or args.bao_ca.stat().st_size > 64 * 1024
             or not args.openbao_state_dir.is_absolute()
             or not args.snapshot_export_dir.is_absolute()
-            or not args.openbao_config.is_absolute()):
+            or not args.openbao_config.is_absolute()
+            or not args.evidence_identity.is_absolute()
+            or not args.audit_identity.is_absolute()):
         raise ValueError("root retirement audit inputs are invalid")
     snapshot_origin(args.bao_addr)
     rollback = args.rollback_secrets
@@ -149,6 +154,11 @@ def audit(args: argparse.Namespace) -> Path:
     checked_static_tokens(bao, active, args.minimum_token_ttl)
     checked_certificates(bao, rollback, active, args.minimum_token_ttl)
     snapshot_login(Bao(args.bao_addr, args.bao_ca, ""), args.snapshot_identity)
+    evidence_login(Bao(args.bao_addr, args.bao_ca, ""), args.evidence_identity)
+    audit_policy, _ = audit_policy_for(args.audit_org_id, args.audit_org_slug,
+                                       args.audit_did)
+    audit_login(Bao(args.bao_addr, args.bao_ca, ""), args.audit_identity,
+                audit_policy)
 
     cwd = args.compose_file.parent
     old = compose_args(args.project_name, args.rollback_env, args.compose_file)
@@ -177,10 +187,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("compose_file", "rollback_env", "active_env", "rollback_secrets",
                  "active_secrets", "bao_ca", "renewal_identity", "snapshot_identity",
-                 "openbao_state_dir", "snapshot_export_dir", "openbao_config"):
+                 "evidence_identity", "audit_identity", "openbao_state_dir",
+                 "snapshot_export_dir", "openbao_config"):
         parser.add_argument("--" + name.replace("_", "-"), required=True, type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--bao-addr", required=True)
+    parser.add_argument("--audit-org-id", required=True)
+    parser.add_argument("--audit-org-slug", required=True)
+    parser.add_argument("--audit-did", required=True)
     parser.add_argument("--minimum-token-ttl", type=int, default=3600)
     args = parser.parse_args()
     try:

@@ -51,6 +51,9 @@ def test_rollback_root_child_stops_retirement_audit(
         rollback_secrets=tmp_path / "rollback", active_secrets=tmp_path / "active",
         rollback_env=tmp_path / "rollback.env", active_env=tmp_path / "active.env",
         renewal_identity=tmp_path / "renewal", snapshot_identity=tmp_path / "snapshot",
+        evidence_identity=tmp_path / "evidence", audit_identity=tmp_path / "audit",
+        audit_org_id="00000000-0000-0000-0000-000000000001",
+        audit_org_slug="marty", audit_did="did:web:localhost:orgs:marty",
         openbao_state_dir=tmp_path / "state", snapshot_export_dir=tmp_path / "exports",
         openbao_config=tmp_path / "openbao.hcl",
     )
