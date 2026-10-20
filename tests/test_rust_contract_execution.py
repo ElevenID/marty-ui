@@ -885,6 +885,9 @@ def test_flow_inventory_real_nocapture_child_stdout_and_failure_guards(
     assert record["observed_renderer_python_imports"] == (
         INVENTORY.flow_renderer_python_imports()
     )
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.acceptance_rust_first_hop_inputs("flow_acceptance")
+    )
     assert record["transitive_source_closure"] == "incomplete"
     assert "child-inherited-stdout" in output
     assert "private-runtime-value" not in json.dumps(record)
@@ -1053,6 +1056,10 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
         "packager_sha256": INVENTORY.digest(packager),
         "compose_sha256": INVENTORY.digest(compose),
     }
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.acceptance_rust_first_hop_inputs("selfhost_acceptance")
+    )
+    assert record["transitive_source_closure"] == "incomplete"
     assert output.count("test result: ok.") == 1
     assert "nested child summary captured" in output
     assert "private-runtime-value" not in json.dumps(record)
@@ -1498,6 +1505,14 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
     ("name", "fixture"),
     (
         (
+            "flow_acceptance",
+            "rust/services/issuance/tests/support/canvas_published_database.rs",
+        ),
+        (
+            "selfhost_acceptance",
+            "rust/crates/canvas-acceptance/tests/support/owned_cleanup.rs",
+        ),
+        (
             "canvas_composition_acceptance",
             "rust/services/issuance/tests/support/canvas_published_database_diagnostic_tests.rs",
         ),
@@ -1507,11 +1522,11 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
         ),
     ),
 )
-def test_canvas_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) -> None:
-    inputs = INVENTORY.canvas_rust_first_hop_inputs(name)
+def test_acceptance_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) -> None:
+    inputs = INVENTORY.acceptance_rust_first_hop_inputs(name)
     paths = [item["path"] for item in inputs]
     assert paths == sorted(set(paths))
-    assert INVENTORY.CANVAS_RUST_TEST_SOURCES[name] in paths
+    assert INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES[name] in paths
     assert fixture in paths
     if name == "canvas_composition_acceptance":
         assert {
@@ -1532,10 +1547,10 @@ def test_canvas_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) 
         'include!(concat!("private-", "fixture.rs"));\n',
     ),
 )
-def test_canvas_rust_first_hop_inputs_reject_unrecognized_import(
+def test_acceptance_rust_first_hop_inputs_reject_unrecognized_import(
     tmp_path, monkeypatch, source_content
 ) -> None:
-    source_path = INVENTORY.CANVAS_RUST_TEST_SOURCES["canvas_worker_acceptance"]
+    source_path = INVENTORY.ACCEPTANCE_RUST_TEST_SOURCES["canvas_worker_acceptance"]
     source = tmp_path / source_path
     source.parent.mkdir(parents=True)
     source.write_text(source_content, encoding="utf-8")
@@ -1547,8 +1562,8 @@ def test_canvas_rust_first_hop_inputs_reject_unrecognized_import(
         encoding="utf-8",
     )
     monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
-    with pytest.raises(ValueError, match="canvas_rust_source_input_drift") as error:
-        INVENTORY.canvas_rust_first_hop_inputs("canvas_worker_acceptance")
+    with pytest.raises(ValueError, match="acceptance_rust_source_input_drift") as error:
+        INVENTORY.acceptance_rust_first_hop_inputs("canvas_worker_acceptance")
     assert "private-" not in str(error.value)
 
 
@@ -1580,7 +1595,7 @@ def test_canvas_composition_inventory_never_records_the_kms_token(
     assert record["runtime_fixture_owner"].endswith("canvas_published_database.rs")
     assert record["transitive_source_closure"] == "incomplete"
     assert record["observed_first_hop_rust_source_inputs"] == (
-        INVENTORY.canvas_rust_first_hop_inputs("canvas_composition_acceptance")
+        INVENTORY.acceptance_rust_first_hop_inputs("canvas_composition_acceptance")
     )
 
 

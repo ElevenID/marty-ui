@@ -171,7 +171,13 @@ def canvas_published_image_inputs() -> dict[str, object]:
     }
 
 
-CANVAS_RUST_TEST_SOURCES = {
+ACCEPTANCE_RUST_TEST_SOURCES = {
+    "flow_acceptance": (
+        "rust/crates/flow-acceptance/tests/flow_published_schema_contract.rs"
+    ),
+    "selfhost_acceptance": (
+        "rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs"
+    ),
     "canvas_composition_acceptance": (
         "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ),
@@ -181,9 +187,9 @@ CANVAS_RUST_TEST_SOURCES = {
 }
 
 
-def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
+def acceptance_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
     """Observe direct Rust test imports and literals, not their transitive graph."""
-    source_path = CANVAS_RUST_TEST_SOURCES[name]
+    source_path = ACCEPTANCE_RUST_TEST_SOURCES[name]
     source = ROOT / source_path
     try:
         if source.is_symlink() or not source.is_file():
@@ -214,7 +220,7 @@ def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
             or declared[0].get("path")
             != source.relative_to(manifest_path.parent).as_posix()
         ):
-            raise ValueError("unrecognized Canvas test target")
+            raise ValueError("unrecognized acceptance test target")
         paths = {source_path}
         for relative in (*module_paths, *included_source_paths, *literal_paths):
             candidate = source.parent / relative
@@ -227,7 +233,7 @@ def canvas_rust_first_hop_inputs(name: str) -> list[dict[str, str]]:
             paths.add(path.as_posix())
         return [{"path": path, "sha256": digest(ROOT / path)} for path in sorted(paths)]
     except (OSError, UnicodeError, ValueError, KeyError) as error:
-        raise ValueError("canvas_rust_source_input_drift") from error
+        raise ValueError("acceptance_rust_source_input_drift") from error
 
 
 def obligation(name: str) -> tuple[str, str, list[dict[str, str]]]:
@@ -1497,7 +1503,6 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             evidence["observed_renderer_python_imports"] = (
                 flow_renderer_python_imports()
             )
-            evidence["transitive_source_closure"] = "incomplete"
         if selfhost:
             evidence["direct_source_inputs"] = selfhost_source_inputs(owner)
         if canvas:
@@ -1508,10 +1513,6 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 "full" if qualification == "1" else "routine"
             )
             evidence["published_image_inputs"] = canvas_published_image_inputs()
-            evidence["observed_first_hop_rust_source_inputs"] = (
-                canvas_rust_first_hop_inputs(name)
-            )
-            evidence["transitive_source_closure"] = "incomplete"
             if name == "canvas_worker_acceptance":
                 tiers = {
                     variable: os.environ.get(variable)
@@ -1527,6 +1528,11 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
                 ):
                     raise ValueError("incomplete_canvas_worker_tier")
                 evidence["worker_tiers"] = tiers
+        if flow or selfhost or canvas:
+            evidence["observed_first_hop_rust_source_inputs"] = (
+                acceptance_rust_first_hop_inputs(name)
+            )
+            evidence["transitive_source_closure"] = "incomplete"
         evidence.update(
             name=name, package=package, target=target, runtime_inputs=inputs
         )
