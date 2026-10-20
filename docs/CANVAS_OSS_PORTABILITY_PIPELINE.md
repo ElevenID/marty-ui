@@ -6,6 +6,25 @@ It is intentionally separate from `docker-compose.profile.canvas-real.yml`, the 
 
 ## Current implementation boundary
 
+The upstream source image build runs on a disposable GitHub `ubuntu-24.04` VM;
+it does not need the beta Docker socket, tunnel, credentials, or WSL runner.
+`prepare_canvas_source_builder.py` removes only a fixed inventory of unrelated
+preinstalled SDK directories on that hosted VM, then requires at least 80 GiB
+free on the actual Docker backing filesystem and 12 GiB Docker memory. It
+rejects local/self-hosted invocation before Docker access or SDK removal. Hosted
+capacity is measured, never assumed: insufficient capacity fails the source
+build. GitHub advertises only 14 GB standard-runner storage; SDK reclamation is
+an attempted workaround, not a guaranteed capacity allocation.
+
+Default-branch publication, the protected `canvas-oss-image-publish` environment,
+pristine upstream source, immutable base-image conversion, SBOM and keyless
+provenance remain required. A published digest still needs review and lock-file
+promotion. This does not qualify Canvas or relax the separate local beta
+portability runner's Docker integration and physical capacity checks.
+
+References: [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
+and [Ubuntu hosted image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
+
 The harness has an executable `readiness_only` mode, but the local host is **not ready to run it yet**. On 2026-07-15, the dedicated Ubuntu 24.04 WSL2 distribution, non-root runner account, prerequisites, and official Actions runner `2.335.1` were installed and checksum-verified. Docker Desktop integration is still intentionally disabled, zero self-hosted runners are registered for `ElevenID/marty-ui`, and the reviewed Canvas image lock remains `pending_source_build`. No successful nightly or portability run is claimed.
 
 After the dedicated distro, runner binary, reviewed image digest, and coordinated beta release exist, `readiness_only` starts the honest topology, verifies the deployed beta capability and public Canvas route, and emits `status=readiness_only`; it cannot be promoted or used by the demo recorder as portability proof.

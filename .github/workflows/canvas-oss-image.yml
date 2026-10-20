@@ -18,7 +18,7 @@ jobs:
       packages: write # Required to publish the reviewed image to GHCR.
       id-token: write # Required for keyless provenance.
       attestations: write # Required to attest the published digest.
-    runs-on: [self-hosted, linux, x64, canvas-oss-wsl2]
+    runs-on: ubuntu-24.04
     environment: canvas-oss-image-publish
     timeout-minutes: 240
     steps:
@@ -34,14 +34,14 @@ jobs:
           test "$GITHUB_REF" = "refs/heads/main"
           test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
 
-      - name: Require verified one-job WSL2 runner
+      - name: Prepare isolated hosted source builder
         run: |
           mkdir -p tests/artifacts/canvas-oss-image
-          python scripts/check_canvas_oss_runner.py \
+          /usr/bin/python3 scripts/prepare_canvas_source_builder.py --reclaim-hosted-sdks \
             --output tests/artifacts/canvas-oss-image/runner-preflight.json
 
       - name: Validate reviewed source lock
-        run: python scripts/check_canvas_oss_portability.py --validate-config
+        run: /usr/bin/python3 scripts/check_canvas_oss_portability.py --validate-config
 
       - name: Read immutable source inputs
         id: lock
