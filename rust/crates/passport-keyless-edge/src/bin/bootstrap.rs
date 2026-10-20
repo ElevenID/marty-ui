@@ -46,6 +46,45 @@ impl Profile {
     }
 }
 
+fn selected_workload_pki_mount(
+    profile: Profile,
+    requested: Option<&str>,
+) -> Result<&str, Box<dyn Error>> {
+    match (profile, requested) {
+        (Profile::SelfhostRenew, None | Some("workload-pki")) => Ok("workload-pki"),
+        (Profile::SelfhostRenew, Some(mount)) => {
+            let version = mount
+                .strip_prefix("workload-pki-v")
+                .ok_or("replacement workload PKI mount is invalid")?;
+            let parsed = version
+                .parse::<u16>()
+                .map_err(|_| "replacement workload PKI version is invalid")?;
+            if !(2..=9999).contains(&parsed) || parsed.to_string() != version {
+                return Err("replacement workload PKI version is invalid".into());
+            }
+            Ok(mount)
+        }
+        (_, None) => Ok("workload-pki"),
+        (_, Some(_)) => Err("workload PKI mount selection is renewal-only".into()),
+    }
+}
+
+fn renewal_authority(mount: &str) -> (&'static str, &'static str, &'static str) {
+    if mount == "workload-pki" {
+        (
+            "selfhost-kms-renewal",
+            "auth/selfhost-renew/login",
+            "BAO_RENEWAL_TOKEN_FILE",
+        )
+    } else {
+        (
+            "selfhost-kms-ca-rotation",
+            "auth/selfhost-ca-rotation/login",
+            "BAO_CA_ROTATION_TOKEN_FILE",
+        )
+    }
+}
+
 struct SelfhostRole {
     name: &'static str,
     key_name: &'static str,
@@ -496,8 +535,10 @@ async fn provision(
     profile: Profile,
     endpoint: &str,
     ca_file: &Path,
+    renewal_pki_mount: &str,
 ) -> Result<(), Box<dyn Error>> {
     if profile == Profile::SelfhostRenew {
+        let (expected_policy, expected_path, _) = renewal_authority(renewal_pki_mount);
         let lookup = bao
             .checked(
                 Method::POST,
@@ -513,8 +554,8 @@ async fn provision(
             .as_u64()
             .ok_or("renewal authority TTL is invalid")?;
         if policies.len() != 1
-            || policies[0] != "selfhost-kms-renewal"
-            || value(&lookup, "path")? != "auth/selfhost-renew/login"
+            || policies[0] != expected_policy
+            || value(&lookup, "path")? != expected_path
             || !(3600..=28800).contains(&remaining)
         {
             return Err("renewal authority is not the scoped AppRole token".into());
@@ -541,9 +582,18 @@ async fn provision(
         Profile::SelfhostRenew => {
             bao.checked(Method::GET, "sys/mounts/transit", None, None)
                 .await?;
-            bao.checked(Method::GET, "sys/mounts/workload-pki", None, None)
+            let mount = bao
+                .checked(
+                    Method::GET,
+                    &format!("sys/mounts/{renewal_pki_mount}"),
+                    None,
+                    None,
+                )
                 .await?;
-            "workload-pki"
+            if value(&mount, "type")? != "pki" {
+                return Err("renewal issuer mount is not PKI".into());
+            }
+            renewal_pki_mount
         }
     };
     if profile != Profile::SelfhostRenew {
@@ -561,9 +611,8 @@ async fn provision(
         Profile::SelfhostRenew => "",
     };
     let ca = if profile == Profile::SelfhostRenew {
-        // Renewal must reuse the currently trusted issuer. Rotating the CA
-        // requires an explicit overlapping-trust rollout, never an implicit
-        // side effect of renewing a leaf certificate.
+        // Read the exact issuer selected by the validated renewal ceremony.
+        // This producer neither creates a CA nor activates a new trust anchor.
         bao.checked(Method::GET, &format!("{pki_mount}/cert/ca"), None, None)
             .await?
     } else {
@@ -830,6 +879,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Ok("passport") | Err(_) => Profile::Passport,
         Ok(_) => return Err("unknown TLS bootstrap profile".into()),
     };
+    let requested_mount = match env::var("MARTY_SELFHOST_WORKLOAD_PKI_MOUNT") {
+        Ok(mount) => Some(mount),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let renewal_pki_mount = selected_workload_pki_mount(profile, requested_mount.as_deref())?;
     if profile == Profile::Selfhost
         && env::var("MARTY_SELFHOST_DISPOSABLE_OPENBAO").as_deref() != Ok("1")
     {
@@ -879,10 +934,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     let ca_file = required("BAO_CACERT")?;
-    let token_variable = if profile == Profile::SelfhostRenew {
-        "BAO_RENEWAL_TOKEN_FILE"
-    } else {
-        "BAO_ROOT_TOKEN_FILE"
+    let token_variable = match profile {
+        Profile::SelfhostRenew => renewal_authority(renewal_pki_mount).2,
+        Profile::Passport | Profile::Selfhost => "BAO_ROOT_TOKEN_FILE",
     };
     let authority_token = fs::read_to_string(required(token_variable)?)?;
     let authority_token = authority_token.trim().to_owned();
@@ -915,6 +969,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         profile,
         &endpoint,
         Path::new(&ca_file),
+        renewal_pki_mount,
     )
     .await?;
     Ok(())
@@ -924,6 +979,40 @@ async fn main() -> Result<(), Box<dyn Error>> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    #[test]
+    fn replacement_workload_issuer_mount_is_explicit_and_versioned() {
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, None).unwrap(),
+            "workload-pki"
+        );
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v2")).unwrap(),
+            "workload-pki-v2"
+        );
+        assert_eq!(
+            selected_workload_pki_mount(Profile::SelfhostRenew, Some("workload-pki-v9999"))
+                .unwrap(),
+            "workload-pki-v9999"
+        );
+        assert_eq!(renewal_authority("workload-pki").0, "selfhost-kms-renewal");
+        assert_eq!(
+            renewal_authority("workload-pki-v2").0,
+            "selfhost-kms-ca-rotation"
+        );
+        for invalid in [
+            "",
+            "workload-pki-next",
+            "workload-pki-v1",
+            "workload-pki-v02",
+            "workload-pki-v10000",
+            "workload-pki-v2/roles/admin",
+        ] {
+            assert!(selected_workload_pki_mount(Profile::SelfhostRenew, Some(invalid)).is_err());
+        }
+        assert!(selected_workload_pki_mount(Profile::Selfhost, Some("workload-pki-v2")).is_err());
+        assert!(selected_workload_pki_mount(Profile::Passport, Some("workload-pki-v2")).is_err());
+    }
 
     #[test]
     fn selfhost_tls_outputs_and_keys_match_deployment_inputs() {
