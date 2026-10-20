@@ -1138,7 +1138,19 @@ $logsDir = Join-Path $script:ArtifactDir "logs"
 $sourceKind = [string]$sourceManifest.source_kind
 $promotionEligible = [bool]$sourceManifest.promotion_eligible
 $releaseInput = if ($OfficialStackRelease) { "official attested stack release" } else { "local coordinated worktree snapshot" }
-$plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only official images" } else { "build migration, application, and UI images" }
+$plannedImageStep = if ($OfficialStackRelease) { "pull and verify digest-only official images" } elseif ($UsePreparedLocalImages) { "reuse verified local migration, application, and UI images" } else { "build migration, application, and UI images" }
+
+# Planning must report the same existing-state blockers as execution. Recheck
+# under the deployment lock below before any mutable operation or image use.
+. (Join-Path $PSScriptRoot "beta-passport-fence-legacy-boundary.ps1")
+$preflightPostgres = Get-ComposeContainerId -Service "postgres"
+if (-not $preflightPostgres) { throw "Beta PostgreSQL container is unavailable" }
+Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $preflightPostgres
+if ($UsePreparedLocalImages) {
+    $null = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
+    $null = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
+}
 
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"

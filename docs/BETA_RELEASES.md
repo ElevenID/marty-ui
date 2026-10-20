@@ -33,6 +33,8 @@ checks Linux/amd64 and exact source/version labels through that ID, and reuses
 the shared service selectors. It skips image builds while retaining source
 verification, rehearsal, backups, maintenance fencing, and recovery. This option
 cannot be combined with `-OfficialStackRelease`.
+`-PlanOnly` checks the current passport fence boundary and prepared image inputs;
+execution repeats those checks under the deployment lock.
 
 `scripts/generate_local_runtime_dockerfiles.py --source <checkout> --output <directory>`
 derives service, migration, and public UI runtime recipes from the production
@@ -49,6 +51,18 @@ for a quick local UI component check. It starts an owned loopback-only container
 checks the homepage, console shell, served marker and local script MIME types,
 requires the UI alone to refuse stack readiness, and removes its container.
 This is component validation, not an authenticated demo or full-stack qualification.
+
+After an authorized beta database reset, a host passport-fence marker can still
+refer to the retired PostgreSQL cluster. Use
+`reconcile-reset-beta-passport-fence.ps1 -PostgresContainer <full-id>` to inspect
+that condition without mutation. The tool requires the running beta PostgreSQL
+container, no current passport fence schema, an intact installation receipt, and
+different old/current container and PostgreSQL system identities. With `-Apply`
+and a new `-OutputPath`, it acquires the deployment lock, rechecks the evidence,
+archives the original marker beside itself and retains a reconciliation receipt.
+It changes no database state. A live fence, same-cluster restart, incomplete
+intent, changed receipt, or production target remains rejected. Never delete a
+marker merely because a local deployment is blocked.
 
 ## Release sequence
 
