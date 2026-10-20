@@ -1,5 +1,13 @@
 # DIDComm consumer retirement gates
 
+This document preserves historical migration audits and their unclosed runtime
+requirements. Python issuance source and its one-time Credentials image gates
+are now retired; descriptions below of retained Python routes or a pending
+0.1.78 image release apply to the cited historical checkpoints. They are not
+current deployment instructions. See [issuance regression ownership](../issuance-contract-ownership.md)
+for the maintained native checks and retired receipt reference. Source retirement
+does not close KMS, transport, provider or deployed acceptance requirements.
+
 Source audit: UI `79b2e3645`, Credentials protected main `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
 This is a source inventory, not deployed configuration or acceptance evidence.
 DIDComm KMS corrections remain deferred. Production is unchanged.

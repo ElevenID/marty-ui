@@ -52,7 +52,7 @@
   "deployment_gate": {
     "existing_beta_signer": "The existing passport-callback-signer process and Compose network are beta-only; they do not qualify base, selfhost, or K8s production-mode consumers.",
     "supported_consumers": ["base", "selfhost", "K8s"],
-    "required_before_python_retirement": "For each accepted base, selfhost, and K8s environment, separately review and deploy an isolated KMS callback signer process using the same shared Rust implementation. Prove a narrow signer credential and KMS key policy, a private signer-to-ingress network, no public sign route, and no OpenBao token exposure to the bureau or public ingress before marty-credentials #305 cutover.",
+    "required_for_supported_deployment": "For each accepted base, selfhost, and K8s environment, separately review and deploy an isolated KMS callback signer process using the same shared Rust implementation. Prove a narrow signer credential and KMS key policy, a private signer-to-ingress network, no public sign route, and no OpenBao token exposure to the bureau or public ingress for supported deployment. The Python source cutover in marty-credentials #305 is historical and does not establish this runtime qualification.",
     "default": "No physical bureau ingress or production-mode callback signer is enabled by this contract."
   },
   "supported_signer_runtime": {

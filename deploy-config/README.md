@@ -71,19 +71,23 @@ source/tag identity. The wrapper verifies the binary digest and embedded
 identity on every call. A source checkout uses Cargo when no release binary is
 selected.
 
-Local image release commands:
+Registry authentication uses Docker's credential store: run `docker login ghcr.io`
+with the operator account and a least-privilege package token, or provide the
+existing registry credential inputs to `scripts/build-push-registry.sh`. Keep
+tokens outside the checkout. The standalone login wrapper and its absent Make
+target are retired.
 
-- `make selfhost-images-ghcr-setup`
-- `make selfhost-images-build-dry-run TAG=2026.05.0`
-- `make selfhost-images-build TAG=2026.05.0`
-- `make selfhost-images-build-push TAG=2026.05.0`
-- `make selfhost-images-artifacts-dry-run TAG=2026.05.0`
-- `make selfhost-images-release-artifacts TAG=2026.05.0`
-- `make selfhost-images-sign TAG=2026.05.0 COSIGN_KEY=/secure/operator-only/cosign.key`
-- `make selfhost-images-verify-signatures TAG=2026.05.0 COSIGN_PUBLIC_KEY=/secure/operator-only/cosign.pub`
-- `make package-selfhost-bundle`
+Local image builds use `scripts/build-push-registry.sh` with the signed operator
+binary described above and exact API-core/blog release URI, digest and version
+inputs required by that script. Select `--build-only` explicitly to avoid a push;
+the default builds and pushes. `--push-only` publishes existing local images.
+Use the reviewed release tag and target platform, rather than `latest`.
 
-Builds run on the operator machine and push to GHCR only when the `*-push` target is used. Customer deployments should use immutable `SELFHOST_IMAGE_TAG` values, not `latest`.
-Release artifacts are staged under `dist/releases/<tag>/` and include SBOMs, vulnerability scan reports, digest inspection output, schema-v2 `release-manifest.json`, `release-evidence.md`, and `checksums.sha256` when the required local tools are installed. Cosign signing and verification use image digest refs, not mutable tags.
+`make package-selfhost-bundle` remains the Rust bundle staging entry point.
+The old `selfhost-images-*` Make targets are absent; they do not provide local
+artifact, signing or verification commands. Published image signing, SBOMs,
+provenance and release manifests belong to the current
+[CD workflow](../.github/workflows/cd.yml) and its release checks. A local build
+or registry login does not create that release evidence.
 
 Use the templates in this directory as documentation and copy sources for new operators.

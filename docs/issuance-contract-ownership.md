@@ -1,6 +1,6 @@
 # Issuance regression ownership
 
-The three remaining Credentials contract copies are historical migration
+The three retired Credentials contract copies are historical migration
 references, not inputs to this runtime. Maintained behavior belongs here:
 
 | Retired Credentials reference | Current executable owner |
@@ -36,3 +36,20 @@ owners; deleting reference JSON does not establish any of those capabilities.
 Existing contract source hashes and upstream paths describe immutable migration
 provenance, not a dependency on current Credentials files. No code/test imports
 those three retired files across repositories.
+
+## Retired activation receipts
+
+The one-time DIDComm and retention image checkers, their historical-only tests,
+and the `release_gate` receipt in `didcomm-native-consumer-ownership.json` are
+retired. They validated Credentials 0.1.78 at commit
+`efd5da1e2d41419ce93721f98d314c7b911e6b5e`, before Python issuance retirement;
+that image is absent from the current stack lock. Their implementations and
+receipt remain recoverable in UI commit `5499531d5630f09d6ab7f44a20d6e827ce9a6c81`.
+
+The DIDComm contract still checks selected native owners, readiness and no
+cryptographic mode downgrade through `test_didcomm_native_consumer_ownership.py`.
+Current release validation belongs to the stack lock, release manifests and
+existing release checks, rather than an exact old Python image. Native retention
+must retain tenant-owned issuance events and qualified schema migrations; the
+old image receipt did not prove current runtime behavior. DIDCOMM-KMS-001 and
+live callback/provider qualification remain open with their existing owners.
