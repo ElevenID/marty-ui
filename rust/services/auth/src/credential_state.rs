@@ -461,6 +461,8 @@ fn failure_reason_code(reason: &str) -> &'static str {
         &lower,
         &[
             "does not match any trust source issuer identifier",
+            "issuer has no trusted issuer relationship",
+            "issuer does not match a trust profile source",
             "not in trust profile allowed_issuers",
             "explicitly denied by trust profile",
         ],
@@ -587,4 +589,22 @@ fn is_lower_hex_64(value: &str) -> bool {
 
 fn contains_any(value: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| value.contains(needle))
+}
+
+#[cfg(test)]
+mod issuer_denial_tests {
+    #[test]
+    fn native_policy_issuer_denials_have_specific_login_reason() {
+        for reason in [
+            "Issuer has no trusted issuer relationship",
+            "Issuer does not match a Trust Profile source",
+            "Issuer is not in Trust Profile allowed_issuers",
+        ] {
+            assert_eq!(super::failure_reason_code(reason), "issuer_not_trusted");
+        }
+        assert_eq!(
+            super::failure_reason_code("Credential signature was not verified"),
+            "verification_failed"
+        );
+    }
 }

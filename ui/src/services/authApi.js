@@ -4,6 +4,8 @@
  * Provides API calls for authentication operations.
  */
 
+import { LOGOUT_STARTED_EVENT } from './authEvents';
+
 // Auth endpoints should always use relative paths to go through nginx proxy
 // This ensures cookies are sent correctly (same origin)
 const AUTH_BASE_URL = '/v1/auth';
@@ -92,6 +94,7 @@ export function initiateRegister(redirectUri = '/', locale = null) {
  * Initiate logout (full SSO logout)
  */
 export function initiateLogout() {
+  window.dispatchEvent(new Event(LOGOUT_STARTED_EVENT));
   // POST to logout endpoint via nginx proxy, which will redirect to Keycloak logout
   // Using relative path ensures cookies are sent correctly (same origin)
   const form = document.createElement('form');

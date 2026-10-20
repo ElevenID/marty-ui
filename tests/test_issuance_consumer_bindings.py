@@ -254,7 +254,7 @@ def assert_selfhost_bindings(compose):
         "issuance-native": {PRIVATE: "false"},
     }
 
-    common = "revocation-profile-migrate db-migrate issuance-migrations gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile signing-keys flow verification revocation-profile device-registration event-stream".split()
+    common = "revocation-profile-migrate db-migrate kms-initialize issuance-migrations gateway auth organization credential-template trust-profile issuance applicant notification compliance-profile presentation-policy deployment-profile signing-keys flow verification revocation-profile device-registration event-stream".split()
     expected = {name: {"ES_GRPC_TARGET": "https://event-stream:9015"} for name in common}
     for name in (
         "gateway",

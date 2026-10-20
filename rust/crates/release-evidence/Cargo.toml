@@ -45,3 +45,11 @@ path = "src/envoy_cli.rs"
 [[bin]]
 name = "public-kms-jwk"
 path = "src/public_kms_jwk.rs"
+
+[[bin]]
+name = "validate-signing-capability"
+path = "src/signing_capability_cli.rs"
+
+[[bin]]
+name = "validate-age-proof-demo"
+path = "src/age_proof_cli.rs"

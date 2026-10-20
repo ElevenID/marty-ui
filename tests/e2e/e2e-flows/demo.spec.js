@@ -1,432 +1,154 @@
 /**
- * Marty Platform — Demo Recording Script
+ * Narrated, serial credential application demo. Each scene requires observable
+ * product results; a video is not evidence that issuance or wallet claim passed.
  *
- * A narrated walkthrough of the core credential issuance flow, structured as
- * sequential scenes so the Playwright video timeline maps to the product story.
- *
- * Scenes:
- *   1. Vendor Admin logs in and views the admin dashboard
- *   2. Vendor Admin reviews the credential catalogue
- *   3. Applicant logs in and browses available credentials
- *   4. Applicant completes the mDL application form
- *   5. Vendor Admin reviews and approves the application
- *   6. Credential is issued — applicant sees it in their wallet
- *
- * Run:
- *   cd marty-ui/tests
- *   npx playwright test --config playwright.demo.config.js
- *
- * The recording is written to demo-recordings/<scene>/video.webm by default.
+ * Run from tests: npx playwright test --config playwright.demo.config.js
+ * Uses an existing seeded organization and active credential/application template.
+ * Select ambiguous fixtures with DEMO_ORGANIZATION_ID / DEMO_CREDENTIAL_TEMPLATE_ID.
+ * DEMO_FORM_VALUES_JSON supplies custom values keyed by the rendered field label.
+ * Scene 6 requires real wallet redemption; this recorder does not implement a
+ * wallet client. An unclaimed offer fails that scene instead of completing it.
  */
 
 const { test, expect } = require('@playwright/test');
-const path = require('path');
-const { AuthHelpers, AuthenticatedApiClient } = require('../../utils/test-helpers');
+const { AuthHelpers } = require('../../utils/test-helpers');
 const { SEEDED_USERS } = require('../../fixtures/users');
+const {
+  readJson, requireSession, selectDemoSetup, requireApplicationId, assertApplicationRecord,
+  isClaimedApplication, bindOrganization, scrollIntoView, demoFormValues, fillApplicationStep,
+  submitApplication, approveApplication,
+} = require('./demo-journey-helpers');
 
-// ---------------------------------------------------------------------------
-// Shared demo state (passed between serial tests via module scope)
-// ---------------------------------------------------------------------------
+let setup;
+let applicationId;
 
-/** @type {string|null} */
-let credentialConfigId = null;
-/** @type {string|null} */
-let applicationId = null;
-/** @type {string|null} */
-let organizationId = null;
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-const PORTRAIT_PATH = path.resolve(__dirname, '../../fixtures/test-portrait.jpg');
-
-const inputSelectorFor = (testId) =>
-  `[data-testid="${testId}"] input:not([aria-hidden="true"]), ` +
-  `[data-testid="${testId}"] textarea:not([aria-hidden="true"])`;
-
-async function fillField(page, testId, value) {
-  await page.locator(inputSelectorFor(testId)).fill(value);
+async function signIn(page, role) {
+  await page.goto('/');
+  await new AuthHelpers(page).loginAsSeededUser(role, { uiOnboarding: true });
+  await requireSession(page, SEEDED_USERS[role].email);
+  if (role === 'vendor' && setup) await bindOrganization(page, setup.organizationId);
 }
 
-/** Graceful pause for visual breathing room between actions in slow-mo. */
 async function beat(page, ms = 600) {
   await page.waitForTimeout(ms);
 }
 
-/** Try a locator click; silently skip if not visible within timeout. */
-async function tryClick(page, selector, timeout = 4000) {
-  try {
-    await page.locator(selector).waitFor({ state: 'visible', timeout });
-    await page.locator(selector).click();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/** Scroll an element into view before interacting (helps video legibility). */
-async function scrollIntoView(page, selector) {
-  const el = page.locator(selector).first();
-  if (await el.count()) {
-    await el.scrollIntoViewIfNeeded().catch(() => {});
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Demo suite
-// ---------------------------------------------------------------------------
-
 test.describe.serial('Marty Platform Demo', () => {
-
-  // ── Scene 0: Pre-flight setup (not recorded as a scene, just state init) ─
-
-  test.beforeAll(async ({ browser }) => {
-    const page = await browser.newPage();
-    const auth = new AuthHelpers(page);
-    const api  = new AuthenticatedApiClient(page);
-
-    await page.goto('/');
+  test.beforeAll(async ({ browser, baseURL }) => {
+    const page = await browser.newPage({ baseURL });
     try {
-      await auth.loginAsSeededUser('vendor', { uiOnboarding: true });
-
-      // Resolve org ID
-      const me = await page.request.get('/auth/me');
-      if (me.ok()) {
-        const data = await me.json();
-        organizationId = data?.user?.organization_id ?? null;
-      }
-
-      // Ensure a demo credential config exists
-      if (organizationId) {
-        const result = await api.ensureCredentialConfig(
-          organizationId,
-          'drivers_license',
-        ).catch(() => null);
-        // ensureCredentialConfig returns a string ID directly
-        credentialConfigId = typeof result === 'string' ? result : (result?.id ?? null);
-      }
-    } catch (err) {
-      console.warn('[demo] beforeAll setup warning:', err.message);
+      await signIn(page, 'vendor');
+      const organizations = await readJson(page, '/v1/organizations/mine');
+      const matches = Array.isArray(organizations) ? organizations.filter((org) => process.env.DEMO_ORGANIZATION_ID
+        ? org.id === process.env.DEMO_ORGANIZATION_ID
+        : org.name === SEEDED_USERS.vendor.organization || org.display_name === SEEDED_USERS.vendor.organization) : [];
+      expect(matches, 'A unique existing vendor demo organization is required; set DEMO_ORGANIZATION_ID').toHaveLength(1);
+      const organizationId = matches[0].id;
+      const templates = await readJson(page, `/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`);
+      const applicationTemplates = await readJson(page, `/v1/application-templates?organization_id=${encodeURIComponent(organizationId)}`);
+      setup = selectDemoSetup(organizations, templates, applicationTemplates, {
+        organizationId, templateId: process.env.DEMO_CREDENTIAL_TEMPLATE_ID,
+      });
     } finally {
       await page.close();
     }
   });
 
-  // ── Scene 1: Vendor Admin — Dashboard ────────────────────────────────────
-
   test('Scene 1 · Vendor Admin logs in and views the dashboard', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-
-    await test.step('Navigate to the application', async () => {
-      await page.goto('/');
-      await beat(page);
-    });
-
-    await test.step('Sign in as Vendor Admin', async () => {
-      await auth.loginAsSeededUser('vendor', { uiOnboarding: true });
-      await beat(page, 800);
-    });
-
-    await test.step('Browse the admin dashboard', async () => {
-      await page.waitForLoadState('networkidle');
-      // Take a moment to show the loaded dashboard
+    await test.step('Sign in as Vendor Admin', () => signIn(page, 'vendor'));
+    await test.step('View the loaded admin dashboard', async () => {
+      await page.goto('/console/org');
+      await expect(page.getByTestId('console.dashboard.page')).toBeVisible();
       await beat(page, 1200);
-
-      // Highlight the navigation if present
-      await scrollIntoView(page, '[data-testid="nav-tab-dashboard"], nav, header');
-      await beat(page, 600);
     });
   });
-
-  // ── Scene 2: Vendor Admin — Credential Catalogue ─────────────────────────
 
   test('Scene 2 · Admin reviews the credential catalogue', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-
-    await test.step('Sign in as Vendor Admin', async () => {
-      await page.goto('/');
-      await auth.loginAsSeededUser('vendor', { uiOnboarding: true });
-    });
-
-    await test.step('Open credential catalogue', async () => {
-      // Try sidebar nav first, fall back to direct URL
-      const navClicked = await tryClick(
-        page,
-        '[data-testid="nav-credentials"], a[href*="/credentials"]',
-      );
-      if (!navClicked) await page.goto('/credentials');
-      await page.waitForLoadState('networkidle');
-      await beat(page, 800);
-    });
-
-    await test.step('View credential types available to this organisation', async () => {
-      await scrollIntoView(page, '[data-testid="credential-card"], [data-testid="credential-config"]');
-      await beat(page, 1000);
-    });
-  });
-
-  // ── Scene 3: Applicant — Browse Credentials ───────────────────────────────
-
-  test('Scene 3 · Applicant logs in and browses available credentials', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-
-    await test.step('Sign in as Applicant', async () => {
-      await page.goto('/');
-      await auth.loginAsSeededUser('applicant1');
-      await page.waitForLoadState('networkidle');
-      await beat(page, 800);
-    });
-
-    await test.step('Navigate to the credentials catalogue', async () => {
-      const navClicked = await tryClick(
-        page,
-        '[data-testid="nav-credentials"], a[href*="/credentials"]',
-      );
-      if (!navClicked) await page.goto('/credentials');
-      await page.waitForLoadState('networkidle');
-      await beat(page, 800);
-    });
-
-    await test.step('Browse available credentials', async () => {
-      await scrollIntoView(page, '[data-testid="apply-btn"], [data-testid="credential-card"]');
+    await signIn(page, 'vendor');
+    await test.step('Open the selected credential template', async () => {
+      await page.goto(`/console/org/templates/credentials/${encodeURIComponent(setup.template.id)}`);
+      await expect(page.getByText('Template overview', { exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: setup.template.name, exact: true })).toBeVisible();
       await beat(page, 1200);
     });
   });
 
-  // ── Scene 4: Applicant — Submit mDL Application ───────────────────────────
-
-  test('Scene 4 · Applicant completes the mDL application form', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-
-    await test.step('Sign in as Applicant', async () => {
-      await page.goto('/');
-      await auth.loginAsSeededUser('applicant1');
-      await page.waitForLoadState('networkidle');
-    });
-
-    await test.step('Open the mDL application form', async () => {
-      if (credentialConfigId) {
-        await page.goto(`/apply/${credentialConfigId}`);
-      } else {
-        await page.goto('/credentials');
-        await page.waitForLoadState('networkidle');
-        const applyBtn = page.locator('[data-testid="apply-btn"]').first();
-        if (await applyBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-          await applyBtn.click();
-        }
-      }
-
-      const form = page.locator('[data-testid="credential-application-form"]');
-      const formVisible = await form.isVisible({ timeout: 12000 }).catch(() => false);
-      if (!formVisible) {
-        test.skip('Application form not available — skip this scene');
-        return;
-      }
-      await beat(page, 600);
-    });
-
-    await test.step('Fill in personal information', async () => {
-      await fillField(page, 'first-name-input', 'Maria').catch(() => {});
-      await beat(page, 300);
-      await fillField(page, 'last-name-input', 'Credentialist').catch(() => {});
-      await beat(page, 300);
-      await fillField(page, 'dob-input', '1988-07-20').catch(() => {});
-      await beat(page, 300);
-
-      // Email (pre-filled for seeded users, fill only if empty)
-      const emailInput = page.locator(inputSelectorFor('email-input'));
-      if (await emailInput.isVisible({ timeout: 2000 }).catch(() => false)) {
-        const current = await emailInput.inputValue().catch(() => '');
-        if (!current) await emailInput.fill('maria.credential@example.com');
-      }
-      await beat(page, 400);
-      await tryClick(page, '[data-testid="next-step-btn"]');
-      await beat(page, 600);
-    });
-
-    await test.step('Fill in address details', async () => {
-      const addressStep = page.locator('[data-testid="address-step"]');
-      if (await addressStep.isVisible({ timeout: 4000 }).catch(() => false)) {
-        await fillField(page, 'street-input', '456 Oak Avenue').catch(() => {});
-        await beat(page, 200);
-        await fillField(page, 'city-input', 'Austin').catch(() => {});
-        await beat(page, 200);
-        await fillField(page, 'zip-input', '78701').catch(() => {});
-        await beat(page, 400);
-        await tryClick(page, '[data-testid="next-step-btn"]');
-        await beat(page, 600);
-      }
-    });
-
-    await test.step('Add portrait photo', async () => {
-      const photoStep = page.locator('[data-testid="photo-step"]');
-      if (await photoStep.isVisible({ timeout: 4000 }).catch(() => false)) {
-        const uploadInput = page.locator('[data-testid="portrait-upload-input"]');
-        if (await uploadInput.isVisible({ timeout: 3000 }).catch(() => false)) {
-          await uploadInput.setInputFiles(PORTRAIT_PATH);
-          await beat(page, 800);
-        }
-        await tryClick(page, '[data-testid="next-step-btn"]');
-        await beat(page, 600);
-      }
-    });
-
-    await test.step('Review and submit the application', async () => {
-      // Accept terms if present
-      await tryClick(page, '[data-testid="accept-terms-checkbox"]');
-      await beat(page, 400);
-
-      const submitBtn = page.locator('[data-testid="submit-application-btn"]');
-      if (await submitBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await scrollIntoView(page, '[data-testid="submit-application-btn"]');
-        await beat(page, 400);
-        await submitBtn.click();
-
-        // Wait for confirmation
-        const submitted = page.locator(
-          '[data-testid="application-submitted"], [data-testid="application-id"]',
-        );
-        const confirmed = await submitted.first()
-          .isVisible({ timeout: 20000 })
-          .catch(() => false);
-
-        if (confirmed) {
-          // Capture the application ID for the approval scene
-          const appIdEl = page.locator('[data-testid="application-id"]');
-          if (await appIdEl.isVisible({ timeout: 2000 }).catch(() => false)) {
-            applicationId = await appIdEl.getAttribute('data-value').catch(() => null);
-          }
-          await beat(page, 1200);
-        }
-      }
+  test('Scene 3 · Applicant logs in and browses available credentials', async ({ page }) => {
+    await signIn(page, 'applicant1');
+    await test.step('Find the selected credential in the catalogue', async () => {
+      await page.goto('/console/applicant/catalog');
+      await expect(page.getByTestId('credential-catalog-page')).toBeVisible();
+      const card = page.getByTestId(`credential-card-${setup.template.id}`);
+      await scrollIntoView(page, card);
+      await expect(card.getByTestId('apply-btn')).toBeEnabled();
+      await beat(page, 1200);
     });
   });
 
-  // ── Scene 5: Vendor Admin — Approve Application ───────────────────────────
-
-  test('Scene 5 · Admin reviews and approves the application', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-    const api  = new AuthenticatedApiClient(page);
-
-    await test.step('Sign in as Vendor Admin', async () => {
-      await page.goto('/');
-      await auth.loginAsSeededUser('vendor', { uiOnboarding: true });
-      await page.waitForLoadState('networkidle');
-      await beat(page, 600);
-    });
-
-    await test.step('Navigate to the applications queue', async () => {
-      const navClicked = await tryClick(
-        page,
-        '[data-testid="nav-applications"], a[href*="/applications"]',
-      );
-      if (!navClicked) await page.goto('/applications');
-      await page.waitForLoadState('networkidle');
-      await beat(page, 800);
-    });
-
-    await test.step('Open the pending application', async () => {
-      // Click the most recent pending application row
-      const pendingRow = page.locator(
-        '[data-testid="application-row"][data-status="pending"], ' +
-        '[data-testid="application-row"]:has-text("pending"), ' +
-        'tr:has-text("pending")',
-      ).first();
-
-      if (await pendingRow.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await scrollIntoView(page, pendingRow);
-        await beat(page, 400);
-        await pendingRow.click();
-        await page.waitForLoadState('networkidle');
-        await beat(page, 800);
+  test('Scene 4 · Applicant completes and submits the mDL application', async ({ page }) => {
+    await signIn(page, 'applicant1');
+    await page.goto(`/console/applicant/apply/${encodeURIComponent(setup.template.id)}`);
+    const form = page.getByTestId('credential-application-form');
+    await expect(form, 'The selected template must expose the current application form').toBeVisible();
+    const values = demoFormValues(SEEDED_USERS.applicant1, JSON.parse(process.env.DEMO_FORM_VALUES_JSON || '{}'));
+    await test.step('Complete every rendered application step', async () => {
+      // The number and grouping of fields comes from the active application
+      // template. A blocked Next action must fail rather than skip a scene.
+      for (let index = 0; ; index += 1) {
+        if (await page.getByTestId('review-step').isVisible()) break;
+        const step = form.getByTestId(`step-${index}`);
+        await expect(step).toBeVisible();
+        await fillApplicationStep(page, step, values);
+        await form.getByTestId('next-step-btn').click();
+        await expect(step).toBeHidden();
+        await beat(page);
       }
+      await expect(page.getByTestId('review-step')).toBeVisible();
     });
-
-    await test.step('Approve the application and issue credential', async () => {
-      // Prefer UI approval button
-      const approveBtn = page.locator(
-        '[data-testid="approve-btn"], button:has-text("Approve"), button:has-text("Issue")',
-      ).first();
-
-      if (await approveBtn.isVisible({ timeout: 5000 }).catch(() => false)) {
-        await scrollIntoView(page, approveBtn);
-        await beat(page, 400);
-        await approveBtn.click();
-        await beat(page, 1000);
-
-        // Handle confirmation dialog if present
-        await tryClick(page, '[data-testid="confirm-approve-btn"], button:has-text("Confirm")', 3000);
-        await beat(page, 1200);
-      } else if (applicationId) {
-        // Fall back to API approval so the recording can continue
-        console.log('[demo] UI approve button not found — using API approval for application', applicationId);
-        await api.approveApplication(applicationId).catch((err) => {
-          console.warn('[demo] API approval failed:', err.message);
-        });
-        await page.reload();
-        await page.waitForLoadState('networkidle');
-        await beat(page, 1000);
-      }
+    await test.step('Submit and capture the new application ID', async () => {
+      applicationId = await submitApplication(page);
+      const profile = await readJson(page, '/v1/me/applicant-profile');
+      expect(profile.id, 'The applicant session must resolve the profile used for this submission').toBeTruthy();
+      setup.applicantId = profile.id;
+      const record = await readJson(page, `/v1/me/applications/${encodeURIComponent(applicationId)}`);
+      assertApplicationRecord(record, setup, applicationId,
+        ['SUBMITTED', 'UNDER_REVIEW']);
+      await beat(page, 1200);
     });
   });
 
-  // ── Scene 6: Applicant — See Issued Credential ────────────────────────────
-
-  test('Scene 6 · Applicant views their issued credential', async ({ page }) => {
-    const auth = new AuthHelpers(page);
-
-    await test.step('Sign in as Applicant', async () => {
-      await page.goto('/');
-      await auth.loginAsSeededUser('applicant1');
-      await page.waitForLoadState('networkidle');
-      await beat(page, 800);
+  test('Scene 5 · Admin reviews and approves this application', async ({ page }) => {
+    requireApplicationId(applicationId);
+    await signIn(page, 'vendor');
+    await test.step('Review and approve the application submitted in Scene 4', async () => {
+      await approveApplication(page, setup, applicationId);
+      await beat(page, 1200);
     });
+  });
 
-    await test.step('Navigate to wallet / credentials', async () => {
-      const navClicked = await tryClick(
-        page,
-        '[data-testid="nav-wallet"], [data-testid="nav-documents"], a[href*="/wallet"], a[href*="/documents"]',
-      );
-      if (!navClicked) {
-        // Try common wallet route variants
-        for (const route of ['/wallet', '/documents', '/credentials/issued', '/my-credentials']) {
-          try {
-            await page.goto(route);
-            await page.waitForLoadState('networkidle');
-            const hasContent = await page.locator(
-              '[data-testid="credential-card"], [data-testid="issued-credential"], .credential-card',
-            ).first().isVisible({ timeout: 4000 });
-            if (hasContent) break;
-          } catch {
-            // try next route
-          }
-        }
-      }
-      await beat(page, 800);
+  test('Scene 6 · Applicant views the actually issued credential', async ({ page }) => {
+    requireApplicationId(applicationId);
+    await signIn(page, 'applicant1');
+    let issuedApplication;
+    await test.step('Require completed issuance for this application', async () => {
+      await expect.poll(async () => {
+        const record = await readJson(page, `/v1/me/applications/${encodeURIComponent(applicationId)}`);
+        assertApplicationRecord(record, setup, applicationId,
+          ['APPROVED', 'OFFERED', 'ISSUED', 'CREDENTIALED']);
+        issuedApplication = record;
+        return isClaimedApplication(record);
+      }, {
+        timeout: 30000,
+        message: 'Real wallet redemption must complete issuance; an approved application or unclaimed offer does not finish this demo',
+      }).toBe(true);
     });
-
-    await test.step('View the issued Mobile Driver\'s License', async () => {
-      // Scroll through the wallet to show the credential
-      const credentialCard = page.locator(
-        '[data-testid="credential-card"], [data-testid="issued-credential"], .credential-card',
-      ).first();
-
-      if (await credentialCard.isVisible({ timeout: 8000 }).catch(() => false)) {
-        await scrollIntoView(page, credentialCard);
-        await beat(page, 600);
-        // Open the credential detail if clickable
-        await credentialCard.click().catch(() => {});
-        await page.waitForLoadState('networkidle').catch(() => {});
-        await beat(page, 1500);
-      } else {
-        // Credential may not be visible yet (issuance async); show current state
-        await beat(page, 1500);
-      }
-    });
-
-    await test.step('End of demo', async () => {
-      await beat(page, 800);
+    await test.step('Show the claimed application in My Identity', async () => {
+      await page.goto(`/console/applicant/identity?id=${encodeURIComponent(applicationId)}`);
+      const details = page.getByRole('dialog', { name: 'Application Details', exact: true });
+      await expect(details).toBeVisible();
+      await expect(details.getByText(issuedApplication.credential_display_name || setup.template.name, { exact: true })).toBeVisible();
+      await expect(details.getByText('Claim: Claimed', { exact: true })).toBeVisible();
+      await beat(page, 1500);
     });
   });
 });

@@ -1,0 +1,164 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-20T04:07:36.273865Z",
+  "scope": "Android public wallet manifest producer/consumer boundary and D05 holder-cancel evidence validation",
+  "qualification": "LOCAL_SYNTHETIC_CONTRACT_CHECKS_ONLY",
+  "productionDeviceRun": "NOT_RUN",
+  "deployedReleaseQualification": "NOT_ESTABLISHED",
+  "contract": {
+    "additionalProperties": false,
+    "newOptionalFields": {
+      "lane_id": "string matching ^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "evidence_sha256": "lowercase SHA-256 of exact retained .evidence.json file bytes, including reportSha256"
+    },
+    "historicalWallets": "Existing valid wallet rows without either optional field remain accepted",
+    "richEvidence": "Device details and protocol observations remain in the retained report, outside public wallet rows",
+    "consumerBuild": "Bundled projection matches the canonical schema; actual generator tested in UI-only and full-source layouts"
+  },
+  "checks": [
+    {
+      "command": "npm test -- src/services/demoManifestService.test.ts src/components/pages/DemoPages.test.tsx",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "executor": "/root/ui_demo_audit",
+      "result": "PASS",
+      "passed": 39,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "python3 -m unittest discover -s tests/unit -p test_demo_manifest_validation.py -v",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "executor": "/root/ui_demo_audit",
+      "result": "PASS",
+      "passed": 16,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    },
+    {
+      "command": "./node_modules/.bin/tsc -p tsconfig.build.json --noEmit",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "executor": "/root/ui_demo_audit",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "git diff --check",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "executor": "/root/ui_demo_audit",
+      "result": "PASS",
+      "exitCode": 0
+    },
+    {
+      "command": "node --test test/androidMembershipCancel.test.js test/androidRecorder.test.js test/assertionCoverage.test.js",
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "executor": "/root/recorder_audit",
+      "verificationBasis": "Exact command and named results reported directly by the producer agent; not rerun by consumer reviewer",
+      "result": "PASS",
+      "passed": 24,
+      "failed": 0,
+      "skipped": 0,
+      "exitCode": 0
+    }
+  ],
+  "totalPassingTestExecutions": 79,
+  "sources": {
+    "marty-ui": {
+      "root": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+      "headAtVerification": "47479695f3ca2218952900639f747877b8103895",
+      "sourceState": "working-tree changes included; no consumer commit created",
+      "files": [
+        {
+          "path": "deploy-config/schemas/stack-demo-manifest.schema.json",
+          "sha256": "1b6bb99cf00ea8bd634c7048236dbfd592ded55d0b3073c5f7cc0107f45c90a3"
+        },
+        {
+          "path": "scripts/validate_demo_manifests.py",
+          "sha256": "a393616b877030fe59c379649bd4be72a196ac84b152b6e5e3c25e2d7969ef6d"
+        },
+        {
+          "path": "tests/unit/test_demo_manifest_validation.py",
+          "sha256": "7d7a1ad33b696452160e353ca44e0bce1888816576d7130fa900ff320efd5987"
+        },
+        {
+          "path": "ui/scripts/generate-demo-manifest-module.mjs",
+          "sha256": "fab6918abfe3a388c58230b2610d7e28332e7884ed1cfb6c497829040a500988"
+        },
+        {
+          "path": "ui/src/components/pages/DemoPages.jsx",
+          "sha256": "4b0606e644b76728bef6acf22ff5a0840c01b60a253c9a20a74c2377f21c5534"
+        },
+        {
+          "path": "ui/src/components/pages/DemoPages.test.tsx",
+          "sha256": "9e67521868847068244f05f95e0ccd6be9a15d5e760ca2caadd7785ad3a71569"
+        },
+        {
+          "path": "ui/src/generated/demoWalletSchema.generated.json",
+          "sha256": "d9bb74797c73f6410d346e2e93646e372bef7331de8bfbbaa9c9d5ff05892bac"
+        },
+        {
+          "path": "ui/src/services/demoManifestService.js",
+          "sha256": "1e23c6b43ea70845d5f946267c411df65bdc9a60b3f2cfd7a44a7cfa4e860a57"
+        },
+        {
+          "path": "ui/src/services/demoManifestService.test.ts",
+          "sha256": "5f3bdd78bd4beb53b806fa04118b0d8f5b5cdd95bdedd08bdb3b356def8c4904"
+        }
+      ]
+    },
+    "marty-demo-recorder": {
+      "root": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+      "headAtVerification": "2ffb38ec0aadf2e2d49fd283297fb4768f68f648",
+      "sourceState": "working-tree changes included; no consumer commit created",
+      "files": [
+        {
+          "path": "android/scenarios/membership-badge-login.spruceid-same-device-denial.example.json",
+          "sha256": "56149400ac498122eb91bfb0eb0c4a0cdd5b888a5db6a066a867af6fb55cfc44"
+        },
+        {
+          "path": "docs/d05-supporting-lanes.md",
+          "sha256": "2eec719614e5795b8e5386d748e851dbc230599fc3c7f4d2000188e6dbfb0e0d"
+        },
+        {
+          "path": "src/androidManifestEvidence.js",
+          "sha256": "ad409da7db987a8a144e6ebe8b22ea81b6134169dc5efcb7581ed91cd3553b96"
+        },
+        {
+          "path": "src/androidMembershipCancel.js",
+          "sha256": "929b0a16000333c1b3f3bedbdea540e1a5e2a451c49538cd26b5ab956da149e7"
+        },
+        {
+          "path": "src/androidRecorder.js",
+          "sha256": "e12d134570e371e20372a3037033153ebfffd7568d864c01ca835e586f9f4b56"
+        },
+        {
+          "path": "src/androidReleaseGateway.js",
+          "sha256": "20b0b0828c86fa43fc22ceeec070f972b267a5e519c17d1f67ab259ca99490c6"
+        },
+        {
+          "path": "src/assertionCoverage.js",
+          "sha256": "29245c7a55d1ebff0f7a30e27ef7825db0237f010f178f6ce5d2ee3db8869efc"
+        },
+        {
+          "path": "test/androidMembershipCancel.test.js",
+          "sha256": "b21ba31293f8997bb06268f3cf3eee316150abdc65ff40f5b99e3bc0f20495a2"
+        },
+        {
+          "path": "test/androidRecorder.test.js",
+          "sha256": "26ca79fbae7712f97201f0b1fc87f542a56a31c8b029f86e1f2b51199b3f75ed"
+        },
+        {
+          "path": "test/assertionCoverage.test.js",
+          "sha256": "3b66b086f1a6629c5fe70a4398252d044d3ff7890a640635639c1f293a880dc2"
+        }
+      ]
+    }
+  },
+  "limits": [
+    "No live Android device/emulator or wallet APK run",
+    "No deployment, publication or authenticated live mutation",
+    "No full UI image build; actual UI-only generator fixture and production typecheck passed",
+    "Publication readiness and release media qualification are not established by these checks"
+  ]
+}

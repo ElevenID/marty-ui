@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { Route, Routes } from 'react-router';
-import { renderWithRouter, screen, waitFor } from '@test/utils';
+import { Link, Route, Routes } from 'react-router';
+import { act, renderWithRouter, screen, waitFor, within } from '@test/utils';
 
 import {
   DemoCatalogPage,
@@ -138,6 +138,114 @@ const index = {
 };
 
 describe('DemoPages', () => {
+  it('keeps same-build Android lane results distinct and renders historical wallet evidence', async () => {
+    const wallet = {
+      implementation: 'SpruceID Showcase Wallet', vendor: 'SpruceID', build: 'a'.repeat(40),
+      deployment_mode: 'ANDROID_EMULATOR', classification: 'INDEPENDENT',
+      protocols: ['openid4vp-1.0'], capabilities: ['credential login'],
+      result: 'PASS', tested_at: '2026-10-20T12:00:00Z',
+    };
+    mockLoadManifest.mockResolvedValue({
+      ...manifest,
+      scenarios: [{ ...scenarios[0], wallets: [
+        { ...wallet, lane_id: 'spruceid-same-device-happy', evidence_sha256: 'a'.repeat(64) },
+        { ...wallet, lane_id: 'spruceid-same-device-cancel', evidence_sha256: 'b'.repeat(64), result: 'FAIL' },
+        { ...wallet, implementation: 'Historical browser wallet', deployment_mode: 'INTERNAL_CONTROL', classification: 'INTERNAL_CONTROL' },
+      ] }],
+    });
+    const errors = vi.spyOn(console, 'error');
+    try {
+      renderWithRouter(
+        <Routes><Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} /></Routes>,
+        { initialEntries: ['/demos/2026.07.0/membership-badge-login'] },
+      );
+      const happy = await screen.findByText('Lane spruceid-same-device-happy');
+      const cancelled = screen.getByText('Lane spruceid-same-device-cancel');
+      expect(within(happy.parentElement!).getByText('INDEPENDENT / PASS')).toBeInTheDocument();
+      expect(within(cancelled.parentElement!).getByText('INDEPENDENT / FAIL')).toBeInTheDocument();
+      const historical = screen.getByText('Historical browser wallet').parentElement!;
+      expect(within(historical).getByText('INTERNAL CONTROL / PASS')).toBeInTheDocument();
+      expect(within(historical).queryByText(/^Lane /)).not.toBeInTheDocument();
+      expect(errors.mock.calls.filter((args) => args.some((value) => /same key|unique.*key/.test(String(value))))).toEqual([]);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it.each(['resolve', 'reject'] as const)('ignores an obsolete release load that later %ss', async (outcome) => {
+    let resolveOld!: (value: typeof manifest) => void;
+    let rejectOld!: (reason: Error) => void;
+    let oldSignal!: AbortSignal;
+    const oldRequest = new Promise<typeof manifest>((resolve, reject) => {
+      resolveOld = resolve;
+      rejectOld = reject;
+    });
+    const newerManifest = { ...manifest, stack_version: '2026.08.0', release_name: 'Rust Platform Completion' };
+    mockLoadManifest.mockImplementation((version: string, { signal }: { signal: AbortSignal }) => {
+      if (version === '2026.07.0') {
+        oldSignal = signal;
+        return oldRequest;
+      }
+      return Promise.resolve(newerManifest);
+    });
+    const { user } = renderWithRouter(
+      <>
+        <Link to="/demos/2026.08.0/organization-primitives">Open newer release</Link>
+        <Routes>
+          <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />
+        </Routes>
+      </>,
+      { initialEntries: ['/demos/2026.07.0/organization-primitives'] },
+    );
+    await waitFor(() => expect(oldSignal).toBeDefined());
+    await user.click(screen.getByRole('link', { name: 'Open newer release' }));
+    expect(await screen.findByText('ElevenID LLC Credential Platform v2026.08.0')).toBeInTheDocument();
+    expect(oldSignal.aborted).toBe(true);
+
+    // A loader can finish parsing, or reject with a wrapped error, after abort.
+    // Its result must never replace the release selected by the current route.
+    await act(async () => {
+      if (outcome === 'resolve') resolveOld(manifest);
+      else rejectOld(new Error('Obsolete release response failed'));
+      await oldRequest.catch(() => {});
+    });
+    expect(screen.getByText('ElevenID LLC Credential Platform v2026.08.0')).toBeInTheDocument();
+    expect(screen.queryByText('ElevenID LLC Credential Platform v2026.07.0')).not.toBeInTheDocument();
+    expect(screen.queryByText('Obsolete release response failed')).not.toBeInTheDocument();
+  });
+
+  it('starts a different scenario at the beginning after seeking in the previous recording', async () => {
+    const first = {
+      ...scenarios[1],
+      slug: 'first-recording',
+      title: 'First recording',
+      chapters: [{ ...scenarios[1].chapters[0], start_seconds: 75, title: 'Later first chapter' }],
+    };
+    const second = { ...scenarios[1], slug: 'second-recording', title: 'Second recording', youtube_id: 'lmnopqrstuv' };
+    mockLoadManifest.mockResolvedValue({ ...manifest, scenarios: [first, second] });
+    const { user } = renderWithRouter(
+      <>
+        <Link to="/demos/2026.07.0/first-recording">Open first recording</Link>
+        <Link to="/demos/2026.07.0/second-recording">Open second recording</Link>
+        <Routes>
+          <Route path="/demos/:stackVersion/:scenario" element={<DemoScenarioPage />} />
+        </Routes>
+      </>,
+      { initialEntries: ['/demos/2026.07.0/first-recording'] },
+    );
+    await user.click(await screen.findByRole('button', { name: 'Load First recording from YouTube' }));
+    await user.click(screen.getByRole('button', { name: /Later first chapter/ }));
+    expect(new URL(screen.getByTitle('First recording video').getAttribute('src')!).searchParams.get('start')).toBe('75');
+
+    await user.click(screen.getByRole('link', { name: 'Open second recording' }));
+    await user.click(await screen.findByRole('button', { name: 'Load Second recording from YouTube' }));
+    expect(new URL(screen.getByTitle('Second recording video').getAttribute('src')!).searchParams.get('start')).toBe('0');
+
+    await user.click(screen.getByRole('link', { name: 'Open first recording' }));
+    await user.click(await screen.findByRole('button', { name: 'Load First recording from YouTube' }));
+    expect(new URL(screen.getByTitle('First recording video').getAttribute('src')!).searchParams.get('start')).toBe('0');
+  });
+
   it('leads with the release name and identifies the ElevenID LLC platform version separately from MIP', async () => {
     mockLoadIndex.mockResolvedValue(index);
     mockLoadManifest.mockResolvedValue(manifest);

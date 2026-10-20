@@ -21,6 +21,11 @@ pub async fn migrate_organization_schema(pool: &PgPool) -> Result<(), Organizati
     sqlx::raw_sql(include_str!("../migrations/0001_organization_schema.sql"))
         .execute(&mut *transaction)
         .await?;
+    sqlx::raw_sql(include_str!(
+        "../migrations/0002_offline_audit_receipts.sql"
+    ))
+    .execute(&mut *transaction)
+    .await?;
     validate_connection(&mut transaction).await?;
     transaction.commit().await?;
     Ok(())
@@ -96,6 +101,19 @@ async fn validate_connection(
                 && row.get::<String, _>("column_name") == column
         }) {
             return Err(incompatible(&format!("{table}.{column} is missing")));
+        }
+    }
+    let offline_indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace JOIN pg_index i ON i.indexrelid=c.oid WHERE n.nspname='organization_service' AND i.indrelid='organization_service.audit_events'::regclass AND i.indisunique AND i.indisvalid AND i.indnkeyatts=2 AND i.indpred IS NOT NULL",
+    ).fetch_all(&mut *connection).await?;
+    for required in [
+        "uq_offline_audit_organization_event",
+        "uq_offline_audit_organization_verification",
+    ] {
+        if !offline_indexes.iter().any(|index| index == required) {
+            return Err(incompatible(&format!(
+                "offline audit index {required} is missing"
+            )));
         }
     }
     Ok(())

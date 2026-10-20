@@ -134,6 +134,127 @@ impl PresentationVerificationOrchestrator for VerifiedFacts {
 
 struct Unavailable;
 
+struct VerifiedMdocFacts {
+    extra_disclosure: bool,
+    authenticated: bool,
+    duplicate_match: bool,
+}
+
+#[async_trait]
+impl PresentationVerificationOrchestrator for VerifiedMdocFacts {
+    async fn verify(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<Value, PresentationVerificationError> {
+        let mut facts = VerifiedFacts.verify(policy, request).await?;
+        facts["presentation_verified"] = json!(self.authenticated);
+        facts["holder_binding_verified"] = json!(self.authenticated);
+        facts["holder_binding_method"] = json!("DEVICE_KEY");
+        facts["proof_profile"] = json!("OID4VP_VERIFIABLE_PRESENTATION");
+        facts["credentials"][0]["credential_format"] = json!("mdoc");
+        facts["credentials"][0]["signature_verified"] = json!(self.authenticated);
+        let mut disclosed = json!({"age_over_21": true});
+        if self.extra_disclosure {
+            disclosed["birth_date"] = json!("1990-01-01");
+        }
+        facts["credentials"][0]["claims"] = json!({
+            "age_over_21": true,
+            "birth_date": "1990-01-01",
+            "_mdoc": {"documents": [{
+                "doc_type": "org.iso.18013.5.1.mDL",
+                "namespaces": {"org.iso.18013.5.1": disclosed}
+            }]}
+        });
+        if self.duplicate_match {
+            let duplicate = facts["credentials"][0].clone();
+            facts["credentials"].as_array_mut().unwrap().push(duplicate);
+        }
+        Ok(facts)
+    }
+}
+
+async fn evaluate_mdoc_disclosures(
+    extra_disclosure: bool,
+    authenticated: bool,
+    duplicate_match: bool,
+) -> Value {
+    let organization_id = Uuid::new_v4();
+    let app = router(
+        organization_id,
+        Arc::new(VerifiedMdocFacts {
+            extra_disclosure,
+            authenticated,
+            duplicate_match,
+        }),
+    );
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/v1/presentation-policies/evaluate",
+            json!({
+                "organization_id": organization_id,
+                "vp_token": "mdoc:untrusted-transport-is-not-the-evidence-source",
+                "credential_requirements": [{
+                    "credential_template_id": "age-template",
+                    "credential_payload_format": "MDOC",
+                    "requested_claims": [{
+                        "claim_name": "age_over_21",
+                        "constraints": [{"claim_name": "age_over_21", "constraint_type": "presence"}]
+                    }]
+                }]
+            }),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body(response).await
+}
+
+#[tokio::test]
+async fn authenticated_mdoc_disclosure_names_include_unrequested_fields_without_their_values() {
+    let result = evaluate_mdoc_disclosures(true, true, false).await;
+    assert_eq!(result["decision"], "allow", "{result}");
+    assert_eq!(result["verified_claims"], json!({"age_over_21": true}));
+    let disclosures = &result["credential_results"][0]["authenticated_disclosures"];
+    assert_eq!(
+        disclosures,
+        &json!({"format": "mso_mdoc", "documents": [{
+            "doc_type": "org.iso.18013.5.1.mDL",
+            "namespaces": {"org.iso.18013.5.1": ["age_over_21", "birth_date"]}
+        }]})
+    );
+    assert!(!disclosures.to_string().contains("1990-01-01"));
+}
+
+#[tokio::test]
+async fn authenticated_mdoc_disclosure_names_do_not_come_from_flat_or_policy_claims() {
+    let result = evaluate_mdoc_disclosures(false, true, false).await;
+    assert_eq!(
+        result["credential_results"][0]["authenticated_disclosures"]["documents"][0]["namespaces"]
+            ["org.iso.18013.5.1"],
+        json!(["age_over_21"])
+    );
+}
+
+#[tokio::test]
+async fn unauthenticated_mdoc_data_never_produces_disclosure_evidence() {
+    let result = evaluate_mdoc_disclosures(true, false, false).await;
+    assert_eq!(result["decision"], "deny", "{result}");
+    assert!(result["credential_results"][0]
+        .get("authenticated_disclosures")
+        .is_none());
+}
+
+#[tokio::test]
+async fn ambiguous_authenticated_credentials_never_produce_a_guessed_disclosure_inventory() {
+    let result = evaluate_mdoc_disclosures(true, true, true).await;
+    for credential in result["credential_results"].as_array().unwrap() {
+        assert!(credential.get("authenticated_disclosures").is_none());
+    }
+}
+
 #[async_trait]
 impl PresentationVerificationOrchestrator for Unavailable {
     async fn verify(

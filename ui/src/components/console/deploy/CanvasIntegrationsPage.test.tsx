@@ -573,6 +573,10 @@ describe('CanvasIntegrationsPage', () => {
     expect(screen.getByText('Pending awards: 1')).toBeInTheDocument();
     expect(screen.getByText('Identity links required: 1')).toBeInTheDocument();
     expect(screen.getByText('Correction reviews: 1')).toBeInTheDocument();
+    const review = screen.getByTestId('canvas-correction-review');
+    expect(review).toHaveAttribute('data-review-id', 'review-1');
+    expect(review).toHaveAttribute('data-application-id', 'application-1');
+    expect(review).toHaveAttribute('data-credential-id', 'credential-1');
   });
 
   it('retries or resolves dead-letter sync jobs and resolves correction reviews', async () => {

@@ -134,12 +134,20 @@ impl CredentialTemplateControlPlane for ControlPlane {
         credential_format: &str,
     ) -> Result<IssuerIdentity, ControlPlaneError> {
         assert_eq!(organization_id, "org-1");
-        assert!(matches!(credential_format, "sd_jwt_vc" | "icao_emrtd"));
+        assert!(matches!(
+            credential_format,
+            "sd_jwt_vc" | "icao_emrtd" | "ldp_vc"
+        ));
         Ok(IssuerIdentity {
             issuer_did: requested_issuer_did
                 .unwrap_or("did:web:issuer.example")
                 .to_owned(),
-            issuer_algorithm: "ES256".to_owned(),
+            issuer_algorithm: if credential_format == "ldp_vc" {
+                "EdDSA"
+            } else {
+                "ES256"
+            }
+            .to_owned(),
         })
     }
 
@@ -394,6 +402,45 @@ async fn internal_metadata_fails_closed_when_the_repository_is_unavailable() {
         error,
         marty_credential_template::application::CredentialTemplateApplicationError::Repository(_)
     ));
+}
+
+#[tokio::test]
+async fn active_data_integrity_template_is_advertised_for_oid4vci() {
+    let (_repository, application) = build_application(ControlPlane {
+        deny_membership: false,
+        deny_revocation: false,
+        deny_trust: false,
+    });
+    let mut data_integrity = command();
+    data_integrity.name = "VC-API Data Integrity Badge".into();
+    data_integrity.credential_type = "DataIntegrityBadge".into();
+    data_integrity.supported_formats = vec![CredentialFormat::JsonLd];
+    data_integrity.credential_payload_format = Some("json_ld".into());
+    data_integrity.selective_disclosure_fields.clear();
+    let draft = application.create_template(data_integrity).await.unwrap();
+    assert_eq!(draft.credential_payload_format, "JSON_LD");
+    assert_eq!(draft.issuer_algorithm.as_deref(), Some("EdDSA"));
+    application
+        .activate_template("user-1", &draft.id, Utc::now())
+        .await
+        .unwrap();
+    let metadata = application
+        .credential_configurations_internal()
+        .await
+        .unwrap();
+    let configuration = &metadata.configurations["DataIntegrityBadge"];
+    assert_eq!(configuration["format"], "ldp_vc");
+    assert_eq!(
+        configuration["credential_signing_alg_values_supported"],
+        serde_json::json!(["EdDSA"])
+    );
+    assert_eq!(
+        configuration["credential_definition"],
+        serde_json::json!({
+            "@context": ["https://www.w3.org/ns/credentials/v2"],
+            "type": ["VerifiableCredential", "DataIntegrityBadge"]
+        })
+    );
 }
 
 #[tokio::test]

@@ -314,6 +314,8 @@ export default defineConfig(async ({ mode }) => {
         prerender({
           routes: prerenderRoutes,
           renderer: new PuppeteerRenderer({
+            injectProperty: '__ELEVENID_PRERENDER__',
+            inject: { demoManifests: true },
             maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
             timeout: 45000,

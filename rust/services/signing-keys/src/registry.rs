@@ -1378,7 +1378,7 @@ fn managed_openbao_service(
         "lti_only_references": lti_only_references,
         "algorithms": SUPPORTED_ALGORITHMS,
         "key_purposes": purposes,
-        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
+        "credential_formats": ["jwt_vc_json", "dc+sd-jwt", "ldp_vc", "mso_mdoc", "zk_mdoc", "icao_emrtd", "vds_nc", "oauth-authz-req+jwt", "lti_tool_jwt"],
         "status": if inventory_complete { "configured" } else { "degraded" },
         "managed": true,
         "read_only": true,
@@ -2443,6 +2443,23 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("x509_doc_signer")));
+    }
+
+    #[test]
+    fn managed_openbao_advertises_data_integrity_issuer_format() {
+        let managed = managed_openbao_service("org-a", "http://openbao:8200", &[], true);
+        assert!(managed["credential_formats"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("ldp_vc")));
+        assert!(managed["algorithms"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("EdDSA")));
+        assert!(managed["key_purposes"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("vc_jwt_issuer")));
     }
 
     #[test]

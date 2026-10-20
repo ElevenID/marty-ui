@@ -467,9 +467,17 @@
       "slug": "private-online-age-proof",
       "title": "Private Online Age Proof",
       "summary": "Request and verify only an age-over-21 fact from a trusted mobile document issuer.",
-      "scenario_revision": 1,
-      "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "scenario_revision": 2,
+      "recording_classification": "INDEPENDENT_WALLET",
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Dedicated mDL age-proof workflow with exact authenticated disclosures and two required independent wallet gates.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -485,8 +493,7 @@
       "protocols": [
         "openid4vci-1.0",
         "openid4vp-1.0",
-        "dcql-1.0",
-        "sd-jwt-vc"
+        "dcql-1.0"
       ],
       "recording_plan": {
         "fresh_recording_required": true,
@@ -542,8 +549,7 @@
           "standards": [
             "openid4vci-1.0",
             "openid4vp-1.0",
-            "dcql-1.0",
-            "sd-jwt-vc"
+            "dcql-1.0"
           ],
           "documentation_links": [
             {
@@ -562,8 +568,7 @@
           "standards": [
             "openid4vci-1.0",
             "openid4vp-1.0",
-            "dcql-1.0",
-            "sd-jwt-vc"
+            "dcql-1.0"
           ],
           "documentation_links": [
             {
@@ -582,8 +587,7 @@
           "standards": [
             "openid4vci-1.0",
             "openid4vp-1.0",
-            "dcql-1.0",
-            "sd-jwt-vc"
+            "dcql-1.0"
           ],
           "documentation_links": [
             {
@@ -602,8 +606,7 @@
           "standards": [
             "openid4vci-1.0",
             "openid4vp-1.0",
-            "dcql-1.0",
-            "sd-jwt-vc"
+            "dcql-1.0"
           ],
           "documentation_links": [
             {
@@ -641,7 +644,9 @@
         }
       ],
       "limitations": [
-        "Fresh release-bound recording and automated evidence are required before publication."
+        "Fresh release-bound recording and automated evidence are required before publication.",
+        "Requires fresh EUDI and SpruceID wallet evidence from the exact pinned builds; no wallet success is established by this draft.",
+        "The negative lane requires an explicit wallet rejection tied to the untrusted fixture. The current public backend does not expose a typed rejection reason for this lane."
       ],
       "published_at": null,
       "publication_attestation": null,
@@ -838,9 +843,17 @@
       "slug": "membership-badge-login",
       "title": "Membership Badge and Login",
       "summary": "Issue a governed Open Badge and use it for same-device passwordless account return.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Run-owned Rust wallet storage and local supporting drivers with real expiry and issuer trust evidence.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -1097,9 +1110,17 @@
       "slug": "credential-lifecycle",
       "title": "Credential Lifecycle",
       "summary": "Renew, suspend, reinstate, and revoke while verification follows current status.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Run-owned Rust wallet storage, public cancellation of unused offers, and pre-existing revocation profile ownership.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -1688,9 +1709,17 @@
       "slug": "offline-facility-verification",
       "title": "Offline Facility Verification",
       "summary": "Verify against provisioned trust offline, buffer the audit, and synchronize after reconnection.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Deployed durable Rust audit receipts and native acknowledgment verification.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -1901,9 +1930,17 @@
       "slug": "organization-primitives",
       "title": "Organization and MIP Primitives",
       "summary": "Configure the organization, issuer, trust, policy, deployment, and flow primitives required to operate.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Real configured OpenBao signing challenges for issuance and OID4VP purposes.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -2092,9 +2129,17 @@
       "slug": "external-admissions-gateway-webhooks",
       "title": "External Admissions Gateway and Webhooks",
       "summary": "Approve a synthetic learner from Northstar through the public API and complete enrollment from a verified webhook.",
-      "scenario_revision": 1,
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Reconcile the unpublished draft with the existing revision 2 admissions, scope, invalid-signature and duplicate-event configurations.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -2448,10 +2493,18 @@
     {
       "slug": "first-party-browser-wallet",
       "title": "First-Party Browser Wallet",
-      "summary": "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate.",
-      "scenario_revision": 1,
+      "summary": "A fresh internal Rust wallet control claims and stores the configured credential, presents it for login, and proves closed-session rejection.",
+      "scenario_revision": 2,
       "recording_classification": "FIRST_PARTY_CONTROL",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "FIRST_PARTY_CONTROL",
+          "state": "DRAFT",
+          "superseded_reason": "Replace the historical placeholder with a dedicated current-run control contract: governed claim, receipt and storage, authenticated presentation, and closed-session rejection. Credential format is observed rather than inferred.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -2459,18 +2512,20 @@
         "Developer"
       ],
       "capabilities": [
-        "Historical behavior preservation"
+        "Governed credential claim",
+        "Internal wallet receipt and storage",
+        "Credential-based login",
+        "Run-owned closed-session rejection"
       ],
       "protocols": [
         "openid4vci-1.0",
         "openid4vp-1.0",
-        "dcql-1.0",
-        "sd-jwt-vc"
+        "dcql-1.0"
       ],
       "poster": {
         "src": "/images/demos/2026.08.0/portfolio-draft.svg",
         "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
-        "alt": "Draft release card for First-Party Browser Wallet; historical capability preserved"
+        "alt": "Draft release card for the first-party Rust wallet control; fresh capture is required"
       },
       "youtube_id": null,
       "media_evidence": null,
@@ -2480,24 +2535,88 @@
           {
             "start_seconds": 0,
             "speaker": "Narrator",
-            "text": "Preserved historical first-party wallet demonstration; fresh MIP 0.5 evidence remains separate."
+            "text": "An eligible synthetic member claims a credential through the product. This recording uses the internal first-party Rust wallet control."
+          },
+          {
+            "start_seconds": 10,
+            "speaker": "Narrator",
+            "text": "The wallet receives the canonical offer and shows the expected stored credential. The actual receipt identifies its credential format."
+          },
+          {
+            "start_seconds": 22,
+            "speaker": "Narrator",
+            "text": "After signing out, the member starts credential login. The wallet presents the credential, and ElevenID creates a new authenticated session without another password."
+          },
+          {
+            "start_seconds": 38,
+            "speaker": "Narrator",
+            "text": "The run's wallet session is then closed. A later credential-list request returns HTTP 410, confirming closed-session rejection for this internal control."
           }
         ]
       },
       "chapters": [
         {
           "start_seconds": 0,
-          "title": "Preserved qualification surface",
-          "role": "Developer",
+          "title": "Claim through the governed product",
+          "role": "Holder",
           "mip_primitives": [
-            "Issuance Flow",
+            "Application Template",
+            "Issuance Flow"
+          ],
+          "standards": [
+            "OpenID4VCI 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 10,
+          "title": "Receive and inspect the credential",
+          "role": "Holder",
+          "mip_primitives": [
+            "Issuance Flow"
+          ],
+          "standards": [
+            "OpenID4VCI 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 22,
+          "title": "Present and authenticate",
+          "role": "Holder",
+          "mip_primitives": [
+            "Presentation Policy",
             "Verification Flow"
           ],
           "standards": [
-            "OpenID4VCI 1.0",
             "OpenID4VP 1.0",
             "DCQL 1.0"
           ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 38,
+          "title": "Reject access after session closure",
+          "role": "Developer",
+          "mip_primitives": [
+            "Internal wallet control"
+          ],
+          "standards": [],
           "documentation_links": [
             {
               "label": "Standards",
@@ -2509,14 +2628,36 @@
       "wallets": [],
       "assertions": [
         {
-          "id": "historical-capability-preserved",
-          "label": "The historical qualification capability remains represented.",
+          "id": "governed_claim",
+          "label": "The synthetic holder claims through the product and signs out before credential login.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "expected_credential_received_and_stored",
+          "label": "The Rust control receives and displays the expected credential with its actual format.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "presentation_authenticated",
+          "label": "A real presentation and HTTP 200 authentication check establish a new session.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "closed_wallet_session_rejected",
+          "label": "After exact owned session closure, the run-bound credential-list API rejects access with HTTP 410.",
           "result": "NOT_RUN",
           "evidence_sha256": null
         }
       ],
       "limitations": [
-        "This entry preserves the historical capability; it does not reuse prior media as MIP 0.5 evidence."
+        "This is the internal FIRST_PARTY_CONTROL and reuses the governed membership product path. It does not qualify a public wallet product.",
+        "The negative boundary is closed-session rejection through the Rust API; TTL expiry and public-device isolation are not claimed.",
+        "The approved synthetic application and deployed issuer, trust and credential-login resources are preprovisioned dependencies. Wallet session closure is not server credential revocation.",
+        "The fixed entrypoint and full capture revision must be bound to the deployed source, with two fresh recordings and this scenario's own report. Historical or D03/D05 media are not inherited.",
+        "Current live capture, measured voice/captions/crops/pointers, privacy review and publication remain unqualified."
       ],
       "published_at": null,
       "publication_attestation": null,
@@ -2525,10 +2666,18 @@
     {
       "slug": "independent-wallet-interoperability",
       "title": "Independent Wallet Interoperability",
-      "summary": "Preserved independent-wallet qualification surface for final-protocol interoperability.",
-      "scenario_revision": 1,
+      "summary": "Two fresh pinned native Spruce runs exercise governed credential receipt, unchanged signed DCQL presentation, authenticated login, and holder cancellation without a browser session.",
+      "scenario_revision": 2,
       "recording_classification": "INDEPENDENT_WALLET",
-      "revision_history": [],
+      "revision_history": [
+        {
+          "scenario_revision": 1,
+          "recording_classification": "INDEPENDENT_WALLET",
+          "state": "DRAFT",
+          "superseded_reason": "Replace the retained placeholder with a dedicated current native Spruce issuance, signed-request presentation, authentication and holder-cancel contract. Each lane requires its own fresh evidence.",
+          "media_evidence": null
+        }
+      ],
       "mip_version": "0.5.0",
       "state": "DRAFT",
       "audiences": [
@@ -2536,18 +2685,20 @@
         "Developer"
       ],
       "capabilities": [
-        "Historical behavior preservation"
+        "Fresh independent native wallet receipt",
+        "Canonical signed DCQL consent",
+        "Credential-based authentication",
+        "Holder cancellation without a session"
       ],
       "protocols": [
         "openid4vci-1.0",
         "openid4vp-1.0",
-        "dcql-1.0",
-        "sd-jwt-vc"
+        "dcql-1.0"
       ],
       "poster": {
         "src": "/images/demos/2026.08.0/portfolio-draft.svg",
         "sha256": "af7f7880ff5dead5eff3a00db4108fe59d771fa831358d98dbbed2c657288db9",
-        "alt": "Draft release card for Independent Wallet Interoperability; historical capability preserved"
+        "alt": "Draft release card for pinned native wallet interoperability; fresh two-lane capture is required"
       },
       "youtube_id": null,
       "media_evidence": null,
@@ -2557,23 +2708,109 @@
           {
             "start_seconds": 0,
             "speaker": "Narrator",
-            "text": "Preserved independent-wallet qualification surface for final-protocol interoperability."
+            "text": "Synthetic test data and AI-generated narration. A member uses a pinned Spruce wallet to receive a credential and access ElevenID."
+          },
+          {
+            "start_seconds": 10,
+            "speaker": "Narrator",
+            "text": "Stage one: issue. Claim through the product, select the registered Spruce wallet, and add the fresh credential to the native wallet."
+          },
+          {
+            "start_seconds": 22,
+            "speaker": "Narrator",
+            "text": "Stage two: present. Sign out and start credential login. The product supplies its unchanged signed request with a DCQL query."
+          },
+          {
+            "start_seconds": 34,
+            "speaker": "Narrator",
+            "text": "Review the request and select Approve. The operator then explicitly returns to Chrome, as shown in the recording."
+          },
+          {
+            "start_seconds": 46,
+            "speaker": "Narrator",
+            "text": "Stage three: authenticate. The same browser confirms ElevenID created a new authenticated session after native presentation."
+          },
+          {
+            "start_seconds": 58,
+            "speaker": "Narrator",
+            "text": "Stage four: cancel. A separate clean wallet run receives a fresh credential and starts another credential-login request."
+          },
+          {
+            "start_seconds": 70,
+            "speaker": "Narrator",
+            "text": "Select Cancel and explicitly return to the same Chrome session. Its authentication check must show that no session was created."
+          },
+          {
+            "start_seconds": 82,
+            "speaker": "Narrator",
+            "text": "These two paths cover one pinned wallet. Other vendors, credential formats and physical-device security need separate evidence."
           }
         ]
       },
       "chapters": [
         {
           "start_seconds": 0,
-          "title": "Preserved qualification surface",
-          "role": "Developer",
+          "title": "Issue into a clean native wallet",
+          "role": "Holder",
           "mip_primitives": [
-            "Issuance Flow",
+            "Application Template",
+            "Issuance Flow"
+          ],
+          "standards": [
+            "OpenID4VCI 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 22,
+          "title": "Approve the canonical request",
+          "role": "Holder",
+          "mip_primitives": [
+            "Presentation Policy",
             "Verification Flow"
           ],
           "standards": [
-            "OpenID4VCI 1.0",
             "OpenID4VP 1.0",
             "DCQL 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 46,
+          "title": "Confirm the new authenticated session",
+          "role": "Holder",
+          "mip_primitives": [
+            "Verification Flow"
+          ],
+          "standards": [
+            "OpenID4VP 1.0"
+          ],
+          "documentation_links": [
+            {
+              "label": "Standards",
+              "href": "/standards"
+            }
+          ]
+        },
+        {
+          "start_seconds": 58,
+          "title": "Cancel in a separate fresh lane",
+          "role": "Holder",
+          "mip_primitives": [
+            "Verification Flow"
+          ],
+          "standards": [
+            "OpenID4VP 1.0"
           ],
           "documentation_links": [
             {
@@ -2586,14 +2823,38 @@
       "wallets": [],
       "assertions": [
         {
-          "id": "historical-capability-preserved",
-          "label": "The historical qualification capability remains represented.",
+          "id": "fresh_native_credential_received",
+          "label": "A clean pinned Spruce wallet receives a fresh credential through the governed product claim.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "canonical_signed_request_presented",
+          "label": "The native wallet handles the product's unchanged signed DCQL request and the holder approves presentation.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "presentation_authenticated",
+          "label": "The same previously signed-out Chrome session observes successful authentication after native presentation.",
+          "result": "NOT_RUN",
+          "evidence_sha256": null
+        },
+        {
+          "id": "holder_cancel_no_session",
+          "label": "A separate clean native run receives its own credential, cancels consent, and confirms that Chrome remains unauthenticated.",
           "result": "NOT_RUN",
           "evidence_sha256": null
         }
       ],
       "limitations": [
-        "This entry preserves the historical capability; it does not reuse prior media as MIP 0.5 evidence."
+        "This current contract covers one pinned Spruce implementation with separate fresh happy and holder-cancel lanes. It does not qualify other vendors, exact credential formats or disclosed-claim inventories.",
+        "The supported transport is the product's existing native-intent fallback in a frozen Chrome profile where Digital Credentials transport is unsupported. A chooser profile remains BLOCKED; feature detection and signed requests are not overridden.",
+        "The native wallet returns to its own home screen. Recorder-driven return to Chrome is explicit and recorded; automatic browser callback behavior is not claimed.",
+        "Each lane needs a distinct fresh synthetic account, no existing same-template application, an empty isolated wallet, active governed issuance/login resources and matching deployed source. Existing applications are not repurposed.",
+        "The adapter binds the original request form and hashes; it does not independently reverify the request signature. Native Rust protocol verification remains the wallet and product's responsibility.",
+        "The two native recordings, reports and final session observations must belong to this scenario's current run. No historical, first-party, D03 or D05 report is inherited.",
+        "Server credential retirement, physical-device security, measured voice/captions/crops/pointers, privacy review and publication are outside the local source checks and remain pending."
       ],
       "published_at": null,
       "publication_attestation": null,

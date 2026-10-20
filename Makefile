@@ -26,7 +26,7 @@
 	package-selfhost-bundle \
 	selfhost-prod-openbao-up selfhost-prod-openbao-down selfhost-prod-openbao-ps selfhost-prod-openbao-logs \
 	selfhost-prod-openbao-bootstrap selfhost-prod-openbao-export selfhost-prod-openbao-rotate-tls \
-	selfhost-prod-config selfhost-prod-check selfhost-prod-bootstrap selfhost-prod-up \
+	selfhost-prod-config selfhost-prod-check selfhost-prod-up \
 	selfhost-prod-down selfhost-prod-restart selfhost-prod-ps selfhost-prod-logs \
 	selfhost-prod-beta-tunnel-up selfhost-prod-beta-tunnel-stop selfhost-prod-beta-tunnel-ps selfhost-prod-beta-tunnel-logs \
 	deploy-catalog-validate deploy-stack-plan selfhost-prod-plan selfhost-prod-beta-tunnel-plan \
@@ -70,7 +70,7 @@ SELFHOST_ENV_FILE ?= .env.selfhost.production.local
 SELFHOST_PROD_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.prod.yml
 SELFHOST_PROD_BETA_COMPOSE := $(SELFHOST_PROD_COMPOSE) --profile beta-tunnel
 SELFHOST_OPENBAO_COMPOSE := $(COMPOSE) --env-file $(SELFHOST_ENV_FILE) -f docker-compose.selfhost.openbao.yml
-SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-bootstrap
+SELFHOST_OPENBAO_LOG_SERVICES := openbao openbao-unseal
 SELFHOST_PROD_LOG_SERVICES := edge cloudflared gateway keycloak
 SELFHOST_PROD_BETA_TUNNEL_SERVICES := tunnel-nginx-proxy cloudflared-beta
 SELFHOST_SECRET_DIR ?=
@@ -187,15 +187,17 @@ selfhost-prod-openbao-ps: ## Show the standalone self-host OpenBao container sta
 selfhost-prod-openbao-logs: ## Follow logs for the standalone self-host OpenBao deployment
 	@$(SELFHOST_OPENBAO_COMPOSE) logs -f $(SELFHOST_OPENBAO_LOG_SERVICES)
 
-selfhost-prod-openbao-bootstrap: ## Re-run the standalone OpenBao bootstrap helper
+selfhost-prod-openbao-bootstrap: ## Initialize a fresh standalone OpenBao state once
 	@echo "$(BLUE)Running self-host OpenBao bootstrap...$(NC)"
-	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d openbao
+	@$(SELFHOST_OPENBAO_COMPOSE) run --rm --no-deps openbao-bootstrap
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d --wait openbao-unseal
 	@echo "$(GREEN)✓ Self-host OpenBao bootstrap completed$(NC)"
 
 selfhost-prod-openbao-rotate-tls: ## Renew the KMS-owned listener identity, restart and unseal OpenBao
 	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-tls-init -rotate
 	@$(SELFHOST_OPENBAO_COMPOSE) restart openbao
-	@$(SELFHOST_OPENBAO_COMPOSE) run --rm openbao-bootstrap
+	@$(SELFHOST_OPENBAO_COMPOSE) up -d --wait openbao openbao-unseal
 
 selfhost-prod-openbao-export: ## Export the standalone OpenBao state archive
 	@echo "$(BLUE)Exporting self-host OpenBao state...$(NC)"
@@ -211,9 +213,6 @@ selfhost-prod-config: ## Validate the self-host production compose files
 selfhost-prod-check: ## Validate tunnel token, OpenBao state, and main self-host compose health
 	@echo "$(BLUE)Checking self-host production deployment state...$(NC)"
 	@python scripts/check-selfhost-production.py --env-file "$(SELFHOST_ENV_FILE)"
-
-selfhost-prod-bootstrap: selfhost-prod-openbao-up selfhost-prod-up ## Start OpenBao and the immutable self-host stack
-	@echo "$(GREEN)✓ Self-host production bootstrap complete$(NC)"
 
 selfhost-prod-up: selfhost-prod-config ## Start the self-host production stack from released images
 	@echo "$(BLUE)Starting self-host production stack...$(NC)"

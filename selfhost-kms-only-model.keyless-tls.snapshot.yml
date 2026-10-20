@@ -280,9 +280,9 @@ services:
     build:
       context: .
       dockerfile: services/Dockerfile.migrations
-    volumes:
+    volumes: &db-migrate-volumes
       - *redis-socket-mount
-    environment:
+    environment: &db-migrate-environment
       <<: *runtime-env
       DATABASE_URL_TEMPLATE: *database-url-sync-template
       MARTY_DB_PASSWORD_FILE: /run/secrets/marty_db_password
@@ -296,15 +296,13 @@ services:
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-https://localhost}
       REDIS_URL: unix:///run/marty-redis/redis.sock
       REDIS_DB_GATEWAY: "2"
-      MARTY_KMS_BOOTSTRAP_ENABLED: ${MARTY_KMS_BOOTSTRAP_ENABLED:-true}
+      MARTY_KMS_BOOTSTRAP_ENABLED: "false"
       BAO_ADDR: ${BAO_ADDR:-}
-      BAO_TOKEN_FILE: /run/secrets/openbao_bootstrap_token
       BAO_CACERT: /run/secrets/openbao_tls_ca_cert
       NOTIFICATION_OPENBAO_TOKEN_FILE: /run/secrets/notification_openbao_token
       NOTIFICATION_OPENBAO_CA_CERT_FILE: /run/secrets/openbao_tls_ca_cert
     secrets:
       - marty_db_password
-      - openbao_bootstrap_token
       - notification_openbao_token
       - openbao_tls_ca_cert
     depends_on:
@@ -314,6 +312,28 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    restart: "no"
+
+  # Explicit one-time KMS/DID provisioning. The ordinary migration and all
+  # application restarts never mount or use the privileged bootstrap token.
+  kms-initialize:
+    profiles: [kms-init]
+    build:
+      context: .
+      dockerfile: services/Dockerfile.migrations
+    volumes: *db-migrate-volumes
+    environment:
+      <<: *db-migrate-environment
+      MARTY_KMS_BOOTSTRAP_ENABLED: "true"
+      BAO_TOKEN_FILE: /run/secrets/openbao_bootstrap_token
+    secrets:
+      - marty_db_password
+      - notification_openbao_token
+      - openbao_tls_ca_cert
+      - openbao_bootstrap_token
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
     restart: "no"
 
   # Apply the native issuance schema with the same Rust build as the API.

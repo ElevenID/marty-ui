@@ -1,0 +1,195 @@
+{
+  "started_at": "2026-10-20T00:35:05.521Z",
+  "schema_version": 1,
+  "scope": "Local public UI, real browser and served manifests; unauthenticated session fixture; no backend qualification",
+  "ui_mode": "production",
+  "base_url": "http://127.0.0.1:4173",
+  "playwright_version": "1.62.1",
+  "fixtures": [
+    "GET /v1/auth/me -> unauthenticated",
+    "YouTube frame content only for consent test",
+    "Controlled manifest failure/review-state responses"
+  ],
+  "checks": [
+    {
+      "name": "Ordinary headless browser fetches served manifests without the build marker",
+      "result": "PASS",
+      "requests": [
+        {
+          "path": "/demos/manifests/index.json",
+          "status": 200
+        },
+        {
+          "path": "/demos/manifests/2026.08.0.json",
+          "status": 200
+        }
+      ]
+    },
+    {
+      "name": "Catalog viewport 320",
+      "result": "PASS",
+      "metrics": {
+        "width": 320,
+        "document": 320
+      },
+      "overflow": []
+    },
+    {
+      "name": "Catalog viewport 390",
+      "result": "PASS",
+      "metrics": {
+        "width": 390,
+        "document": 390
+      },
+      "overflow": []
+    },
+    {
+      "name": "Catalog viewport 768",
+      "result": "PASS",
+      "metrics": {
+        "width": 768,
+        "document": 768
+      },
+      "overflow": []
+    },
+    {
+      "name": "Catalog viewport 1440",
+      "result": "PASS",
+      "metrics": {
+        "width": 1440,
+        "document": 1440
+      },
+      "overflow": []
+    },
+    {
+      "name": "Scenario 2026.08.0/passport-pre-boarding-clearance",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/stable-issuer-identity-pluggable-kms",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/private-online-age-proof",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/employee-onboarding-secure-access",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/membership-badge-login",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/credential-lifecycle",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/canvas-learning-achievement",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/external-evidence-to-credential",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/offline-facility-verification",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/organization-primitives",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/external-admissions-gateway-webhooks",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/physical-passport-issuance-evidence",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/first-party-browser-wallet",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.08.0/independent-wallet-interoperability",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.07.0/membership-badge-login",
+      "result": "PASS",
+      "publication_state": "PUBLIC"
+    },
+    {
+      "name": "Scenario 2026.07.0/organization-primitives",
+      "result": "PASS",
+      "publication_state": "PUBLIC"
+    },
+    {
+      "name": "Scenario 2026.07.0/first-party-browser-wallet",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.07.0/independent-wallet-interoperability",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.07.0/canvas-learning-achievement",
+      "result": "PASS",
+      "publication_state": "DRAFT"
+    },
+    {
+      "name": "Scenario 2026.07.0/credential-lifecycle",
+      "result": "PASS",
+      "publication_state": "PUBLIC"
+    },
+    {
+      "name": "Public video requires consent and chapter seeking preserves it",
+      "result": "PASS",
+      "boundary": "Local frame fixture; external YouTube playback not qualified"
+    },
+    {
+      "name": "Unlisted review-state video is not playable",
+      "result": "PASS"
+    },
+    {
+      "name": "Served manifest 503 is visible and Retry recovers",
+      "result": "PASS"
+    },
+    {
+      "name": "Missing assertions produce recoverable error instead of render crash",
+      "result": "PASS"
+    }
+  ],
+  "page_errors": [],
+  "external_request_failures": [
+    {
+      "origin": "https://fonts.googleapis.com",
+      "error": "net::ERR_CERT_AUTHORITY_INVALID",
+      "count": 58
+    }
+  ],
+  "browser_version": "155.0.8059.84",
+  "custom_browser_executable": true,
+  "result": "PASS",
+  "finished_at": "2026-10-20T00:35:34.802Z",
+  "check_count": 29
+}

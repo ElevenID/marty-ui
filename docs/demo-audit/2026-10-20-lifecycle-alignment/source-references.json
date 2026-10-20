@@ -1,0 +1,131 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-20",
+  "method": "Repository source, retained recipe, focused local tests, and generated-media visual inspection. The retained lifecycle master and uncut source video were not downloaded or viewed.",
+  "martyUi": {
+    "repository": "https://github.com/ElevenID/marty-ui.git",
+    "originalAuditBase": "5be7d67544b9d53fe26a2edc787061a34efdebdc",
+    "priorAuditHead": "9a30cfb76f6bfdc677529b58f804be1c63981c84",
+    "implementationHead": "300309436482796b9a0cd2350fd316b6c28516a2",
+    "implementationTree": "0f6baff41ffb2d7013c8bd93887139b212486c8c",
+    "implementationCommits": [
+      "6e28451353ed683fca1d1e646834adcedabf84ea",
+      "300309436482796b9a0cd2350fd316b6c28516a2"
+    ],
+    "lifecycleReferenceBranch": "demo-lifecycle-live-v258-20261019",
+    "lifecycleReferenceHead": "50f314fdcb29f12a0a606ec3c2a8fb144111d1cf",
+    "adoptedFrontendCorrections": [
+      {
+        "revision": "627191a6d2ec090212f01e81cb1bd5a5458c568e",
+        "change": "Organization reviewer issuance endpoint"
+      },
+      {
+        "revision": "dc7f5c37f28cc28b964dc26b670cc0cc45449c73",
+        "change": "ACTIVE lock and holder_user_id DTO"
+      },
+      {
+        "revision": "4ba81716d7de3d0528667ec44ea5a54941951000",
+        "change": "Cancel identity refresh before logout"
+      }
+    ],
+    "additionalReferenceChangesNotPortedOntoMainAuditVariant": [
+      {
+        "revision": "e15d35fc5f00e9284c4a2826585484f9d840a484",
+        "change": "Native applicant template issuer-organization binding"
+      },
+      {
+        "revision": "846fda58b84238d813b42e2c22b79b1920f90d63",
+        "change": "Native optional template fields and VC_JWT badge discovery"
+      },
+      {
+        "revision": "33330c2a0bec50e30ca09cb9d61eb532e75361f2",
+        "change": "Issuer assertion-key resolution independent of login trust"
+      }
+    ],
+    "variantBoundary": "A patch based on the reference branch retains that branch’s additional work. The main audit variant contains the listed selected ports; it is not a wholesale merge of the reference branch."
+  },
+  "recorder": {
+    "repository": "ElevenID/marty-demo-recorder",
+    "upstreamBranch": "demo-audit-hardening-20261018",
+    "upstreamRevision": "64c9bc986185b53bdcb1dd3d383787ad94fe931a",
+    "upstreamTree": "4e6089f470c9e1a1ca5a704a4587c233acb2e12c",
+    "upstreamTreeEntryCount": 505,
+    "selectedSnapshotEntryCount": 129,
+    "selectedSnapshotManifest": "UPSTREAM_SNAPSHOT.json",
+    "selectedSnapshotManifestSha256": "1ca570e8fe0ea4cfe0ac31883caf2e4f77b5365b4a532756d3bbedf2fbfe972b",
+    "syntheticLocalBaseline": "e993c8fad6d97066319dcec8777f5cbb5dae593b",
+    "priorAuditHead": "a31f7d3b4fab3c00631c00b1575eff5d8dfcc9f8",
+    "implementationHead": "a6317cf6804dea5fdf305b9042f95244d2088151",
+    "implementationTree": "ad412d2d4d40b6cb310ed9d456cad712affde9c6",
+    "snapshotBoundary": "Exact selected upstream blobs, not a full authenticated clone. New paths were checked against the complete non-truncated upstream tree. No synthetic baseline commit or recorder bundle is delivered."
+  },
+  "catalog": {
+    "path": "ui/public/demos/manifests/2026.08.0.json",
+    "sha256": "e70474169d2eac988a0d13508596d1c52d3e7e670f335c6bedd08bf2f2cff901",
+    "stateChangedByThisWork": false,
+    "historicalPublicScenarios": [
+      "membership-badge-login",
+      "organization-primitives",
+      "credential-lifecycle"
+    ],
+    "historicalManifest": "ui/public/demos/manifests/2026.07.0.json",
+    "historicalBoundary": "Historical public demonstrations do not establish current-release qualification."
+  },
+  "lifecycleRecorderReference": {
+    "revision": "64c9bc986185b53bdcb1dd3d383787ad94fe931a",
+    "campaign": "campaigns/d06-credential-lifecycle-2026-08-r1",
+    "editDirectory": "beta-pr1425-7406b9d5a4c3-ui-actions",
+    "sourceDurationSeconds": 97.96,
+    "editDurationSeconds": 122,
+    "openingSeconds": 10,
+    "closingSeconds": 8,
+    "recipeMediaHashesNotLocallyInspected": {
+      "masterSha256": "1793cb8df5ca0310ca1845da5b705d6f82fce90e7d7ecb4b370f4c6c266f149d",
+      "sourceSha256": "dda0f48b25247069bbad0282bac502c63062d0743a47ffbf016a592aa373bef7",
+      "runReportSha256": "36642b25f4bccca556daee95906b22a0b9d07dc7567b5fa9d2fa0ae8dff8202a"
+    },
+    "files": [
+      {
+        "path": "campaign.json",
+        "gitBlob": "2fce1b95a1df65d794d286c350abeaa7ca98a125"
+      },
+      {
+        "path": "ui-action-story.json",
+        "gitBlob": "a2dced5ed93ba732388465a675d4e70c6ed6ab3c"
+      },
+      {
+        "path": "voice-review-preflight.md",
+        "gitBlob": "cef5877b5d1f90309902568215f2fb024f1dcd26"
+      },
+      {
+        "path": "beta-pr1425-7406b9d5a4c3-ui-actions/render.py",
+        "gitBlob": "51e8ea73e64dd79596623a4a6f3b604a7ebe0b07"
+      },
+      {
+        "path": "beta-pr1425-7406b9d5a4c3-ui-actions/segments.json",
+        "gitBlob": "7d26c7f151ab6b256345b615f8a7a76c2889ca24"
+      },
+      {
+        "path": "beta-pr1425-7406b9d5a4c3-ui-actions/opening-roadmap.json",
+        "gitBlob": "6c1b2e655d30a15cb03f5edd076d5aef6e3d9459"
+      },
+      {
+        "path": "beta-pr1425-7406b9d5a4c3-ui-actions/edit-source.json",
+        "gitBlob": "d9564791efaf8397fb206998b1dc005a6ef0e95f"
+      }
+    ],
+    "voice": {
+      "profile": "marty-neutral-1",
+      "id": "af_heart",
+      "status": "PROVISIONAL",
+      "humanReview": "PENDING"
+    },
+    "pointer": {
+      "eventsInRetainedRecipe": 7,
+      "classification": "EDITORIAL_RECONSTRUCTION",
+      "osTelemetryEstablished": false,
+      "marker": "Guided replay - Added cursor"
+    },
+    "masterReview": "PENDING_HUMAN_FULL_WATCH_LISTENING_AND_COMPREHENSION_REVIEW"
+  }
+}

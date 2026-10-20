@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import hashlib
+import os
 from pathlib import Path
 import runpy
 import subprocess
@@ -54,6 +55,7 @@ def test_flow_waits_for_both_issuance_peers_without_a_startup_cycle():
         assert "flow" not in visited
 
 
+@pytest.mark.skipif(os.name != "posix", reason="POSIX shell is required")
 def test_keycloak_preserves_scoped_openbao_token_file(tmp_path):
     model = yaml.safe_load((ROOT / "docker-compose.selfhost.prod.yml").read_text())
     env = model["services"]["keycloak"]["environment"]
@@ -93,7 +95,7 @@ def test_selfhost_redis_is_socket_only_and_available_to_exact_consumers():
     assert "--unixsocketperm 777" in redis["command"]
     assert model["volumes"] == {"redis-socket": None}
     consumers = {
-        "db-migrate", "gateway", "auth", "organization", "signing-keys",
+        "db-migrate", "kms-initialize", "gateway", "auth", "organization", "signing-keys",
         "flow", "verification", "revocation-profile", "device-registration",
     }
     for name, service in services.items():
@@ -117,7 +119,7 @@ def test_reference_identity_and_descriptor_closure():
     data = (ROOT / GATE["APPROVED"]).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "ad2a7766bd60375261809a0fa11cdd0f22ff3cf55afaad06c2b614e8bb741677"
+        == "55a38bd1cb1ef8d49fec40c0cdde9d313066c76e40c3ce5ede54ea9258488d86"
     )
     import json
 
@@ -133,6 +135,21 @@ def rendered_models():
     after = render(GATE["GATE"]["BASE"])
     GATE["assert_models"](before, after)
     return before, after
+
+
+def test_ordinary_migration_cannot_provision_kms(rendered_models):
+    _, current = rendered_models
+    services = current["services"]
+    migration = services["db-migrate"]
+    initializer = services["kms-initialize"]
+    assert migration["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] == "false"
+    assert "BAO_TOKEN_FILE" not in migration["environment"]
+    assert all(secret["source"] != "openbao_bootstrap_token"
+               for secret in migration["secrets"])
+    assert initializer["profiles"] == ["kms-init"]
+    assert initializer["environment"]["MARTY_KMS_BOOTSTRAP_ENABLED"] == "true"
+    assert initializer["environment"]["BAO_TOKEN_FILE"] == "/run/secrets/openbao_bootstrap_token"
+    assert initializer["depends_on"]["db-migrate"]["condition"] == "service_completed_successfully"
 
 
 @pytest.mark.parametrize("missing", ["environment", "mount"])

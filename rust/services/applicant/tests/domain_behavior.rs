@@ -7,6 +7,38 @@ use marty_applicant::{
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
+#[test]
+fn nullable_template_field_options_preserve_validation() {
+    let fields: Vec<FieldDefinition> = serde_json::from_value(json!([
+        {"field_id":"employee_id","field_type":"TEXT","required":true,"options":null},
+        {"field_id":"department","field_type":"TEXT","options":["engineering"]}
+    ]))
+    .unwrap();
+    assert!(fields[0].options.is_empty());
+    assert!(validate_form_data(
+        json!({"employee_id":"E-1","department":"engineering"})
+            .as_object()
+            .unwrap(),
+        &fields
+    )
+    .is_ok());
+    assert!(validate_form_data(
+        json!({"department":"engineering"}).as_object().unwrap(),
+        &fields
+    )
+    .is_err());
+    assert!(validate_form_data(
+        json!({"employee_id":"E-1","department":"other"})
+            .as_object()
+            .unwrap(),
+        &fields
+    )
+    .is_err());
+    assert!(
+        serde_json::from_value::<FieldDefinition>(json!({"field_id":"bad","options":42})).is_err()
+    );
+}
+
 #[derive(Deserialize)]
 struct Behavior {
     http_operations: Vec<Value>,

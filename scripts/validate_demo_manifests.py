@@ -61,6 +61,8 @@ HISTORICAL_2026_07_SCENARIOS = {
 }
 PORTFOLIO_PATH = Path(__file__).resolve().parents[1] / "deploy-config" / "catalog" / "demo-portfolio-v3.json"
 PORTFOLIO = json.loads(PORTFOLIO_PATH.read_text(encoding="utf-8"))
+MANIFEST_SCHEMA_PATH = PORTFOLIO_PATH.parent.parent / "schemas" / "stack-demo-manifest.schema.json"
+WALLET_SCHEMA = json.loads(MANIFEST_SCHEMA_PATH.read_text(encoding="utf-8"))["$defs"]["scenario"]["properties"]["wallets"]["items"]
 PORTFOLIO_SCENARIOS = {scenario["slug"] for scenario in PORTFOLIO["scenarios"]}
 PRESERVED_LEGACY_SCENARIOS = set(PORTFOLIO["preserved_legacy_scenarios"])
 SCENARIO_PUBLICATION_CHECKS = {
@@ -99,6 +101,30 @@ def validate_timestamp(value: Any, label: str) -> None:
     except ValueError as error:
         raise ManifestValidationError(f"{label} timestamp is invalid") from error
     require(parsed.tzinfo is not None, f"{label} timestamp requires a timezone")
+
+
+def validate_wallet_evidence(wallet: Any, label: str) -> None:
+    require(isinstance(wallet, dict), f"{label}: invalid wallet evidence")
+    require(set(WALLET_SCHEMA["required"]).issubset(wallet), f"{label}: required wallet evidence is missing")
+    # Keep the public wallet allowlist and primitive constraints in the schema.
+    # Full Android device/protocol observations belong in the evidence report.
+    for field, value in wallet.items():
+        rule = WALLET_SCHEMA["properties"].get(field)
+        require(rule is not None, f"{label}: unsupported wallet field {field}")
+        error = f"{label}: invalid wallet {field}"
+        if rule.get("$ref") == "#/$defs/stringList":
+            require(isinstance(value, list) and all(isinstance(item, str) and item for item in value), error)
+        elif "enum" in rule:
+            require(value in rule["enum"], error)
+        else:
+            types = rule["type"] if isinstance(rule["type"], list) else [rule["type"]]
+            require((value is None and "null" in types) or (isinstance(value, str) and "string" in types), error)
+            if isinstance(value, str):
+                require(len(value) >= rule.get("minLength", 0), error)
+                if "pattern" in rule:
+                    require(re.search(rule["pattern"], value) is not None, error)
+                if rule.get("format") == "date-time":
+                    validate_timestamp(value, f"{label} wallet {field}")
 
 
 def validate_publication_attestation(value: Any, expected_checks: set[str], published_at: Any, label: str) -> None:
@@ -243,6 +269,9 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
 
     for scenario in scenarios:
         slug = scenario.get("slug", "unknown")
+        require(isinstance(scenario.get("wallets"), list), f"{slug}: wallet evidence is missing")
+        for index, wallet in enumerate(scenario["wallets"], start=1):
+            validate_wallet_evidence(wallet, f"{slug} wallet {index}")
         require(scenario.get("mip_version") == manifest["mip_version"], f"{slug}: scenario MIP version must match release metadata")
         protocols = set(scenario.get("protocols", []))
         require(bool(protocols), f"{slug}: at least one protocol is required")

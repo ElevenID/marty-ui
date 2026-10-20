@@ -1,0 +1,15 @@
+✔ D03 config validates and retains both required independent-wallet evidence files (6.631826ms)
+✔ D03 binds the actual console result and explicit wallet selections to fresh resource IDs (2.51014ms)
+✔ D03 rejects substituted controls, ambiguous credentials, wrong origins and unknown denial (1.552949ms)
+✔ D03 checks all frozen wallet controls before creating the first issuance (13.127698ms)
+✔ D03 requires both lanes and ready native tools before issuance (7.563459ms)
+✔ D03 restores the non-secret frozen scenario after a lost device recording response (4.677484ms)
+✔ D03 keeps the real shared two-lane gate and only accepts measured device and native receipts (12.434013ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 61.914308

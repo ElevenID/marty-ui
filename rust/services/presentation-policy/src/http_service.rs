@@ -518,7 +518,7 @@ pub fn evaluate_verified_facts_for_policy(
     let output = evaluate_verified_facts_json(&verified.to_string()).map_err(domain_error)?;
     let native: Value = serde_json::from_str(&output)
         .map_err(|_| service_unavailable("PRESENTATION_POLICY.INVALID_NATIVE_RESULT"))?;
-    Ok(project_evaluation(native, request))
+    Ok(project_evaluation(native, request, &verified))
 }
 
 fn build_policy(
@@ -974,7 +974,65 @@ fn service_requirement(requirement: &CredentialRequirement) -> Value {
     })
 }
 
-fn project_evaluation(native: Value, request: &EvaluatePresentationRequest) -> Value {
+/// Project names, never values, from the native kernel's authenticated mdoc
+/// documents. Policy-filtered `verified_claims` cannot prove minimal disclosure.
+/// The raw wallet request and requested claim list are deliberately not inputs.
+fn authenticated_mdoc_disclosures(verified: &Value, result: &Value) -> Option<Value> {
+    if verified["presentation_verified"] != true
+        || verified["holder_binding_verified"] != true
+        || verified["holder_binding_method"] != "DEVICE_KEY"
+    {
+        return None;
+    }
+    let template_id = result["credential_template_id"].as_str()?;
+    let issuer_id = result["issuer_id"].as_str()?;
+    let matches = verified["credentials"]
+        .as_array()?
+        .iter()
+        .filter(|credential| {
+            credential["signature_verified"] == true
+                && credential["credential_format"] == "mdoc"
+                && credential["issuer_id"].as_str() == Some(issuer_id)
+                && credential["credential_template_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(template_id)))
+        })
+        .collect::<Vec<_>>();
+    let [credential] = matches.as_slice() else {
+        // Ambiguous credentials must not look like complete disclosure evidence.
+        return None;
+    };
+    let documents = credential["claims"]["_mdoc"]["documents"].as_array()?;
+    if documents.len() != 1 {
+        // This is also the native mdoc kernel's authentication boundary.
+        return None;
+    }
+    let mut projected = Vec::new();
+    for document in documents {
+        let doc_type = document["doc_type"].as_str()?;
+        let namespaces = document["namespaces"].as_object()?;
+        let mut namespace_names = namespaces.keys().collect::<Vec<_>>();
+        namespace_names.sort();
+        let mut names = Map::new();
+        for namespace in namespace_names {
+            let mut claim_names = namespaces[namespace]
+                .as_object()?
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            claim_names.sort();
+            names.insert(namespace.clone(), json!(claim_names));
+        }
+        projected.push(json!({"doc_type": doc_type, "namespaces": names}));
+    }
+    Some(json!({"format": "mso_mdoc", "documents": projected}))
+}
+
+fn project_evaluation(
+    native: Value,
+    request: &EvaluatePresentationRequest,
+    verified: &Value,
+) -> Value {
     let errors = native["errors"].as_array().cloned().unwrap_or_default();
     let error_codes = errors
         .iter()
@@ -1000,6 +1058,7 @@ fn project_evaluation(native: Value, request: &EvaluatePresentationRequest) -> V
                 "issuer_did": result["issuer_id"],
                 "issuer_name": Value::Null,
                 "claim_results": result["claim_results"],
+                "authenticated_disclosures": authenticated_mdoc_disclosures(verified, result),
                 "trust_check_passed": !has_any_code(&codes, &["TrustProfileNotVerified", "IssuerNotAllowed", "IssuerTrustLevelInsufficient", "IssuerComplianceStatusMissing", "IssuerAccreditationMissing"]),
                 "freshness_check_passed": !has_any_code(&codes, &["CredentialTimestampMissing", "CredentialTimestampFuture", "CredentialStale", "RevocationEvidenceStale"]),
                 "signature_valid": !has_any_code(&codes, &["SignatureInvalid"]),

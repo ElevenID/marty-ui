@@ -5,10 +5,12 @@
 
 use serde::Deserialize;
 
+pub mod age_proof;
 pub mod demo_qualification;
 pub mod deployment_bundle;
 pub mod envoy_config;
 pub mod kubernetes_native;
+pub mod signing_capability;
 
 pub const MAX_RUN_BYTES: usize = 1024 * 1024;
 const REPOSITORY: &str = "ElevenID/marty-ui";

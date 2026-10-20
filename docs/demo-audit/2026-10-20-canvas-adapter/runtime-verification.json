@@ -1,0 +1,26 @@
+{
+  "scope": "LOCAL_CONTAINER_RUNTIME_ONLY",
+  "problem": "The stock contract image supplied Playwright 1.56 browser binaries while npm required 1.62.1.",
+  "baseImage": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "packageVersion": "1.63.0",
+  "containerSmoke": {
+    "result": "PASS",
+    "node": "24.20.0",
+    "playwright": "1.63.0",
+    "chromium": "153.0.8010.12",
+    "user": "pwuser",
+    "network": "none",
+    "operation": "Launch real bundled Chromium; set local content; locate and click a button; close browser."
+  },
+  "focusedVerification": {
+    "canvasTopologyAndPortabilityPython": {"passed": 31, "failed": 0},
+    "canvasSequenceAndTransportNode": {"passed": 31, "failed": 0},
+    "lockedNpmAudit": {"vulnerabilities": 0}
+  },
+  "boundaries": [
+    "No Canvas navigation, credential issuance, deployment, or production recording was performed.",
+    "The source-built stock Canvas image and complete recorder/wallet capture topology are still required.",
+    "The local image was built from a working source tree; its source label is a base commit and is not release provenance.",
+    "The build includes a real browser smoke check so mismatched package/browser binaries fail image creation."
+  ]
+}

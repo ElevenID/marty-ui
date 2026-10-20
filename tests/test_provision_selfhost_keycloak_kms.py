@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from provision_selfhost_keycloak_kms import (  # noqa: E402
     MIN_VALIDITY_SECONDS, OUTPUTS, SESSION_TTL, require_cert_lifetime,
-    require_mounts, scoped_token, write_outputs,
+    renewed_token, require_mounts, scoped_token, selected_pki_mount, write_outputs,
 )
 from with_disposable_event_stream_kms import PLUGIN_IMAGE  # noqa: E402
 
@@ -72,6 +72,14 @@ def test_keycloak_output_preserves_unrelated_existing_file(tmp_path: Path) -> No
     write_outputs(tmp_path, values)
     assert {path.name for path in tmp_path.iterdir()} == EXPECTED | {marker.name}
     assert marker.read_text(encoding="ascii") == "keep me"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX private-root contract")
+def test_renewal_stages_owner_only_files(tmp_path: Path) -> None:
+    tmp_path.chmod(0o700)
+    values = {name: f"scope-{name}" for name in EXPECTED}
+    write_outputs(tmp_path, values, staged=True)
+    assert {path.stat().st_mode & 0o777 for path in tmp_path.iterdir()} == {0o600}
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private-root contract")
@@ -141,22 +149,52 @@ def test_keycloak_output_rejects_native_windows(tmp_path: Path) -> None:
 
 
 class Mounts:
-    def __init__(self, didcomm: str) -> None:
+    def __init__(self, didcomm: str, *, keycloak: bool = False) -> None:
         self.didcomm = didcomm
+        self.keycloak = keycloak
 
     def request(self, method: str, path: str) -> dict:
         assert (method, path) == ("GET", "sys/mounts")
-        return {"data": {"transit/": {"type": "transit"},
-                         "didcomm/": {"type": self.didcomm}}}
+        mounts = {"transit/": {"type": "transit"}, "didcomm/": {"type": self.didcomm}}
+        if self.keycloak:
+            mounts["keycloak-pki/"] = {"type": "pki"}
+        return {"data": mounts}
 
 
 def test_keycloak_provisioning_requires_current_didcomm_plugin() -> None:
     require_mounts(Mounts("openbao-didcomm-authcrypt"))
     with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
         require_mounts(Mounts("kv"))
+    require_mounts(Mounts("openbao-didcomm-authcrypt", keycloak=True), renew=True)
+    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
+        require_mounts(Mounts("openbao-didcomm-authcrypt"), renew=True)
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:ci")
     assert PLUGIN_IMAGE.fullmatch("marty-openbao-didcomm:local")
     assert not PLUGIN_IMAGE.fullmatch("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm:latest")
+
+
+def test_replacement_keycloak_issuer_is_explicit_and_bounded() -> None:
+    assert selected_pki_mount(renew=True, requested=None) == "keycloak-pki"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v2") == "keycloak-pki-v2"
+    assert selected_pki_mount(renew=True, requested="keycloak-pki-v8") == "keycloak-pki-v8"
+    for value in ("", "keycloak-pki-v1", "keycloak-pki-v02", "keycloak-pki-v9",
+                  "keycloak-pki-v2/sign/rs256"):
+        with pytest.raises(ValueError, match="mount is invalid"):
+            selected_pki_mount(renew=True, requested=value)
+    with pytest.raises(ValueError, match="renewal-only"):
+        selected_pki_mount(renew=False, requested="keycloak-pki-v2")
+
+    class ReplacementMounts(Mounts):
+        def request(self, method: str, path: str) -> dict:
+            response = super().request(method, path)
+            response["data"]["keycloak-pki-v2/"] = {"type": "pki"}
+            return response
+
+    require_mounts(ReplacementMounts("openbao-didcomm-authcrypt", keycloak=True),
+                   renew=True, pki_mount="keycloak-pki-v2")
+    with pytest.raises(RuntimeError, match="reviewed Keycloak mounts"):
+        require_mounts(Mounts("openbao-didcomm-authcrypt", keycloak=True),
+                       renew=True, pki_mount="keycloak-pki-v2")
 
 
 def test_keycloak_token_requires_a_real_session_length() -> None:
@@ -179,6 +217,45 @@ def test_keycloak_token_requires_a_real_session_length() -> None:
     assert scoped_token(TokenBao(MIN_VALIDITY_SECONDS), "policy", "scope")
     with pytest.raises(RuntimeError, match="expires before tester session"):
         scoped_token(TokenBao(MIN_VALIDITY_SECONDS - 1), "policy", "scope")
+
+
+def test_renewal_reuses_only_exact_existing_policy_and_checks_new_token() -> None:
+    class PolicyBao:
+        token = "operator-token-long-enough"
+
+        def __init__(self, policy: str, *, orphan: bool = True) -> None:
+            self.policy = policy
+            self.orphan = orphan
+            self.created = False
+
+        def request(self, method: str, path: str, body: dict | None = None) -> dict:
+            if (method, path) == ("LIST", "sys/policies/acl"):
+                return {"data": {"keys": ["selfhost-keycloak-sign-old", "unrelated"]}}
+            if (method, path) == ("GET", "sys/policies/acl/selfhost-keycloak-sign-old"):
+                return {"data": {"policy": self.policy}}
+            if (method, path) == ("POST", "auth/token/create/selfhost-renew-leaf"):
+                self.created = True
+                assert body == {"policies": ["selfhost-keycloak-sign-old"],
+                                "no_default_policy": True, "ttl": SESSION_TTL}
+                return {"auth": {"client_token": "scoped-token-long-enough",
+                                 "lease_duration": 8 * 60 * 60}}
+            if (method, path) == ("POST", "auth/token/lookup"):
+                assert body == {"token": "scoped-token-long-enough"}
+                return {"data": {"policies": ["selfhost-keycloak-sign-old"],
+                                 "ttl": 8 * 60 * 60, "orphan": self.orphan,
+                                 "path": "auth/token/create/selfhost-renew-leaf"}}
+            raise AssertionError((method, path))
+
+    bao = PolicyBao("exact-scope")
+    assert renewed_token(bao, "exact-scope", "selfhost-keycloak-sign-")
+    assert bao.created
+    changed = PolicyBao("wider-scope")
+    with pytest.raises(RuntimeError, match="one exact existing scoped policy"):
+        renewed_token(changed, "exact-scope", "selfhost-keycloak-sign-")
+    assert not changed.created
+    with pytest.raises(RuntimeError, match="unexpected scope"):
+        renewed_token(PolicyBao("exact-scope", orphan=False),
+                      "exact-scope", "selfhost-keycloak-sign-")
 
 
 def test_keycloak_certificate_requires_a_real_session_length(

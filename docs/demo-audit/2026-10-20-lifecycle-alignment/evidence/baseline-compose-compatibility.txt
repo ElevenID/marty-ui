@@ -1,0 +1,62 @@
+Baseline compose.js/openingRoadmap.js: a31f7d3b4fab3c00631c00b1575eff5d8dfcc9f8
+Pinned upstream test copies: 64c9bc986185b53bdcb1dd3d383787ad94fe931a
+Exit code: 1
+
+✔ camera eases from stable context to bounded focus and optionally pulls back without retiming (2.707076ms)
+✔ camera rejects unsupported geometry, expression injection and motion without stable dwell (0.859584ms)
+✔ FFmpeg camera renders changing geometry, stable final focus and exact frame budget (260.573749ms)
+✔ binds screen identity labels into the edit evidence and renders them after framing (0.79043ms)
+✔ binds readable crops to source bounds and preserves aspect ratio across segments (0.376927ms)
+✔ pads synchronized sources through the reviewed caption timeline (0.369185ms)
+✔ rejects unordered chapters before invoking FFmpeg (0.275405ms)
+✔ reads the final reviewed VTT cue end as the minimum master duration (0.23959ms)
+✔ accepts sequential ElevenID and EUDI wallet chapter recordings (0.296176ms)
+✔ validates and binds an ordered editorial segment map (0.609077ms)
+✔ writes a non-overwriting composition report beside the master (1.209371ms)
+✔ adds governed slate time without consuming source frames (0.175945ms)
+✔ validates governed derivative timing, layout, narration, and disclosure options (1.2617ms)
+✔ binds approved local narration provenance to the selected recording (16.056314ms)
+✔ builds opening, persistent disclosure, and evidence-bounded closing overlays (0.970531ms)
+✔ packages manifest-bound release and transcript evidence (2.202366ms)
+✔ sequential edit switches independent clocks and validates each source separately (0.828047ms)
+✔ sequential lineage binds both hashes and reports omitted ranges per independent source (0.825564ms)
+✖ renders exact segment frame budgets when short high-rate trims lose trailing frame time (1028.813651ms)
+✔ roadmap copy remains readable and all graphics end strictly before source footage (2.709309ms)
+✔ roadmap rejects unreadable or injectable copy and impossible opening duration (0.496848ms)
+ℹ tests 21
+ℹ suites 0
+ℹ pass 20
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1492.04557
+
+✖ failing tests:
+
+test at ../../../../tmp/recorder-baseline-compat-fp1mo_6v/test/compose.test.js:423:1
+✖ renders exact segment frame budgets when short high-rate trims lose trailing frame time (1028.813651ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:
+  + actual - expected
+  
+    {
+  +   duration: 11.96,
+  -   duration: 12,
+      frames: 300
+    }
+  
+      at TestContext.<anonymous> (/tmp/recorder-baseline-compat-fp1mo_6v/test/compose.test.js:449:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:960:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: { frames: 300, duration: 11.96 },
+    expected: { frames: 300, duration: 12 },
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
+import { KEY_MANAGEMENT_PURPOSES, getCompatiblePurposesForAlgorithm, normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
 
 describe('key management configuration boundary', () => {
+  it('exposes the native OID4VP request purpose only for its required ES256 key', () => {
+    expect(KEY_MANAGEMENT_PURPOSES.find((purpose) => purpose.value === 'oid4vp_request_signing')?.formats)
+      .toEqual(['oauth-authz-req+jwt'])
+    expect(getCompatiblePurposesForAlgorithm('ES256')).toContain('oid4vp_request_signing')
+    for (const algorithm of ['ES384', 'ES512', 'RS256', 'EdDSA']) {
+      expect(getCompatiblePurposesForAlgorithm(algorithm)).not.toContain('oid4vp_request_signing')
+    }
+  })
+
   it('advertises only authentication modes supported by native signers', () => {
     const catalog = normalizeKeyManagementConfig({}).service_type_catalog
     expect(catalog.find((service) => service.id === 'openbao-transit')?.auth_modes).toEqual(['token'])

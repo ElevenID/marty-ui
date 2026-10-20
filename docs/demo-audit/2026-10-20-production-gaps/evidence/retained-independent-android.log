@@ -1,0 +1,26 @@
+✔ requires release-bound Android scenario identity and executable actions (2.047353ms)
+✔ requires browser navigation for a same-device OpenID4VP scenario (0.389106ms)
+✔ keeps Android scenario URLs and screenshot artifacts inside release boundaries (0.581386ms)
+✔ binds hash-verified Android execution evidence into the matching release scenario (13.381761ms)
+✔ keeps separate Android records for happy and denial lanes (16.100284ms)
+✔ public Android wallet projection rejects malformed typed evidence before changing a manifest (4.625956ms)
+✔ Android gateway blocks incompatible public output or an evidence digest from different retained bytes (20.446169ms)
+✔ freezes scenario placeholders from a non-secret release fixture (0.525832ms)
+✔ reads nested verifier results for minimum-disclosure assertions (0.247773ms)
+✔ accepts only fully pinned Android profiles with an existing APK (0.939175ms)
+✔ freezes an Android profile from a local APK and immutable release inputs (27.312528ms)
+✔ defines the exact twelve-scenario v3 acceptance portfolio with D-05 lanes first (0.55141ms)
+✔ requires the selected Android lane set before a containerized release gate can run (1.431416ms)
+✔ redacts masked runtime input values from action evidence (0.391099ms)
+✔ creates and expires the D-05 offer before handoff using actual native state, then reopens the real claim route (0.845273ms)
+✔ accepts safe browser status-attribute assertions in scenarios (0.223717ms)
+✔ requires source-bound explicit browser returns for the D-05 happy lane, not a package summary (5.779993ms)
+✔ requires exact minimum-disclosure and issuer-trust assertions for D-03 (0.329126ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 124.500007

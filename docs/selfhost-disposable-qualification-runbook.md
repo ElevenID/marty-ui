@@ -150,14 +150,19 @@ journey window: the custody signer and audit tokens expire within **one hour**
 of issuance. Mint them immediately before the installed journey and leave
 enough time for its image pull, build, startup, and public test. A slow run may
 still fail on expiry; never extend token TTL or treat that failure as an
-installed pass. The audit helper does not overwrite an existing token, so
-retrying after expiry requires a new disposable OpenBao state and private root.
+installed pass. The initial audit helper refuses to overwrite a token. Matching
+source revisions with the evidence and audit AppRole helpers below can refresh
+both one-hour tokens through their separate scoped identities, including after
+root revocation; earlier released previews without those helpers require a new
+disposable OpenBao state and private root after expiry.
 Also check the effective expiry of workload TLS credentials, which OpenBao may cap,
 and complete the journey before the earliest expiration. Do not keep the stack
-running afterward. A new session requires teardown and
-fresh disposable OpenBao state and secret roots, followed by a new install and
-bootstrap. The current helpers deliberately do not rotate live Keycloak or
-workload TLS files in place.
+running afterward. For this released-preview installer path, a new session
+requires teardown and fresh disposable OpenBao state and secret roots. The
+separate source-level [renewal procedure](selfhost-renewal-activation.md) can
+stage Keycloak and workload TLS credentials into a new generation and recreate
+an owned KMS-only project, but it is not yet an installed preview acceptance
+or a supported cutover procedure.
 
 New source revisions offer an optional `--with-operator-password` staging flag.
 If the matching checkout's `stage_selfhost_disposable_preview.py --help` lists
@@ -449,6 +454,19 @@ sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
   --project-name "$openbao_project"
+evidence_identity_root="$(dirname "$openbao_state_root")/evidence-identity"
+sudo install -d -m 700 "$evidence_identity_root"
+sudo python3 "$source_root/scripts/provision_selfhost_evidence_identity.py" \
+  --mode bootstrap --bao-addr "https://127.0.0.1:$openbao_port" \
+  --bao-ca "$openbao_state_root/tls/ca.crt" \
+  --root-token-file "$openbao_state_root/root.token" \
+  --output "$evidence_identity_root"
+# Later token refresh uses the evidence identity, even after root revocation:
+# sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
+#   --endpoint "https://127.0.0.1:$openbao_port" \
+#   --state-root "$openbao_state_root" --output-root "$secret_root" \
+#   --project-name "$openbao_project" --refresh-token \
+#   --identity-root "$evidence_identity_root"
 sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
@@ -456,6 +474,22 @@ sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
   --org-slug "${MARTY_ORG_SLUG:?Set the seeded organization slug}" \
   --did "${SELFHOST_ISSUER_DID:?Set the matching issuer DID}" \
   --project-name "$openbao_project"
+audit_identity_root="$(dirname "$openbao_state_root")/audit-identity"
+sudo install -d -m 700 "$audit_identity_root"
+sudo python3 "$source_root/scripts/provision_selfhost_audit_identity.py" \
+  --mode bootstrap --bao-addr "https://127.0.0.1:$openbao_port" \
+  --bao-ca "$openbao_state_root/tls/ca.crt" \
+  --root-token-file "$openbao_state_root/root.token" \
+  --org-id "$MARTY_ORG_ID" --org-slug "$MARTY_ORG_SLUG" \
+  --did "$SELFHOST_ISSUER_DID" --output "$audit_identity_root"
+# Later audit token refresh requires --refresh-token --identity-root
+# "$audit_identity_root" with the same org, slug, DID, state, output and project.
+# Before retiring the bootstrap root, check_selfhost_root_retirement.py now
+# requires --evidence-identity, --audit-identity and
+# --snapshot-rotator-identity as well as the existing renewal and snapshot
+# identities. Supply --audit-org-id "$MARTY_ORG_ID",
+# --audit-org-slug "$MARTY_ORG_SLUG" and --audit-did "$SELFHOST_ISSUER_DID"
+# so it checks the live audit role against the exact seeded read policy.
 python3 "$source_root/scripts/run_selfhost_business_journey.py" \
   --archive "$prepared/prepared-selfhost-bundle.zip" \
   --image-lock "$prepared/prepared-selfhost-images.json" \

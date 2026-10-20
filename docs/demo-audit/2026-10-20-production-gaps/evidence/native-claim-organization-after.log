@@ -1,0 +1,23 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui
+
+stderr | src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > explains Canvas-only credential applications with launch context and completion checks
+Received `true` for a non-boolean attribute `item`.
+
+If you want to write it to the DOM, pass a string instead: item="true" or item={value.toString()}.
+
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > explains Canvas-only credential applications with launch context and completion checks 236ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > renders only server-verified Canvas evidence and a real unsigned pending claim 70ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the Canvas issuer organization 259ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > queues a learner refresh and opens a server-authorized claim in the authenticated organization fallback 149ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > does not load org-scoped templates for Canvas LTI learners 49ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > runs the one-click credential issuance flow for member credentials 123ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > submits the application but waits for wallet selection before generating an offer 50ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > keeps one-click membership wallet selection in the application organization before an offer exists 48ms
+ ✓ src/components/__tests__/ApplicationForm.test.tsx > ApplicationForm > uploads required evidence through the same public API before browser submission 199ms
+
+ Test Files  1 passed (1)
+      Tests  9 passed (9)
+   Start at  00:56:59
+   Duration  3.19s (tests 39%, import 26%, environment 18%, transform 10%, setup 7%)
+

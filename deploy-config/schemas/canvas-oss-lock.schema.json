@@ -68,7 +68,7 @@
         "package_manifest": {"const": "tests/canvas-oss-contract/package.json"},
         "package_lock": {"const": "tests/canvas-oss-contract/package-lock.json"},
         "audit_level": {"const": "high"},
-        "base_image": {"type": "string", "pattern": "^mcr\\.microsoft\\.com/playwright:v1\\.56\\.0-jammy@sha256:[0-9a-f]{64}$"},
+        "base_image": {"type": "string", "pattern": "^mcr\\.microsoft\\.com/playwright:v1\\.63\\.0-noble@sha256:[0-9a-f]{64}$"},
         "compose_service": {"const": "canvas-contract"},
         "monitor_service": {"const": "canvas-continuity-monitor"},
         "execution_boundary": {"const": "docker_compose_one_shot"},

@@ -1,0 +1,12 @@
+✔ editorial pointer keeps source clocks, explicit uncertainty, settle and exact cue frame through holds/retiming (2.672464ms)
+✔ pointer refuses missing disclosure/uncertainty, phantom controls, overlapping windows and unsafe evidence (1.89302ms)
+✔ composition verifies source-bound measured event identity without changing held raw input (10.831941ms)
+✔ real FFmpeg pulse starts only on mapped cue frame and follows static/dynamic camera (2182.786038ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2208.618366

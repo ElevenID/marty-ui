@@ -14,8 +14,11 @@ from pathlib import Path
 from urllib.error import HTTPError
 
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
+from provision_selfhost_evidence_identity import checked_login as evidence_login
+from provision_selfhost_evidence_identity import mint as mint_evidence_token
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
+    CUSTODY_SIGNER_LEAF_ACL,
     CUSTODY_SIGNER_POLICY,
     Bao,
     ed25519_public_pem,
@@ -34,9 +37,27 @@ def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
     write(temporary, token, 0o400)
     try:
         try:
-            bao.request("POST", "auth/token/revoke", {"token": old_token})
+            Bao(bao.endpoint, bao.ca, old_token).request("POST", "auth/token/revoke-self")
         except HTTPError as error:
-            if error.code != 400:  # Already-expired disposable token.
+            if error.code in (400, 403):
+                try:
+                    bao.request("POST", "auth/token/lookup", {"token": old_token})
+                except HTTPError as lookup_error:
+                    if lookup_error.code == 403:
+                        # OpenBao can return 403 for an expired token. Prove
+                        # this operator can still look up the new live leaf,
+                        # so the old 403 is not an operator ACL or TTL failure.
+                        current = bao.request("POST", "auth/token/lookup",
+                                              {"token": token}).get("data", {})
+                        if (not isinstance(current, dict)
+                                or type(current.get("ttl")) is not int
+                                or current["ttl"] <= 0):
+                            raise RuntimeError("new custody token lookup is invalid")
+                    elif lookup_error.code not in (400, 404):
+                        raise
+                else:
+                    raise RuntimeError("old custody token is still active") from error
+            else:
                 raise
     except (OSError, RuntimeError, HTTPError) as error:
         # A lost response does not tell us whether the old token was revoked.
@@ -57,7 +78,8 @@ def private_directory(path: Path) -> Path:
 
 
 def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
-              *, refresh_token: bool = False) -> str:
+              *, refresh_token: bool = False,
+              identity_root: Path | None = None) -> str:
     if os.name != "posix" or os.geteuid() != 0:
         raise ValueError("OpenBao signer provisioning requires root on Linux")
     if not re.fullmatch(r"https://127\.0\.0\.1:[0-9]{2,5}", endpoint):
@@ -78,10 +100,15 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
     token_file = output_root / "selfhost_custody_signer_token"
     public_file = output_root / "selfhost_custody_signer.pub"
     pending_file = token_file.with_name(token_file.name + ".new")
-    if (root_file.is_symlink() or not root_file.is_file() or ca_file.is_symlink()
+    if refresh_token and identity_root is None:
+        raise ValueError("evidence identity is required for custody token refresh")
+    if ((identity_root is None and (root_file.is_symlink() or not root_file.is_file()))
+            or ca_file.is_symlink()
             or not ca_file.is_file() or token_file.is_symlink()
             or public_file.is_symlink() or pending_file.is_symlink()):
         raise ValueError("OpenBao signer input or output is invalid")
+    if identity_root is not None and not refresh_token:
+        raise ValueError("evidence identity is only valid for rootless refresh")
     if refresh_token:
         if not token_file.is_file() or not public_file.is_file():
             raise ValueError("OpenBao custody signer outputs are absent for refresh")
@@ -91,8 +118,17 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
         raise ValueError("OpenBao custody signer outputs must be fresh")
     if not 0 < ca_file.stat().st_size <= 65536:
         raise ValueError("OpenBao signer CA is missing or invalid")
-    root_token = read_protected_root_token(root_file)
-    bao = Bao(endpoint, ca_file, root_token)
+    if identity_root is None:
+        root_token = read_protected_root_token(root_file)
+        bao = Bao(endpoint, ca_file, root_token)
+    else:
+        identity_root = private_directory(identity_root)
+        if (identity_root.parent != private_root
+                or not re.fullmatch(r"evidence-identity(?:-[a-z0-9-]{1,80})?",
+                                    identity_root.name)):
+            raise ValueError("evidence identity must be separate from stack secrets")
+        operator = evidence_login(Bao(endpoint, ca_file, ""), identity_root)
+        bao = Bao(endpoint, ca_file, operator)
     exists = True
     try:
         bao.request("GET", f"transit/keys/{CUSTODY_SIGNER}")
@@ -101,6 +137,8 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
             raise ValueError("OpenBao custody key lookup failed") from None
         exists = False
     if not exists:
+        if identity_root is not None:
+            raise ValueError("rootless evidence refresh cannot create a signer")
         bao.request("POST", f"transit/keys/{CUSTODY_SIGNER}", {
             "type": "ed25519", "exportable": False, "allow_plaintext_backup": False,
         })
@@ -112,12 +150,12 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
     pem = ed25519_public_pem(metadata.get("keys", {}).get("1", {}).get("public_key"))
     if refresh_token and public_file.read_text(encoding="ascii") != pem:
         raise ValueError("OpenBao custody public key changed before token refresh")
-    policy = (
-        f'path "transit/keys/{CUSTODY_SIGNER}" {{ capabilities = ["read"] }}\n'
-        f'path "transit/sign/{CUSTODY_SIGNER}" {{ capabilities = ["update"] }}\n'
-        'path "auth/token/lookup-self" { capabilities = ["read"] }\n'
-    )
-    bao.request("PUT", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}", {"policy": policy})
+    if identity_root is None:
+        bao.request("PUT", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}",
+                    {"policy": CUSTODY_SIGNER_LEAF_ACL})
+    elif bao.request("GET", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}") \
+            .get("data", {}).get("policy") != CUSTODY_SIGNER_LEAF_ACL:
+        raise ValueError("rootless custody evidence policy drifted")
     owner = output_root.stat()
 
     def write(path: Path, value: str, mode: int) -> None:
@@ -132,11 +170,14 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
             path.unlink(missing_ok=True)
             raise
 
-    created = bao.request("POST", "auth/token/create", {
-        "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
-        "no_parent": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
-    })
-    token = created.get("auth", {}).get("client_token")
+    if identity_root is None:
+        created = bao.request("POST", "auth/token/create", {
+            "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+            "no_parent": True, "renewable": False, "ttl": "1h", "explicit_max_ttl": "1h",
+        })
+        token = created.get("auth", {}).get("client_token")
+    else:
+        token = mint_evidence_token(Bao(endpoint, ca_file, ""), identity_root)
     if not isinstance(token, str) or not token:
         raise ValueError("OpenBao scoped custody token is absent")
     try:
@@ -166,11 +207,14 @@ def provision(endpoint: str, state_root: Path, output_root: Path, project: str,
         if not pending_file.exists() and not (token_file.is_file()
                                               and token_file.read_text(encoding="ascii").strip() == token):
             try:
-                bao.request("POST", "auth/token/revoke", {"token": token})
-            except (OSError, RuntimeError, ValueError):
+                if identity_root is None:
+                    bao.request("POST", "auth/token/revoke", {"token": token})
+                else:
+                    Bao(endpoint, ca_file, token).request("POST", "auth/token/revoke-self")
+            except (OSError, RuntimeError, ValueError, HTTPError):
                 try:
                     write(pending_file, token, 0o400)
-                except (OSError, RuntimeError, ValueError) as recovery_error:
+                except (OSError, RuntimeError, ValueError, HTTPError) as recovery_error:
                     raise RuntimeError("new custody token could not be revoked or preserved") from recovery_error
         if not refresh_token:
             public_file.unlink(missing_ok=True)
@@ -185,11 +229,13 @@ def main() -> int:
     parser.add_argument("--output-root", required=True, type=Path)
     parser.add_argument("--project-name", required=True)
     parser.add_argument("--refresh-token", action="store_true")
+    parser.add_argument("--identity-root", type=Path)
     args = parser.parse_args()
     try:
         digest = provision(args.endpoint, args.state_root, args.output_root,
                            args.project_name,
-                           refresh_token=args.refresh_token)
+                           refresh_token=args.refresh_token,
+                           identity_root=args.identity_root)
     except ValueError as error:
         print(f"OpenBao custody signer provisioning failed: {error}", file=sys.stderr)
         return 2

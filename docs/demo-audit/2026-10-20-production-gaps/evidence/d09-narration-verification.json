@@ -1,0 +1,276 @@
+{
+  "schemaVersion": 1,
+  "kind": "d09-draft-narration-verification",
+  "verifiedAt": "2026-10-20T04:41:15.609111+00:00",
+  "repository": "/workspace/scratch/d8b5d3d3b0dd/marty-demo-recorder-complete",
+  "baseline": "cf33fdd16e826e8a75c386e96ca92c80f345a381",
+  "status": "PASS_FOCUSED_CONTENT_CHECKS",
+  "scenarioRevision": 2,
+  "transcript": {
+    "source": "demos/transcripts/offline-facility-verification.en.vtt",
+    "language": "en",
+    "reviewStatus": "DRAFT",
+    "sha256": "9a0cb94d0c0cad1c6da824950c20c419f88a533c94a284abc0a67094f11621bd",
+    "cueCount": 12,
+    "durationSeconds": 136.0,
+    "maximumCueWpm": 132.0,
+    "wordCount": 233,
+    "ceilingWpm": 160,
+    "timingBasis": "PROVISIONAL_DRAFT_CUE_WINDOWS_UNBOUND_TO_VIDEO_OR_AUDIO",
+    "cues": [
+      {
+        "index": 1,
+        "start": 0.0,
+        "end": 10.0,
+        "words": 20,
+        "wpm": 120.0
+      },
+      {
+        "index": 2,
+        "start": 10.0,
+        "end": 22.0,
+        "words": 20,
+        "wpm": 100.0
+      },
+      {
+        "index": 3,
+        "start": 22.0,
+        "end": 30.0,
+        "words": 17,
+        "wpm": 127.5
+      },
+      {
+        "index": 4,
+        "start": 30.0,
+        "end": 42.0,
+        "words": 16,
+        "wpm": 80.0
+      },
+      {
+        "index": 5,
+        "start": 42.0,
+        "end": 52.0,
+        "words": 22,
+        "wpm": 132.0
+      },
+      {
+        "index": 6,
+        "start": 52.0,
+        "end": 64.0,
+        "words": 18,
+        "wpm": 90.0
+      },
+      {
+        "index": 7,
+        "start": 64.0,
+        "end": 76.0,
+        "words": 21,
+        "wpm": 105.0
+      },
+      {
+        "index": 8,
+        "start": 76.0,
+        "end": 88.0,
+        "words": 21,
+        "wpm": 105.0
+      },
+      {
+        "index": 9,
+        "start": 88.0,
+        "end": 100.0,
+        "words": 19,
+        "wpm": 95.0
+      },
+      {
+        "index": 10,
+        "start": 100.0,
+        "end": 112.0,
+        "words": 21,
+        "wpm": 105.0
+      },
+      {
+        "index": 11,
+        "start": 112.0,
+        "end": 124.0,
+        "words": 18,
+        "wpm": 90.0
+      },
+      {
+        "index": 12,
+        "start": 124.0,
+        "end": 136.0,
+        "words": 20,
+        "wpm": 100.0
+      }
+    ]
+  },
+  "checks": [
+    {
+      "name": "actual recorder configuration validator and existing transcript source",
+      "status": "PASS"
+    },
+    {
+      "name": "actual narration parser and validate_cues disclosure/timing/160-WPM rules",
+      "status": "PASS"
+    },
+    {
+      "name": "actual spoken-caption filter validates at most three 52-character lines per cue",
+      "status": "PASS"
+    },
+    {
+      "name": "five ordered story stages and explicit client-reported receipt scope",
+      "status": "PASS"
+    },
+    {
+      "name": "only D09 alignment entry and transcript.source change from baseline",
+      "status": "PASS"
+    },
+    {
+      "name": "61 total story beats and all 14 capture bindings remain UNBOUND/non-executable",
+      "status": "PASS"
+    },
+    {
+      "name": "D09 evidence, acceptance, capture and presentation status remain unchanged/pending",
+      "status": "PASS"
+    },
+    {
+      "name": "stale loopback/sent-once/server-helper claims removed and source locators resolved",
+      "status": "PASS",
+      "sourceCount": 7,
+      "locatorCount": 23
+    },
+    {
+      "name": "D09 runtime hooks/client and all config assertions unchanged",
+      "status": "PASS"
+    },
+    {
+      "name": "git diff --check",
+      "status": "PASS"
+    }
+  ],
+  "nodeVerification": {
+    "configuration": "PASS",
+    "captionLayout": "PASS",
+    "cues": 12,
+    "voiceRendered": false
+  },
+  "verificationMethods": {
+    "python": "tools.narration.generate.parse_vtt / validate_cues plus exact baseline JSON and source-locator checks; no renderer or model loaded",
+    "node": {
+      "command": "node -",
+      "script": "const assert=require('node:assert/strict'), fs=require('node:fs');\nconst {validateConfig}=require('./src/config');\nconst {spokenCaptionFilters}=require('./src/spokenCaptions');\nconst config=JSON.parse(fs.readFileSync('demos/offline-facility-verification.json','utf8'));\nvalidateConfig(config); assert.ok(fs.existsSync(config.transcript.source));\nconst seconds=value=>value.split(':').reduce((sum,part)=>sum*60+Number(part),0);\nconst cues=fs.readFileSync(config.transcript.source,'utf8').split(/\\n\\s*\\n/).filter(block=>block.includes(' --> ')).map(block=>{\n  const [timing,...lines]=block.split('\\n'); const [start,end]=timing.split(' --> ').map(seconds);\n  return {start,end,text:lines.join(' ').trim()};\n});\nspokenCaptionFilters(cues,'/unused-font-path');\nconsole.log(JSON.stringify({configuration:'PASS',captionLayout:'PASS',cues:cues.length,voiceRendered:false}));",
+      "exitCode": 0
+    },
+    "diff": {
+      "command": "git diff --check",
+      "exitCode": 0
+    }
+  },
+  "changedSources": [
+    {
+      "path": "demos/offline-facility-verification.json",
+      "sha256": "bd633ad7981870ebeb7f90ed0fd1322c217e1b4a3bfbdf4fac0a504e65fd5113"
+    },
+    {
+      "path": "demos/transcripts/offline-facility-verification.en.vtt",
+      "sha256": "9a0cb94d0c0cad1c6da824950c20c419f88a533c94a284abc0a67094f11621bd"
+    },
+    {
+      "path": "demos/lifecycle-alignment.json",
+      "sha256": "7e7b3ba57bd5cab876eb6b724ebafb6d38b977bc51cfb4a0c2413e08a9540e03"
+    }
+  ],
+  "reviewedImplementationSources": [
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-facility-verification.hooks.js",
+      "sha256": "97768bc0297f4b893f95bf34991cd41a85760ec0462f412e85a646e6c692447a",
+      "locators": [
+        "prepare",
+        "beforeRun",
+        "provisionEdgeTrust",
+        "verifyOffline",
+        "assertBufferedAudit",
+        "reconnectAndFlush",
+        "denyExpiredTrust"
+      ]
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-audit-client.js",
+      "sha256": "bda1bbc9b3505d2366699b1631aa959229199d0844b83bfe4248dc5485664de4",
+      "locators": [
+        "loadAuditConfig",
+        "createAuditClient",
+        "preflight",
+        "requireAbsent",
+        "requireReceipt",
+        "verifyReceiptAndIdempotency"
+      ]
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/offline-facility-verification.json",
+      "sha256": "bd633ad7981870ebeb7f90ed0fd1322c217e1b4a3bfbdf4fac0a504e65fd5113",
+      "locators": []
+    },
+    {
+      "repository": "marty-ui",
+      "path": "rust/services/organization/src/offline_audit_store.rs",
+      "sha256": "4a8a7f0243f21bf4566e08a9f04c061d4fe27901d21c041c7bbd1994b46d47d7",
+      "locators": [
+        "from_principal",
+        "offline_audit_transaction",
+        "ingest_offline_audit",
+        "offline_audit_receipt",
+        "load_conflicting_receipt"
+      ]
+    },
+    {
+      "repository": "marty-verifier",
+      "path": "crates/marty-reporting/src/durable_ack.rs",
+      "sha256": "c93c14752b944a84f6e56005d89c3609505f1657468bf0a11fce1000c4e5414d",
+      "locators": [
+        "authorize",
+        "require_acknowledgement",
+        "validate_acknowledgement"
+      ]
+    },
+    {
+      "repository": "marty-verifier",
+      "path": "crates/marty-reporting/src/reporter.rs",
+      "sha256": "8d9779c661176c1d518ad019e34b3231d291c7ee87ef7b4d34037e36e966d31d",
+      "locators": [
+        "flush",
+        "require_acknowledgement"
+      ]
+    },
+    {
+      "repository": "marty-demo-recorder",
+      "path": "demos/transcripts/offline-facility-verification.en.vtt",
+      "sha256": "9a0cb94d0c0cad1c6da824950c20c419f88a533c94a284abc0a67094f11621bd",
+      "locators": []
+    }
+  ],
+  "boundary": {
+    "liveRequests": 0,
+    "runtimeAssertionsEdited": false,
+    "newMediaCreated": false,
+    "audioRendered": false,
+    "frameOrAudioAlignmentMeasured": false,
+    "captureBinding": "UNBOUND",
+    "currentQualification": "NOT_RUN",
+    "publicationPerformed": false,
+    "committed": false
+  },
+  "spokenCopyPolish": {
+    "changedCues": [
+      1,
+      12
+    ],
+    "timingsUnchanged": true,
+    "planAndConfigUnchanged": true,
+    "draftBoundaryRetainedIn": "VTT NOTE",
+    "priorVerificationSha256": "cea8710b50545f85feb75d12f3f769782b6f56c2f5c64be7ec7721cad724c2ca"
+  }
+}
