@@ -18,6 +18,12 @@ from urllib.request import (
 
 CUSTODY_SIGNER = "selfhost-qualification-custody-v1"
 CUSTODY_SIGNER_POLICY = "selfhost-qualification-custody-signer"
+CUSTODY_SIGNER_LEAF_ACL = (
+    f'path "transit/keys/{CUSTODY_SIGNER}" {{ capabilities = ["read"] }}\n'
+    f'path "transit/sign/{CUSTODY_SIGNER}" {{ capabilities = ["update"] }}\n'
+    'path "auth/token/lookup-self" { capabilities = ["read"] }\n'
+    'path "auth/token/revoke-self" { capabilities = ["update"] }\n'
+)
 RENEWAL_LEAF_ROLE = "selfhost-renew-leaf"
 RENEWAL_OPERATOR_POLICY = "selfhost-kms-renewal"
 
@@ -85,6 +91,7 @@ def certificate_public_key_der(certificate: str) -> bytes:
 class Bao:
     def __init__(self, endpoint: str, ca: Path, token: str) -> None:
         self.endpoint = endpoint
+        self.ca = ca
         self.token = token
         self.opener = build_opener(
             ProxyHandler({}), HTTPSHandler(context=ssl.create_default_context(cafile=str(ca))),

@@ -437,6 +437,19 @@ sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
   --project-name "$openbao_project"
+evidence_identity_root="$(dirname "$openbao_state_root")/evidence-identity"
+sudo install -d -m 700 "$evidence_identity_root"
+sudo python3 "$source_root/scripts/provision_selfhost_evidence_identity.py" \
+  --mode bootstrap --bao-addr "https://127.0.0.1:$openbao_port" \
+  --bao-ca "$openbao_state_root/tls/ca.crt" \
+  --root-token-file "$openbao_state_root/root.token" \
+  --output "$evidence_identity_root"
+# Later token refresh uses the evidence identity, even after root revocation:
+# sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
+#   --endpoint "https://127.0.0.1:$openbao_port" \
+#   --state-root "$openbao_state_root" --output-root "$secret_root" \
+#   --project-name "$openbao_project" --refresh-token \
+#   --identity-root "$evidence_identity_root"
 sudo python3 "$source_root/scripts/provision_selfhost_audit_token.py" \
   --endpoint "https://127.0.0.1:$openbao_port" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \

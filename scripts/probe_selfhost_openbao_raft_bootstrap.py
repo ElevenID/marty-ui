@@ -16,6 +16,14 @@ from functools import partial
 from pathlib import Path
 
 from check_selfhost_root_retirement import STATIC_KMS_TOKENS, checked_static_tokens
+from provision_selfhost_custody_signer import refresh_scoped_token
+from provision_selfhost_evidence_identity import bootstrap as bootstrap_evidence_identity
+from provision_selfhost_evidence_identity import checked_login as evidence_login
+from provision_selfhost_evidence_identity import mint as mint_evidence_token
+from provision_selfhost_evidence_identity import rotate as rotate_evidence_identity
+from provision_selfhost_evidence_identity import require_revoked as evidence_revoked
+from provision_selfhost_evidence_identity import ROLE_ID_FILE as EVIDENCE_ROLE_ID_FILE
+from provision_selfhost_evidence_identity import SECRET_ID_FILE as EVIDENCE_SECRET_ID_FILE
 from probe_didcomm_openbao_ha import (
     IMAGE,
     ROOT,
@@ -25,7 +33,8 @@ from probe_didcomm_openbao_ha import (
     require_status as http_require_status,
     wait_for,
 )
-from selfhost_openbao_client import Bao
+from selfhost_openbao_client import (Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_LEAF_ACL,
+                                   CUSTODY_SIGNER_POLICY)
 
 DOCKER_ROOT = Path(os.environ.get("MARTY_OPENBAO_PROBE_HOST_ROOT", str(ROOT)))
 
@@ -265,6 +274,31 @@ def run() -> None:
         root_file = host_state / "root.token"
         root_file.write_text(volume_file(state, "root.token"), encoding="utf-8")
         root_file.chmod(0o600)
+        evidence_bao = Bao(base, ca_file, root)
+        evidence_bao.request("POST", f"transit/keys/{CUSTODY_SIGNER}", {
+            "type": "ed25519", "exportable": False,
+            "allow_plaintext_backup": False,
+        })
+        evidence_bao.request("PUT", f"sys/policies/acl/{CUSTODY_SIGNER_POLICY}", {
+            "policy": CUSTODY_SIGNER_LEAF_ACL,
+        })
+        evidence_identity = Path(public_ca_dir.name) / "evidence-identity"
+        evidence_identity.mkdir(mode=0o700)
+        bootstrap_evidence_identity(evidence_bao, evidence_identity)
+        retired_evidence_identity = evidence_identity
+        evidence_identity = Path(public_ca_dir.name) / "evidence-identity-rotated"
+        evidence_identity.mkdir(mode=0o700)
+        rotate_evidence_identity(Bao(base, ca_file, ""), retired_evidence_identity,
+                                 evidence_identity)
+        minted_initial = evidence_bao.request("POST", "auth/token/create", {
+            "policies": [CUSTODY_SIGNER_POLICY], "no_default_policy": True,
+            "no_parent": True, "renewable": False, "ttl": "1h",
+            "explicit_max_ttl": "1h",
+        })
+        first_evidence_leaf = minted_initial.get("auth", {}).get("client_token")
+        if not isinstance(first_evidence_leaf, str) or len(first_evidence_leaf) < 20:
+            raise RuntimeError("Initial orphan evidence token is absent")
+        mint_evidence_token(Bao(base, ca_file, ""), evidence_identity)
         identity = Path(public_ca_dir.name) / "snapshot-identity"
         identity.mkdir(mode=0o700)
         provision = subprocess.run(
@@ -325,6 +359,24 @@ def run() -> None:
         if http_request(cold_base, "GET", f"transit/keys/{key_name}",
                         token=root, ca_file=ca_file)[0] != 403:
             raise RuntimeError("Revoked bootstrap root still has KMS access")
+        evidence_revoked(
+            Bao(cold_base, ca_file, ""),
+            (retired_evidence_identity / EVIDENCE_ROLE_ID_FILE).read_text().strip(),
+            (retired_evidence_identity / EVIDENCE_SECRET_ID_FILE).read_text().strip(),
+        )
+        renewed_evidence_leaf = mint_evidence_token(Bao(cold_base, ca_file, ""),
+                                                    evidence_identity)
+        evidence_file = Path(public_ca_dir.name) / "evidence-leaf.token"
+        evidence_file.write_text(first_evidence_leaf, encoding="ascii")
+        operator = evidence_login(Bao(cold_base, ca_file, ""), evidence_identity)
+        refresh_scoped_token(
+            Bao(cold_base, ca_file, operator), evidence_file, renewed_evidence_leaf,
+            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
+        )
+        if (evidence_file.read_text(encoding="ascii") != renewed_evidence_leaf
+                or http_request(cold_base, "GET", f"transit/keys/{CUSTODY_SIGNER}",
+                                token=first_evidence_leaf, ca_file=ca_file)[0] != 403):
+            raise RuntimeError("Rootless evidence refresh retained its old token")
         rootless_exports = Path(public_ca_dir.name) / "rootless-exports"
         rootless_exports.mkdir(mode=0o700)
         rootless = subprocess.run(
@@ -370,8 +422,9 @@ def run() -> None:
         snapshot_name = f"{server}-restored"
         started.append(snapshot_name)
         snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
-        fresh(snapshot_base, "POST", "sys/unseal", "",
-              {"key": volume_file(state, "unseal.key")})
+        if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
+            fresh(snapshot_base, "POST", "sys/unseal", "",
+                  {"key": volume_file(state, "unseal.key")})
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")

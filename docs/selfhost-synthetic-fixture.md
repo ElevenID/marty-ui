@@ -61,14 +61,23 @@ sudo python3 "$source_root/scripts/provision_selfhost_custody_signer.py" \
   --endpoint "https://127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}" \
   --state-root "$openbao_state_root" --output-root "$secret_root" \
   --project-name "$openbao_project"
+evidence_identity_root="$(dirname "$openbao_state_root")/evidence-identity"
+sudo install -d -m 700 "$evidence_identity_root"
+sudo python3 "$source_root/scripts/provision_selfhost_evidence_identity.py" \
+  --mode bootstrap --bao-addr "https://127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT}" \
+  --bao-ca "$openbao_state_root/tls/ca.crt" \
+  --root-token-file "$openbao_state_root/root.token" \
+  --output "$evidence_identity_root"
 ```
 
 The printed public-key digest is an install-local diagnostic, not a release
 source edit. Each fresh OpenBao instance may generate a distinct signer.
 Only the public PEM and scoped token leave OpenBao; no custody private key file is
-created. If the token expires before the installed run, repeat the helper with
-`--refresh-token`; it verifies that the public key still matches and revokes
-the prior token. The helper uses the OpenBao API's `no_parent` field and checks
+created. If the token expires before the installed run, repeat the signer helper
+with `--refresh-token --identity-root "$evidence_identity_root"`; it verifies
+the public key and policy, mints through a separate narrow AppRole, and revokes
+the prior token through that token's `revoke-self` capability. The initial
+helper uses the OpenBao API's `no_parent` field and checks
 that token lookup reports an orphan, so revoking the provisioning root token
 does not revoke the scoped signer token. The hook independently checks the
 orphan flag, policy, and TTL, then reads the
@@ -79,11 +88,23 @@ The runner independently reads the live key metadata from the owned,
 image-locked OpenBao instance and verifies the signature with that public key
 before the public journey. Remove the scoped token after the disposable run.
 
+To rotate the evidence AppRole without the bootstrap root, create a separate
+private sibling such as `evidence-identity-next` and run
+`provision_selfhost_evidence_identity.py --mode rotate --bao-addr "$bao_url"
+--bao-ca "$openbao_state_root/tls/ca.crt" --identity "$evidence_identity_root"
+--output "$next_identity_root"`. The command verifies the replacement login
+before retiring the old SecretID. Use the new directory for subsequent
+`--identity-root` refreshes. If retiring the old SecretID was interrupted,
+`--mode retire --identity "$next_identity_root" --retired-identity
+"$evidence_identity_root"` completes the operation; keep both private until it
+confirms the old login is rejected.
+
 If refresh fails and `selfhost_custody_signer_token.new` remains in the private
 output directory, stop rather than minting another token. The old-token revoke
-response may have been lost; either token may still be valid. Using the protected
-OpenBao root token, revoke the token held in `.new` without printing its value.
-Remove `.new` only after OpenBao confirms revocation or that token's expiry,
+response may have been lost; either token may still be valid. Using the scoped
+evidence identity, inspect both token statuses without printing their values.
+Revoke a live token through its own `revoke-self` capability and remove `.new`
+only after OpenBao confirms revocation or that token's expiry,
 then rerun `--refresh-token`. Keep `.new` private and do not delete it merely
 because the OpenBao API is unavailable.
 The signed statement records both managed transit key references, versions,
