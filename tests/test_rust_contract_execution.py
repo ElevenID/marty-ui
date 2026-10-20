@@ -1494,6 +1494,52 @@ def test_canvas_published_image_pin_must_exist(tmp_path, monkeypatch) -> None:
         INVENTORY.canvas_published_image_inputs()
 
 
+@pytest.mark.parametrize(
+    ("name", "fixture"),
+    (
+        (
+            "canvas_composition_acceptance",
+            "rust/services/issuance/tests/support/renewal_reference_fixture.rs",
+        ),
+        (
+            "canvas_worker_acceptance",
+            "contracts/canvas-worker-body-timeout-oracle.json",
+        ),
+    ),
+)
+def test_canvas_rust_first_hop_inputs_record_exact_source_hashes(name, fixture) -> None:
+    inputs = INVENTORY.canvas_rust_first_hop_inputs(name)
+    paths = [item["path"] for item in inputs]
+    assert paths == sorted(set(paths))
+    assert INVENTORY.CANVAS_RUST_TEST_SOURCES[name] in paths
+    assert fixture in paths
+    assert all(
+        item["sha256"] == INVENTORY.digest(ROOT / item["path"]) for item in inputs
+    )
+
+
+def test_canvas_rust_first_hop_inputs_reject_unrecognized_import(
+    tmp_path, monkeypatch
+) -> None:
+    source_path = INVENTORY.CANVAS_RUST_TEST_SOURCES["canvas_worker_acceptance"]
+    source = tmp_path / source_path
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        '#[path = concat!("private-", "fixture.rs")]\nmod fixture;\n', encoding="utf-8"
+    )
+    manifest = source.parent.parent / "Cargo.toml"
+    manifest.write_text(
+        '[package]\nname = "marty-canvas-worker-acceptance"\n'
+        '[[test]]\nname = "canvas_published_worker_contract"\n'
+        'path = "tests/canvas_published_worker_contract.rs"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(INVENTORY, "ROOT", tmp_path)
+    with pytest.raises(ValueError, match="canvas_rust_source_input_drift") as error:
+        INVENTORY.canvas_rust_first_hop_inputs("canvas_worker_acceptance")
+    assert "private-" not in str(error.value)
+
+
 def test_canvas_composition_inventory_never_records_the_kms_token(
     real_obligation_harness, monkeypatch, capsys
 ) -> None:
@@ -1520,6 +1566,10 @@ def test_canvas_composition_inventory_never_records_the_kms_token(
     )
     assert record["selected"] == record["executed"] == ["happy"]
     assert record["runtime_fixture_owner"].endswith("canvas_published_database.rs")
+    assert record["transitive_source_closure"] == "incomplete"
+    assert record["observed_first_hop_rust_source_inputs"] == (
+        INVENTORY.canvas_rust_first_hop_inputs("canvas_composition_acceptance")
+    )
 
 
 def test_canvas_obligation_files_are_separate_for_parallel_targets(
