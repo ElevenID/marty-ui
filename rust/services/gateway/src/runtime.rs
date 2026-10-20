@@ -4312,9 +4312,14 @@ async fn vc_api_verify_handler(state: Arc<GatewayRuntimeState>, request: Request
         .extensions
         .get::<ConnectInfo<SocketAddr>>()
         .map(|value| value.0.ip().to_string());
+    let overrides = proxy_overrides(
+        &state,
+        &format!("/v1/presentation-policies/{policy_id}/evaluate"),
+        &identity,
+    );
     let upstream = match state
         .proxy
-        .execute(upstream_request, &identity, &ProxyOverrides::default())
+        .execute(upstream_request, &identity, &overrides)
         .await
     {
         Ok(response) => response,
@@ -9700,6 +9705,25 @@ mod tests {
         let body: Value = serde_json::from_slice(&body).expect("json");
         assert_eq!(body["verified"], true);
         assert_eq!(body["results"]["decision"], "allow");
+    }
+
+    #[test]
+    fn vc_api_verification_handoff_uses_policy_service_authentication() {
+        let state = runtime_state();
+        let identity = TrustedIdentityContext {
+            organization_id: Some("org-1".into()),
+            user_id: Some("user-1".into()),
+            ..TrustedIdentityContext::default()
+        };
+        let overrides = proxy_overrides(
+            &state,
+            "/v1/presentation-policies/policy-1/evaluate",
+            &identity,
+        );
+        assert_eq!(
+            overrides.headers.get("x-service-token"),
+            state.service_token.as_ref()
+        );
     }
 
     #[tokio::test]
