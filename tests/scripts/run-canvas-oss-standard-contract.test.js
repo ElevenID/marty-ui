@@ -15,6 +15,8 @@ const {
   observePipelinePrerequisites,
   selectProductionBadgeTemplates,
   contractFailureLocation,
+  canvasTokenExpiration,
+  freshCanvasLearnerEmail,
   martyRequestSummary,
   createHolderProof,
   didWebResolutionUrl,
@@ -46,6 +48,23 @@ test('Marty request failure context preserves static operation but excludes dyna
     'Marty PUT /v1/integrations/canvas/platforms/:resource/lti-installation failed');
   assert.equal(martyRequestSummary('secret', '/v1/integrations/canvas/lti/config/secret-token'),
     'Marty REQUEST /v1/integrations/canvas/:resource/:resource/:resource failed');
+});
+
+test('Canvas token expiration uses the account timezone and stays within a bounded window', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const actual = canvasTokenExpiration(now, 'America/Denver');
+  assert.deepEqual(actual, { timestamp: Date.parse('2026-10-21T10:00:00Z'), date: '10/21/2026', time: '4:00 AM' });
+  const nextDay = canvasTokenExpiration(Date.parse('2026-12-31T22:45:00Z'), 'UTC');
+  assert.equal(nextDay.date, '01/01/2027');
+  assert.ok(actual.timestamp >= now + 2 * 3600000 && actual.timestamp < now + 2.5 * 3600000);
+});
+
+test('Canvas learner fixtures have fresh bounded synthetic identities for each run', () => {
+  const first = freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001');
+  assert.equal(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001'));
+  assert.notEqual(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0002'));
+  assert.ok(freshCanvasLearnerEmail('a'.repeat(100) + '@stage.test', 'owned-run-0001').split('@')[0].length <= 64);
+  assert.throws(() => freshCanvasLearnerEmail('person@example.com', 'owned-run-0001'), /synthetic mailbox/);
 });
 
 test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
