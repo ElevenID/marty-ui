@@ -25,7 +25,9 @@ portability runner's Docker integration and physical capacity checks.
 References: [GitHub runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)
 and [Ubuntu hosted image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md).
 
-The harness has an executable `readiness_only` mode, but the local host is **not ready to run it yet**. On 2026-07-15, the dedicated Ubuntu 24.04 WSL2 distribution, non-root runner account, prerequisites, and official Actions runner `2.335.1` were installed and checksum-verified. Docker Desktop integration is still intentionally disabled, zero self-hosted runners are registered for `ElevenID/marty-ui`, and the reviewed Canvas image lock remains `pending_source_build`. No successful nightly or portability run is claimed.
+The stock source image was published by [run 39527943630](https://github.com/ElevenID/marty-ui/actions/runs/39527943630), pulled locally, and promoted to `published` in the lock after registry hashes, source labels and GitHub attestation verification. The [review receipt](canvas-oss-image-review-20261020.json) records the immutable digest and verification inputs. This completes image acquisition; it does not qualify the Canvas runtime or D07/D08.
+
+The harness has an executable `readiness_only` mode. Recheck the actual host's Docker backing capacity, memory, integration and beta network/tunnel bindings before starting it; earlier host observations are not current readiness evidence. The local stock Canvas bootstrap, public LTI navigation, wallet operations and fresh negative/recovery contract still require real execution. No successful nightly or portability run is claimed.
 
 After the dedicated distro, runner binary, reviewed image digest, and coordinated beta release exist, `readiness_only` starts the honest topology, verifies the deployed beta capability and public Canvas route, and emits `status=readiness_only`; it cannot be promoted or used by the demo recorder as portability proof.
 
