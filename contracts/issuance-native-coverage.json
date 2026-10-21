@@ -884,6 +884,26 @@
       "retention_behavior_contract": true
     }
   ],
+  "native_extension_http": [
+    {
+      "method": "GET",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+      "operation": "read_canvas_learner_claim",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_lti_claim.rs",
+      "behavior_test": "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+      "adaptation": "Native-only session-scoped Canvas claim; not part of the frozen legacy HTTP surface."
+    },
+    {
+      "method": "POST",
+      "path": "/v1/integrations/canvas/lti/experience-sessions/current/claim",
+      "operation": "create_canvas_learner_claim",
+      "owner": "issuance-native",
+      "source": "rust/services/issuance/src/canvas_lti_claim.rs",
+      "behavior_test": "rust/services/issuance/tests/support/canvas_claim_behavior.rs",
+      "adaptation": "Native-only session-scoped Canvas claim; not part of the frozen legacy HTTP surface."
+    }
+  ],
   "native_grpc": [
     "ExchangeToken",
     "GetCredentialStatus",
