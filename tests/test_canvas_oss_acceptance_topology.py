@@ -242,8 +242,8 @@ def test_runner_setup_is_explicit_ephemeral_and_fail_closed() -> None:
     for tool in ("gh", "jq", "node", "python3"):
         assert f'"{tool}"' in preflight
     assert "/var/run/docker.sock" in preflight
-    assert "zero self-hosted runners" in docs
-    assert "not ready to run it yet" in docs
+    assert "zero registered Canvas runners after each job" in docs
+    assert "until then scheduled triggers exit" in docs
     assert "all remain Docker Compose services" in docs
     assert "no second Docker daemon" in docs
 
