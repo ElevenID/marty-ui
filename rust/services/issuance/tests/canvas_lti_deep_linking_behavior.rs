@@ -1019,3 +1019,25 @@ async fn http_route_sanitizes_signing_failures_and_prevents_caching() {
         json!({"detail": "Canvas LTI tool signing is temporarily unavailable"})
     );
 }
+
+#[test]
+fn deep_linked_resources_preserve_signed_canvas_course_id_instead_of_opaque_context() {
+    let mut launch = context();
+    launch.verified_launch["context"]["id"] = json!("opaque-lti-context-hash");
+    launch.verified_launch["raw_claims"]["https://purl.imsglobal.org/spec/lti/claim/custom"] =
+        json!({"canvas_course_id": "42"});
+    let plan = plan_deep_linking_response(
+        &launch,
+        &platform(),
+        &binding(),
+        Some("elevenid-tool-client"),
+        "https://issuer.example.test/",
+        &generated_nonce(),
+        now(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.response.content_items[0]["custom"]["canvas_course_id"],
+        "42"
+    );
+}
