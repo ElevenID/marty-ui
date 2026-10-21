@@ -1102,7 +1102,14 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
     presentation.surface = popup; presentation.page = popup;
   }
   await presentation.surface.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await presentation.surface.getByText(/^Canvas launch verified$/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  const experience = presentation.surface.getByTestId('canvas-lti-login-page');
+  const verification = await waitFor(async () => {
+    if (await experience.getByText(/^Canvas launch verified$/i).isVisible()) return { verified: true };
+    if (await experience.getByRole('alert').first().isVisible()) return { verified: false };
+    return null;
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_resource_ui_pending');
+  requireCondition(verification.verified, 'canvas_resource_ui_not_verified',
+    'The actual Marty resource UI reported an error before its verified state.');
   return presentation;
   } catch (error) {
     await Promise.allSettled(reads);

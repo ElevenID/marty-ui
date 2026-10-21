@@ -158,3 +158,27 @@ fn canvas_application_rejects_non_positive_session_ttl() {
 
     assert_eq!(error.code, "canvas_lti_configuration_invalid");
 }
+
+#[tokio::test]
+async fn canvas_session_lookup_joins_root_origins_and_preserves_path_prefixes() {
+    for (base, prefix) in [
+        ("http://issuance-native:8005", ""),
+        ("http://issuance-native:8005/", ""),
+        ("http://issuance-native:8005/base", "/base"),
+        ("http://issuance-native:8005/base/", "/base"),
+    ] {
+        let http = Arc::new(HttpStub {
+            response: Mutex::new(Some(OutboundHttpResponse {
+                status: 200,
+                headers: Default::default(),
+                body: b"{}".to_vec(),
+            })),
+            request: Mutex::new(None),
+        });
+        let provider = HttpCanvasExperienceSessionProvider::new(http.clone(), base).unwrap();
+        provider.current("experience-token").await.unwrap();
+        let request = http.request.lock().unwrap().clone().unwrap();
+        assert_eq!(request.url, format!("http://issuance-native:8005{prefix}/v1/integrations/canvas/lti/experience-sessions/current"), "base={base}");
+        assert_eq!(request.headers["authorization"], "Bearer experience-token");
+    }
+}
