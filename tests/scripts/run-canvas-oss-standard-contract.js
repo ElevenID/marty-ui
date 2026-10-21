@@ -1038,7 +1038,7 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId,
 function canvasLaunchErrorSummary(value, depth = 0) {
   if (!value || typeof value !== 'object' || depth > 3) return [];
   const result = [];
-  for (const key of ['detail', 'message', 'error', 'code', 'error_code', 'reason']) {
+  for (const key of ['detail', 'details', 'message', 'error', 'error_description', 'code', 'error_code', 'reason']) {
     const item = value[key];
     if (typeof item === 'string') result.push(sanitizeEvidence(item)
       .replace(/https?:\/\/[^\s]+/gi, '[redacted-url]')

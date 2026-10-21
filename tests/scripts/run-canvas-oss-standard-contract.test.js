@@ -620,3 +620,9 @@ test('resource conflict summaries read wrapped errors without retaining credenti
   assert.ok(summary.some(value => value.includes('Canvas AGS rejection')));
   assert.ok(!JSON.stringify(summary).includes('private') && !JSON.stringify(summary).includes('https://'));
 });
+
+
+test('resource conflict summaries preserve the production MIP error description', () => {
+  assert.deepEqual(canvasLaunchErrorSummary({ error: 'service_error', error_description: 'Canvas launch resource does not match the selected binding', message_id: 'opaque-private-message-id', details: [{ message: 'scope mismatch' }] }),
+    ['scope mismatch', 'service_error', 'Canvas launch resource does not match the selected binding']);
+});
