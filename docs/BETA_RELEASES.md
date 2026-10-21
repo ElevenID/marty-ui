@@ -95,6 +95,17 @@ and modifies no KMS state. A changed database, image, owner, volume or active jo
 requires investigation and forward repair instead. Keep the original failed
 cutover and recovery receipts; recovery is not an updated-beta qualification.
 
+An update of an already initialized beta uses the production ordinary-migration
+contract: KMS/DID initialization is disabled, the initialization token is absent,
+and only the Notification envelope token and public CA are mounted. The separate
+initialization role's short-lived token is not a signing-key rotation mechanism.
+Native database, issuance and revocation migration jobs use frozen image IDs with
+their build definitions removed. Rehearsal and live migration run the same normal
+migration entrypoint, including Notification schema migration. An existing Raft
+node is checked for readiness rather than rerunning its fresh-only initializer.
+The durable configuration includes every initializer script and policy; missing
+bind sources cannot become empty directories that falsely report success.
+
 ## Release sequence
 
 1. Merge every coordinated component through its protected default branch and

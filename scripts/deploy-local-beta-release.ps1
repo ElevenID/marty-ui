@@ -54,6 +54,7 @@ $script:RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-application-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-native-probes.ps1")
+. (Join-Path $PSScriptRoot "beta-migration-image-plan.ps1")
 . (Join-Path $PSScriptRoot "beta-didcomm-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-passport-configuration.ps1")
 . (Join-Path $PSScriptRoot "beta-tunnel-configuration.ps1")
@@ -590,6 +591,8 @@ function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
         "config/keycloak",
         "scripts/setup-keycloak.sh",
         "docker/openbao-init.sh",
+        "docker/openbao-selfhost-init.sh",
+        "docker/openbao-haip-workload-policy.hcl",
         "config/envoy/envoy.yaml",
         "config/envoy/proto_descriptor.pb",
         "docker/canvas-localhost-bridge/Cargo.toml",
@@ -1152,6 +1155,12 @@ $preflightPostgres = Get-ComposeContainerId -Service "postgres"
 if (-not $preflightPostgres) { throw "Beta PostgreSQL container is unavailable" }
 Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $preflightPostgres
 $script:StateVolumePlan = @(Get-BetaStateVolumePlan)
+$migrationAdminFiles = @($script:EnvFiles | Where-Object {
+    @(Select-String -LiteralPath $_ -Pattern '^MARTY_ORG_ADMIN_EMAIL=').Count -gt 0
+})
+if ($migrationAdminFiles.Count -eq 0) { throw 'MARTY_ORG_ADMIN_EMAIL must be configured for native migrations' }
+$migrationAdminEmail = (Get-DotEnvValue -Path $migrationAdminFiles[-1] -Name 'MARTY_ORG_ADMIN_EMAIL').Trim().Trim('"').Trim("'")
+if ($migrationAdminEmail -cnotmatch '^[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+$') { throw 'Invalid migration admin email' }
 if ($UsePreparedLocalImages) {
     $null = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
     $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
@@ -1472,6 +1481,32 @@ else {
     $script:ComposeFiles += $verificationImageOverride
 }
 
+# Freeze one-shot roles as well as application roles. Otherwise Compose can
+# rebuild a default migration image despite UsePreparedLocalImages.
+$migrationImage = & docker image inspect $migrationImage --format '{{.Id}}'
+if ($LASTEXITCODE -ne 0 -or $migrationImage -cnotmatch '^sha256:[0-9a-f]{64}$') { throw 'Migration image is unavailable' }
+$migrationRoleImages = @{}
+foreach ($role in @('issuance-native', 'revocation-profile')) {
+    $entry = @($applicationImagePlan | Where-Object service -eq $role)
+    if ($entry.Count -ne 1) { throw "Missing migration runtime role: $role" }
+    $id = & docker image inspect $entry[0].effective_reference --format '{{.Id}}'
+    if ($LASTEXITCODE -ne 0 -or $id -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Migration runtime image is unavailable: $role" }
+    $migrationRoleImages[$role] = $id
+}
+$migrationOverride = Join-Path $script:ArtifactDir 'native-migration-images.yml'
+$migrationLines = @(ConvertTo-BetaMigrationImageLines -MigrationImage $migrationImage `
+    -IssuanceImage $migrationRoleImages['issuance-native'] -RevocationImage $migrationRoleImages['revocation-profile'])
+Write-Utf8Text -Path $migrationOverride -Content (($migrationLines -join "`n") + "`n")
+$script:ComposeFiles += $migrationOverride
+Write-Utf8Text -Path (Join-Path $script:ArtifactDir 'native-migration-image-plan.json') -Content (([ordered]@{
+    source_id = $sourceId
+    kms_initialization_enabled = $false
+    db_migrate = $migrationImage
+    issuance_migrations = $migrationRoleImages['issuance-native']
+    revocation_profile_migrate = $migrationRoleImages['revocation-profile']
+    compose_override_sha256 = Get-FileSha256 $migrationOverride
+} | ConvertTo-Json) + "`n")
+
 Write-Step "Rehearse one-way migration on isolated beta copy"
 $copySuffix = $sourceId.Substring(0, 12)
 $copyContainer = "elevenid-beta-copy-$copySuffix"
@@ -1539,28 +1574,31 @@ try {
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--no-build', '--env', "DATABASE_URL=$copyUrl", 'revocation-profile-migrate') `
+        -LogPath (Join-Path $logsDir 'revocation-migration-rehearsal.log') -FailureMessage 'Native revocation migration rehearsal failed'
     $rehearsalArguments = @(
         "run", "--rm", "--network", "container:$copyOpenBaoContainer",
         "--mount", $copyCaMount,
         "--env", "DATABASE_URL=$copyUrl",
+        "--env", "MARTY_DB_PASSWORD=$copyPassword",
+        "--env", "MARTY_ORG_ADMIN_EMAIL=$migrationAdminEmail",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false",
         "--env", "BAO_ADDR=https://localhost:8200",
         "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
-        "--env", "BAO_TOKEN=$copyBaoToken",
         "--env", "NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken",
         "--env", "REDIS_URL=redis://:${encodedCopyRedisPassword}@${copyRedisContainer}:6379",
         "--env", "MARTY_ORG_ID=$PilotOrganizationId"
     )
-    $rehearsalArguments += @($migrationImage, "/usr/local/bin/marty-migration-bootstrap")
+    $rehearsalArguments += @($migrationImage)
     Invoke-DockerLogged -Arguments $rehearsalArguments -LogPath (Join-Path $logsDir "migration-rehearsal.log") -FailureMessage "Migration rehearsal failed"
     $verifyArguments = @("run", "--rm", "--network", "container:$copyOpenBaoContainer", "--mount", $copyCaMount, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", "--env", "BAO_ADDR=https://localhost:8200", "--env", "BAO_CACERT=/bao-public-ca/ca.crt", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
     $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
+    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
+        -Arguments @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
         -FailureMessage "Issuance migration rehearsal failed"
     Invoke-ComposeLogged `
@@ -1699,33 +1737,34 @@ try {
         -Phase "maintenance_quiesced" `
         -WritersStopped $true `
         -RedisPassword $redisPassword
-    Write-Step "Reconcile beta OpenBao state from release configuration"
-    $liveMutationStarted = $true
-    Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "openbao-init") `
-        -LogPath (Join-Path $logsDir "openbao-init-live.log") `
-        -FailureMessage "Beta OpenBao reconciliation failed"
+    Write-Step "Verify preserved beta OpenBao readiness"
+    $baoContainer = Get-ComposeContainerId -Service 'openbao'
+    $baoStatus = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $baoContainer, 'bao', 'status', '-address=https://127.0.0.1:8200', '-ca-cert=/bao/data/tls/ca.crt')
+    if ($baoStatus.exit_code -ne 0) { throw 'Preserved beta OpenBao is not ready' }
 
     $env:MARTY_MIGRATION_PROFILE = "beta"
     $env:PUBLIC_API_URL = $BetaOrigin
     $liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
+    $liveMutationStarted = $true
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--no-build', '--env', "DATABASE_URL=$liveDatabaseUrl", 'revocation-profile-migrate') `
+        -LogPath (Join-Path $logsDir 'revocation-migration-live.log') -FailureMessage 'Native revocation migration failed'
     $migrationArguments = @(
-        "run", "--rm", "--no-deps",
+        "run", "--rm", "--no-deps", "--no-build",
         "--env", "DATABASE_URL=$liveDatabaseUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
-        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=true",
+        "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false",
         "--env", "REDIS_URL=redis://:${encodedRedisPassword}@redis:6379",
         "--env", "MARTY_ORG_ID=$PilotOrganizationId",
-        "db-migrate", "/usr/local/bin/marty-migration-bootstrap"
+        "db-migrate"
     )
     $liveMutationStarted = $true
     Invoke-ComposeLogged -Arguments $migrationArguments `
         -LogPath (Join-Path $logsDir "migration-live.log") `
         -FailureMessage "Live migration failed"
-    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
+    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
+        -Arguments @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
         -FailureMessage "Live issuance migration failed"
     Invoke-ComposeLogged `

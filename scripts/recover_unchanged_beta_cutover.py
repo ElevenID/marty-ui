@@ -38,14 +38,14 @@ def normalized_dump(value: bytes) -> bytes:
     return value
 
 
-def check_container(record, current):
+def check_container(record, current, *, stopped=True):
     project = 'elevenid-beta-ui' if record['service'] == 'ui-prod' else 'elevenid-beta'
     reference = record['container_id']
     if (not re.fullmatch('[0-9a-f]{12,64}', reference) or not current['Id'].startswith(reference)
             or current['Image'] != record['image_id']
             or current['Config']['Labels'].get('com.docker.compose.project') != project
             or current['Config']['Labels'].get('com.docker.compose.service') != record['service']
-            or current['State']['Running']):
+            or current['State']['Running'] is stopped):
         raise RuntimeError('Prior beta container identity, ownership, image or stopped state changed')
 
 
@@ -69,8 +69,34 @@ def wait_healthy(records):
 
 
 def public_json(url):
-    with urlopen(Request(url, headers={'Cache-Control': 'no-cache'}), timeout=20) as response:
+    with urlopen(Request(url, headers={'Cache-Control': 'no-cache', 'User-Agent': 'elevenid-beta-health/1'}), timeout=20) as response:
         return json.load(response)
+
+
+def verify_recovered_runtime(records):
+    for record in records:
+        current = inspect(record['container_id'])
+        check_container(record, current, stopped=False)
+        record['container_id'] = current['Id']
+    wait_healthy(records)
+    gateway = next(row for row in records if row['service'] == 'gateway')['runtime_marker_environment']
+    expected_release = {
+        'deployment_release_marker': gateway['MARTY_RELEASE_VERSION'],
+        'marty_ui_sha': gateway['MARTY_UI_SHA'], 'stack_version': gateway['ELEVENID_STACK_VERSION'],
+        'component_revisions': json.loads(gateway['ELEVENID_COMPONENT_REVISIONS_JSON']),
+        'image_digests': json.loads(gateway['ELEVENID_IMAGE_DIGESTS_JSON']),
+    }
+    for origin in ['http://127.0.0.1:8000', 'https://beta.elevenidllc.com']:
+        actual = public_json(origin + '/.well-known/marty-release')
+        if any(actual.get(key) != value for key, value in expected_release.items()):
+            raise RuntimeError('Recovered API binding differs from the retained prior environment')
+    ui = next(row for row in records if row['service'] == 'ui-prod')
+    expected_ui = json.loads(docker('run', '--rm', '--network', 'none', '--entrypoint', 'cat',
+                                    ui['image_id'], '/usr/share/nginx/html/marty-ui-release.json'))
+    for origin in ['http://127.0.0.1:3002', 'https://beta.elevenidllc.com']:
+        if public_json(origin + '/marty-ui-release.json') != expected_ui:
+            raise RuntimeError('Recovered UI marker differs from its retained immutable image')
+    return expected_release['deployment_release_marker']
 
 
 def recover(artifacts: Path, apply: bool):
@@ -135,24 +161,8 @@ def recover(artifacts: Path, apply: bool):
         selected = [row for row in records if row['service'] in group]
         docker('start', *[row['container_id'] for row in selected])
         wait_healthy(selected)
-    gateway = next(row for row in records if row['service'] == 'gateway')['runtime_marker_environment']
-    expected_release = {
-        'deployment_release_marker': gateway['MARTY_RELEASE_VERSION'],
-        'marty_ui_sha': gateway['MARTY_UI_SHA'], 'stack_version': gateway['ELEVENID_STACK_VERSION'],
-        'component_revisions': json.loads(gateway['ELEVENID_COMPONENT_REVISIONS_JSON']),
-        'image_digests': json.loads(gateway['ELEVENID_IMAGE_DIGESTS_JSON']),
-    }
-    for origin in ['http://127.0.0.1:8000', 'https://beta.elevenidllc.com']:
-        actual = public_json(origin + '/.well-known/marty-release')
-        if any(actual.get(key) != value for key, value in expected_release.items()):
-            raise RuntimeError('Recovered API binding differs from the retained prior environment')
-    ui = next(row for row in records if row['service'] == 'ui-prod')
-    expected_ui = json.loads(docker('run', '--rm', '--network', 'none', '--entrypoint', 'cat',
-                                    ui['image_id'], '/usr/share/nginx/html/marty-ui-release.json'))
-    for origin in ['http://127.0.0.1:3002', 'https://beta.elevenidllc.com']:
-        if public_json(origin + '/marty-ui-release.json') != expected_ui:
-            raise RuntimeError('Recovered UI marker differs from its retained immutable image')
-    result.update(applied=True, priorRelease=expected_release['deployment_release_marker'],
+    prior_release = verify_recovered_runtime(records)
+    result.update(applied=True, priorRelease=prior_release,
                   apiAndUiBindingsVerified=True)
     return result
 

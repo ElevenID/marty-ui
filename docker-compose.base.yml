@@ -280,9 +280,24 @@ services:
       - openbao_didcomm_issuance_token:/bao/didcomm-issuance-token
       - openbao_haip_token:/bao/haip-token
       - openbao_grant_tokens:/bao/grant-tokens
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh
+        target: /scripts/openbao-init.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost-init.sh
+        target: /scripts/openbao-selfhost-init.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-haip-workload-policy.hcl
+        target: /scripts/openbao-haip-workload-policy.hcl
+        read_only: true
+        bind:
+          create_host_path: false
       - openbao_flow_grant:/bao/flow-grant
       - openbao_verify_grant:/bao/verify-grant
       - openbao_gateway_grant:/bao/gateway-grant
