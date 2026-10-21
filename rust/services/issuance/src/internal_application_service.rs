@@ -545,6 +545,13 @@ impl InternalApplicationService {
         let application = self
             .load_managed(application_id, trusted_organization)
             .await?;
+        self.generate_offer_for_application(&application).await
+    }
+
+    async fn generate_offer_for_application(
+        &self,
+        application: &ApplicationRecord,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
         if application.status != ApplicationStatus::Approved {
             return Err(InternalApplicationServiceError::OfferRequiresApproved(
                 application.status.as_str().to_owned(),
@@ -558,7 +565,7 @@ impl InternalApplicationService {
         self.offers
             .as_ref()
             .ok_or(InternalApplicationOfferError::Unavailable)?
-            .generate(&application, template.as_ref())
+            .generate(application, template.as_ref())
             .await
             .map_err(Into::into)
     }
@@ -574,6 +581,13 @@ impl InternalApplicationService {
         let application = self
             .load_managed(application_id, trusted_organization)
             .await?;
+        self.get_offer_for_application(&application).await
+    }
+
+    async fn get_offer_for_application(
+        &self,
+        application: &ApplicationRecord,
+    ) -> Result<IssuanceOfferResponse, InternalApplicationServiceError> {
         if application.status != ApplicationStatus::Approved {
             return Err(InternalApplicationServiceError::OfferNotAvailable);
         }
@@ -585,9 +599,60 @@ impl InternalApplicationService {
         self.offers
             .as_ref()
             .ok_or(InternalApplicationOfferError::Unavailable)?
-            .get(&application, template.as_ref())
+            .get(application, template.as_ref())
             .await
             .map_err(Into::into)
+    }
+
+    /// Only a validated, expiring Canvas session can construct this authority.
+    /// Reload canonical state; neither the browser nor an applicant-store copy
+    /// selects the application, tenant, subject, or template.
+    pub(crate) async fn canvas_claim(
+        &self,
+        authority: &crate::canvas_lti_claim::CanvasClaimAuthority,
+        generate: bool,
+    ) -> Result<crate::canvas_lti_claim::CanvasClaimResponse, InternalApplicationServiceError> {
+        let application = self
+            .load_managed(authority.application_id(), authority.organization_id())
+            .await?;
+        if !authority.matches(&application) {
+            return Err(InternalApplicationServiceError::ApplicationNotFound);
+        }
+        let mut response = crate::canvas_lti_claim::CanvasClaimResponse {
+            id: application.id.clone(),
+            organization_id: application.organization_id.clone(),
+            claim_state: "BLOCKED",
+            offer: None,
+        };
+        if application
+            .credential_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            response.claim_state = "CLAIMED";
+        } else if generate {
+            let offer = self.generate_offer_for_application(&application).await?;
+            response.claim_state = "OFFER_READY";
+            response.offer = Some(offer);
+        } else if application.status == ApplicationStatus::Approved {
+            match self.get_offer_for_application(&application).await {
+                Ok(offer) => {
+                    response.claim_state = if offer.status == "expired" {
+                        "EXPIRED"
+                    } else {
+                        "OFFER_READY"
+                    };
+                    response.offer = Some(offer);
+                }
+                Err(InternalApplicationServiceError::Offer(
+                    InternalApplicationOfferError::MissingTransactionBinding,
+                )) => {
+                    response.claim_state = "READY";
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(response)
     }
 
     pub async fn run_external_evidence_api_check(

@@ -617,7 +617,7 @@ static CANVAS_PUBLIC: LazyLock<Vec<Regex>> = LazyLock::new(|| {
         r"^/v1/integrations/canvas/lti/config/[^/]+/?$",
         r"^/v1/integrations/canvas/lti/platforms/[^/]+/(?:login|experience-login|launch|experience)/?$",
         r"^/v1/integrations/canvas/oauth/callback/?$",
-        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response))?)/?$",
+        r"^/v1/integrations/canvas/lti/experience-sessions/(?:exchange|current(?:/(?:bootstrap|evidence-sync|evidence-status|deep-linking-response|claim))?)/?$",
     ]
     .into_iter()
     .map(|pattern| Regex::new(pattern).expect("static Canvas route regex"))
@@ -1314,6 +1314,21 @@ mod tests {
                 .unwrap_or_else(|_| panic!("missing D-11 route {method:?} {path}"));
             assert_eq!(matched.route.upstream_service, service, "{method:?} {path}");
             assert!(!path.contains("/internal/"), "{path}");
+        }
+    }
+
+    #[test]
+    fn canvas_claim_routes_only_current_session_to_native_authorization() {
+        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+        assert_eq!(route_ownership(path).service, "issuance");
+        assert!(!route_ownership(path).requires_authentication);
+        assert!(crate::authorization::skips_tenant_authorization(path));
+        for foreign in [
+            "/v1/integrations/canvas/lti/experience-sessions/other/claim",
+            "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
+        ] {
+            assert!(route_ownership(foreign).requires_authentication);
+            assert!(!crate::authorization::skips_tenant_authorization(foreign));
         }
     }
 

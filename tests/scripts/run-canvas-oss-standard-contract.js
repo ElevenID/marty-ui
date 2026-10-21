@@ -2017,11 +2017,15 @@ async function main() {
 
     const claimResponsePromise = recordedPage.waitForResponse((response) => (
       response.request().method() === 'POST'
-        && new URL(response.url()).pathname === `/v1/me/applications/${firstBootstrap.application_id}/claim`
+        && new URL(response.url()).pathname === '/v1/integrations/canvas/lti/experience-sessions/current/claim'
     ), { timeout: DEFAULT_TIMEOUT_MS });
     await recordedPage.getByTestId('canvas-claim-action').click();
     const claimResponse = await claimResponsePromise;
     const claim = await responseJson(claimResponse, 'canvas_claim_offer_failed', 'Canvas learner claim offer failed', [200]);
+    requireCondition(claim.id === firstBootstrap.application_id
+      && claim.organization_id === organizationId
+      && claim.transaction_id === reservedTransactionIds[0],
+    'canvas_claim_binding_mismatch', 'Learner claim did not reuse the exact approved application transaction.');
     await recordedPage.getByTestId('credential-claim-dialog').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
     await showVideoStep(recordedPage, 'Wallet claim starts signing', 'The learner initiated a standards-based wallet claim; the credential offer is intentionally not displayed in this artifact.');
     const wallet = await receiveAndVerifyCredential(claim?.credential_offer_uri || claim?.offer_url, templates.credential, martyOrigin);

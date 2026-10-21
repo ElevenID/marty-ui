@@ -501,7 +501,7 @@ fn result_application(
     }
 }
 
-fn service_error(error: InternalApplicationServiceError) -> Response {
+pub(crate) fn service_error(error: InternalApplicationServiceError) -> Response {
     let error = match error {
         InternalApplicationServiceError::Domain(error) => {
             let status = match &error {

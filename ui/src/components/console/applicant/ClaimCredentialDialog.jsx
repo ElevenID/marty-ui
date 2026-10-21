@@ -71,7 +71,7 @@ import {
 const EMPTY_ITEMS = [];
 const TERMINAL_CLAIM_STATES = new Set(['CLAIMED', 'EXPIRED', 'BLOCKED']);
 
-export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData, organizationId }) {
+export default function ClaimCredentialDialog({ open, onClose, applicationId, offerData, organizationId, generateOffer = generateIssuanceOffer, readApplication = getApplication }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { user } = useAuth();
@@ -157,7 +157,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
     setOfferRequest({ key: offerKey, status: 'loading' });
     let request = pendingOffers.current.get(scopeKey);
     if (!request) {
-      request = generateIssuanceOffer(applicationId).finally(() => {
+      request = generateOffer(applicationId).finally(() => {
         if (pendingOffers.current.get(scopeKey) === request) pendingOffers.current.delete(scopeKey);
       });
       pendingOffers.current.set(scopeKey, request);
@@ -168,7 +168,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       if (active) setOfferRequest({ key: offerKey, status: 'error', error: getWalletOfferDialogError(err) });
     });
     return () => { active = false; };
-  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey]);
+  }, [open, applicationId, canGenerateWalletOffer, offerKey, scopeKey, generateOffer]);
 
   // A wallet can finish on another device without closing this dialog. Observe
   // the authenticated application projection; browser return and polling never
@@ -189,7 +189,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       clearTimeout(timer);
       reading = true;
       try {
-        const application = await getApplication(applicationId);
+        const application = await readApplication(applicationId);
         if (!active) return;
         if (application?.id !== applicationId
           || (resolvedOrganizationId && application.organization_id !== resolvedOrganizationId)) {
@@ -217,7 +217,7 @@ export default function ClaimCredentialDialog({ open, onClose, applicationId, of
       window.removeEventListener('focus', onReturn);
       document.removeEventListener('visibilitychange', onReturn);
     };
-  }, [open, applicationId, resolvedOrganizationId, offerKey, currentOffer?.status]); // eslint-disable-line react-hooks/exhaustive-deps -- one read loop per offer attempt
+  }, [open, applicationId, resolvedOrganizationId, offerKey, currentOffer?.status, readApplication]); // eslint-disable-line react-hooks/exhaustive-deps -- one read loop per offer attempt
 
   // Build per-wallet offer data.
   // Keep backend-provided wallet URIs, then synthesize the selected wallet from

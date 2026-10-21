@@ -1817,3 +1817,6 @@ async fn current_evidence_reads_use_authoritative_heads_without_changing_history
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[path = "support/canvas_claim_behavior.rs"]
+mod canvas_claim_behavior;

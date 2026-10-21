@@ -50,6 +50,8 @@ import {
   enqueueCurrentCanvasLtiEvidenceSync,
   getCurrentCanvasLtiExperience,
   getCurrentCanvasLtiEvidenceStatus,
+  generateCurrentCanvasLtiClaim,
+  getCurrentCanvasLtiClaim,
 } from '../../services/canvasLtiExperience';
 import { APPLY_LOCATION_STATE_STORAGE_KEY } from '../../application/routing';
 import {
@@ -1435,6 +1437,8 @@ export default function ApplicationForm() {
         <ClaimCredentialDialog
           open={claimDialogOpen}
           onClose={handleCanvasClaimClose}
+          generateOffer={generateCurrentCanvasLtiClaim}
+          readApplication={getCurrentCanvasLtiClaim}
           applicationId={applicationId || canvasLtiBootstrap?.application_id || canvasLtiSession?.application_id}
           offerData={autoOfferData}
           organizationId={applicationOrganizationId}
