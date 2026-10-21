@@ -46,6 +46,7 @@ import {
   KEY_MANAGEMENT_PURPOSES,
   PURPOSES_REQUIRING_AUTHORITY,
   createKeyManagementServicePayload,
+  createKeyManagementRegistrationPayload,
   getServiceTypeDefinition,
   isAlgorithmAllowedForPurpose,
   normalizeKeyManagementConfig,
@@ -290,20 +291,15 @@ const KeyManagementServiceWizard = () => {
       ...data,
       auth_reference: serializeAuthReference(data.auth_mode, data.auth_fields),
     }, serviceCatalog);
-    const nextDefaultServiceId = data.make_default
-      ? newService.id
-      : (currentConfig.default_service_id || newService.id);
-
     await signingKeysApi.updateKeyManagementConfig({
       ...orgRequestParams,
-      services: [...currentConfig.services, newService],
-      default_service_id: nextDefaultServiceId,
+      ...createKeyManagementRegistrationPayload(currentConfig, newService, data.make_default),
     });
 
     setRegisteredService(newService);
     showNotification?.('Registered key management service.', 'success');
     return newService;
-  }, [currentConfig.default_service_id, currentConfig.services, orgRequestParams, serviceCatalog, showNotification]);
+  }, [currentConfig, orgRequestParams, serviceCatalog, showNotification]);
 
   const wizard = useWizard({
     steps: STEPS,

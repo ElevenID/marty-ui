@@ -274,6 +274,9 @@ export const normalizeKeyManagementService = (service, catalog) => {
   }
 }
 
+const cloneConfigMap = (value) => value && typeof value === 'object' && !Array.isArray(value)
+  ? structuredClone(value) : {}
+
 export const normalizeKeyManagementConfig = (data) => {
   const normalized = data && typeof data === 'object' ? data : {}
   const serviceTypeCatalog = normalizeServiceTypeCatalog(normalized.service_type_catalog)
@@ -298,6 +301,30 @@ export const normalizeKeyManagementConfig = (data) => {
     default_service_id: defaultServiceId,
     service_type_catalog: serviceTypeCatalog,
     services,
+    key_reference_purposes: cloneConfigMap(normalized.key_reference_purposes),
+    type_defaults: cloneConfigMap(normalized.type_defaults),
+    format_defaults: cloneConfigMap(normalized.format_defaults),
+  }
+}
+
+export const createKeyManagementRegistrationPayload = (config, newService, makeDefault = false) => {
+  const current = normalizeKeyManagementConfig(config)
+  if (!newService?.id || current.services.some((service) => service.id === newService.id)
+    || Object.hasOwn(current.key_reference_purposes, newService.id)) {
+    throw new Error('New signing service must have a fresh identity')
+  }
+  const reference = normalizeString(newService.key_reference).trim()
+  const purposes = [...new Set(Array.isArray(newService.key_purposes) ? newService.key_purposes : [])]
+  // Only the explicit selected key receives its explicitly selected purposes.
+  // Aliases and other services are never granted permissions by inference.
+  const bindings = current.key_reference_purposes
+  if (reference && purposes.length) bindings[newService.id] = { [reference]: purposes }
+  return {
+    services: [...current.services, newService],
+    default_service_id: makeDefault ? newService.id : (current.default_service_id || newService.id),
+    key_reference_purposes: bindings,
+    type_defaults: current.type_defaults,
+    format_defaults: current.format_defaults,
   }
 }
 
@@ -373,5 +400,6 @@ export default {
   getServiceTypeDefinition,
   getDefaultKeyManagementService,
   createKeyManagementServicePayload,
+  createKeyManagementRegistrationPayload,
   parseListInput,
 }

@@ -105,7 +105,12 @@ describe('KeyManagementServiceWizard', () => {
   })
 
   it('D10 adapter controls match the rendered production OpenBao registration and review', async () => {
-    mockGetKeyManagementConfig.mockResolvedValue({ services: [], service_type_catalog: [] })
+    mockGetKeyManagementConfig.mockResolvedValue({
+      services: [{id:'previous',service_type:'openbao-transit',key_reference:'reserved-key'}],
+      default_service_id:'previous',service_type_catalog:[],
+      key_reference_purposes:{previous:{'reserved-key':['lti_tool_signing']}},
+      type_defaults:{lti_tool_signing:'previous'},format_defaults:{'jwt':'previous'},
+    })
     const { user } = renderWithRouter(<KeyManagementServiceWizard />)
     await user.click(await screen.findByRole(d10Controls.kmsProvider.role, { name: d10Name('kmsProvider') }))
     await user.click(screen.getByRole(d10Controls.next.role, { name: d10Name('next') }))
@@ -136,11 +141,18 @@ describe('KeyManagementServiceWizard', () => {
     await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
     const payload = mockUpdateKeyManagementConfig.mock.calls[0][0]
     expect(payload.organization_id).toBe('org-123')
-    expect(payload.default_service_id).toBe(payload.services[0].id)
+    const registered = payload.services.find((service: {name: string}) => service.name === 'D10 component contract')
+    expect(payload.default_service_id).toBe(registered.id)
+    expect(payload.key_reference_purposes).toEqual({
+      previous:{'reserved-key':['lti_tool_signing']},
+      [registered.id]:{'existing-external-key':['vc_jwt_issuer','oid4vp_request_signing']},
+    })
+    expect(payload.type_defaults).toEqual({lti_tool_signing:'previous'})
+    expect(payload.format_defaults).toEqual({'jwt':'previous'})
     expect(screen.getByText(/then create an issuer identity with its public DID and signing compatibility/i)).toBeInTheDocument()
     expect(screen.queryByText(/choose.*Use existing key from KMS/i)).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Use managed OpenBao key creation' })).not.toBeInTheDocument()
-    expect(payload.services[0]).toMatchObject({ service_type: 'openbao-transit', key_reference: 'existing-external-key',
+    expect(registered).toMatchObject({ service_type: 'openbao-transit', key_reference: 'existing-external-key',
       ca_cert_file: '/run/secrets/customer-ca', key_purposes: expect.arrayContaining(['vc_jwt_issuer', 'oid4vp_request_signing']) })
   })
 
