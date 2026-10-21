@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -57,6 +58,36 @@ SECRET_PATTERNS = [
     re.compile(r"(\"fullKey\"\s*:\s*\")([^\"\\]+)(\")"),
     re.compile(r"(\"full_key\"\s*:\s*\")([^\"\\]+)(\")"),
 ]
+
+
+def start_recorder_capture(required: bool):
+    client_file = os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT")
+    if not client_file:
+        if required:
+            raise ValueError("D10 recording and functional qualification require recorder-owned live Python capture")
+        return None
+    path = Path(client_file)
+    if (not path.is_absolute() or path.is_symlink() or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT_SHA256")):
+        raise ValueError("Recorder-owned Python client source binding is invalid")
+    spec = importlib.util.spec_from_file_location("recorder_python_live_evidence", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.PythonCapture()
+
+
+def bound_recorder_inputs(capture, signing_inputs, record_video, recording_pause_ms):
+    scenario = capture.inputs["scenario"]
+    expected_signing = {"endpoint": signing_inputs["endpoint"], "mount": signing_inputs["mount"],
+                        "namespace": signing_inputs["namespace"], "keyReference": signing_inputs["key_reference"],
+                        "caCertFile": signing_inputs.get("ca_cert_file", ""),
+                        "validatorSha256": signing_inputs["validator_sha256"]}
+    if (capture.inputs["origin"] != "https://beta.elevenidllc.com"
+            or scenario.get("signing") != expected_signing or scenario.get("recordVideo") is not record_video
+            or scenario.get("recordingPauseMs") != recording_pause_ms
+            or not re.fullmatch(r"[0-9]{14}-[a-f0-9]{8}", str(scenario.get("runId") or ""))):
+        raise ValueError("Actual D10 action inputs differ from recorder-acknowledged inputs")
+    return scenario
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -2592,7 +2623,7 @@ def main() -> int:
     # traces retain execution events without capturing screenshots or DOMs.
     record_trace = args.record_video or functional_rerun
 
-    env = load_env_file(ENV_FILE)
+    env = {} if os.environ.get("DEMO_PYTHON_CAPTURE_NONCE") else load_env_file(ENV_FILE)
     base_url = (
         args.base_url
         or os.environ.get("BETA_ORIGIN")
@@ -2600,8 +2631,11 @@ def main() -> int:
         or env.get("BASE_URL")
         or "https://beta.elevenidllc.com"
     )
-    if "beta.elevenidllc.com" not in base_url:
-        base_url = "https://beta.elevenidllc.com"
+    if (base_url != "https://beta.elevenidllc.com" or os.environ.get("BETA_LOCAL_PROXY") == "1"
+            or os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED") not in {None, "1"}
+            or os.environ.get("MARTY_UI_CANDIDATE_DIST")):
+        print("D10 requires the exact beta HTTPS origin and verified deployed UI with normal TLS", file=sys.stderr)
+        return 2
 
     email = os.environ.get("TEST_VENDOR_EMAIL") or os.environ.get("TEST_ADMIN_EMAIL")
     password = os.environ.get("TEST_VENDOR_PASSWORD") or os.environ.get("TEST_ADMIN_PASSWORD")
@@ -2616,7 +2650,13 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    run_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(4)
+    try:
+        capture = start_recorder_capture(required=record_trace)
+        acknowledged = bound_recorder_inputs(capture, signing_inputs, record_video, args.recording_pause_ms) if capture else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    run_id = acknowledged["runId"] if acknowledged else datetime.now().strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(4)
     artifact_dir = resolve_artifact_dir(run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2625,7 +2665,7 @@ def main() -> int:
         context_options: dict[str, Any] = {
             "base_url": base_url,
             "viewport": RECORDING_VIEWPORT,
-            "ignore_https_errors": True,
+            "ignore_https_errors": False,
         }
         if record_video:
             context_options.update({
@@ -2639,6 +2679,8 @@ def main() -> int:
         # screenshots. Start only after login and KMS credential submission.
         trace_started = False
         page = context.new_page()
+        if capture:
+            capture.bind_page(page)
         page_video = page.video if record_video else None
         audit = Audit(
             page,
@@ -2736,7 +2778,9 @@ def main() -> int:
             f"verifier:{environment['BETA_AUDIT_VERIFIER_DID']}"
         )
 
-    return 0 if report["release_checks"]["status"] == "pass" else 1
+    if capture and report["releaseReady"]:
+        capture.complete()
+    return 0 if report["releaseReady"] else 1
 
 
 if __name__ == "__main__":

@@ -158,6 +158,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     monkeypatch.setattr(audit, "sync_playwright", Playwright)
     monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
     monkeypatch.setattr(audit, "load_signing_inputs", lambda: {})
+    monkeypatch.setattr(audit, "start_recorder_capture", lambda **_kwargs: None)
     monkeypatch.setattr(audit, "require_created_organization", lambda *_args: "org-fixture")
     monkeypatch.setattr(audit, "fetch_json_from_page", lambda *_args: {})
     for name in [
@@ -200,6 +201,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     assert audit.main() == 0
     report = json.loads((artifact_dir / "report.json").read_text())
     assert report["releaseReady"] is True
+    assert contexts[0]["ignore_https_errors"] is False
     assert all(report["behaviorAssertions"].values())
     assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
     assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
@@ -839,3 +841,33 @@ def test_exact_owned_key_cleanup_succeeds_but_partial_cleanup_does_not():
     assert audit.evaluate_release_checks(report)["status"] == "pass"
     report["created_api_keys"].append({"id": "second-owned-key", "organization_id": "org-fixture"})
     assert not audit.owned_api_key_cleanup_proven(report)
+
+
+@pytest.mark.parametrize("origin", ["https://beta.elevenidllc.com.attacker.invalid", "https://attacker.invalid/?beta.elevenidllc.com", "http://beta.elevenidllc.com", "https://beta.elevenidllc.com/path"])
+def test_d10_rejects_lookalike_or_noncanonical_origin_before_signer_or_browser(monkeypatch, origin):
+    audit = _load_audit_module()
+    monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--base-url", origin])
+    monkeypatch.setattr(audit, "load_signing_inputs", lambda: pytest.fail("signer cannot be inspected for an unapproved origin"))
+    monkeypatch.setattr(audit, "sync_playwright", lambda: pytest.fail("browser cannot start for an unapproved origin"))
+    assert audit.main() == 2
+
+
+def test_d10_recording_refuses_missing_recorder_child_client():
+    audit = _load_audit_module()
+    with pytest.raises(ValueError, match="recorder-owned live Python capture"):
+        audit.start_recorder_capture(required=True)
+
+
+def test_d10_uses_only_exact_acknowledged_inputs_for_feature_actions():
+    audit = _load_audit_module()
+    signing = {"endpoint": "https://kms.internal.company", "mount": "transit", "namespace": "",
+               "key_reference": "existing-key", "ca_cert_file": "/run/secrets/customer-ca", "validator_sha256": "a" * 64}
+    scenario = {"runId": "20261021200000-1234abcd", "recordVideo": False, "recordingPauseMs": 1300,
+                "signing": {"endpoint": signing["endpoint"], "mount": "transit", "namespace": "", "keyReference": "existing-key",
+                            "caCertFile": "/run/secrets/customer-ca", "validatorSha256": "a" * 64}}
+    capture = SimpleNamespace(inputs={"origin": "https://beta.elevenidllc.com", "scenario": scenario})
+    assert audit.bound_recorder_inputs(capture, signing, False, 1300) is scenario
+    scenario["signing"]["keyReference"] = "substituted-key"
+    with pytest.raises(ValueError, match="differ from recorder-acknowledged"):
+        audit.bound_recorder_inputs(capture, signing, False, 1300)
