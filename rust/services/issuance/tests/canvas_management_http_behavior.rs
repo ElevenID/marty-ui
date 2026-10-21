@@ -478,6 +478,7 @@ impl CanvasLtiProbeClient for SuccessfulProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Ok(successful_probe(canvas_base_url, "canvas-key"))
@@ -491,6 +492,7 @@ impl CanvasLtiProbeClient for CountingProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         let count = self.0.fetch_add(1, Ordering::SeqCst) + 1;
@@ -508,6 +510,7 @@ impl CanvasLtiProbeClient for FailedProbe {
     async fn probe(
         &self,
         _canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Err("provider metadata unavailable".to_owned())
@@ -601,6 +604,7 @@ impl CanvasLtiProbeClient for DriftProbe {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         let mut probe = successful_probe(canvas_base_url, "drift-key");

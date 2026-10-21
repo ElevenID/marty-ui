@@ -1539,7 +1539,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 3.0.3",
 ]
 
 [[package]]
@@ -3710,7 +3710,7 @@ dependencies = [
 [[package]]
 name = "marty-canonical-digest"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "serde_json",
  "sha2 0.10.9",
@@ -3914,7 +3914,7 @@ dependencies = [
 [[package]]
 name = "marty-crypto"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "aws-lc-rs",
  "base64 0.22.1",
@@ -4029,7 +4029,7 @@ dependencies = [
 [[package]]
 name = "marty-didcomm"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "affinidi-messaging-didcomm",
  "base64 0.22.1",
@@ -4052,7 +4052,7 @@ dependencies = [
 [[package]]
 name = "marty-emrtd-issuance"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "cms",
  "const-oid 0.9.6",
@@ -4251,7 +4251,7 @@ dependencies = [
 [[package]]
 name = "marty-iso18013"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "anyhow",
  "ciborium",
@@ -4424,7 +4424,7 @@ dependencies = [
 [[package]]
 name = "marty-oid4vci"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -4821,7 +4821,7 @@ dependencies = [
 [[package]]
 name = "marty-status"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "base64 0.22.1",
  "flate2",
@@ -4867,7 +4867,7 @@ dependencies = [
 [[package]]
 name = "marty-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -4969,7 +4969,7 @@ dependencies = [
 [[package]]
 name = "marty-x509-verification"
 version = "0.2.2"
-source = "git+https://github.com/ElevenID/marty-core?rev=f0819fa#f0819fa0a7783eaebc2efaa105908809244c75a4"
+source = "git+https://github.com/ElevenID/marty-core?rev=a6ac856b038aa0c83c083679a37f7f28ea76c3cc#a6ac856b038aa0c83c083679a37f7f28ea76c3cc"
 dependencies = [
  "chrono",
  "const-oid 0.9.6",
@@ -5909,7 +5909,7 @@ version = "0.14.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03da047801ff44bb6a4d407d4860c05fd70bb81714e6b2f3812603d5b145b042"
 dependencies = [
- "heck 0.4.1",
+ "heck 0.5.0",
  "itertools 0.14.0",
  "log",
  "multimap",
@@ -8100,7 +8100,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

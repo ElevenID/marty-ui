@@ -1,6 +1,6 @@
 //! Shared, provider-neutral Canvas LTI metadata probing.
 //!
-//! Network discovery and trust-profile validation live here so management,
+//! Manual registration key probing and trust-profile validation live here so management,
 //! launch-time JWKS refresh, and explicit probe routes cannot drift.
 
 use std::time::Duration;
@@ -8,7 +8,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use marty_oid4vci::lti::{
     canvas_lti_trust_profile, ensure_canvas_metadata_public_only, normalize_canvas_base_url,
-    probe_canvas_lti_platform, CanvasLtiPlatformProbe,
+    probe_canvas_lti_registration, CanvasLtiPlatformProbe,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -44,6 +44,7 @@ pub trait CanvasLtiProbeClient: Send + Sync {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        trust_profile: &str,
         config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String>;
 }
@@ -56,10 +57,13 @@ impl CanvasLtiProbeClient for MartyCanvasLtiProbeClient {
     async fn probe(
         &self,
         canvas_base_url: &str,
+        trust_profile: &str,
         config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
-        probe_canvas_lti_platform(
+        probe_canvas_lti_registration(
             canvas_base_url,
+            trust_profile,
+            &config.self_managed_origins,
             config.timeout.as_secs().max(1),
             config.allow_private_networks,
             config.allow_http_localhost,
@@ -130,7 +134,7 @@ pub async fn probe_canvas_lti_metadata(
     )
     .map_err(|error| CanvasLtiMetadataProbeError::Provider(error.to_string()))?;
     let probe = client
-        .probe(&normalized_origin, config)
+        .probe(&normalized_origin, trust_profile, config)
         .await
         .map_err(CanvasLtiMetadataProbeError::Provider)?;
     if probe.canvas_base_url != normalized_origin
@@ -161,6 +165,7 @@ mod tests {
         async fn probe(
             &self,
             _canvas_base_url: &str,
+            _trust_profile: &str,
             _config: &CanvasLtiJwksRefreshConfig,
         ) -> Result<CanvasLtiPlatformProbe, String> {
             Ok(self.0.clone())
