@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 
 from bind_deployed_demo_manifest import bind_manifest
 from recover_unchanged_beta_cutover import docker, inspect, public_json, wait_healthy
+from repair_beta_issuance_alias_kms import prepare_alias_repair, apply_alias_repair
 
 
 def load(path):
@@ -114,10 +115,13 @@ def complete(root, artifacts, runtime_root, apply):
         path = (runtime_root / item['path']).resolve()
         require(path.is_relative_to(runtime_root) and sha(path) == item['sha256'],
                 'Durable runtime configuration bytes changed')
+    alias_repair = prepare_alias_repair(root, artifacts, runtime_root, candidates['issuance'],
+                                      gateway_env, candidates['issuance-native'])
     result = dict(scope='LOCAL_BETA_FORWARD_STARTUP', sourceRevision=components['marty-ui'],
                   sourceId=source['marty_ui_sha'], release=source['release_version'],
                   sourceManifestSha256=sha(artifacts / 'source-manifest.json'),
                   candidateContainerCount=len(candidates), applied=False, productionDemoQualified=False)
+    result['issuanceAliasKmsRepairRequired'] = alias_repair is not None
     if not apply:
         return result
     # Recheck each frozen container ID before starting only the unstarted roles.
@@ -126,6 +130,9 @@ def complete(root, artifacts, runtime_root, apply):
     unstarted = [current['Id'] for current in candidates.values() if current['State']['Status'] == 'created']
     if unstarted:
         docker('start', *unstarted)
+    if alias_repair:
+        apply_alias_repair(alias_repair)
+        candidates['issuance'] = observe('issuance', images['issuance'])
     wait_healthy([record(role, current) for role, current in candidates.items()])
     # UI is stateless; recreate only this role from the already frozen image.
     import os
@@ -172,6 +179,10 @@ def complete(root, artifacts, runtime_root, apply):
                     images=records, canvas_portable_configuration=dict(enabled=False, canvas_origin=None,
                         pilot_organization_id=None, lti_issuer_did=None, signing_resolution=None,
                         legacy_event_ingest_enabled=False), deployed_at=datetime.now(timezone.utc).isoformat())
+    if alias_repair:
+        manifest['forward_configuration_repair'] = dict(file=alias_repair[2].name,
+            sha256=sha(alias_repair[2]), operator_script_sha256=sha(Path(__file__)),
+            reason='HTTP alias missing native integration-secret KMS URL and trusted CA')
     (artifacts / 'local-deployment-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf8')
     result.update(applied=True, apiAndUiBindingsVerified=True, nativeIssuanceProbes='PASS', betaDeployed=True)
     return result

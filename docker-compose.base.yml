@@ -1103,6 +1103,8 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
       CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
       CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS: ${CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS:-300}
@@ -1141,6 +1143,8 @@ services:
       # Managed path-scoped did:web issuer documents are resolved through the
       # stack-owned gateway, never by caller-selected or public-network URLs.
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
+    secrets:
+      - dev_integration_secret_ca
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_service_token:/bao/service-token:ro
