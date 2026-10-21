@@ -499,7 +499,12 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   const date = dialog.getByLabel(/^expiration date\b/i);
   const time = dialog.getByLabel(/^expiration time\b/i);
   await date.fill(expiration.date); await date.press('Tab');
-  await time.fill(expiration.time); await time.press('Tab');
+  await time.fill(expiration.time);
+  // InstUI commits a combobox choice asynchronously. Tab can accept its stale
+  // highlighted option (midnight) before filtering the newly typed time.
+  await page.getByRole('option', { name: expiration.time, exact: true }).click();
+  requireCondition(await time.inputValue() === expiration.time,
+    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
   const valid = await dialog.locator('input[required]').evaluateAll(inputs =>
     inputs.every(input => input.checkValidity() && input.getAttribute('aria-invalid') !== 'true'));
   requireCondition(valid, 'canvas_personal_token_form_invalid', 'Canvas token purpose and bounded expiration must be valid before submission.');
