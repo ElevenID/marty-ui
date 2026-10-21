@@ -1035,6 +1035,20 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId,
   return assignment;
 }
 
+function canvasLaunchErrorSummary(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 3) return [];
+  const result = [];
+  for (const key of ['detail', 'message', 'error', 'code', 'error_code', 'reason']) {
+    const item = value[key];
+    if (typeof item === 'string') result.push(sanitizeEvidence(item)
+      .replace(/https?:\/\/[^\s]+/gi, '[redacted-url]')
+      .replace(/[A-Za-z0-9_-]{24,}/g, '[redacted-opaque]'));
+    else if (Array.isArray(item)) result.push(...item.slice(0, 3).flatMap(entry => canvasLaunchErrorSummary(entry, depth + 1)));
+    else if (item && typeof item === 'object') result.push(...canvasLaunchErrorSummary(item, depth + 1));
+  }
+  return [...new Set(result)].slice(0, 8);
+}
+
 async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssignment, martyOrigin) {
   const documents = [];
   const reads = [];
@@ -1050,11 +1064,7 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
     json: (response.headers()['content-type'] || '').includes('application/json') };
     documents.push(item);
     if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
-      const code = value.code || value.error?.code || value.error_code;
-      if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(code)) item.errorCode = code;
-      if (typeof value.detail === 'string') item.detail = sanitizeEvidence(value.detail)
-        .replace(/https?:\/\/[^\s]+/gi, '[redacted-url]')
-        .replace(/[A-Za-z0-9_-]{24,}/g, '[redacted-opaque]');
+      item.errors = canvasLaunchErrorSummary(value);
     }).catch(() => {}));
   };
   page.on('response', observeDocument);
@@ -1095,11 +1105,16 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   } catch (error) {
     await Promise.allSettled(reads);
     const surface = presentation?.surface;
-    const document = surface ? await surface.evaluate(() => ({
-      contentType: document.contentType,
-      hasAppRoot: Boolean(document.querySelector('#root')),
-      bodyLength: document.body?.textContent?.length || 0,
-    })).catch(() => null) : null;
+    const document = surface ? await surface.evaluate(() => {
+      let body;
+      try { body = JSON.parse(document.body?.textContent || ''); } catch { body = null; }
+      return { contentType: document.contentType, hasAppRoot: Boolean(document.querySelector('#root')),
+        bodyLength: document.body?.textContent?.length || 0, errorBody: body };
+    }).catch(() => null) : null;
+    if (document) {
+      document.errors = canvasLaunchErrorSummary(document.errorBody);
+      delete document.errorBody;
+    }
     error.canvasResourceDiagnostic = { documents, document };
     throw error;
   } finally {
@@ -2112,6 +2127,7 @@ async function main() {
 }
 
 module.exports = {
+  canvasLaunchErrorSummary,
   canvasOwnedToolIndex,
   assertCanvasOauthCompletion,
   publishCanvasCourse,

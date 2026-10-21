@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  canvasLaunchErrorSummary,
   canvasOwnedToolIndex,
   assertCanvasOauthCompletion,
   publishCanvasCourse,
@@ -610,4 +611,12 @@ test('Canvas personal tokens cover the actual long-run deadline with a bounded b
   for (const value of ['invalid', String(now / 1000), String((now + 25 * 3600000) / 1000)]) {
     assert.throws(() => canvasTokenExpiration(now, 'UTC', value), error => error.code === 'canvas_contract_deadline_invalid');
   }
+});
+
+
+test('resource conflict summaries read wrapped errors without retaining credential fields or URLs', () => {
+  const summary = canvasLaunchErrorSummary({ error: { code: 'canvas_conflict', message: 'Canvas AGS rejection at https://canvas.test/api?state=private-value', detail: [{ message: 'Bearer abcdefghijklmnopqrstuvwxyz' }] }, session_token: 'private-session', ignored: 'private-other' });
+  assert.ok(summary.includes('canvas_conflict'));
+  assert.ok(summary.some(value => value.includes('Canvas AGS rejection')));
+  assert.ok(!JSON.stringify(summary).includes('private') && !JSON.stringify(summary).includes('https://'));
 });
