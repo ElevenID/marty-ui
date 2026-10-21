@@ -3,12 +3,16 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   ContractFailure,
   ObservationLedger,
+  observePipelinePrerequisites,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
@@ -24,6 +28,32 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-prerequisite-root-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(directory, 'image'));
+  fs.writeFileSync(path.join(directory, 'image/canvas-oss-image-manifest.json'), JSON.stringify({
+    source_repository: 'https://github.com/instructure/canvas-lms.git', source_modified: false,
+    source_commit: 'a'.repeat(40), image_digest: 'sha256:' + 'b'.repeat(64), scope: 'UNIT_FIXTURE_ONLY',
+  }));
+  const bootstrap = { phase: 'pre_start_only', web_started_after_bootstrap: true, forbidden_operation_counts: { rails_runner: 0 } };
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  fs.writeFileSync(path.join(directory, 'runtime-context.json'), JSON.stringify({
+    origin: 'https://beta.elevenidllc.com', source_id: 'c'.repeat(40),
+  }));
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  global.fetch = async () => new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+  const ledger = new ObservationLedger(NOW);
+  await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
+  assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
+  bootstrap.forbidden_operation_counts.rails_runner = 1;
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'bootstrap_audit_invalid');
+});
 
 function readinessSnapshot(overrides = {}) {
   return {

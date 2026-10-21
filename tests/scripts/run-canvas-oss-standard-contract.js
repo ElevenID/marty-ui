@@ -614,9 +614,9 @@ async function selectProductionBadgeTemplates(marty, organizationId) {
   return { application, credential };
 }
 
-async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive = () => {}) {
+async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive = () => {}, prerequisiteDirectory = '/artifacts') {
   markActive('upstream_source_and_image_provenance');
-  const artifactRoot = path.resolve('tests/artifacts/canvas-oss-portability');
+  const artifactRoot = path.resolve(prerequisiteDirectory);
   const image = readJsonFile(path.join(artifactRoot, 'image', 'canvas-oss-image-manifest.json'), 'image_manifest_unavailable');
   requireCondition(
     image.source_repository === 'https://github.com/instructure/canvas-lms.git'
@@ -1467,7 +1467,7 @@ async function finishRecordedVideo(context, page, destination) {
 }
 
 async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () => {},
-  pass = () => {}, runSuffix, state = {} }) {
+  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts' }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
@@ -1491,7 +1491,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     state.marty = marty = new MartyClient(martyOrigin, martyApiKey);
 
 
-    await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive);
+    await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive, prerequisiteDirectory);
 
     state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const adminPage = await adminContext.newPage();
@@ -1677,6 +1677,7 @@ async function main() {
     const setup = await prepareCanvasCaptureFixtures({
       browser: browser = await chromium.launch({ headless: true }), ledger, markActive, pass, state: preparationState,
       runSuffix: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+      prerequisiteDirectory: path.dirname(args.observations),
     });
     ({ marty, adminContext, learnerContext, platformId, integrationSecretId } = setup);
     const { canvasOrigin, martyOrigin, organizationId, martyApiKey, learnerCanvas, adminCanvas,
@@ -1905,6 +1906,7 @@ async function main() {
 }
 
 module.exports = {
+  observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
   launchLearnerResource,
   triggerLearnerSync,
