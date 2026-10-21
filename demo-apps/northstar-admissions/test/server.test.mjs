@@ -196,6 +196,18 @@ test('public server bounds JSON bodies and sends browser security headers', asyn
     assert.equal(state.headers.get('cache-control'), 'no-store');
     assert.equal(state.headers.get('x-content-type-options'), 'nosniff');
 
+    for (const path of ['/', '/index.html']) {
+      const html = await fetch(origin + path);
+      assert.equal(html.status, 200);
+      assert.equal(html.headers.get('cache-control'), 'no-store, no-transform');
+      assert.equal(html.headers.get('content-security-policy'), state.headers.get('content-security-policy'));
+      assert.match(html.headers.get('content-security-policy'), /script-src 'self'; style-src 'self'/);
+      await html.text();
+    }
+    const script = await fetch(`${origin}/app.js`);
+    assert.equal(script.headers.get('cache-control'), 'no-store');
+    await script.text();
+
     const unsupported = await fetch(`${origin}/api/applications/app-1/approve`, {
       method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}',
     });

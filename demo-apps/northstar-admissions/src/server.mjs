@@ -350,7 +350,8 @@ function json(response, status, body) {
 function responseHeaders(contentType) {
   return {
     'content-type': contentType,
-    'cache-control': 'no-store',
+    // Keep intermediaries from injecting scripts that violate this page's CSP.
+    'cache-control': contentType.startsWith('text/html') ? 'no-store, no-transform' : 'no-store',
     'content-security-policy': "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self'",
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
