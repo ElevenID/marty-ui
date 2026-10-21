@@ -7,7 +7,8 @@
 use std::{collections::BTreeSet, sync::LazyLock};
 
 use mmf_platform::{
-    AuthenticationType, GatewayRequest, HttpMethod, RouteConfig, RouteMatchType, RouteTable,
+    AuthenticationType, GatewayRequest, HttpMethod, PlatformError, RouteConfig, RouteMatchType,
+    RouteTable,
 };
 use serde::Deserialize;
 
@@ -19,6 +20,7 @@ const OID4VCI_AUTHORIZATION_TAG: &str = "oid4vci-authorization";
 const CANVAS_MIRROR_TAG: &str = "canvas-mirror";
 const RETENTION_TAG: &str = "retention";
 const NATIVE_EXTENSION_TAG: &str = "native-extension";
+pub(crate) const NATIVE_EXTENSION_ROUTE_COUNT: usize = 2;
 const CANVAS_CLAIM_PATH: &str = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
 
 const CANVAS_MIRROR_BATCH_PATHS: [&str; 3] = [
@@ -80,7 +82,7 @@ fn validate_native_extensions(coverage: &Coverage) -> Result<(), &'static str> {
             return Err("native extension differs from reviewed claim contract");
         }
     }
-    if operations.len() != 2 {
+    if operations.len() != NATIVE_EXTENSION_ROUTE_COUNT {
         return Err("native claim extension requires both reviewed operations");
     }
     Ok(())
@@ -177,6 +179,25 @@ static NATIVE_ROUTES: LazyLock<RouteTable> = LazyLock::new(|| {
     }
     table
 });
+
+/// Register the reviewed native-only public routes as well as selecting their
+/// upstream. The frozen gateway inventory cannot register new operations.
+pub(crate) fn add_public_native_extensions(table: &mut RouteTable) -> Result<(), PlatformError> {
+    let coverage: Coverage = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-native-coverage.json"
+    ))
+    .map_err(|error| PlatformError::InvalidConfiguration(error.to_string()))?;
+    validate_native_extensions(&coverage)
+        .map_err(|error| PlatformError::InvalidConfiguration(error.into()))?;
+    for extension in coverage.native_extension_http {
+        // Reuse the exact validated route object, including method, upstream,
+        // authentication and tags; do not maintain a second extension list.
+        let request = GatewayRequest::new(extension.method, extension.path, 0);
+        let matched = NATIVE_ROUTES.find(&request)?;
+        table.add(matched.route.clone())?;
+    }
+    Ok(())
+}
 
 // The signed bureau webhook has its own HMAC-authenticated ingress boundary.
 // Keep the tenant-key selector tied to the eight caller-authenticated routes,

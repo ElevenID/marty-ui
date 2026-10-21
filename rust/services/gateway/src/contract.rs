@@ -168,6 +168,7 @@ impl GatewayContract {
                 }]),
             })?;
         }
+        issuance_native::add_public_native_extensions(&mut table)?;
         Ok(table)
     }
 
@@ -990,7 +991,10 @@ mod tests {
     fn frozen_route_and_middleware_contract_builds_one_mmf_table() {
         let contract = GatewayContract::load().expect("gateway contract");
         let table = contract.route_table().expect("route table");
-        assert_eq!(table.routes().len(), EXPECTED_ROUTE_COUNT);
+        assert_eq!(
+            table.routes().len(),
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
+        );
         assert_eq!(
             route_for(&table, HttpMethod::Get, "/v1/auth/session/validate")
                 .expect("catch-all auth route")
@@ -1066,7 +1070,7 @@ mod tests {
         let contract = GatewayContract::load().expect("gateway contract");
         assert_eq!(
             contract.route_table().expect("public").routes().len(),
-            EXPECTED_ROUTE_COUNT
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT
         );
         assert_eq!(
             contract
@@ -1074,10 +1078,13 @@ mod tests {
                 .expect("runtime")
                 .routes()
                 .len(),
-            EXPECTED_ROUTE_COUNT + 3
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 3
         );
         let proxy = contract.proxy_route_table().expect("proxy");
-        assert_eq!(proxy.routes().len(), EXPECTED_ROUTE_COUNT + 16);
+        assert_eq!(
+            proxy.routes().len(),
+            EXPECTED_ROUTE_COUNT + issuance_native::NATIVE_EXTENSION_ROUTE_COUNT + 16
+        );
         assert_eq!(
             route_for(
                 &proxy,
@@ -1329,6 +1336,48 @@ mod tests {
         ] {
             assert!(route_ownership(foreign).requires_authentication);
             assert!(!crate::authorization::skips_tenant_authorization(foreign));
+        }
+    }
+
+    #[test]
+    fn canvas_claim_is_registered_in_actual_public_and_proxy_dispatch_tables() {
+        let contract = GatewayContract::load().unwrap();
+        assert_eq!(contract.routes.len(), EXPECTED_ROUTE_COUNT);
+        let path = "/v1/integrations/canvas/lti/experience-sessions/current/claim";
+        assert!(!contract.routes.iter().any(|route| route.path == path));
+        for table in [
+            contract.route_table().unwrap(),
+            contract.proxy_route_table().unwrap(),
+        ] {
+            for method in [HttpMethod::Get, HttpMethod::Post] {
+                let matched = route_for(&table, method, path)
+                    .expect("native extension must be registered before authentication dispatch");
+                assert_eq!(matched.route.pattern, path);
+                assert_eq!(
+                    matched.route.upstream_service,
+                    issuance_native::NATIVE_SERVICE
+                );
+                assert!(
+                    !matched.route.auth_required,
+                    "native handler authenticates the Canvas session bearer"
+                );
+                assert!(matched.route.rewrite_path.is_none());
+                for foreign in [
+                    "/v1/integrations/canvas/lti/experience-sessions/foreign/claim",
+                    "/v1/integrations/canvas/lti/experience-sessions/current/claim/other",
+                    "/v1/integrations/canvas/lti/experience-sessions/current/claim-other",
+                ] {
+                    assert!(route_for(&table, method, foreign).is_err());
+                }
+            }
+            for method in [
+                HttpMethod::Put,
+                HttpMethod::Patch,
+                HttpMethod::Delete,
+                HttpMethod::Options,
+            ] {
+                assert!(route_for(&table, method, path).is_err());
+            }
         }
     }
 
