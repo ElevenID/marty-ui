@@ -128,9 +128,46 @@ async function selectOrganization(page, { organizationId, consoleOrigin }) {
     waitUntil: 'domcontentloaded',
     timeout: 60_000,
   });
+  // The console intentionally prefers an existing valid local selection over
+  // backend preferences. Use its actual organization action to update context,
+  // storage and preferences together instead of trying to override that policy.
+  await page.waitForFunction(() => Boolean(localStorage.getItem('activeOrgId')),
+    undefined, { timeout: 60_000 });
+  const currentOrganizationId = await page.evaluate(() => localStorage.getItem('activeOrgId'));
+  if (currentOrganizationId !== organizationId) {
+    const eligible = membershipsResult.body.filter((row) => row.membership?.has_org_console_access);
+    const labelFor = (id) => {
+      const row = eligible.find((entry) => entry.id === id);
+      if (!row) throw new Error('Current organization is not an eligible console membership');
+      const label = row.display_name || row.name || row.id;
+      if (eligible.filter((entry) => (entry.display_name || entry.name || entry.id) === label).length !== 1) {
+        throw new Error('Organization selection has an ambiguous display label');
+      }
+      return label;
+    };
+    const button = page.getByRole('button', { name: labelFor(currentOrganizationId), exact: true });
+    await button.waitFor({ state: 'visible', timeout: 60_000 });
+    if (await button.count() !== 1) throw new Error('Organization header action is not unique');
+    await button.click();
+    const menu = page.getByRole('menu').filter({ has: page.getByPlaceholder('Search organizations', { exact: true }) });
+    await menu.waitFor({ state: 'visible' });
+    const option = menu.getByRole('menuitem').filter({ has: page.getByText(labelFor(organizationId), { exact: true }) });
+    if (await option.count() !== 1) throw new Error('Organization menu choice is not unique');
+    const persisted = page.waitForResponse((response) => {
+      if (new URL(response.url()).pathname !== '/v1/me/preferences' || response.request().method() !== 'PUT') return false;
+      try { return response.request().postDataJSON()?.last_active_org_id === organizationId; } catch { return false; }
+    });
+    await option.click();
+    if ((await persisted).status() !== 200) throw new Error('Organization UI selection was not persisted');
+  }
   await page.waitForFunction((expectedOrganizationId) => (
     localStorage.getItem('activeOrgId') === expectedOrganizationId
   ), organizationId, { timeout: 60_000 });
+  const persistedPreferences = await requireJson(page, '/v1/me/preferences');
+  if (persistedPreferences.last_view_mode !== 'org_admin'
+      || persistedPreferences.last_active_org_id !== organizationId) {
+    throw new Error('Organization UI selection and persisted preferences disagree');
+  }
   return {
     ok: true,
     membershipsStatus: membershipsResult.status,
