@@ -3621,8 +3621,7 @@ def test_frozen_reference_test_sources_select_only_release_on_prs(
     ):
         assert _classify_changed_path(path, tmp_path)["rust"] == "true"
     for path in (
-        "scripts/probe_kms_native_service_migrations.py",
-        "scripts/probe_kms_profile_runtime_schema.py",
+        "scripts/new-unregistered-database-probe.py",
         "tests/test_signing_response_reference_helpers.py",
         "unknown-new-input.txt",
     ):
@@ -5882,3 +5881,31 @@ def test_renewal_write_boundaries_overlap_only_with_owned_databases() -> None:
         < owner.index("pool.close().await")
         < owner.index("DROP DATABASE {database}")
     )
+
+
+def test_native_kms_schema_acceptance_is_mandatory_in_contracts_lane() -> None:
+    _, ci = _workflow(CI_PATH)
+    steps = ci["jobs"]["test-rust-services"]["steps"]
+    gate = next(step for step in steps if step.get("name") ==
+                "Prove native migration and profile KMS custody on fresh databases")
+    assert gate["if"] == "matrix.lane == 'contracts'"
+    assert not gate.get("continue-on-error", False)
+    run = gate["run"]
+    assert "set -euo pipefail" in run
+    assert "resolve_recorded_contract_executable marty-selfhost-acceptance native_kms_schema_contract" in run
+    assert "native_owners_preserve_kms_only_custody --ignored --exact --nocapture" in run
+    for name in ("AUTH_CONTRACT", "ORGANIZATION_CONTRACT", "CREDENTIAL_TEMPLATE_CONTRACT",
+                 "PRESENTATION_POLICY_CONTRACT", "FLOW_CONTRACT", "VERIFICATION_BINARY",
+                 "DEPLOYMENT_BINARY", "COMPLIANCE_BINARY"):
+        assert "export MARTY_KMS_" + name + "=" in run
+    assert "|| true" not in run
+    workflow = CI_PATH.read_text(encoding="utf-8")
+    assert "cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json" in workflow
+
+
+def test_native_kms_audit_changes_keep_contracts_ci_selected(tmp_path: Path) -> None:
+    selected = _classify_changed_paths(
+        ["rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs"],
+        tmp_path, include_rust_plan=True)[0]
+    assert selected["rust"] == "true"
+    assert "contracts" in json.loads(selected["rust_matrix"])

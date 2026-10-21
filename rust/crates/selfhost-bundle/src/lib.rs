@@ -9,6 +9,7 @@ use std::{
 };
 
 pub mod process;
+pub mod secret_closure;
 mod publication;
 pub mod transform;
 pub type Result<T> = std::result::Result<T, String>;
