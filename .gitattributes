@@ -1,6 +1,7 @@
 *.sh text eol=lf
 *.svg text eol=lf
 *.vtt text eol=lf
+docker/canvas-oss/source-policy.json text eol=lf
 rust/crates/canvas-demo-seed/assets/*.rb text eol=lf
 release/stack-lock*.json text eol=lf
 contracts/canvas-worker-body-timeout-oracle.json text eol=lf
