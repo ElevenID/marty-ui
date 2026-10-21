@@ -77,6 +77,27 @@ def docker(*args: str, timeout: int = 90) -> str:
     return result.stdout.strip()
 
 
+def classify_unseal_error(raw: bytes) -> list[str]:
+    """Return only fixed diagnostics; never reflect a key-bearing error body."""
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        return ["UNCLASSIFIED_ERROR"]
+    errors = value.get("errors") if isinstance(value, dict) else None
+    if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
+        return ["UNCLASSIFIED_ERROR"]
+    text = " ".join(errors).lower()
+    markers = {
+        "INVALID_KEY_SIZE": "invalid key size",
+        "DECRYPTION_FAILED": "failed to decrypt",
+        "AUTHENTICATION_FAILED": "message authentication failed",
+        "INVALID_UNSEAL_KEY": "invalid key",
+        "SEAL_STATE_ERROR": "sealed",
+        "UNINITIALIZED": "not initialized",
+    }
+    return [name for name, marker in markers.items() if marker in text] or ["UNCLASSIFIED_ERROR"]
+
+
 def request(
     base: str,
     method: str,
@@ -86,6 +107,7 @@ def request(
     *,
     timeout: float = 10,
     ca_file: Path | None = None,
+    unseal_error_diagnostics: bool = False,
 ) -> tuple[int, dict]:
     payload = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
@@ -100,7 +122,9 @@ def request(
             raw = response.read()
             return response.status, json.loads(raw) if raw else {}
     except urllib.error.HTTPError as error:
-        error.read()
+        raw = error.read(16 * 1024)
+        if unseal_error_diagnostics:
+            return error.code, {"error_classes": classify_unseal_error(raw)}
         return error.code, {}
 
 

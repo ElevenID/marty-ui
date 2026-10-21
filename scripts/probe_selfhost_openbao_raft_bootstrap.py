@@ -563,12 +563,15 @@ def run() -> None:
         )
         original_unseal_key = volume_file(state, "unseal.key")
         unseal_statuses: set[int] = set()
+        unseal_error_classes: set[str] = set()
 
         def restored_unseal_ready() -> bool:
             status, response = http_request(snapshot_base, "POST", "sys/unseal",
                                             {"key": original_unseal_key},
-                                            ca_file=snapshot_ca)
+                                            ca_file=snapshot_ca,
+                                            unseal_error_diagnostics=True)
             unseal_statuses.add(status)
+            unseal_error_classes.update(response.get("error_classes", []))
             return status == 200 and response.get("sealed") is False
 
         try:
@@ -577,7 +580,8 @@ def run() -> None:
         except RuntimeError as error:
             raise RuntimeError(
                 f"Force-restored Raft unseal failed with statuses "
-                f"{sorted(unseal_statuses)}"
+                f"{sorted(unseal_statuses)}; classified errors "
+                f"{sorted(unseal_error_classes)}"
             ) from error
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
