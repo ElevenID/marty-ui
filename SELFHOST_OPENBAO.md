@@ -171,3 +171,61 @@ rehearsal, `auth/token/revoke` succeeded and the root lookup returned 403;
 `auth/token/revoke-self` returned 500 and left it valid. Keep the unseal material
 under separate custody: revoking the root token does not unseal OpenBao or
 replace a Raft recovery test.
+
+## Qualification ownership and retired exploration
+
+Current custody and release requirements belong to the
+[remote KMS hardening plan](docs/remote-kms-hardening-plan.md). The uncalled
+`probe_kms_hardening_capabilities.py` and April `KMS_GAP_ANALYSIS.md` are retired;
+their original source is available at UI commit
+`956bfa2985ef3e9854fe22cac089f190da0327ee`. The old provider matrix and completed
+task counts are historical implementation claims, not current cloud-provider,
+installed-release or device qualification. OpenBao evidence does not qualify
+AWS KMS, Azure Key Vault or GCP Cloud KMS.
+
+Retain the capability probe's questions as explicit acceptance requirements:
+
+- Establish whether the selected provider supports non-exportable `x25519` or
+  `ecdh-x25519` key creation and the needed derivation semantics. CLI help for
+  `transit/derive-key` mentioning a named output does not prove remote DIDComm
+  authcrypt, recipient interoperability or an acceptable key-custody boundary.
+- For integration-secret AES-256-GCM custody, assert both `exportable=false` and
+  `allow_plaintext_backup=false`, and prove a key-export request is denied.
+  Rotate the remote key and decrypt the original version's ciphertext back to
+  the same synthetic plaintext. Change a byte of the decoded authenticated
+  ciphertext and require an authentication failure, without accepting outages,
+  invalid configuration or arbitrary provider errors as tamper rejection.
+- Exercise tenant/purpose isolation, persistent application writes, restart and
+  coordinated Raft/database recovery through current Rust service paths.
+  Disposable primitive checks do not qualify legacy ciphertext import, deployed
+  authorization or a supported provider/algorithm combination.
+
+Existing owners include `probe_selfhost_openbao_raft_bootstrap.py` for Raft and
+export restrictions, `probe_integration_secret_coordinated_restore.py` for real
+service recovery, and the Rust
+`integration_secret_envelope_live_kms.rs` opt-in test for rotation and binding.
+These are related checks, not an assertion that every exploratory case above
+is executed by CI. Preserve missing assertions at these active owners when
+qualifying a provider; do not restore a parallel capability-reporting script.
+This cleanup executes no provider, restore or installed-release qualification.
+
+The April gap audit also carried useful product requirements. Keep each with
+its current Rust service or Core owner and qualify advertised combinations:
+
+- Resolve tenant-scoped keys by purpose, format, credential type, issuer and
+  country/authority namespace; preserve supported type/format/global selection
+  precedence and explicit errors, with no local-key or runtime retry fallback.
+- Discover and validate provider algorithms/curves, signature DER versus raw
+  encoding, public-key retrieval, attestation and supported lifecycle operations.
+  Do not infer a provider capability from static metadata or mocked connectivity.
+- Bind public JWKS/DID verification methods and certificate chains to the managed
+  key. Preserve publication persistence/retrieval, mdoc COSE `x5chain`, certificate
+  inspection/expiry alerts, authenticated CSCA import/status/list/revocation,
+  renewal lineage, chain validation and transactional lifecycle events.
+- Qualify versioned rotation with old/new verification overlap, scheduled
+  activation, publication updates and coordinated certificate rollover. Preserve
+  holder registration and presentation-proof capabilities through the existing
+  wallet/opaque-signer boundary; issuer custody cleanup must not erase them.
+
+The retained VDS-NC format and end-to-end requirements are mapped in the
+[DTC/VDS-NC decision](docs/rust-migration-phase8-dtc-vds-decision.md).
