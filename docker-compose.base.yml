@@ -363,6 +363,7 @@ services:
       BAO_CACERT: /bao/public-ca/ca.crt
       BAO_TOKEN_FILE: /bao/bootstrap-token/token
       NOTIFICATION_OPENBAO_TOKEN_FILE: /bao/notification/token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/ca.crt
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_bootstrap_token:/bao/bootstrap-token:ro

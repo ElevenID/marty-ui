@@ -42,6 +42,7 @@ $lines=@(ConvertTo-BetaMigrationImageLines -MigrationImage '{images[0]}' -Issuan
         assert not services[role].get('build')
     environment = services['db-migrate']['environment']
     assert environment['MARTY_KMS_BOOTSTRAP_ENABLED'] == 'false'
+    assert environment['BAO_CACERT'] == environment['NOTIFICATION_OPENBAO_CA_CERT_FILE'] == '/bao/public-ca/ca.crt'
     for name in ['BAO_TOKEN', 'BAO_TOKEN_FILE', 'OPENBAO_SERVICE_TOKEN', 'OPENBAO_SERVICE_TOKEN_FILE']:
         assert environment[name] == ''
     mounts = services['db-migrate']['volumes']

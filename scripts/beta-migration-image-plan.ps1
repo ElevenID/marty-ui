@@ -16,6 +16,8 @@ function ConvertTo-BetaMigrationImageLines {
         if ($entry[0] -eq 'db-migrate') {
             '    environment:'
             "      MARTY_KMS_BOOTSTRAP_ENABLED: 'false'"
+            '      BAO_CACERT: /bao/public-ca/ca.crt'
+            '      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/ca.crt'
             foreach ($key in @('BAO_TOKEN', 'BAO_TOKEN_FILE', 'OPENBAO_SERVICE_TOKEN', 'OPENBAO_SERVICE_TOKEN_FILE')) {
                 "      ${key}: ''"
             }

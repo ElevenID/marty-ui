@@ -1560,6 +1560,7 @@ try {
         "--mount", $copyCaMount,
         "--env", "BAO_ADDR=https://localhost:8200",
         "--env", "BAO_CACERT=/bao-public-ca/ca.crt",
+        "--env", "NOTIFICATION_OPENBAO_CA_CERT_FILE=/bao-public-ca/ca.crt",
         "--env", "BAO_TOKEN=$copyBaoToken",
         "--mount", "type=bind,src=$((Resolve-Path (Join-Path $script:RepoRoot 'docker/openbao-init.sh')).Path),dst=/scripts/openbao-init.sh,readonly",
         "--entrypoint", "/bin/sh", $copyBaoImage, "/scripts/openbao-init.sh"
