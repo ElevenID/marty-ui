@@ -21,9 +21,9 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
-    from .canvas_beta_topology import BETA_NETWORK
+    from .canvas_beta_topology import BETA_NETWORK, BETA_PROJECT
 else:
-    from canvas_beta_topology import BETA_NETWORK
+    from canvas_beta_topology import BETA_NETWORK, BETA_PROJECT
 
 
 EXPECTED_MARTY_ORIGIN = "https://beta.elevenidllc.com"
@@ -545,23 +545,52 @@ def validate_runtime_binding(manifest_path: Path, context_path: Path, expected_s
     )
     records = manifest.get("images")
     _require(isinstance(records, list), "Coordinated deployment container image evidence is missing")
-    by_container = {
-        str(record.get("container")): record
-        for record in records
-        if isinstance(record, dict) and record.get("container")
-    }
+    _require(all(isinstance(record, dict) for record in records), "Invalid deployment image record")
+    compose_owned = "compose_project" in manifest
+    if compose_owned:
+        _require(manifest["compose_project"] == BETA_PROJECT, "Deployment Compose project is not beta")
+    else:
+        _require(
+            not any("compose_project" in record or "compose_service" in record for record in records),
+            "Compose image evidence requires its deployment project",
+        )
     release = str(context["release_version"])
     for service, (container, image_service) in REQUIRED_BETA_RUNTIME_IMAGES.items():
-        record = by_container.get(container)
-        _require(record is not None, f"Coordinated deployment is missing {container} image evidence")
-        expected_reference = f"elevenid-local/{image_service}:{release}"
-        _require(record.get("configured_image") == expected_reference, f"{container} is not configured from the coordinated release image")
+        matches = [record for record in records if (
+            record.get("service") == service or record.get("compose_service") == service
+        )] if compose_owned else [record for record in records if record.get("container") == container]
+        _require(matches, f"Coordinated deployment is missing {container} image evidence")
+        _require(len(matches) == 1, f"Coordinated deployment requires exactly one {container} image record")
+        record = matches[0]
         image_id = str(record.get("image_id", ""))
         _require(bool(IMAGE_DIGEST_RE.fullmatch(image_id)), f"{container} image ID is invalid")
+        expected_reference = f"elevenid-local/{image_service}:{release}"
+        if compose_owned:
+            _require(
+                record.get("compose_project") == BETA_PROJECT
+                and record.get("compose_service") == service and record.get("service") == service,
+                f"{container} Compose ownership or service role differs",
+            )
+            _require(
+                bool(re.fullmatch(r"[0-9a-f]{64}", str(record.get("container_id", ""))))
+                and record.get("running") is True,
+                f"{container} running container identity is missing",
+            )
+            environment = record.get("runtime_marker_environment", {})
+            _require(
+                isinstance(environment, dict)
+                and environment.get("MARTY_UI_SHA") == context["source_id"]
+                and environment.get("MARTY_RELEASE_VERSION") == release,
+                f"{container} runtime source or release differs",
+            )
+            # Prepared shared Rust runtimes are configured by immutable image ID;
+            # historical split images retain the coordinated release tag contract.
+            if IMAGE_DIGEST_RE.fullmatch(str(record.get("configured_image", ""))):
+                expected_reference = image_id
+        _require(record.get("configured_image") == expected_reference, f"{container} is not configured from the coordinated release image")
         _require(marker_images.get(service) == image_id, f"{container} image does not match the services release marker")
         _require(record.get("status") == "running", f"{container} was not running when deployment evidence was captured")
-    # The native worker has its own coordinated local build. Its exact running
-    # image must match its own release marker above, not the retained Python API.
+    # Each native role must match its own marker, including shared runtime images.
 
 
 def _validate_observations(catalog: dict[str, Any], observations: dict[str, Any], mode: str) -> list[dict[str, str]]:
