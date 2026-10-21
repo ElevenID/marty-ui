@@ -54,6 +54,7 @@ async function retireOwnedConfiguration(page, owned) {
     bindings.push({ resource, path, current, rule: retirement[resource.collectionPath] });
   }
   const retired = [];
+  owned.configurationRetirement = retired;
   for (const { resource, path, current, rule } of bindings) {
     if (!rule.inactive.includes(String(current.status).toUpperCase())) {
       await browserJson(page, path + rule.action, { method: rule.method,

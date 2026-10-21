@@ -419,7 +419,10 @@ async function approveAndIssue(page, ownedResources, { recording } = {}) {
 async function cleanup(page, ownedResources) {
   const result = await cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup');
   if (!result.ok) return result;
-  result.configuration = await retireOwnedConfiguration(page, ownedResources);
+  try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
+  catch (error) {
+    result.configuration = { ok: false, retired: ownedResources.configurationRetirement || [], error: redact(error.message) };
+  }
   result.ok = result.configuration.ok === true;
   return result;
 }

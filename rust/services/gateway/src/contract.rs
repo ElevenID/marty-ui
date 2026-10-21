@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 453;
+pub const EXPECTED_ROUTE_COUNT: usize = 454;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -801,6 +801,45 @@ const fn method_name(method: HttpMethod) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn policy_suspension_requires_tenant_bound_write_scope() {
+        use crate::authorization::{api_key_allowed, authorize_api_key, resolve_action};
+        let path = "/v1/presentation-policies/policy-one/suspend";
+        let table = GatewayContract::load()
+            .unwrap()
+            .proxy_route_table()
+            .unwrap();
+        let route = route_for(&table, HttpMethod::Post, path).unwrap();
+        assert_eq!(route.route.upstream_service, "presentation-policies");
+        assert!(route.route.auth_required);
+        let permission = resolve_action("POST", path).unwrap();
+        assert_eq!(permission.permission, "presentation-policy:suspend");
+        assert!(api_key_allowed(
+            permission.permission,
+            &["trust:write".into()]
+        ));
+        assert!(!api_key_allowed(
+            permission.permission,
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(permission.permission, &[]));
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("other-org"),
+            &["trust:write".into()]
+        )
+        .is_err());
+        assert!(authorize_api_key(
+            permission.permission,
+            "org-one",
+            Some("org-one"),
+            &["trust:write".into()]
+        )
+        .is_ok());
+        assert!(route_for(&table, HttpMethod::Get, path).is_err());
+    }
 
     #[test]
     fn passport_route_table_opt_in_changes_only_frozen_public_owners() {
