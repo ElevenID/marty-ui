@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KEY_MANAGEMENT_PURPOSES, createKeyManagementServicePayload, createKeyManagementRegistrationPayload, getCompatiblePurposesForAlgorithm, normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
+import { KEY_MANAGEMENT_PURPOSES, createKeyManagementServicePayload, createKeyManagementRegistrationPayload, createKeyManagementConfigUpdate, createKeyManagementRemovalPayload, getCompatiblePurposesForAlgorithm, normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
 
 describe('key management configuration boundary', () => {
   it('exposes the native OID4VP request purpose only for its required ES256 key', () => {
@@ -95,4 +95,42 @@ it('registration does not invent purposes or infer a selected key from aliases',
     const service=createKeyManagementServicePayload({id:'new-service',service_type:'openbao-transit',...input},[])
     expect(createKeyManagementRegistrationPayload({},service).key_reference_purposes).toEqual({})
   }
+})
+
+const routingConfig = () => ({
+  services: ['first', 'second'].map((id) => ({ id, service_type: 'openbao-transit' })),
+  default_service_id: 'first',
+  key_reference_purposes: { first: { one: ['vc_jwt_issuer'] }, second: { two: ['oid4vp_request_signing'] } },
+  type_defaults: { vc_jwt_issuer: 'first', oid4vp_request_signing: 'second' },
+  format_defaults: { JWT: 'first', SD_JWT_VC: 'second' },
+})
+
+it('default updates preserve explicit maps and reject unregistered defaults without mutating inputs', () => {
+  const original = routingConfig()
+  const snapshot = structuredClone(original)
+  const payload = createKeyManagementConfigUpdate(original, { default_service_id: 'second' })
+  expect(payload.default_service_id).toBe('second')
+  for (const field of ['key_reference_purposes', 'type_defaults', 'format_defaults'] as const) {
+    expect(payload[field]).toEqual(original[field])
+    expect(payload[field]).not.toBe(original[field])
+  }
+  expect(() => createKeyManagementConfigUpdate(original, { default_service_id: 'foreign' })).toThrow(/registered/)
+  expect(original).toEqual(snapshot)
+})
+
+it('removal prunes only exact removed-service bindings and handles the last default explicitly', () => {
+  const original = routingConfig()
+  const snapshot = structuredClone(original)
+  const payload = createKeyManagementRemovalPayload(original, 'first')
+  expect(payload.services.map((service) => service.id)).toEqual(['second'])
+  expect(payload.default_service_id).toBe('second')
+  expect(payload.key_reference_purposes).toEqual({ second: { two: ['oid4vp_request_signing'] } })
+  expect(payload.type_defaults).toEqual({ oid4vp_request_signing: 'second' })
+  expect(payload.format_defaults).toEqual({ SD_JWT_VC: 'second' })
+  expect(createKeyManagementRemovalPayload(payload, 'second')).toEqual({
+    services: [], default_service_id: null, key_reference_purposes: {}, type_defaults: {}, format_defaults: {},
+  })
+  expect(createKeyManagementRemovalPayload(original, 'second').default_service_id).toBe('first')
+  expect(() => createKeyManagementRemovalPayload(original, 'foreign')).toThrow(/registered/)
+  expect(original).toEqual(snapshot)
 })

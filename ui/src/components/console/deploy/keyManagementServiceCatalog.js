@@ -307,6 +307,43 @@ export const normalizeKeyManagementConfig = (data) => {
   }
 }
 
+export const createKeyManagementConfigUpdate = (config, changes = {}) => {
+  const current = normalizeKeyManagementConfig(config)
+  const services = changes.services ?? current.services
+  const defaultServiceId = Object.hasOwn(changes, 'default_service_id')
+    ? changes.default_service_id : current.default_service_id
+  if (defaultServiceId !== null && !services.some((service) => service.id === defaultServiceId)) {
+    throw new Error('Default signing service must be registered')
+  }
+  return {
+    services,
+    default_service_id: defaultServiceId,
+    key_reference_purposes: current.key_reference_purposes,
+    type_defaults: current.type_defaults,
+    format_defaults: current.format_defaults,
+  }
+}
+
+export const createKeyManagementRemovalPayload = (config, serviceId) => {
+  const current = normalizeKeyManagementConfig(config)
+  if (!current.services.some((service) => service.id === serviceId)) {
+    throw new Error('Removed signing service must be registered')
+  }
+  const services = current.services.filter((service) => service.id !== serviceId)
+  const payload = createKeyManagementConfigUpdate(current, {
+    services,
+    default_service_id: current.default_service_id === serviceId
+      ? services[0]?.id || null : current.default_service_id,
+  })
+  delete payload.key_reference_purposes[serviceId]
+  for (const routing of [payload.type_defaults, payload.format_defaults]) {
+    for (const [purpose, boundService] of Object.entries(routing)) {
+      if (boundService === serviceId) delete routing[purpose]
+    }
+  }
+  return payload
+}
+
 export const createKeyManagementRegistrationPayload = (config, newService, makeDefault = false) => {
   const current = normalizeKeyManagementConfig(config)
   if (!newService?.id || current.services.some((service) => service.id === newService.id)
@@ -317,15 +354,12 @@ export const createKeyManagementRegistrationPayload = (config, newService, makeD
   const purposes = [...new Set(Array.isArray(newService.key_purposes) ? newService.key_purposes : [])]
   // Only the explicit selected key receives its explicitly selected purposes.
   // Aliases and other services are never granted permissions by inference.
-  const bindings = current.key_reference_purposes
-  if (reference && purposes.length) bindings[newService.id] = { [reference]: purposes }
-  return {
+  const payload = createKeyManagementConfigUpdate(current, {
     services: [...current.services, newService],
     default_service_id: makeDefault ? newService.id : (current.default_service_id || newService.id),
-    key_reference_purposes: bindings,
-    type_defaults: current.type_defaults,
-    format_defaults: current.format_defaults,
-  }
+  })
+  if (reference && purposes.length) payload.key_reference_purposes[newService.id] = { [reference]: purposes }
+  return payload
 }
 
 export const getDefaultKeyManagementService = (config) => {
@@ -401,5 +435,7 @@ export default {
   getDefaultKeyManagementService,
   createKeyManagementServicePayload,
   createKeyManagementRegistrationPayload,
+  createKeyManagementConfigUpdate,
+  createKeyManagementRemovalPayload,
   parseListInput,
 }
