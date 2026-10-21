@@ -590,9 +590,12 @@ function safeList(value) {
   return [];
 }
 
-async function selectProductionBadgeTemplates(marty, organizationId) {
-  const explicitApplicationId = String(process.env.CANVAS_OSS_APPLICATION_TEMPLATE_ID || '').trim();
-  const explicitCredentialId = String(process.env.CANVAS_OSS_CREDENTIAL_TEMPLATE_ID || '').trim();
+async function selectProductionBadgeTemplates(marty, organizationId, selectors = {
+  applicationTemplateId: process.env.CANVAS_OSS_APPLICATION_TEMPLATE_ID,
+  credentialTemplateId: process.env.CANVAS_OSS_CREDENTIAL_TEMPLATE_ID,
+}) {
+  const explicitApplicationId = String(selectors.applicationTemplateId || '').trim();
+  const explicitCredentialId = String(selectors.credentialTemplateId || '').trim();
   const applications = safeList(await marty.get(`/v1/application-templates?organization_id=${encodeURIComponent(organizationId)}`));
   const credentials = safeList(await marty.get(`/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`));
   const credentialById = new Map(credentials.map((item) => [String(item.id), item]));

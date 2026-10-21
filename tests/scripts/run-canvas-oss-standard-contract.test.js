@@ -47,14 +47,17 @@ test('learning template selection rejects employee and membership badges and for
     credential_type: 'OpenBadgeCredential', claims };
   const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
   function client(c, a) { return { get: async path => path.startsWith('/v1/credential-templates') ? [c] : [a] }; }
-  assert.equal((await selectProductionBadgeTemplates(client(credential, application), 'org-1')).credential.id, 'learning');
+  const select = (c, a, selectors = {}) => selectProductionBadgeTemplates(client(c, a), 'org-1', selectors);
+  assert.equal((await select(credential, application)).credential.id, 'learning');
+  assert.equal((await select(credential, application, { applicationTemplateId: 'application', credentialTemplateId: 'learning' })).credential.id, 'learning');
+  await assert.rejects(select(credential, application, { credentialTemplateId: 'different' }), /Exactly one active Open Badge/);
   for (const c of [
     { ...credential, credential_type: 'EmployeeBadge' },
     { ...credential, credential_type: 'open_badge', claims: [{ name: 'email' }] },
     { ...credential, organization_id: 'foreign' },
-  ]) await assert.rejects(selectProductionBadgeTemplates(client(c, application), 'org-1'), /Exactly one active Open Badge/);
-  await assert.rejects(selectProductionBadgeTemplates(client(credential,
-    { ...application, organization_id: 'foreign' }), 'org-1'), /Exactly one active Open Badge/);
+  ]) await assert.rejects(select(c, application), /Exactly one active Open Badge/);
+  await assert.rejects(select(credential,
+    { ...application, organization_id: 'foreign' }), /Exactly one active Open Badge/);
 });
 
 test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
