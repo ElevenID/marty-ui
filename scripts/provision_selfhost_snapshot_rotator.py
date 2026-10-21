@@ -11,19 +11,12 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from activate_selfhost_renewed_secrets import private_file  # noqa: E402
-from provision_selfhost_renewal_identity import write_private  # noqa: E402
-from provision_selfhost_snapshot_identity import (  # noqa: E402
-    ACL as READER_ACL, APPROLE as READER_ROLE, AUTH_MOUNT,
-    POLICY as READER_POLICY, ROLE_ID_FILE as READER_ROLE_ID_FILE,
-    SECRET_ID_FILE as READER_SECRET_ID_FILE,
-    checked_login as reader_login, snapshot_origin,
-)
+from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
+from provision_selfhost_snapshot_identity import ACL as READER_ACL, APPROLE as READER_ROLE, AUTH_MOUNT, POLICY as READER_POLICY, ROLE_ID_FILE as READER_ROLE_ID_FILE, SECRET_ID_FILE as READER_SECRET_ID_FILE, checked_login as reader_login  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
     RotationSpec, retire as retire_secret_id, rotate as rotate_secret_id,
 )
 from selfhost_openbao_client import Bao  # noqa: E402
-from stage_selfhost_renewed_secrets import private_empty_or_source  # noqa: E402
 
 
 ROTATOR_ROLE = "raft-exporter-rotator"

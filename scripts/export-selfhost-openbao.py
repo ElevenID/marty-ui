@@ -19,7 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-from provision_selfhost_snapshot_identity import checked_login, snapshot_origin  # noqa: E402
+from selfhost_operator_inputs import snapshot_origin  # noqa: E402
+from provision_selfhost_snapshot_identity import checked_login  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
 
 

@@ -151,3 +151,13 @@ and the remote signer versions stay fixed. Complete the separate browser-session
 and expiry-crossing checks before accepting trust retirement. Do not wait for
 the old leaf certificates to expire before refreshing the active eight-hour
 leaves and tokens: a stale active generation will fail this preflight.
+
+## Operator input helper ownership
+
+`selfhost_operator_inputs.py` owns the shared private-file reader, exclusive
+credential writer, private-directory check and loopback HTTPS-origin check.
+The command modules retain their historical imported names; command-specific
+AppRole policies, token checks, policy receipts, staging and rollback remain
+with their existing owners. The shared module ships in the self-host bundle
+and performs no filesystem or subprocess work at import time. This refactoring
+does not change validation rules or broaden snapshot/renewal authority.

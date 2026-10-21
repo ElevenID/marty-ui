@@ -19,6 +19,7 @@ from urllib.error import HTTPError
 import zipfile
 
 sys.dont_write_bytecode = True
+from selfhost_operator_inputs import snapshot_origin  # noqa: E402
 from activate_selfhost_renewed_secrets import (  # noqa: E402
     PROJECT, checked_certificates, checked_compose_secret_files, checked_env,
     checked_overlap_mounts,
@@ -31,9 +32,7 @@ from provision_selfhost_ca_rotation_identity import checked_login as ca_rotation
 from provision_selfhost_evidence_identity import checked_login as evidence_login  # noqa: E402
 from provision_selfhost_audit_identity import checked_login as audit_login  # noqa: E402
 from provision_selfhost_audit_token import policy_for as audit_policy_for  # noqa: E402
-from provision_selfhost_snapshot_identity import (  # noqa: E402
-    checked_login as snapshot_login, snapshot_origin,
-)
+from provision_selfhost_snapshot_identity import checked_login as snapshot_login  # noqa: E402
 from provision_selfhost_snapshot_rotator import checked_login as rotator_login  # noqa: E402
 from selfhost_openbao_client import (  # noqa: E402
     Bao, require_ca_rotation_authority, require_renewal_authority,
