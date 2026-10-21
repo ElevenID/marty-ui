@@ -1118,7 +1118,7 @@ def test_selfhost_runner_keeps_roster_preflight_and_both_evidence_call_sites() -
         "--name selfhost_acceptance --owner selfhost --"
     )
     assert dedicated.count('"$selfhost_executable" --nocapture --test-threads=4') == 1
-    assert dedicated.count("12 passed; 0 failed; 0 ignored;") == 1
+    assert dedicated.count("17 passed; 0 failed; 0 ignored;") == 1
     assert source.count("--name selfhost_acceptance --owner canvas --") == 1
     assert source.count('"$selfhost_executable" --nocapture --test-threads=4') == 2
     assert source.index('require_selfhost_tests "$selfhost_tests"') < source.index(

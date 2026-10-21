@@ -11,7 +11,10 @@ retry, ported to the maintained self-host acceptance owner. Reads and polling
 share a five-second budget, while the existing owned-command runner retains
 its separate bounded shutdown. Secret exposure, empty secrets, invalid UTF-8
 and Docker failures are not retried; late success is rejected. This changes
-no production runtime, required assertion or CI selector. Exact-candidate
+no production runtime or CI selector. The exact self-host test roster grows
+from twelve to seventeen without dropping any existing case; function-scoped
+connectivity and mutation checks preserve the fail-closed source guard.
+Exact-candidate
 checks, independent review and protected merge remain the next action; remove
 this sole integration checkout after accepted merge and verified consumer cleanup.
 
