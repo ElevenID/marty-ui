@@ -16,9 +16,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from activate_selfhost_renewed_secrets import private_file  # noqa: E402
-from provision_selfhost_renewal_identity import write_private  # noqa: E402
-from provision_selfhost_snapshot_identity import snapshot_origin  # noqa: E402
+from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
     RotationSpec, require_revoked as require_secret_revoked,
     retire as retire_secret_id, rotate as rotate_secret_id,
@@ -27,7 +25,6 @@ from selfhost_openbao_client import (  # noqa: E402
     Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_POLICY, CUSTODY_SIGNER_LEAF_ACL,
     custody_signer_public,
 )
-from stage_selfhost_renewed_secrets import private_empty_or_source  # noqa: E402
 
 
 AUTH_MOUNT = "selfhost-evidence"

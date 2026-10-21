@@ -95,6 +95,11 @@ function loadWalletDriver(filename, { loseAcquisition = false, failClose = false
       writeFileSync: (_filename, text) => { operations.push('report:write'); reports.push(JSON.parse(text)); },
     };
     if (name === '@playwright/test') return { chromium: { launch: async () => browser } };
+    if (name === './demo-live-evidence') return {
+      createDemoLiveEvidence: async () => ({ bindPage() {}, close() {},
+        complete: async () => assert.fail('Stopped wallet fixture cannot complete business evidence') }),
+      acknowledgeDemoInputs: async (_directory, _file, expected) => expected,
+    };
     if (name === './verify-beta-waltid-acceptance') return {
       ...require(name), loadEnvFile() {},
     };
