@@ -1055,11 +1055,12 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   let presentation;
   const observeDocument = response => {
     const request = response.request();
-    if (!request.isNavigationRequest() || documents.length >= 40) return;
+    if ((!request.isNavigationRequest() && response.status() < 400) || documents.length >= 40) return;
     const url = new URL(response.url());
     const item = { status: response.status(), origin: url.origin === martyOrigin ? 'marty'
       : url.origin === canvas.origin ? 'canvas' : 'other',
-    kind: url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
+    kind: url.pathname.startsWith('/v1/auth/canvas-lti/') ? 'canvas_auth_api'
+      : url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
       : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui' : 'other',
     json: (response.headers()['content-type'] || '').includes('application/json') };
     documents.push(item);
@@ -1101,6 +1102,7 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
     presentation.surface = popup; presentation.page = popup;
   }
   await presentation.surface.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  await presentation.surface.getByText(/^Canvas launch verified$/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   return presentation;
   } catch (error) {
     await Promise.allSettled(reads);
@@ -1109,10 +1111,12 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
       let body;
       try { body = JSON.parse(document.body?.textContent || ''); } catch { body = null; }
       return { contentType: document.contentType, hasAppRoot: Boolean(document.querySelector('#root')),
-        bodyLength: document.body?.textContent?.length || 0, errorBody: body };
+        bodyLength: document.body?.textContent?.length || 0, errorBody: body,
+        alerts: [...document.querySelectorAll('[role=alert]')].slice(0, 4).map(node => node.textContent) };
     }).catch(() => null) : null;
     if (document) {
       document.errors = canvasLaunchErrorSummary(document.errorBody);
+      document.alerts = canvasLaunchErrorSummary({ details: document.alerts.map(message => ({ message })) });
       delete document.errorBody;
     }
     error.canvasResourceDiagnostic = { documents, document };
@@ -1124,7 +1128,6 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
 
 async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
   const launch = await openCanvasAssignmentResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin);
-  await launch.surface.getByText(/Canvas launch verified/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   if (launch.popup) await launch.page.close();
 }
 
