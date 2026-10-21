@@ -467,8 +467,11 @@ async function loginCanvas(page, origin, email, password) {
   if (await accepted.isVisible().catch(() => false)) await accepted.click();
 }
 
-function canvasTokenExpiration(now, timeZone) {
-  const timestamp = Math.ceil((now + 2 * 60 * 60 * 1000) / (30 * 60 * 1000)) * (30 * 60 * 1000);
+function canvasTokenExpiration(now, timeZone, deadlineEpoch = process.env.CANVAS_OSS_CONTRACT_DEADLINE_EPOCH || '') {
+  const runDeadline = deadlineEpoch === '' ? now + 9_000_000 : Number(deadlineEpoch) * 1000;
+  requireCondition(Number.isSafeInteger(runDeadline) && runDeadline > now && runDeadline <= now + 24 * 3600000,
+    'canvas_contract_deadline_invalid', 'Canvas contract deadline must be future and within the bounded daily run window.');
+  const timestamp = Math.ceil((runDeadline + 30 * 60 * 1000) / (30 * 60 * 1000)) * (30 * 60 * 1000);
   const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit',
     day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(new Date(timestamp));
   const part = type => parts.find(item => item.type === type).value;

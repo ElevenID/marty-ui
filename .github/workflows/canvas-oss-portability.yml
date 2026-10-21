@@ -374,6 +374,7 @@ jobs:
             echo "Insufficient maintenance-window time remains for the portable flow and safe teardown." >&2
             exit 1
           fi
+          CANVAS_OSS_CONTRACT_DEADLINE_EPOCH="$(( $(date +%s) + max_driver_seconds ))" \
           timeout --signal=TERM --kill-after=30s "${max_driver_seconds}s" \
             docker compose --project-name canvas-oss-portability \
               --file docker-compose.canvas-oss-acceptance.yml \

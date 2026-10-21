@@ -55,11 +55,11 @@ test('Marty request failure context preserves static operation but excludes dyna
 
 test('Canvas token expiration uses the account timezone and stays within a bounded window', () => {
   const now = Date.parse('2026-10-21T07:51:00Z');
-  const actual = canvasTokenExpiration(now, 'America/Denver');
-  assert.deepEqual(actual, { timestamp: Date.parse('2026-10-21T10:00:00Z'), date: '10/21/2026', time: '4:00 AM' });
-  const nextDay = canvasTokenExpiration(Date.parse('2026-12-31T22:45:00Z'), 'UTC');
+  const actual = canvasTokenExpiration(now, 'America/Denver', '');
+  assert.deepEqual(actual, { timestamp: Date.parse('2026-10-21T11:00:00Z'), date: '10/21/2026', time: '5:00 AM' });
+  const nextDay = canvasTokenExpiration(Date.parse('2026-12-31T22:45:00Z'), 'UTC', '');
   assert.equal(nextDay.date, '01/01/2027');
-  assert.ok(actual.timestamp >= now + 2 * 3600000 && actual.timestamp < now + 2.5 * 3600000);
+  assert.ok(actual.timestamp >= now + 3 * 3600000 && actual.timestamp < now + 3.5 * 3600000);
 });
 
 test('Canvas learner fixtures have fresh bounded synthetic identities for each run', () => {
@@ -598,5 +598,16 @@ test('Canvas chooser selects the acknowledged installation among identically nam
   assert.equal(canvasOwnedToolIndex(['1', '2', '9'], '9'), 2);
   for (const [ids, owned] of [[['1', '2'], '9'], [['9', '9'], '9'], [['9'], 'not-an-id']]) {
     assert.throws(() => canvasOwnedToolIndex(ids, owned), ContractFailure);
+  }
+});
+
+
+test('Canvas personal tokens cover the actual long-run deadline with a bounded buffer', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const deadline = now + 6 * 3600000;
+  const token = canvasTokenExpiration(now, 'UTC', String(deadline / 1000));
+  assert.ok(token.timestamp >= deadline + 1800000 && token.timestamp < deadline + 3600000);
+  for (const value of ['invalid', String(now / 1000), String((now + 25 * 3600000) / 1000)]) {
+    assert.throws(() => canvasTokenExpiration(now, 'UTC', value), error => error.code === 'canvas_contract_deadline_invalid');
   }
 });
