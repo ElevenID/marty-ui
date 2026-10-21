@@ -101,6 +101,28 @@ def test_active_peer_and_exact_secret_binding_fail_closed(gate, change):
         gate["bind_active"](TOKEN, c)
 
 
+def test_legacy_preparation_requires_exact_matching_beta_command(gate):
+    container = active()
+    container['Config']['Cmd'] += ['--token', TOKEN]
+    with pytest.raises(gate['TunnelInputError']):
+        gate['bind_active'](TOKEN, container)
+    assert gate['bind_active'](TOKEN, container, prepare_legacy_migration=True) == 'a' * 64
+    container['Config']['Env'] = []
+    assert gate['bind_active'](TOKEN, container, prepare_legacy_migration=True) == 'a' * 64
+    for change in ['stale', 'foreign', 'extra', 'entrypoint']:
+        candidate = json.loads(json.dumps(container))
+        if change == 'stale':
+            candidate['Config']['Cmd'][-1] += 'stale'
+        elif change == 'foreign':
+            candidate['Config']['Labels']['com.docker.compose.project'] = 'marty-selfhost-prod'
+        elif change == 'extra':
+            candidate['Config']['Cmd'] += ['--token', TOKEN]
+        else:
+            candidate['Config']['Entrypoint'] = ['cloudflared', TOKEN]
+        with pytest.raises(gate['TunnelInputError']):
+            gate['bind_active'](TOKEN, candidate, prepare_legacy_migration=True)
+
+
 def secure_file(path):
     if os.name != "nt":
         path.chmod(0o600)

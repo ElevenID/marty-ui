@@ -249,6 +249,10 @@ the old inline value and resolves the protected input file. Connector commands
 use the token environment rather than a secret argument. This does not rotate a
 token or restart the existing connector.
 
+For an older connector whose command still contains `--token`, use the
+[one-time environment-only migration](beta-connector-credential-migration.md)
+before the application rollout. The normal credential gate remains strict.
+
 The runner validates every release and source input twice, with the final check
 immediately before the maintenance window. It retains the existing preflight
 backup, isolated migration rehearsal, quiesced backup, supervised rollback,

@@ -80,7 +80,7 @@ def token_from_input(content: bytes) -> str:
     return match.group(1)
 
 
-def bind_active(token: str, container: dict) -> str:
+def bind_active(token: str, container: dict, *, prepare_legacy_migration: bool = False) -> str:
     require(container["State"]["Running"] is True)
     labels = container["Config"]["Labels"]
     require(labels.get("com.docker.compose.project") == "elevenid-beta")
@@ -90,19 +90,23 @@ def bind_active(token: str, container: dict) -> str:
         for item in container["Config"]["Env"]
         if item.startswith("TUNNEL_TOKEN=")
     ]
-    require(values == [token])
+    require(values == [token] or (prepare_legacy_migration and values == []))
     command = container["Config"]["Cmd"]
     require(isinstance(command, list) and all(isinstance(arg, str) for arg in command))
     entrypoint = container["Config"].get("Entrypoint") or []
     require(
         isinstance(entrypoint, list) and all(isinstance(arg, str) for arg in entrypoint)
     )
-    require(
-        not any(
+    if prepare_legacy_migration:
+        # Only the exact former repository command is migratable. This mode
+        # prepares configuration; ordinary deployment still rejects argv tokens.
+        require(command == ["tunnel", "--no-autoupdate", "run", "--token", token])
+        require(not any(token in arg or "--token" in arg for arg in entrypoint))
+    else:
+        require(not any(
             token in arg or arg == "--token" or arg.startswith("--token=")
             for arg in [*entrypoint, *command]
-        )
-    )
+        ))
     identity = container["Id"]
     require(re.fullmatch(r"[a-f0-9]{64}", identity) is not None)
     return identity
@@ -150,13 +154,16 @@ def validate(
     path: Path,
     expected_fingerprint: str | None = None,
     expected_container: str | None = None,
+    *,
+    prepare_legacy_migration: bool = False,
 ) -> dict:
     require(bool(expected_fingerprint) == bool(expected_container))
     path, content = private_input(path)
     fingerprint = hashlib.sha256(content).hexdigest()
     if expected_fingerprint:
         require(fingerprint == expected_fingerprint)
-    identity = bind_active(token_from_input(content), inspect_active())
+    identity = bind_active(token_from_input(content), inspect_active(),
+                           prepare_legacy_migration=prepare_legacy_migration)
     if expected_container:
         require(identity == expected_container)
     return {
@@ -174,10 +181,13 @@ def main() -> int:
     parser.add_argument("--expected-fingerprint")
     parser.add_argument("--expected-container")
     parser.add_argument("--override-output", type=Path)
+    parser.add_argument("--prepare-legacy-migration", action="store_true")
     args = parser.parse_args()
     try:
+        require(not args.prepare_legacy_migration or args.override_output is not None)
         binding = validate(
-            args.credential_env_file, args.expected_fingerprint, args.expected_container
+            args.credential_env_file, args.expected_fingerprint, args.expected_container,
+            prepare_legacy_migration=args.prepare_legacy_migration,
         )
         if args.override_output:
             path = args.override_output.absolute()
@@ -196,7 +206,10 @@ def main() -> int:
                 args.credential_env_file,
                 binding["credential_sha256"],
                 binding["connector_id"],
+                prepare_legacy_migration=args.prepare_legacy_migration,
             )
+        if args.prepare_legacy_migration:
+            binding["connector_migration_required"] = True
         print(json.dumps(binding))
         return 0
     except Exception:

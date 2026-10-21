@@ -154,6 +154,9 @@ deployment wrapper itself admits only `02:00` through `05:59`
 `America/Denver`.
 
 ```powershell
+# Existing private beta TUNNEL_TOKEN file. Migrate legacy argv connectors first
+# using docs/beta-connector-credential-migration.md.
+$protectedBetaConnectorEnvFile = "C:\beta-runtime\private\connector-token.env"
 $release = "canvas-oss-beta-local-$([DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ'))"
 $artifact = Join-Path $PWD "tests\artifacts\$release"
 $snapshots = Join-Path $artifact "source-snapshots"
@@ -176,11 +179,13 @@ python .\scripts\create_local_release_manifest.py `
   -EnablePortableCanvas `
   -CanvasOrigin "https://canvas-test.elevenidllc.com" `
   -PilotOrganizationId "00000000-0000-0000-0000-000000000001" `
+  -TunnelTokenEnvFile $protectedBetaConnectorEnvFile `
   -PlanOnly
 
 # Execute only inside the approved Denver maintenance window.
 & .\scripts\deploy-canvas-oss-beta.ps1 `
   -ArtifactDir $artifact `
+  -TunnelTokenEnvFile $protectedBetaConnectorEnvFile `
   -AuditPath $audit
 
 python .\scripts\check_canvas_beta_capabilities.py `
