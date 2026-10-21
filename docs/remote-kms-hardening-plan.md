@@ -13,9 +13,11 @@ grouped native UI custody, recovery, renewal and rootless CA-rotation changes
 are merged. The installed-qualification and release-source batch
 [UI PR #1446](https://github.com/ElevenID/marty-ui/pull/1446) merged into
 protected main at `a2fb60a21cf7dd1f91e49019efb6785368b77e04` after all
-five exact merge-group workflows passed. Separate full exact-main
-[CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929)
-was dispatched on that SHA and is still running. Require its success and
+five exact merge-group workflows passed. Main subsequently advanced through
+protected #1450 to `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`, retaining
+the `v1.1.261` lock. Separate full exact-main
+[CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803)
+was dispatched on the new SHA and is still running. Require its success and
 unchanged main before the no-write release claim, promoted tag,
 signed `v1.1.261` release, exact installed business/session/expiry journey,
 and fresh replacement/cutover or rollback proof. The two old installations
@@ -24881,3 +24883,5 @@ Local acceptance-host recovery (2026-10-20 UTC): The Windows C: volume had about
 Protected merge and exact-main dispatch (2026-10-21 UTC): [PR #1446](https://github.com/ElevenID/marty-ui/pull/1446) merged at `a2fb60a21cf7dd1f91e49019efb6785368b77e04` after [merge-group CI 39516051065](https://github.com/ElevenID/marty-ui/actions/runs/39516051065) passed all 23 jobs and Open-source policy, Organization Quality, CodeQL Actions and CodeQL Rust also passed on the same candidate. The remote protected main exactly matched that merge commit; the `v1.1.261` tag was absent. A separate [full CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929) was dispatched as `workflow_dispatch` on that exact SHA. The clean local release-helper main worktree was fast-forwarded to the merge commit. Do not claim the release until full CI succeeds and main remains unchanged.
 
 Installed-run preparation (2026-10-21 UTC): Three other dated, source-independent Rust `target` caches were verified as rebuildable and cleaned through Cargo; C: free space rose from 13.9 to about 20.4 GiB, meeting the runbook's disk target at that instant. A clean native Ubuntu source checkout at the exact merged SHA was created under the new v1.1.261 private qualification directory; the existing clean integration checkout remains pinned to `5b3ec6a8`. A fresh Python 3.12 verifier environment installed the two direct preview requirements. Installing the larger pinned integration lock then lost the Ubuntu WSL connection, so that dependency step has **not** passed. Only the Ubuntu distro was terminated for recovery; the Docker Desktop production site remained HTTP 200. Recheck WSL health, Python packages, free disk and the production site before any signed-bundle install. The full exact-main CI was still running, so no release claim, tag or installed project was started.
+
+Exact-main CI superseded (2026-10-21 UTC): While full [CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929) on #1446's merge commit had 21 successful jobs and only Canvas live, protected [#1450](https://github.com/ElevenID/marty-ui/pull/1450) merged as `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`. Its five protected merge-group workflows passed; the change affects acceptance fixture ownership, Docker ignore and CI planning, and retains `marty-ui@1.1.261` as eligible. The obsolete exact-main run was cancelled to avoid further runner cost. New [full CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803) is a `workflow_dispatch` on `2e0b27242e`; the clean local release-helper worktree was fast-forwarded to that commit. The native Ubuntu checkout remains on the earlier SHA and must be advanced or recreated only after the release source is final. No release claim or tag yet.
