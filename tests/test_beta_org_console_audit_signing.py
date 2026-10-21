@@ -259,7 +259,7 @@ def test_live_key_access_controls_bind_required_label_and_signing_purposes(monke
             page.set_content('''<label for="key">Transit key name <span aria-hidden="true">*</span></label><input id="key" required>
                 <label><input id="issuer" type="checkbox">VC JWT / SD-JWT issuer <span>Formats: jwt_vc_json, dc+sd-jwt</span></label>
                 <label><input id="verifier" type="checkbox">OID4VP request signing <span>Formats: oauth-authz-req+jwt</span></label>
-                <label><input id="default" type="checkbox">Use as the default signing service</label>''')
+                <label><input id="default" type="checkbox" role="switch">Use as the default signing service</label>''')
             monkeypatch.setattr(audit, "active_organization_id", lambda _page: "fresh-org")
             class StopBeforeRegister(Exception):
                 pass
