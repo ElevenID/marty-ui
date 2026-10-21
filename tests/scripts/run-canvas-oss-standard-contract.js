@@ -1036,6 +1036,27 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId,
 }
 
 async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssignment, martyOrigin) {
+  const documents = [];
+  const reads = [];
+  let presentation;
+  const observeDocument = response => {
+    const request = response.request();
+    if (!request.isNavigationRequest() || documents.length >= 40) return;
+    const url = new URL(response.url());
+    const item = { status: response.status(), origin: url.origin === martyOrigin ? 'marty'
+      : url.origin === canvas.origin ? 'canvas' : 'other',
+    kind: url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
+      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui' : 'other',
+    json: (response.headers()['content-type'] || '').includes('application/json') };
+    documents.push(item);
+    if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
+      const code = value.code || value.error?.code || value.error_code;
+      if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(code)) item.errorCode = code;
+      if (typeof value.detail === 'string' && /^Canvas LTI [A-Za-z ,._-]{1,180}$/.test(value.detail)) item.detail = value.detail;
+    }).catch(() => {}));
+  };
+  page.on('response', observeDocument);
+  try {
   await page.goto(`${canvas.origin}/courses/${fixtures.course.id}/assignments`, {
     waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
   });
@@ -1047,7 +1068,7 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   { timeout: DEFAULT_TIMEOUT_MS });
   const launchControl = page.getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
     .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i })).first();
-  const presentation = await waitFor(async () => {
+  presentation = await waitFor(async () => {
     const frames = [];
     for (const frame of page.frames()) {
       if (frame === page.mainFrame()) continue;
@@ -1069,6 +1090,19 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
   }
   await presentation.surface.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   return presentation;
+  } catch (error) {
+    await Promise.allSettled(reads);
+    const surface = presentation?.surface;
+    const document = surface ? await surface.evaluate(() => ({
+      contentType: document.contentType,
+      hasAppRoot: Boolean(document.querySelector('#root')),
+      bodyLength: document.body?.textContent?.length || 0,
+    })).catch(() => null) : null;
+    error.canvasResourceDiagnostic = { documents, document };
+    throw error;
+  } finally {
+    page.off('response', observeDocument);
+  }
 }
 
 async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
@@ -1597,8 +1631,10 @@ function contractFailureLocation(error, activeCase) {
   // or Playwright action arguments from the original exception message.
   const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
   const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
-  return { activeCase, errorType: name,
+  const result = { activeCase, errorType: name,
     sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+  if (error?.canvasResourceDiagnostic) result.canvasResource = error.canvasResourceDiagnostic;
+  return result;
 }
 
 async function finishRecordedVideo(context, page, destination) {
