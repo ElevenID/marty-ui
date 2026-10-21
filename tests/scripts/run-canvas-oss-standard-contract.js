@@ -341,6 +341,15 @@ async function responseJson(response, code, summary, expectedStatuses = [200]) {
   }
 }
 
+function martyRequestSummary(method, requestPath) {
+  // Only static contract route vocabulary may enter public failure evidence.
+  const words = new Set(['v1', 'integrations', 'canvas', 'platforms', 'registration-config',
+    'lti-installation', 'integration-secrets', 'oauth', 'authorizations', 'program-bindings',
+    'validate', 'activate', 'applications', 'approve', 'credentials', 'evidence-sync-jobs']);
+  const route = requestPath.split('?')[0].split('/').map(word => words.has(word) ? word : word ? ':resource' : '').join('/');
+  return `Marty ${['GET', 'POST', 'PUT', 'DELETE'].includes(method) ? method : 'REQUEST'} ${route} failed`;
+}
+
 class MartyClient {
   constructor(origin, apiKey) {
     this.origin = origin;
@@ -361,7 +370,7 @@ class MartyClient {
       body = JSON.stringify(json);
     }
     const response = await fetchWithTimeout(url, { method, headers, body, redirect: 'manual' });
-    return responseJson(response, 'marty_request_failed', 'Marty API request failed', expected);
+    return responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
   }
 
   get(requestPath, expected = [200]) {
@@ -1947,6 +1956,7 @@ async function main() {
 
 module.exports = {
   contractFailureLocation,
+  martyRequestSummary,
   selectProductionBadgeTemplates,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,

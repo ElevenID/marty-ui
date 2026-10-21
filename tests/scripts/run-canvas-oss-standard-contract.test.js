@@ -15,6 +15,7 @@ const {
   observePipelinePrerequisites,
   selectProductionBadgeTemplates,
   contractFailureLocation,
+  martyRequestSummary,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
@@ -38,6 +39,13 @@ test('unexpected driver diagnostics retain source location without secret-bearin
   assert.deepEqual(result, { activeCase: 'standard_lti_13_install', errorType: 'Error',
     sourceLocation: { file: 'run-canvas-oss-standard-contract.js', line: 712, column: 19 } });
   assert.ok(!JSON.stringify(result).includes('secret') && !JSON.stringify(result).includes('private-value'));
+});
+
+test('Marty request failure context preserves static operation but excludes dynamic paths and queries', () => {
+  assert.equal(martyRequestSummary('PUT', '/v1/integrations/canvas/platforms/private-id/lti-installation?token=secret'),
+    'Marty PUT /v1/integrations/canvas/platforms/:resource/lti-installation failed');
+  assert.equal(martyRequestSummary('secret', '/v1/integrations/canvas/lti/config/secret-token'),
+    'Marty REQUEST /v1/integrations/canvas/:resource/:resource/:resource failed');
 });
 
 test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
