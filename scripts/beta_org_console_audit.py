@@ -31,6 +31,10 @@ from playwright.sync_api import expect, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_cleanup_spec = importlib.util.spec_from_file_location("demo_cleanup_evidence", ROOT / "scripts/demo_cleanup_evidence.py")
+_cleanup_module = importlib.util.module_from_spec(_cleanup_spec)
+_cleanup_spec.loader.exec_module(_cleanup_module)
+owned_api_key_cleanup_proven = _cleanup_module.owned_api_key_cleanup_proven
 ENV_FILE = ROOT / ".env.tunnel.beta.local"
 ARTIFACT_ROOT = ROOT / "tests" / "artifacts"
 RECORDING_VIEWPORT = {"width": 1920, "height": 1080}
@@ -405,36 +409,6 @@ def is_expected_navigation_abort(entry: dict[str, Any]) -> bool:
     if str(entry.get("failure") or "") != "net::ERR_ABORTED":
         return False
     return str(entry.get("resource_type") or "") in {"fetch", "xhr"}
-
-
-def owned_api_key_cleanup_proven(report: dict[str, Any]) -> bool:
-    """Require a successful exact-tenant revocation for every run-created key."""
-    created = report.get("created_api_keys")
-    actions = report.get("cleanup_actions")
-    if not isinstance(created, list) or not isinstance(actions, list):
-        return False
-    # A completed setup must retain the response-owned key identity. Labels
-    # alone cannot establish either key ownership or successful cleanup.
-    if not created:
-        return not any(step.get("label") == "api-key-created" for step in report.get("steps", []))
-    owned = set()
-    for key in created:
-        if not isinstance(key, dict):
-            return False
-        identity = (key.get("id"), key.get("organization_id"))
-        if not all(isinstance(value, str) and value.strip() for value in identity) or identity in owned:
-            return False
-        owned.add(identity)
-        matches = [action for action in actions if isinstance(action, dict)
-                   and action.get("type") == "revoke_api_key"
-                   and (action.get("id"), action.get("organization_id")) == identity]
-        if len(matches) != 1:
-            return False
-        action = matches[0]
-        # The adapter stores strings in its existing durable report format.
-        if action.get("ok") != "true" or action.get("status") not in {"200", "204"}:
-            return False
-    return True
 
 
 def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
