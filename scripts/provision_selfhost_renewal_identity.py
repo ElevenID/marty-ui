@@ -17,10 +17,12 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from activate_selfhost_renewed_secrets import checked_certificates, checked_tokens, private_file  # noqa: E402
+from selfhost_operator_inputs import private_file, private_empty_or_source  # noqa: E402
+from selfhost_operator_inputs import write_private as write_private  # noqa: E402
+from activate_selfhost_renewed_secrets import checked_certificates, checked_tokens  # noqa: E402
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE, RENEWAL_OPERATOR_POLICY)  # noqa: E402
-from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, entries, private_empty_or_source  # noqa: E402
+from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, entries  # noqa: E402
 
 
 AUTH_MOUNT = "selfhost-renew"
@@ -100,14 +102,6 @@ def operator_acl(policy_names: list[str], *, allow_secret_id_rotation: bool = Tr
     )
 
 
-def write_private(path: Path, value: str, *, max_bytes: int = 512) -> None:
-    if not value or "\n" in value or "\r" in value or len(value) > max_bytes:
-        raise ValueError("renewal credential is invalid")
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(fd, "w", encoding="ascii") as stream:
-        stream.write(value + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
 
 
 def bootstrap(bao: Bao, current: Path, output: Path) -> None:
