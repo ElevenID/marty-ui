@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KEY_MANAGEMENT_PURPOSES, getCompatiblePurposesForAlgorithm, normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
+import { KEY_MANAGEMENT_PURPOSES, createKeyManagementServicePayload, getCompatiblePurposesForAlgorithm, normalizeKeyManagementConfig } from './keyManagementServiceCatalog'
 
 describe('key management configuration boundary', () => {
   it('exposes the native OID4VP request purpose only for its required ES256 key', () => {
@@ -47,4 +47,18 @@ describe('key management configuration boundary', () => {
     expect(normalized.services[0].key_reference).toBe('issuer-key-v4')
     expect(normalized.default_service_id).toBe('remote-signer')
   })
+})
+
+
+it('preserves existing transit CA trust through config normalization and new registration payloads', () => {
+  const normalized = normalizeKeyManagementConfig({
+    services: [{ id: 'external-transit', service_type: 'openbao-transit', ca_cert_file: '/run/secrets/customer-ca' }],
+    service_type_catalog: [{ id: 'openbao-transit', protocol: 'vault-transit', connection_fields: ['endpoint', 'mount'] }],
+  })
+  expect(normalized.services[0].ca_cert_file).toBe('/run/secrets/customer-ca')
+  expect(normalizeKeyManagementConfig(normalized).services[0].ca_cert_file).toBe('/run/secrets/customer-ca')
+  expect(normalized.service_type_catalog[0].connection_fields).toContain('ca_cert_file')
+  expect(createKeyManagementServicePayload({ service_type: 'openbao-transit', ca_cert_file: '/run/secrets/new-ca' },
+    normalized.service_type_catalog).ca_cert_file).toBe('/run/secrets/new-ca')
+  expect(createKeyManagementServicePayload({ service_type: 'openbao-transit' }, normalized.service_type_catalog).ca_cert_file).toBe('')
 })

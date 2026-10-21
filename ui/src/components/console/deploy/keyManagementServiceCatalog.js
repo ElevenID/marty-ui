@@ -7,7 +7,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit',
     category: 'service-hsm',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
   },
@@ -19,7 +19,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit',
     category: 'service-hsm',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Transit key name',
     supports_inventory: true,
   },
@@ -67,7 +67,7 @@ const DEFAULT_KEY_MANAGEMENT_SERVICE_TYPE_CATALOG = [
     protocol: 'vault-transit-compatible',
     category: 'custom',
     auth_modes: ['token'],
-    connection_fields: ['endpoint', 'mount', 'namespace'],
+    connection_fields: ['endpoint', 'mount', 'namespace', 'ca_cert_file'],
     key_reference_label: 'Key reference',
     supports_inventory: false,
   },
@@ -164,6 +164,16 @@ export const parseListInput = (value) => {
   return deduped
 }
 
+// The native transit transport already accepts an optional mounted CA file.
+// Older server catalogs omit it; retain the same control for those responses.
+const connectionFieldsForService = (entry) => {
+  const fields = parseListInput(entry.connection_fields)
+  if (['vault-transit', 'vault-transit-compatible'].includes(entry.protocol) && !fields.includes('ca_cert_file')) {
+    fields.push('ca_cert_file')
+  }
+  return fields
+}
+
 export const normalizeServiceTypeCatalog = (catalog) => {
   const rawCatalog = Array.isArray(catalog) && catalog.length > 0
     ? catalog
@@ -179,7 +189,7 @@ export const normalizeServiceTypeCatalog = (catalog) => {
       protocol: normalizeString(entry.protocol) || 'custom',
       category: normalizeString(entry.category) || 'custom',
       auth_modes: parseListInput(entry.auth_modes),
-      connection_fields: parseListInput(entry.connection_fields),
+      connection_fields: connectionFieldsForService(entry),
       key_reference_label: normalizeString(entry.key_reference_label) || 'Key reference',
       supports_inventory: Boolean(entry.supports_inventory),
     }))
@@ -223,6 +233,7 @@ export const normalizeKeyManagementService = (service, catalog) => {
     region: normalizeString(service.region),
     mount: normalizeString(service.mount),
     namespace: normalizeString(service.namespace),
+    ca_cert_file: normalizeString(service.ca_cert_file),
     auth_mode: normalizeString(service.auth_mode) || definition.auth_modes[0] || 'custom',
     auth_reference: normalizeString(service.auth_reference),
     key_reference: keyReference,
@@ -326,6 +337,7 @@ export const createKeyManagementServicePayload = (wizardData, catalog) => {
       region: wizardData.region,
       mount: wizardData.mount,
       namespace: wizardData.namespace,
+      ca_cert_file: wizardData.ca_cert_file,
       auth_mode: wizardData.auth_mode,
       auth_reference: wizardData.auth_reference,
       key_reference: wizardData.key_reference,

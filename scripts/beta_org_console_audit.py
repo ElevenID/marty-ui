@@ -141,6 +141,10 @@ def load_signing_inputs(environment: dict[str, str] | None = None) -> dict[str, 
         raise ValueError("DEMO_D10_KMS_TOKEN_FILE must be a bounded readable token file") from None
     if not 16 <= len(token) <= 4096 or any(char.isspace() or ord(char) < 32 for char in token):
         raise ValueError("DEMO_D10_KMS_TOKEN_FILE does not contain a usable transit token")
+    ca_cert_file = str(environment.get("DEMO_D10_KMS_CA_CERT_FILE") or "").strip()
+    if ca_cert_file and (not ca_cert_file.startswith("/") or len(ca_cert_file) > 4096
+                         or any(ord(char) < 32 for char in ca_cert_file)):
+        raise ValueError("DEMO_D10_KMS_CA_CERT_FILE must be an absolute file path mounted on the beta signing server")
     KNOWN_SECRETS.add(token)
     validator = Path(environment["DEMO_SIGNING_CAPABILITY_BIN"]).resolve()
     try:
@@ -154,7 +158,7 @@ def load_signing_inputs(environment: dict[str, str] | None = None) -> dict[str, 
             raise ValueError("wrong validator")
     except (OSError, ValueError, subprocess.SubprocessError):
         raise ValueError("Build and select the native validate-signing-capability binary before running D10") from None
-    return {"endpoint": endpoint, "mount": mount, "namespace": namespace,
+    return {"endpoint": endpoint, "mount": mount, "namespace": namespace, "ca_cert_file": ca_cert_file,
             "key_reference": key_reference, "token": token, "validator": str(validator),
             "validator_sha256": validator_sha256}
 
@@ -1665,6 +1669,8 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
               (r"^transit token", inputs["token"])]
     if inputs["namespace"]:
         fields.append((r"^namespace", inputs["namespace"]))
+    if inputs.get("ca_cert_file"):
+        fields.append((r"^TLS CA certificate file", inputs["ca_cert_file"]))
     if page.get_by_label(re.compile(r"^transit token", re.I)).first.get_attribute("type") != "password":
         raise ValueError("The deployed transit token field must mask its value before capture")
     for label, value in fields:
@@ -1705,6 +1711,7 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
             or str(service.get("endpoint") or "").rstrip("/") != inputs["endpoint"]
             or service.get("mount") != inputs["mount"]
             or str(service.get("namespace") or "") != inputs["namespace"]
+            or str(service.get("ca_cert_file") or "") != inputs.get("ca_cert_file", "")
             or service.get("key_reference") != inputs["key_reference"]
             or not set(SIGNING_PURPOSES).issubset(service.get("key_purposes") or [])
             or "ES256" not in (service.get("algorithms") or [])):

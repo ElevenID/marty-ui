@@ -65,6 +65,7 @@ const CONNECTION_LABELS = {
   region: 'Region / location',
   mount: 'Transit mount',
   namespace: 'Namespace',
+  ca_cert_file: 'TLS CA certificate file',
 };
 
 function logKeyManagementWizardError(message, error) {
@@ -315,6 +316,7 @@ const KeyManagementServiceWizard = () => {
       region: '',
       mount: 'transit',
       namespace: '',
+      ca_cert_file: '',
       auth_mode: '',
       auth_fields: {},
       key_reference: '',
@@ -377,6 +379,7 @@ const KeyManagementServiceWizard = () => {
         region: wizard.data.region,
         mount: wizard.data.mount,
         namespace: wizard.data.namespace,
+        ca_cert_file: wizard.data.ca_cert_file,
         auth_mode: wizard.data.auth_mode,
         auth_reference: serializeAuthReference(wizard.data.auth_mode, wizard.data.auth_fields),
         key_reference: wizard.data.key_reference,
@@ -411,7 +414,7 @@ const KeyManagementServiceWizard = () => {
     } finally {
       setPreflightLoading(false);
     }
-  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
+  }, [orgRequestParams, wizard.data.algorithms, wizard.data.auth_mode, wizard.data.auth_fields, wizard.data.ca_cert_file, wizard.data.endpoint, wizard.data.key_aliases, wizard.data.key_reference, wizard.data.mount, wizard.data.name, wizard.data.namespace, wizard.data.region, wizard.data.service_type]);
 
   const handleSelectServiceType = (definition) => {
     setPreflightChecks([]);
@@ -421,6 +424,7 @@ const KeyManagementServiceWizard = () => {
       auth_fields: {},
       mount: definition.connection_fields.includes('mount') ? (wizard.data.mount || 'transit') : '',
       namespace: definition.connection_fields.includes('namespace') ? wizard.data.namespace : '',
+      ca_cert_file: definition.connection_fields.includes('ca_cert_file') ? wizard.data.ca_cert_file : '',
       endpoint: definition.connection_fields.includes('endpoint') ? wizard.data.endpoint : '',
       region: definition.connection_fields.includes('region') ? wizard.data.region : '',
     });
@@ -469,7 +473,7 @@ const KeyManagementServiceWizard = () => {
   );
 
   const renderConnectionField = (fieldName) => {
-    const isOptional = fieldName === 'namespace';
+    const isOptional = ['namespace', 'ca_cert_file'].includes(fieldName);
     return (
       <TextField
         key={fieldName}
@@ -477,6 +481,9 @@ const KeyManagementServiceWizard = () => {
         label={CONNECTION_LABELS[fieldName] || fieldName}
         value={wizard.data[fieldName] || ''}
         required={!isOptional}
+        helperText={fieldName === 'ca_cert_file'
+          ? 'Optional path to a CA certificate file already mounted on the signing server. Leave blank to use the system trust store.'
+          : undefined}
         onChange={(event) => wizard.updateData({ [fieldName]: event.target.value })}
       />
     );

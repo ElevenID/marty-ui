@@ -213,3 +213,21 @@ def test_public_probe_adapter_uses_real_native_es256_verification_and_rejects_re
     with pytest.raises(ValueError, match="prepare failed"):
         audit.verify_issuer_signing_capabilities(fake, expected["run_id"], inputs)
     assert len(calls) == 2 and not any(path.endswith("/sign") for path in calls)
+
+
+@pytest.mark.parametrize("ca_path", ["relative/ca.pem", "/run/secrets/ca\nforged", "x" * 4097])
+def test_rejects_unusable_beta_server_ca_paths_before_validator_or_mutation(tmp_path, ca_path):
+    audit = _audit()
+    environment = {**_environment(tmp_path), "DEMO_D10_KMS_CA_CERT_FILE": ca_path}
+    with pytest.raises(ValueError, match="mounted on the beta signing server"):
+        audit.load_signing_inputs(environment)
+
+
+def test_explicit_mounted_ca_path_is_preserved_for_real_ui_registration(monkeypatch, tmp_path):
+    audit = _audit()
+    monkeypatch.setattr(audit.subprocess, "run", lambda *_args, **_kwargs:
+                        SimpleNamespace(returncode=0, stdout=audit.SIGNING_CAPABILITY_SCHEMA + "\n"))
+    environment = {**_environment(tmp_path), "DEMO_D10_KMS_CA_CERT_FILE": "/run/secrets/customer-ca"}
+    assert audit.load_signing_inputs(environment)["ca_cert_file"] == "/run/secrets/customer-ca"
+    environment.pop("DEMO_D10_KMS_CA_CERT_FILE")
+    assert audit.load_signing_inputs(environment)["ca_cert_file"] == ""

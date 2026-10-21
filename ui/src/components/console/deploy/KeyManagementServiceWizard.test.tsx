@@ -53,6 +53,7 @@ describe('KeyManagementServiceWizard', () => {
           protocol: 'vault-transit',
           endpoint: 'http://openbao:8200',
           mount: 'transit',
+          ca_cert_file: '/run/secrets/existing-transit-ca',
           key_reference: 'cred-issuer-marty-es256',
           key_aliases: ['cred-issuer-marty-es256'],
           algorithms: ['ES256'],
@@ -137,6 +138,7 @@ describe('KeyManagementServiceWizard', () => {
     expect(payload.organization_id).toBe('org-123')
     expect(payload.default_service_id).toBeTruthy()
     expect(payload.services).toHaveLength(2)
+    expect(payload.services[0].ca_cert_file).toBe('/run/secrets/existing-transit-ca')
     expect(payload.services[1]).toMatchObject({
       name: 'Production AWS KMS',
       service_type: 'aws-kms',
@@ -199,6 +201,10 @@ describe('KeyManagementServiceWizard', () => {
 
     await user.type(screen.getByRole('textbox', { name: /service name/i }), 'Transit signer')
     await user.type(screen.getByRole('textbox', { name: /service url/i }), 'https://signer.example.com')
+    const caInput = screen.getByRole('textbox', { name: /TLS CA certificate file/i })
+    expect(caInput).not.toBeRequired()
+    await user.type(caInput, '/run/secrets/customer-transit-ca')
+    expect(screen.getByText(/already mounted on the signing server/i)).toBeInTheDocument()
     const mountInput = screen.getByRole('textbox', { name: /transit mount/i })
     await user.clear(mountInput)
     await user.type(mountInput, 'marty-transit')
@@ -227,12 +233,16 @@ describe('KeyManagementServiceWizard', () => {
       organization_id: 'org-123',
       service_type: 'custom-transit-compatible',
       endpoint: 'https://signer.example.com',
+      ca_cert_file: '/run/secrets/customer-transit-ca',
       mount: 'marty-transit',
       auth_reference: 'vault-token',
       key_reference: 'cred-issuer-prod',
     }))
     expect(await screen.findByText('Provider connectivity')).toBeInTheDocument()
     expect(screen.getByText('Connected to signer endpoint.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Register service' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledTimes(1))
+    expect(mockUpdateKeyManagementConfig.mock.calls[0][0].services[1].ca_cert_file).toBe('/run/secrets/customer-transit-ca')
   })
 
   it('disables incompatible key purposes for selected algorithms', async () => {
