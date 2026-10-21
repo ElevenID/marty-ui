@@ -3156,8 +3156,6 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
 ) -> None:
     cases = {
         "tests/test_didcomm_native_consumer_ownership.py": 38,
-        "tests/test_didcomm_native_credentials_release.py": 21,
-        "tests/test_issuance_retention_credentials_release.py": 4,
     }
     _, workflow = _workflow(CI_PATH)
     ci_source = CI_PATH.read_text(encoding="utf-8")
@@ -3224,7 +3222,7 @@ def test_didcomm_policy_test_sources_have_exact_release_owner(
         step.get("run") == RELEASE_TEST_COMMAND for step in release["steps"]
     )
     assert "tests" in RELEASE_TEST_COMMAND.split()
-    assert sum(cases.values()) == 63
+    assert sum(cases.values()) == 38
 
 
 def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
@@ -3236,8 +3234,6 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
     )
     sources = (
         "tests/test_didcomm_native_consumer_ownership.py",
-        "tests/test_didcomm_native_credentials_release.py",
-        "tests/test_issuance_retention_credentials_release.py",
     )
 
     def classify(paths: list[str], **kwargs: object) -> dict[str, str]:
@@ -3259,6 +3255,8 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
             "contracts/didcomm-native-consumer-ownership.json",
             "docker-compose.base.yml",
             "tests/unknown_didcomm_test.py",
+            "tests/test_didcomm_native_credentials_release.py",
+            "tests/test_issuance_retention_credentials_release.py",
             "renamed/old_didcomm_test.py",
         ):
             mixed = classify([source, other])
@@ -3275,6 +3273,13 @@ def test_exact_didcomm_release_pr_path_preserves_full_release_fallback(
         no_base = classify([source], missing_base=True)
         assert no_base["didcomm_release_test_only"] == "false"
         assert no_base["all"] == "true"
+    for retired in (
+        "tests/test_didcomm_native_credentials_release.py",
+        "tests/test_issuance_retention_credentials_release.py",
+    ):
+        fallback = classify([retired])
+        assert fallback["didcomm_release_test_only"] == "false"
+        assert fallback["all"] == "true"
     assert classify([])["didcomm_release_test_only"] == "false"
 
     release = workflow["jobs"]["test-release-contracts"]

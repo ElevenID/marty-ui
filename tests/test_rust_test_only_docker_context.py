@@ -356,6 +356,8 @@ def test_exact_test_only_leaves_do_not_invalidate_release_docker_copy() -> None:
         for shared_fixture in (
             "rust/acceptance/support/base_runtime_redis.rs",
             "rust/acceptance/support/didcomm_gateway_replay.rs",
+            "rust/acceptance/support/didcomm_native_grpc_fixture.rs",
+            "rust/acceptance/support/issuance_named_peers.rs",
         ):
             assert lines.count(shared_fixture) == 1, (
                 f"Shared acceptance fixture exclusion missing: {ignore_path}"

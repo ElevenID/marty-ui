@@ -449,6 +449,26 @@ This does not establish nested-module or runtime-input closure, nor prove that
 all future Rust module syntaxes are recognized. It does not change acceptance
 selection or the required CI lanes.
 
+The Canvas first-hop inventory landed in
+[#1439](https://github.com/ElevenID/marty-ui/pull/1439) as
+`c084fc0fe4c06da59fad5e3261290482d1301c19`; the Flow/self-host extension
+landed in [#1440](https://github.com/ElevenID/marty-ui/pull/1440) as
+`537884a37e2387a85a72caa08d611318fe234732`. Both are diagnostic input
+visibility, not evidence of complete source closure, changed CI selection, or
+a measured turnaround reduction.
+
+The next A0 slice records the Rust compiler depfile adjacent to each of the
+four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
+file inputs without relying on a second hand-maintained module list. A local
+Rust 1.95 package-scoped compile of `marty-platform-clock` confirmed that the
+actual Cargo depfile names both `src/lib.rs` and its embedded public JSON
+fixture; the recorder also parsed that actual depfile. The compiler record is
+target-scoped diagnostic evidence, not authenticated provenance or complete
+closure: it does not enumerate source in dependent crates, cannot guarantee
+coverage of generated files, and does not cover runtime inputs or reached
+assertions. `transitive_source_closure`
+remains incomplete, and no test selection or qualification gate changes.
+
 October 20 A5 diagnostic gap: the first exact-main full run
 [39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
 had one substantive test failure,
@@ -525,6 +545,12 @@ and OIDF keyless edges. The shadow planner now records the source-backed
 build, image and runtime witnesses, including the packaged passport TLS
 bootstrap binary, and keeps these changes broad if a witness disappears.
 This is input evidence, not a live CI selector change or measured speedup.
+
+The next A3 shadow audit records the direct `marty-demo-vendor-seed` binary
+consumer as well as its Cargo-dependent Canvas seed: the migrations image builds
+and copies the binary, and the explicit `seed-demo-vendor-fixtures` Make target
+invokes it through `db-migrate`. The existing full fallback remains in place
+even if a packaging witness disappears; no live check is skipped.
 
 A6 narrow PR pilot: a change containing only the two verified Issuance
 `canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing

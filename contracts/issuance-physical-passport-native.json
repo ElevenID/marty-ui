@@ -81,7 +81,7 @@
       "failure_status": "FAILED"
     },
     "native_status": "Rust BureauClient::submit_batch ports the Python batch envelope, accepted/rejected statuses, out-of-order job mapping and preservation of existing job metadata/state on partial or failed responses; no public passport route uses it",
-    "python_retirement_gate": "qualify the Rust batch adapter against the frozen Python provider contract and live bureau before deleting the Python bureau adapter"
+    "live_provider_qualification": "The Python bureau adapter is retired. Qualify the Rust batch adapter against the frozen provider reference and the live bureau before enabling it for a supported deployment; source retirement does not qualify live provider behavior"
   },
   "document_types": ["TD1", "TD2", "TD3"],
   "wide_data_group_number_observation": {

@@ -366,6 +366,11 @@ export const decorators = [
 3. **Preserve placeholders**: Keep `{{variable}}` intact in translations
 4. **Test in context**: Use language switcher to verify translations
 
+Review user-visible JSX/TSX text and accessibility labels when changing a
+component, then add translation keys and exercise the language switcher. The
+former standalone grep helper was a partial manual search, not a localization
+check; no extraction or completeness gate is claimed.
+
 ### Translation Tools (Optional)
 
 Consider using:

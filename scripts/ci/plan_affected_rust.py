@@ -143,6 +143,28 @@ PACKAGED_RUNTIME_PRODUCERS = {
             ),
         ),
     },
+    "marty-demo-vendor-seed": {
+        "consumer_kind": "packaged-executable/runtime",
+        "consumer": "explicit-demo-fixture-seed",
+        "witnesses": (
+            (
+                "services/Dockerfile.migrations",
+                "&& cargo build --locked --release -p marty-demo-vendor-seed --bin marty-demo-vendor-seed",
+            ),
+            (
+                "services/Dockerfile.migrations",
+                "COPY --from=rust-migration-builder /build/rust/target/release/marty-demo-vendor-seed /usr/local/bin/marty-demo-vendor-seed",
+            ),
+            (
+                "docker-compose.base.yml",
+                "  db-migrate:\n    build:\n      context: .\n      dockerfile: services/Dockerfile.migrations",
+            ),
+            (
+                "Makefile",
+                "db-migrate /usr/local/bin/marty-demo-vendor-seed",
+            ),
+        ),
+    },
 }
 PACKAGED_WITNESS_MAX_BYTES = 1024 * 1024
 
