@@ -1035,31 +1035,46 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId,
   return assignment;
 }
 
-async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
-  await page.goto(`${adminCanvas.origin}/courses/${fixtures.course.id}/assignments`, {
-    waitUntil: 'domcontentloaded',
-    timeout: DEFAULT_TIMEOUT_MS,
+async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssignment, martyOrigin) {
+  await page.goto(`${canvas.origin}/courses/${fixtures.course.id}/assignments`, {
+    waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
   });
   const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
-  requireCondition(assignmentName, 'canvas_staff_assignment_name_missing', 'The Deep Linked Canvas assignment has no instructor-visible name.');
+  requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment requires a visible name.');
   await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
-  await page.waitForURL(
-    (url) => url.origin === adminCanvas.origin && url.pathname.includes(`/assignments/${externalAssignment.id}`),
-    { timeout: DEFAULT_TIMEOUT_MS },
-  );
-  const launchControl = page
-    .getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
-    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i }))
-    .first();
-  await launchControl.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchControl.click();
-  const launchedPage = await popupPromise;
-  await launchedPage.waitForURL((url) => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByText(/Canvas launch verified/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.close();
+  await page.waitForURL(url => url.origin === canvas.origin
+    && url.pathname === `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`,
+  { timeout: DEFAULT_TIMEOUT_MS });
+  const launchControl = page.getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
+    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i })).first();
+  const presentation = await waitFor(async () => {
+    const frames = [];
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) continue;
+      try {
+        if (new URL(frame.url()).origin === martyOrigin && await (await frame.frameElement()).isVisible()) frames.push(frame);
+      } catch { /* A stock iframe may still be navigating. */ }
+    }
+    requireCondition(frames.length <= 1, 'canvas_resource_launch_ambiguous', 'Canvas must expose exactly one visible Marty resource launch.');
+    if (frames.length === 1) return { surface: frames[0], page, popup: false };
+    return await launchControl.isVisible() ? { popup: true } : null;
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_resource_launch_missing');
+  if (presentation.popup) {
+    const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
+    await launchControl.click();
+    const popup = await popupPromise;
+    await popup.waitForURL(url => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
+    await popup.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
+    presentation.surface = popup; presentation.page = popup;
+  }
+  await presentation.surface.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  return presentation;
+}
+
+async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
+  const launch = await openCanvasAssignmentResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin);
+  await launch.surface.getByText(/Canvas launch verified/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  if (launch.popup) await launch.page.close();
 }
 
 function validateReadinessSnapshot(snapshot, { requireActive = false } = {}) {
@@ -1205,38 +1220,15 @@ async function copyCookies(sourceContext, destinationContext) {
 }
 
 async function launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin) {
-  // Require the learner-visible stock Canvas assignment path. The external
-  // tool launch APIs cannot satisfy the portability/adoption case.
-  await page.goto(`${learnerCanvas.origin}/courses/${fixtures.course.id}/assignments`, {
-    waitUntil: 'domcontentloaded',
-    timeout: DEFAULT_TIMEOUT_MS,
-  });
-  const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
-  requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment has no learner-visible name.');
-  await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
-  await page.waitForURL(
-    (url) => url.origin === learnerCanvas.origin && url.pathname.includes(`/assignments/${externalAssignment.id}`),
-    { timeout: DEFAULT_TIMEOUT_MS },
-  );
-
-  const launchControl = page
-    .getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
-    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i }))
-    .first();
-  await launchControl.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchControl.click();
-  const launchedPage = await popupPromise;
-  await launchedPage.waitForURL((url) => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
-  requireCondition(new URL(launchedPage.url()).origin === martyOrigin, 'learner_canvas_ui_launch_untrusted', 'The stock Canvas assignment launched outside Marty.');
-  await launchedPage.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  // Both stock embedded and new-window launches exercise the assignment UI.
+  const launch = await openCanvasAssignmentResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
+  const launchedPage = launch.page;
   const bootstrapPromise = launchedPage.waitForResponse((response) => (
     response.request().method() === 'POST'
       && new URL(response.url()).origin === martyOrigin
       && new URL(response.url()).pathname.endsWith('/lti/experience-sessions/current/bootstrap')
   ), { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByTestId('canvas-lti-continue').click();
+  await launch.surface.getByTestId('canvas-lti-continue').click();
   const bootstrapResponse = await bootstrapPromise;
   const bootstrap = await responseJson(bootstrapResponse, 'canvas_application_bootstrap_failed', 'Canvas learner application bootstrap failed', [200]);
   await launchedPage.getByTestId('canvas-evidence-sync-panel').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
