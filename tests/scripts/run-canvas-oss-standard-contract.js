@@ -1052,7 +1052,9 @@ async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssi
     if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
       const code = value.code || value.error?.code || value.error_code;
       if (typeof code === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(code)) item.errorCode = code;
-      if (typeof value.detail === 'string' && /^Canvas LTI [A-Za-z ,._-]{1,180}$/.test(value.detail)) item.detail = value.detail;
+      if (typeof value.detail === 'string') item.detail = sanitizeEvidence(value.detail)
+        .replace(/https?:\/\/[^\s]+/gi, '[redacted-url]')
+        .replace(/[A-Za-z0-9_-]{24,}/g, '[redacted-opaque]');
     }).catch(() => {}));
   };
   page.on('response', observeDocument);
