@@ -54,6 +54,16 @@ checks the homepage, console shell, served marker and local script MIME types,
 requires the UI alone to refuse stack readiness, and removes its container.
 This is component validation, not an authenticated demo or full-stack qualification.
 
+The shared Compose graph waits for organization health before starting
+revocation-profile. Native TLS startup eagerly connects to that gRPC service;
+starting both together can exhaust the health retries and abort dependent
+application startup even though organization becomes healthy moments later.
+Keep the dependency in the shared graph instead of weakening the health check.
+If a prior rollout already completed migrations and stopped during application
+startup, inspect the retained artifacts and use the guarded
+`complete-local-beta-startup.ps1` path. Do not replay migrations to restart
+already prepared application containers.
+
 After an authorized beta database reset, a host passport-fence marker can still
 refer to the retired PostgreSQL cluster. Use
 `reconcile-reset-beta-passport-fence.ps1 -PostgresContainer <full-id>` to inspect

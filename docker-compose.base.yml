@@ -1274,6 +1274,9 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+      # Native TLS startup eagerly connects to organization before binding HTTP.
+      organization:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8013/health"]
       interval: 10s
