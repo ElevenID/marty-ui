@@ -248,35 +248,39 @@ def test_explicit_mounted_ca_path_is_preserved_for_real_ui_registration(monkeypa
     assert audit.load_signing_inputs(environment)["ca_cert_file"] == ""
 
 
-def test_live_required_transit_key_label_is_fillable_without_label_fallback(monkeypatch):
-    """Actual browser label semantics: MUI's required marker is part of the label."""
+def test_live_key_access_controls_bind_required_label_and_signing_purposes(monkeypatch):
+    """Actual Chromium semantics through the entire Key Access stage; no beta requests."""
     audit = _audit()
     from playwright.sync_api import sync_playwright
     with sync_playwright() as runtime:
         browser = runtime.chromium.launch(headless=True)
         try:
             page = browser.new_page()
-            page.set_content('<label for="key">Transit key name <span aria-hidden="true">*</span></label><input id="key" required>')
-            # Exercise the production form operation up to its next required control.
+            page.set_content('''<label for="key">Transit key name <span aria-hidden="true">*</span></label><input id="key" required>
+                <label><input id="issuer" type="checkbox">VC JWT / SD-JWT issuer <span>Formats: jwt_vc_json, dc+sd-jwt</span></label>
+                <label><input id="verifier" type="checkbox">OID4VP request signing <span>Formats: oauth-authz-req+jwt</span></label>
+                <label><input id="default" type="checkbox">Use as the default signing service</label>''')
             monkeypatch.setattr(audit, "active_organization_id", lambda _page: "fresh-org")
-            class StopAfterKey(Exception):
+            class StopBeforeRegister(Exception):
                 pass
             token = SimpleNamespace(first=SimpleNamespace(get_attribute=lambda _name: "password"))
             real_get_label = page.get_by_label
             monkeypatch.setattr(page, "get_by_label", lambda label: token if label.pattern.startswith("^transit token") else real_get_label(label))
-            monkeypatch.setattr(page, "get_by_role", lambda *args, **kwargs: (_ for _ in ()).throw(StopAfterKey()))
+            monkeypatch.setattr(page, "expect_response", lambda *args, **kwargs: (_ for _ in ()).throw(StopBeforeRegister()))
+            steps = []
             fake = SimpleNamespace(page=page, base_url="https://beta.elevenidllc.com", goto=lambda *_: None,
-                                   snapshot=lambda *_: None, click_role=lambda *args, **kwargs: True, fill_label=lambda *_: True)
-            with pytest.raises(StopAfterKey):
-                audit.create_key_service_if_possible(fake, "required-label-control", {
-                    "endpoint": "https://kms.internal.company", "mount": "transit", "token": "generated-control-only",
-                    "namespace": "", "key_reference": "actual-reference"})
+                snapshot=lambda label, *_: steps.append(label), click_role=lambda *args, **kwargs: True,
+                fill_label=lambda *_: True)
+            inputs = {"endpoint": "https://kms.internal.company", "mount": "transit", "token": "generated-control-only",
+                      "namespace": "", "key_reference": "actual-reference"}
+            with pytest.raises(StopBeforeRegister):
+                audit.create_key_service_if_possible(fake, "key-access-control", inputs)
             assert page.locator("#key").input_value() == "actual-reference"
+            assert all(page.locator("#" + name).is_checked() for name in ["issuer", "verifier", "default"])
+            assert steps[-2:] == ["kms-key-access-filled", "kms-review"]
             page.set_content('<label for="key">Transit key name *</label><input id="key"><label for="other">Transit key name</label><input id="other">')
             with pytest.raises(ValueError, match="ambiguous"):
-                audit.create_key_service_if_possible(fake, "duplicate-control", {
-                    "endpoint": "https://kms.internal.company", "mount": "transit", "token": "generated-control-only",
-                    "namespace": "", "key_reference": "must-not-be-filled"})
+                audit.create_key_service_if_possible(fake, "duplicate-control", inputs)
             assert page.locator("#key").input_value() == ""
             assert page.locator("#other").input_value() == ""
         finally:

@@ -1691,7 +1691,7 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
     if key_field.count() != 1:
         raise ValueError("The real transit key selector is unavailable or ambiguous")
     key_field.fill(inputs["key_reference"], timeout=5000)
-    for purpose in [r"^VC JWT / SD-JWT issuer", r"^OID4VP request signing"]:
+    for purpose in [r"^VC JWT \/ SD-JWT issuer(?:\s|$)", r"^OID4VP request signing(?:\s|$)"]:
         page.get_by_role("checkbox", name=re.compile(purpose, re.I)).check(timeout=3000)
     page.get_by_role("checkbox", name="Use as the default signing service", exact=True).check(timeout=3000)
     audit.snapshot("kms-key-access-filled", "Selected the existing ES256 key for credential issuance and OID4VP request signing.")
