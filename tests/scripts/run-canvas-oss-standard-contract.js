@@ -597,16 +597,18 @@ async function selectProductionBadgeTemplates(marty, organizationId) {
   const credentials = safeList(await marty.get(`/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`));
   const credentialById = new Map(credentials.map((item) => [String(item.id), item]));
   const candidates = applications.filter((application) => {
+    if (String(application.organization_id) !== organizationId) return false;
     if (String(application.status || '').toUpperCase() !== 'ACTIVE') return false;
     if (explicitApplicationId && String(application.id) !== explicitApplicationId) return false;
     const credential = credentialById.get(String(application.credential_template_id || ''));
     if (!credential || String(credential.status || '').toUpperCase() !== 'ACTIVE') return false;
+    if (String(credential.organization_id) !== organizationId) return false;
     if (explicitCredentialId && String(credential.id) !== explicitCredentialId) return false;
-    const descriptor = [credential.name, credential.credential_type, credential.vct]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return /open.?badge|badge|achievement/.test(descriptor);
+    const type = String(credential.credential_type || '').replace(/[^a-z]/gi, '').toLowerCase();
+    const claims = new Set((credential.claims || []).map(claim => claim.name));
+    return ['openbadge', 'openbadgecredential'].includes(type)
+      && ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+        .every(name => claims.has(name));
   });
   requireCondition(candidates.length === 1, 'badge_template_selection_ambiguous', 'Exactly one active Open Badge application/template pair must be selected for the portability lane.');
   const application = candidates[0];
@@ -1906,6 +1908,7 @@ async function main() {
 }
 
 module.exports = {
+  selectProductionBadgeTemplates,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
   launchLearnerResource,

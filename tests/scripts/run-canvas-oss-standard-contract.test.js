@@ -13,6 +13,7 @@ const {
   ContractFailure,
   ObservationLedger,
   observePipelinePrerequisites,
+  selectProductionBadgeTemplates,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
@@ -28,6 +29,23 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
+  const claims = ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+    .map(name => ({ name }));
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE',
+    credential_type: 'OpenBadgeCredential', claims };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  function client(c, a) { return { get: async path => path.startsWith('/v1/credential-templates') ? [c] : [a] }; }
+  assert.equal((await selectProductionBadgeTemplates(client(credential, application), 'org-1')).credential.id, 'learning');
+  for (const c of [
+    { ...credential, credential_type: 'EmployeeBadge' },
+    { ...credential, credential_type: 'open_badge', claims: [{ name: 'email' }] },
+    { ...credential, organization_id: 'foreign' },
+  ]) await assert.rejects(selectProductionBadgeTemplates(client(c, application), 'org-1'), /Exactly one active Open Badge/);
+  await assert.rejects(selectProductionBadgeTemplates(client(credential,
+    { ...application, organization_id: 'foreign' }), 'org-1'), /Exactly one active Open Badge/);
+});
 
 test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-prerequisite-root-'));
