@@ -856,9 +856,7 @@ fn kms_issuer_context_matches(binding: &Map<String, Value>, issuer: &IssuerConte
         raw.and_then(|value| value.get("issuer_profile_id")),
         profile.and_then(|value| value.get("id")),
     ]);
-    let service = raw
-        .and_then(|value| value.get("service"))
-        .and_then(Value::as_object);
+    let service = crate::credential_issuer::signing_service_context(&issuer.raw_context);
     let service_id = first_text(&[
         raw.and_then(|value| value.get("signing_service_id")),
         service.and_then(|value| value.get("id")),

@@ -1994,6 +1994,7 @@ async function main() {
     requireCondition(recoveredSync.job?.result?.policy_allowed === true, 'pre_issuance_recovery_not_applied', 'The corrected pre-issuance score did not restore the current permit decision.');
     pass('pre_issuance_grade_correction', 'A 95 to 40 to 95 score revision denied then restored policy before issuance; current evidence heads won.');
 
+    markActive('kms_open_badge_claim_and_verify');
     const approvalPath = `/v1/integrations/canvas/applications/${encodeURIComponent(firstBootstrap.application_id)}/approve`;
     const approvalBody = {
       review_notes: 'Approved by the Canvas OSS portability contract after authoritative policy permit.',
@@ -2014,7 +2015,6 @@ async function main() {
       .filter((record) => String(record.application_id) === String(firstBootstrap.application_id));
     requireCondition(preClaimCredentials.length === 0, 'background_claim_signed_early', 'A credential existed before the learner wallet claim.');
 
-    markActive('kms_open_badge_claim_and_verify');
     const claimResponsePromise = recordedPage.waitForResponse((response) => (
       response.request().method() === 'POST'
         && new URL(response.url()).pathname === `/v1/me/applications/${firstBootstrap.application_id}/claim`

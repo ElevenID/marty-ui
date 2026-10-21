@@ -461,6 +461,17 @@ fn parse_issuer_context(
     Ok(resolved)
 }
 
+/// Resolve the signing service returned by the production signing-keys contract.
+/// Retain the historical alias only when it does not contradict the canonical field.
+pub(crate) fn signing_service_context(context: &Value) -> Option<&serde_json::Map<String, Value>> {
+    match (context.get("signing_service"), context.get("service")) {
+        (Some(canonical), Some(legacy)) if canonical != legacy => None,
+        (Some(canonical), _) => canonical.as_object(),
+        (None, Some(legacy)) => legacy.as_object(),
+        (None, None) => None,
+    }
+}
+
 fn native_json(
     operation: fn(&str) -> Result<String, String>,
     request: Value,

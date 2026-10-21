@@ -433,3 +433,42 @@ async fn approval_separates_readiness_drift_from_dependency_outage() {
         Err(CanvasAwardCandidateApprovalError::Unavailable)
     );
 }
+
+#[tokio::test]
+async fn approval_accepts_production_signing_service_context() {
+    let mut resolved = issuer();
+    let raw = resolved.raw_context.as_object_mut().unwrap();
+    let service_value = raw.remove("service").unwrap();
+    raw.insert("signing_service".to_owned(), service_value);
+    // The deployed response carries these identifiers inside issuer_profile.
+    raw.remove("signing_service_id");
+    raw["issuer_profile"]["signing_service_id"] = json!("kms-service-1");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    service(events.clone(), Some(snapshot()), resolved, None, Ok(()))
+        .approve_if_ready(&context(), &application(), &plan(), true)
+        .await
+        .expect("canonical production signing service must reserve issuance");
+    assert!(events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|event| event.starts_with("reserve:")));
+}
+
+#[tokio::test]
+async fn approval_rejects_conflicting_signing_service_alias_before_reservation() {
+    let mut resolved = issuer();
+    resolved.raw_context["signing_service"] = json!({"id":"another-service","algorithm":"ES256"});
+    let events = Arc::new(Mutex::new(Vec::new()));
+    assert_eq!(
+        service(events.clone(), Some(snapshot()), resolved, None, Ok(()))
+            .approve_if_ready(&context(), &application(), &plan(), true)
+            .await,
+        Err(CanvasAwardCandidateApprovalError::ReadinessDrift)
+    );
+    assert!(!events
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|event| event.starts_with("reserve:")));
+}
