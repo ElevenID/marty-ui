@@ -566,7 +566,7 @@ async function enableDeveloperKey(page, keyName) {
   const toggle = row.getByRole('checkbox', { name: new RegExp(`(?:off|on).*${escapeRegExp(keyName)}`, 'i') }).first();
   const checked = await toggle.isChecked().catch(() => false);
   if (!checked) {
-    await toggle.click();
+    await clickCanvasCheckboxLabel(row, toggle);
     const confirm = page.getByRole('button', { name: /switch to on|turn on|enable/i }).first();
     if (await confirm.isVisible().catch(() => false)) await confirm.click();
   }
@@ -591,11 +591,15 @@ async function createLtiDeveloperKey(page, config) {
   return { clientId: String(record.id) };
 }
 
-async function setCanvasCheckbox(modal, input, desired) {
-  if (await input.isChecked() === desired) return;
+async function clickCanvasCheckboxLabel(modal, input) {
   const id = await input.getAttribute('id');
   requireCondition(id && /^[A-Za-z][\w:-]{0,100}$/.test(id), 'canvas_checkbox_identity_missing', 'Canvas checkbox requires its stock associated label.');
   await modal.locator(`label[for=${JSON.stringify(id)}]`).click();
+}
+
+async function setCanvasCheckbox(modal, input, desired) {
+  if (await input.isChecked() === desired) return;
+  await clickCanvasCheckboxLabel(modal, input);
   requireCondition(await input.isChecked() === desired, 'canvas_checkbox_state_mismatch', 'Canvas checkbox did not reach the requested state.');
 }
 
