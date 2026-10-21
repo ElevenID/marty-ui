@@ -1247,6 +1247,18 @@ async function waitForLatestRosterJob(marty, organizationId, bindingId, afterIso
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
 }
 
+async function waitForCanvasCourseCompletion(canvas, fixtures) {
+  return waitFor(async () => {
+    const progress = await canvas.get(`/api/v1/courses/${fixtures.course.id}/users/${fixtures.learner.id}/progress`);
+    const required = Number(progress?.requirement_count);
+    const completed = Number(progress?.requirement_completed_count);
+    // Canvas may retain completed_at while asynchronously recalculating module
+    // progress after a grade correction. Require current nonempty counts.
+    return Number.isFinite(required) && required > 0 && Number.isFinite(completed)
+      && completed >= required ? progress : null;
+  }, DEFAULT_TIMEOUT_MS, 1_000, 'course_completion_not_observed');
+}
+
 async function showVideoStep(page, title, detail) {
   await page.evaluate(({ titleText, detailText }) => {
     let overlay = document.getElementById('canvas-oss-contract-step');
@@ -1854,13 +1866,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     pass('module_completion', 'Canvas module lookup with student_id reported the required module completed.');
 
     markActive('course_completion');
-    await waitFor(async () => {
-      const progress = await adminCanvas.get(`/api/v1/courses/${fixtures.course.id}/users/${fixtures.learner.id}/progress`);
-      const complete = progress?.completed_at
-        || (Number(progress?.requirement_count) > 0
-          && Number(progress?.requirement_completed_count) === Number(progress?.requirement_count));
-      return complete ? progress : null;
-    }, DEFAULT_TIMEOUT_MS, 1_000, 'course_completion_not_observed');
+    await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     pass('course_completion', 'Canvas CourseProgress reported all non-empty module requirements completed.');
 
   return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
@@ -1981,6 +1987,7 @@ async function main() {
     await adminCanvas.putForm(`/api/v1/courses/${fixtures.course.id}/assignments/${fixtures.assignment.id}/submissions/${fixtures.learner.id}`, {
       'submission[posted_grade]': 95,
     }, [200]);
+    await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     const recoveredSync = await triggerLearnerSync(recordedPage, marty);
     requireCondition(recoveredSync.job?.result?.policy_allowed === true, 'pre_issuance_recovery_not_applied', 'The corrected pre-issuance score did not restore the current permit decision.');
     pass('pre_issuance_grade_correction', 'A 95 to 40 to 95 score revision denied then restored policy before issuance; current evidence heads won.');
@@ -2138,6 +2145,7 @@ async function main() {
 }
 
 module.exports = {
+  waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
   canvasOwnedToolIndex,
   assertCanvasOauthCompletion,
