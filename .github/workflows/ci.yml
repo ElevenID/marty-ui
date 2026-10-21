@@ -1556,11 +1556,16 @@ jobs:
         run: |
           set -euo pipefail
           source ../scripts/ci/rust_contract_execution.sh
-          export MARTY_KMS_AUTH_CONTRACT="$(resolve_recorded_contract_executable marty-auth persistence_contract)"
-          export MARTY_KMS_ORGANIZATION_CONTRACT="$(resolve_recorded_contract_executable marty-organization postgres_integration)"
-          export MARTY_KMS_CREDENTIAL_TEMPLATE_CONTRACT="$(resolve_recorded_contract_executable marty-credential-template postgres_integration)"
-          export MARTY_KMS_PRESENTATION_POLICY_CONTRACT="$(resolve_recorded_contract_executable marty-presentation-policy postgres_integration)"
-          export MARTY_KMS_FLOW_CONTRACT="$(resolve_recorded_contract_executable marty-flow migration_behavior)"
+          MARTY_KMS_AUTH_CONTRACT="$(resolve_recorded_contract_executable marty-auth persistence_contract)"
+          export MARTY_KMS_AUTH_CONTRACT
+          MARTY_KMS_ORGANIZATION_CONTRACT="$(resolve_recorded_contract_executable marty-organization postgres_integration)"
+          export MARTY_KMS_ORGANIZATION_CONTRACT
+          MARTY_KMS_CREDENTIAL_TEMPLATE_CONTRACT="$(resolve_recorded_contract_executable marty-credential-template postgres_integration)"
+          export MARTY_KMS_CREDENTIAL_TEMPLATE_CONTRACT
+          MARTY_KMS_PRESENTATION_POLICY_CONTRACT="$(resolve_recorded_contract_executable marty-presentation-policy postgres_integration)"
+          export MARTY_KMS_PRESENTATION_POLICY_CONTRACT
+          MARTY_KMS_FLOW_CONTRACT="$(resolve_recorded_contract_executable marty-flow migration_behavior)"
+          export MARTY_KMS_FLOW_CONTRACT
           export MARTY_KMS_VERIFICATION_BINARY="$PWD/target/debug/marty-verification-service"
           export MARTY_KMS_DEPLOYMENT_BINARY="$PWD/target/debug/marty-deployment-profile"
           export MARTY_KMS_COMPLIANCE_BINARY="$PWD/target/debug/marty-compliance-profile"

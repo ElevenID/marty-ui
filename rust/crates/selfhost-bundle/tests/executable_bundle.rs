@@ -140,7 +140,8 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
         &repo.join("deploy-config/catalog/secrets.json"),
         &repo.join("deploy-config/stacks/selfhost-production.json"),
         &extracted.join("docker/secrets/selfhost.example"),
-    ).expect("extracted bundle declarations must retain closed secret ownership");
+    )
+    .expect("extracted bundle declarations must retain closed secret ownership");
     let helper = "scripts/bootstrap-selfhost-vault.sh";
     let packaged_helper = fs::read(extracted.join(helper)).unwrap();
     assert_eq!(packaged_helper, fs::read(repo.join(helper)).unwrap());

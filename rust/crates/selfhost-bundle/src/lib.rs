@@ -9,8 +9,8 @@ use std::{
 };
 
 pub mod process;
-pub mod secret_closure;
 mod publication;
+pub mod secret_closure;
 pub mod transform;
 pub type Result<T> = std::result::Result<T, String>;
 pub const MARKER: &str = ".marty-selfhost-bundle.json";

@@ -5897,7 +5897,8 @@ def test_native_kms_schema_acceptance_is_mandatory_in_contracts_lane() -> None:
     for name in ("AUTH_CONTRACT", "ORGANIZATION_CONTRACT", "CREDENTIAL_TEMPLATE_CONTRACT",
                  "PRESENTATION_POLICY_CONTRACT", "FLOW_CONTRACT", "VERIFICATION_BINARY",
                  "DEPLOYMENT_BINARY", "COMPLIANCE_BINARY"):
-        assert "export MARTY_KMS_" + name + "=" in run
+        assert "MARTY_KMS_" + name + "=" in run
+        assert "export MARTY_KMS_" + name in run
     assert "|| true" not in run
     workflow = CI_PATH.read_text(encoding="utf-8")
     assert "cargo build --locked -p marty-deployment-profile -p marty-compliance-profile -p marty-verification-service --bins --message-format=json" in workflow
