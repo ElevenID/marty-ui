@@ -17,13 +17,35 @@ test('UI mutation evidence must match the exact origin, organization, applicatio
 });
 
 test('successful narration requires the wallet and completed verifier decision', () => {
-  const passed = { session: { ok: true }, wallet: { ok: true }, result: { httpStatus: 200, decision: 'allow' } };
+  const passed = { session: { ok: true }, wallet: { ok: true }, result: {
+    httpStatus: 200, decision: 'allow', status: 'COMPLETED', evaluation: 'passed',
+  } };
   assert.equal(requireVerificationDecision(passed, 'allow'), passed.result);
   for (const evidence of [
     { ...passed, session: { ok: false } }, { ...passed, wallet: { ok: false } },
     { ...passed, result: { httpStatus: 202, decision: 'allow' } },
     { ...passed, result: { httpStatus: 200, decision: 'deny' } },
+    { ...passed, result: { ...passed.result, status: 'PENDING' } },
+    { ...passed, result: { ...passed.result, evaluation: 'failed' } },
   ]) assert.throws(() => requireVerificationDecision(evidence, 'allow'), /completed wallet presentation/);
+});
+
+test('expected denial requires typed submission rejection and corroborating terminal verifier result', () => {
+  const denied = {
+    session: { ok: true }, wallet: { ok: false, status: 400, submission: {
+      submitted: true, verifier_http_status: 400, verifier_error: 'invalid_presentation',
+    } }, result: { httpStatus: 200, status: 'FAILED', evaluation: 'failed', decision: 'deny' },
+  };
+  assert.equal(requireVerificationDecision(denied, 'deny'), denied.result);
+  for (const evidence of [
+    { ...denied, session: { ok: false } },
+    { ...denied, wallet: { ...denied.wallet, submission: null } },
+    { ...denied, wallet: { ...denied.wallet, submission: { ...denied.wallet.submission, verifier_http_status: 503 } } },
+    { ...denied, wallet: { ...denied.wallet, submission: { ...denied.wallet.submission, verifier_error: 'invalid_request' } } },
+    { ...denied, result: { ...denied.result, status: 'PENDING' } },
+    { ...denied, result: { ...denied.result, decision: 'allow' } },
+  ]) assert.throws(() => requireVerificationDecision(evidence, 'deny'), /completed wallet presentation/);
+  assert.throws(() => requireVerificationDecision(denied, 'allow'), /completed wallet presentation/);
 });
 
 // Controlled local browser fixture: exercises recorder interaction and masking,

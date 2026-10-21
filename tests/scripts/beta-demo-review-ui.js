@@ -10,7 +10,18 @@ function matchesMutation(response, pageUrl, endpoint) {
 }
 
 function requireVerificationDecision(verification, expectedDecision) {
-  if (verification?.session?.ok !== true || verification?.wallet?.ok !== true
+  const terminalDecision = expectedDecision === 'allow'
+    ? verification?.result?.status === 'COMPLETED' && verification.result.evaluation === 'passed'
+    : expectedDecision === 'deny' && ['FAILED', 'COMPLETED'].includes(verification?.result?.status)
+      && verification.result.evaluation === 'failed';
+  const rejectedPresentation = expectedDecision === 'deny'
+    && verification?.wallet?.ok === false && verification.wallet.status === 400
+    && verification.wallet.submission?.submitted === true
+    && verification.wallet.submission.verifier_http_status === 400
+    && verification.wallet.submission.verifier_error === 'invalid_presentation'
+    && verification?.result?.status === 'FAILED'
+    && verification.result.evaluation === 'failed';
+  if (!terminalDecision || verification?.session?.ok !== true || (verification?.wallet?.ok !== true && !rejectedPresentation)
       || verification?.result?.httpStatus !== 200 || verification?.result?.decision !== expectedDecision) {
     throw new Error(`Expected a completed wallet presentation with an explicit ${expectedDecision} decision`);
   }

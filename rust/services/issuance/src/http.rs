@@ -1306,7 +1306,7 @@ fn router_with_optional_services(
     let api = if let Some(passport) = services.passport {
         api.merge(crate::passport_http::router(passport))
     } else {
-        api
+        api.merge(crate::passport_http::disabled_router())
     };
     let api = if let Some(application_templates) = services.application_templates {
         api.merge(crate::application_template_http::router(
