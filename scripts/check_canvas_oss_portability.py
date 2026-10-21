@@ -20,6 +20,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .canvas_beta_topology import BETA_NETWORK
+else:
+    from canvas_beta_topology import BETA_NETWORK
+
 
 EXPECTED_MARTY_ORIGIN = "https://beta.elevenidllc.com"
 EXPECTED_CANVAS_ORIGIN = "https://canvas-test.elevenidllc.com"
@@ -193,7 +198,7 @@ def validate_lock(lock: dict[str, Any]) -> None:
     topology = lock.get("acceptance_topology", {})
     _require(topology.get("marty_origin") == EXPECTED_MARTY_ORIGIN, "Marty acceptance origin changed")
     _require(topology.get("canvas_origin") == EXPECTED_CANVAS_ORIGIN, "Canvas acceptance origin changed")
-    _require(topology.get("docker_network") == "marty-infra-network", "Canvas must attach to the existing beta tunnel network")
+    _require(topology.get("docker_network") == BETA_NETWORK, "Canvas must attach to the existing beta tunnel network")
     _require(topology.get("tunnel_owner") == "existing_beta_stack", "Acceptance must not start a competing tunnel")
     _require(topology.get("contract_service") == "canvas-contract", "Browser contract must be a Compose service")
     _require(topology.get("continuity_monitor_service") == "canvas-continuity-monitor", "Continuity monitor must be a Compose service")

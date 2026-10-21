@@ -104,7 +104,7 @@
         "timezone": {"const": "America/Denver"},
         "overnight_window": {"const": "02:00-06:00"},
         "runner_labels": {"type": "array", "contains": {"const": "canvas-oss-wsl2"}},
-        "docker_network": {"const": "marty-infra-network"},
+        "docker_network": {"const": "elevenid-beta-network"},
         "tunnel_owner": {"const": "existing_beta_stack"},
         "contract_service": {"const": "canvas-contract"},
         "continuity_monitor_service": {"const": "canvas-continuity-monitor"},

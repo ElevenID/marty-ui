@@ -90,7 +90,7 @@
       "x64",
       "canvas-oss-wsl2"
     ],
-    "docker_network": "marty-infra-network",
+    "docker_network": "elevenid-beta-network",
     "tunnel_owner": "existing_beta_stack",
     "contract_service": "canvas-contract",
     "continuity_monitor_service": "canvas-continuity-monitor",

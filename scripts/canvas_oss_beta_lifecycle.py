@@ -12,6 +12,11 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
+if __package__:
+    from .canvas_beta_topology import inspect_beta_tunnel
+else:
+    from canvas_beta_topology import inspect_beta_tunnel
+
 
 BETA_ORIGIN = "https://beta.elevenidllc.com"
 CANVAS_ORIGIN = "https://canvas-test.elevenidllc.com"
@@ -53,7 +58,10 @@ def is_running(name: str) -> bool:
 
 
 def prepare(state_path: Path) -> None:
-    subprocess.run(["docker", "network", "inspect", "marty-infra-network"], check=True, capture_output=True)
+    def docker(*args):
+        return subprocess.check_output(['docker', *args], stderr=subprocess.PIPE, text=True).strip()
+
+    topology = inspect_beta_tunnel(docker)
     release = assert_beta()
     running = [name for name in STOP_ALLOWLIST if is_running(name)]
     state = {
@@ -62,6 +70,7 @@ def prepare(state_path: Path) -> None:
         "stop_allowlist": list(STOP_ALLOWLIST),
         "previously_running": running,
         "beta_release": release,
+        "beta_topology": topology,
         "docker_desktop_stopped": False,
         "beta_core_stopped": False,
         "selfhost_production_touched": False,
