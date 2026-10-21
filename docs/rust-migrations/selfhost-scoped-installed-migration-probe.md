@@ -58,3 +58,9 @@ This proves neither an operational external OpenBao deployment nor full stack
 startup, login, issuer readiness, customer installation, provenance of third-party
 images, or release eligibility. No operator credentials or secrets are needed;
 the fixture generates disposable values and destroys the project afterward.
+
+The collected `test_actual_scoped_openbao_bootstrap` test (opt in with
+`MARTY_RUN_SCOPED_OPENBAO_PROBE=1`) checks the public certificate contains no
+private key and all five bootstrap tokens are nonempty and distinct from each
+other and the disposable root token. It replaces the standalone HTTPS diagnostic;
+installed migration qualification continues to use the maintained probe above.

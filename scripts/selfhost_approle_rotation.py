@@ -58,23 +58,46 @@ def rotate(
     create_token = manager_login(bao) if manager_login is not None else old_token
     role_id = read(identity / spec.role_id_file).strip()
     old_secret = read(identity / spec.secret_id_file).strip()
+
+    def stage(new_secret: str) -> str:
+        write(output / spec.role_id_file, role_id)
+        write(output / spec.secret_id_file, new_secret)
+        return login(bao, output)
+
+    def cleanup() -> None:
+        for name in (spec.role_id_file, spec.secret_id_file):
+            (output / name).unlink(missing_ok=True)
+
+    rotate_credentials(bao, spec, role_id, old_secret, create_token, stage, cleanup,
+                       (lambda: manager_login(bao)) if manager_login is not None else None)
+
+
+def rotate_credentials(
+    bao, spec: RotationSpec, role_id: str, old_secret: str, create_token: str,
+    stage: Callable[[str], str], cleanup: Callable[[], None],
+    destroy_authority: Callable[[], str] | None = None,
+) -> None:
+    """Commit a validated replacement before revoking the previous credential.
+
+    The owner supplies its validation and staging order; failures remove staged
+    files and revoke only the replacement, leaving the previous identity usable.
+    """
     new_secret = bao.request("POST", spec.secret_id_path, {}, token=create_token) \
         .get("data", {}).get("secret_id")
     if not isinstance(new_secret, str) or len(new_secret) < 20 or new_secret == old_secret:
         raise ValueError(f"replacement {spec.label} SecretID is invalid")
     staged = False
     try:
-        write(output / spec.role_id_file, role_id)
-        write(output / spec.secret_id_file, new_secret)
-        new_token = login(bao, output)
+        new_token = stage(new_secret)
         staged = True
     finally:
         if not staged:
-            for name in (spec.role_id_file, spec.secret_id_file):
-                (output / name).unlink(missing_ok=True)
-            bao.request("POST", spec.secret_id_path + "/destroy",
-                        {"secret_id": new_secret}, token=create_token)
-    destroy_token = manager_login(bao) if manager_login is not None else new_token
+            try:
+                cleanup()
+            finally:
+                bao.request("POST", spec.secret_id_path + "/destroy",
+                            {"secret_id": new_secret}, token=create_token)
+    destroy_token = destroy_authority() if destroy_authority is not None else new_token
     bao.request("POST", spec.secret_id_path + "/destroy",
                 {"secret_id": old_secret}, token=destroy_token)
     require_revoked(bao, role_id, old_secret, spec)
@@ -95,9 +118,19 @@ def retire(
     secret_id = read(identity / spec.secret_id_file).strip()
     old_role = read(retired / spec.role_id_file).strip()
     old_secret = read(retired / spec.secret_id_file).strip()
+    retire_credentials(bao, spec, role_id, secret_id, old_role, old_secret, token,
+                       (lambda: manager_login(bao)) if manager_login is not None else None)
+
+
+def retire_credentials(
+    bao, spec: RotationSpec, role_id: str, secret_id: str,
+    old_role: str, old_secret: str, token: str,
+    destroy_authority: Callable[[], str] | None = None,
+) -> None:
+    """Finish an interrupted rotation using the validated active authority."""
     if old_role != role_id or old_secret == secret_id:
         raise ValueError(f"retired {spec.label} identity differs from active AppRole")
-    destroy_token = manager_login(bao) if manager_login is not None else token
+    destroy_token = destroy_authority() if destroy_authority is not None else token
     bao.request("POST", spec.secret_id_path + "/destroy",
                 {"secret_id": old_secret}, token=destroy_token)
     require_revoked(bao, old_role, old_secret, spec)

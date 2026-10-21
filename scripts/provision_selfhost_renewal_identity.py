@@ -23,6 +23,9 @@ from activate_selfhost_renewed_secrets import checked_certificates, checked_toke
 from provision_selfhost_disposable_tls import ENV_PREFIX_ROLE, KEY_NAMES  # noqa: E402
 from selfhost_openbao_client import (Bao, RENEWAL_LEAF_ROLE, RENEWAL_OPERATOR_POLICY)  # noqa: E402
 from stage_selfhost_renewed_secrets import RENEWED_TOKEN_FILES, entries  # noqa: E402
+from selfhost_approle_rotation import (  # noqa: E402
+    RotationSpec, rotate_credentials, retire_credentials,
+)
 
 
 AUTH_MOUNT = "selfhost-renew"
@@ -33,6 +36,8 @@ ROLE_ID_FILE = "renewal-role-id"
 SECRET_ID_FILE = "renewal-secret-id"
 TOKEN_FILE = "renewal-operator-token"
 POLICY_NAMES_FILE = "renewal-leaf-policies.json"
+ROTATION = RotationSpec(AUTH_MOUNT, APPROLE, ROLE_ID_FILE, SECRET_ID_FILE,
+                        "", "renewal")
 NAME = re.compile(r"[a-z0-9-]{1,160}\Z")
 
 
@@ -236,13 +241,8 @@ def rotate(bao: Bao, identity: Path, output: Path) -> None:
     if identity == output:
         raise ValueError("replacement identity must be separate")
     role_id, old_secret, names, old_token = checked_login(bao, identity)
-    path = f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id"
-    fresh = bao.request("POST", path, {}, token=old_token).get("data", {})
-    new_secret = fresh.get("secret_id")
-    if not isinstance(new_secret, str) or len(new_secret) < 20 or new_secret == old_secret:
-        raise ValueError("replacement SecretID is invalid")
-    staged = False
-    try:
+
+    def stage(new_secret: str) -> str:
         response = bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
             "role_id": role_id, "secret_id": new_secret,
         }, authenticate=False)
@@ -258,27 +258,13 @@ def rotate(bao: Bao, identity: Path, output: Path) -> None:
         write_private(output / SECRET_ID_FILE, new_secret)
         write_private(output / POLICY_NAMES_FILE,
                       json.dumps(names, separators=(",", ":")), max_bytes=4096)
-        staged = True
-    finally:
-        if not staged:
-            for name in (ROLE_ID_FILE, SECRET_ID_FILE, POLICY_NAMES_FILE):
-                (output / name).unlink(missing_ok=True)
-            bao.request("POST", path + "/destroy", {"secret_id": new_secret}, token=old_token)
-    bao.request("POST", path + "/destroy", {"secret_id": old_secret}, token=new_token)
-    require_revoked(bao, role_id, old_secret)
+        return new_token
 
+    def cleanup() -> None:
+        for name in (ROLE_ID_FILE, SECRET_ID_FILE, POLICY_NAMES_FILE):
+            (output / name).unlink(missing_ok=True)
 
-def require_revoked(bao: Bao, role_id: str, secret_id: str) -> None:
-    """An acknowledged destroy must actually prevent another AppRole login."""
-    try:
-        bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
-            "role_id": role_id, "secret_id": secret_id,
-        }, authenticate=False)
-    except HTTPError as error:
-        if error.code in (400, 403):
-            return
-        raise
-    raise ValueError("retired AppRole credential remains usable")
+    rotate_credentials(bao, ROTATION, role_id, old_secret, old_token, stage, cleanup)
 
 
 def retire(bao: Bao, identity: Path, retired: Path) -> None:
@@ -290,11 +276,7 @@ def retire(bao: Bao, identity: Path, retired: Path) -> None:
     role_id, new_secret, _, token = checked_login(bao, identity)
     old_role = private_file(retired / ROLE_ID_FILE).strip()
     old_secret = private_file(retired / SECRET_ID_FILE).strip()
-    if old_role != role_id or old_secret == new_secret:
-        raise ValueError("retired identity does not match the active AppRole")
-    bao.request("POST", f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id/destroy",
-                {"secret_id": old_secret}, token=token)
-    require_revoked(bao, old_role, old_secret)
+    retire_credentials(bao, ROTATION, role_id, new_secret, old_role, old_secret, token)
 
 
 def main() -> int:
