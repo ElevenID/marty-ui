@@ -310,6 +310,12 @@ def test_actual_scoped_openbao_bootstrap():
             probe._checked(probe.command([*compose, "run", "--no-deps", "--rm",
                                           "openbao-bootstrap"], environment, 180),
                            "Scoped OpenBao bootstrap failed")
+            public_ca = probe._checked(probe.command(
+                [*compose, "exec", "-T", "openbao", "cat", "/bao/public-ca/ca.crt"],
+                environment, 30), "Public CA could not be read")
+            assert "-----BEGIN CERTIFICATE-----" in public_ca
+            assert "PRIVATE KEY" not in public_ca
+            bootstrap = (secret_dir / "bao_bootstrap_token").read_text(encoding="ascii")
             service = (secret_dir / "bao_service_token").read_text(encoding="ascii")
             notification = (secret_dir / "notification_openbao_token").read_text(
                 encoding="ascii")
@@ -317,8 +323,8 @@ def test_actual_scoped_openbao_bootstrap():
                 encoding="ascii")
             signing_keys = (secret_dir / "signing_keys_openbao_token").read_text(
                 encoding="ascii")
-            assert service and notification and verifier and signing_keys
-            assert len({root, service, notification, verifier, signing_keys}) == 5
+            assert bootstrap and service and notification and verifier and signing_keys
+            assert len({root, bootstrap, service, notification, verifier, signing_keys}) == 6
         finally:
             probe._checked(probe.command([*compose, "down", "--volumes"],
                                          environment, 120), "OpenBao cleanup failed")
