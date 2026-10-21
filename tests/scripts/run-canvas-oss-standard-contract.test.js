@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  publishCanvasCourse,
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   ContractFailure,
@@ -558,4 +559,19 @@ test('credential verifier accepts a valid ES256 JWS and rejects payload tamperin
 test('Developer Key extraction handles the nested stock Canvas response shape', () => {
   const record = extractDeveloperKeyRecord({ developer_key: { id: 42, name: 'Marty LTI run', api_key: 'secret' } }, 'Marty LTI run');
   assert.deepEqual(record, { id: 42, name: 'Marty LTI run', api_key: 'secret' });
+});
+
+
+test('single-course publication uses its documented event and rejects silent unchanged success', async () => {
+  let request;
+  const admin = { putForm: async (...args) => {
+    request = args;
+    return { id: 42, workflow_state: args[1]['course[event]'] === 'offer' ? 'available' : 'unpublished' };
+  } };
+  await publishCanvasCourse(admin, 42);
+  assert.deepEqual(request, ['/api/v1/courses/42', { 'course[event]': 'offer' }, [200]]);
+  for (const result of [{ id: 42, workflow_state: 'unpublished' }, { id: 99, workflow_state: 'available' }]) {
+    await assert.rejects(publishCanvasCourse({ putForm: async () => result }, 42),
+      error => error.code === 'canvas_course_not_published');
+  }
 });

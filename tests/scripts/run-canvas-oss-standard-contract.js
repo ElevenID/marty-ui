@@ -740,6 +740,15 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
   ledger.pass('canvas_public_https_reachable', 'The stock Canvas HTTPS login surface returned HTTP 200 from the reviewed public origin.');
 }
 
+async function publishCanvasCourse(adminCanvas, courseId) {
+  const published = await adminCanvas.putForm(`/api/v1/courses/${courseId}`, {
+    'course[event]': 'offer',
+  }, [200]);
+  requireCondition(String(published?.id) === String(courseId) && published?.workflow_state === 'available',
+    'canvas_course_not_published', 'Canvas must confirm the owned course is published before learner activity.');
+  return published;
+}
+
 async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learnerEmail, learnerPassword, runSuffix, onOwned = () => {}) {
   const learner = await adminCanvas.postForm(`/api/v1/accounts/${encodeURIComponent(accountId)}/users`, {
     'user[name]': `Portable Learner ${runSuffix}`,
@@ -831,7 +840,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
   await adminCanvas.putForm(`/api/v1/courses/${course.id}/modules/${module.id}`, {
     'module[published]': true,
   }, [200]);
-  await adminCanvas.putForm(`/api/v1/courses/${course.id}`, { event: 'offer' }, [200]);
+  await publishCanvasCourse(adminCanvas, course.id);
   return { learner, course, assignment, quiz, question, correctAnswer, module };
 }
 
@@ -2028,6 +2037,7 @@ async function main() {
 }
 
 module.exports = {
+  publishCanvasCourse,
   contractFailureLocation,
   canvasTokenExpiration,
   freshCanvasLearnerEmail,
