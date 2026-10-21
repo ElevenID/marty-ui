@@ -15,15 +15,14 @@ are merged. The installed-qualification and release-source batch
 protected main at `a2fb60a21cf7dd1f91e49019efb6785368b77e04` after all
 five exact merge-group workflows passed. Main subsequently advanced through
 protected #1450 to `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`, retaining
-the `v1.1.261` lock. Separate full exact-main
-[CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803)
-passed all 23 jobs on the new SHA. No-write
-[claim 39525624090](https://github.com/ElevenID/marty-ui/actions/runs/39525624090)
-passed and produced its exact transaction. First
-[Stack release 39525728437](https://github.com/ElevenID/marty-ui/actions/runs/39525728437)
-is running to qualify and promote the five images before the intentionally
-stopping late-tag gate. Require its promotion-complete artifact and current
-main before pushing the exact annotated tag, then resume for the
+the `v1.1.261` lock. Full exact-main CI, no-write claim, all five image
+qualifications and promotions passed for that source, but protected #1452
+advanced main to `956bfa2985ef3e9854fe22cac089f190da0327ee` before the
+late local tag push. The source-pinned tag helper must reject the stale source;
+no tag was pushed. New full exact-main
+[CI 39528500806](https://github.com/ElevenID/marty-ui/actions/runs/39528500806)
+is running on current main. Require its success, a new exact-source claim and
+promotion, then the annotated tag and resumed run for the
 signed `v1.1.261` release, exact installed business/session/expiry journey,
 and fresh replacement/cutover or rollback proof. The two old installations
 can be replaced fresh without data migration. Work on this 16 GiB machine
@@ -24894,3 +24893,5 @@ Exact-main CI superseded (2026-10-21 UTC): While full [CI 39518833929](https://g
 WSL local-runner finding (2026-10-21 UTC): This host reports WSL 2.6.3.0 and kernel 6.6.87.2-1. Ubuntu and the separate recovery distro now time out with `Wsl/Service/0x8007274c` on new commands, even after terminating only Ubuntu; Docker Desktop production remains HTTP 200. A [Microsoft WSL issue](https://github.com/microsoft/WSL/issues/14541) documents the same version/error during `systemd=true` startup and says a 2.7.3 fix was offered. That is a plausible diagnosis, not proven root cause on this host. Avoid `wsl --shutdown`, WSL update or Docker Desktop restart while the production website is live; those global actions may interrupt it. Continue hosted release qualification and revisit the local runner with a controlled production-safe maintenance decision before the installed journey.
 
 Exact-main release claim (2026-10-21 UTC): [full CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803) completed **success** on `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`, all 23 jobs including Canvas and CI Gate; protected main still equaled that SHA and the queue was empty. [No-write claim 39525624090](https://github.com/ElevenID/marty-ui/actions/runs/39525624090) passed both jobs and uploaded exactly one `stack-release-claim-v1.1.261` artifact. Its downloaded transaction reports `claimed`, the exact source SHA, tag and claim run ID. No tag or public release existed. First [Stack release 39525728437](https://github.com/ElevenID/marty-ui/actions/runs/39525728437) was dispatched on the same SHA with `prepare_selfhost_lock=false`; this run is expected to stop at the late tag gate only **after** promotion-complete checkpoint. An earlier failure is a real failure to diagnose. Do not tag until the five images and promotion checkpoint are verified.
+
+Promotion invalidated by newer main (2026-10-21 UTC): First [Stack release 39525728437](https://github.com/ElevenID/marty-ui/actions/runs/39525728437) passed transaction validation, all five image builds and promotions, public-stack smoke, DIDComm plugin, Keycloak KMS, verifier differential, native-schema and release qualification. It uploaded one `stack-release-promotion-complete-39525728437` artifact, then failed **only** at the intentional late source-tag handoff with the expected log message. Before running the tag helper, the safety check found protected [#1452](https://github.com/ElevenID/marty-ui/pull/1452) had advanced main from `2e0b27242e` to `956bfa2985ef3e9854fe22cac089f190da0327ee`; #1452 is Canvas OSS publication policy and retains the eligible `v1.1.261` lock. Its five merge-group workflows passed, but the tag helper requires its promotion source to equal **current** protected main and atomically guards that ref. Do not bypass it or reuse the old claim/promotion as release evidence. No tag or public release was created. New [full CI 39528500806](https://github.com/ElevenID/marty-ui/actions/runs/39528500806) was dispatched on `956bfa2985`; the clean local release-helper main worktree was fast-forwarded. Request a quiet protected-main window through publication to avoid another costly invalidation.
