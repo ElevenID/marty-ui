@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use mmf_security::{SecurityError, ServiceTokenAuthenticator};
 use tonic::{Request, Response, Status};
 use uuid::Uuid;
@@ -59,6 +59,98 @@ impl OrganizationGrpcService {
     fn authenticate<T>(&self, request: &Request<T>) -> Result<(), Status> {
         authenticate_service_token(&self.service_authenticator, request)
     }
+
+    async fn principal_membership(
+        &self,
+        user_id: &str,
+        organization_id: Uuid,
+    ) -> Result<MemberResponse, Status> {
+        let explicit = self
+            .application
+            .get_membership(user_id, organization_id)
+            .await
+            .map_err(application_status)?
+            .as_ref()
+            .map(member_response);
+        let response = if let Some(raw_id) = user_id.strip_prefix("api_key:") {
+            let id = Uuid::parse_str(raw_id)
+                .map_err(|_| Status::not_found("ORGANIZATION.MEMBERSHIP_NOT_FOUND"))?;
+            let key = self
+                .application
+                .get_api_key(organization_id, id)
+                .await
+                .map_err(application_status)?;
+            match key {
+                Some(key) if key.is_valid_at(Utc::now()) => {
+                    let catalog = self
+                        .application
+                        .list_permissions()
+                        .await
+                        .map_err(application_status)?;
+                    api_key_member_response(
+                        &key,
+                        user_id,
+                        organization_id,
+                        explicit,
+                        catalog.iter().map(crate::Permission::key),
+                        Utc::now(),
+                    )
+                }
+                _ => None,
+            }
+        } else {
+            explicit
+        };
+        response.ok_or_else(|| Status::not_found("ORGANIZATION.MEMBERSHIP_NOT_FOUND"))
+    }
+}
+
+/// Service-principal view of an authoritative live key; no human member or role
+/// is created. Persisted restrictions can narrow scopes, never expand them.
+fn api_key_member_response(
+    key: &crate::ApiKey,
+    principal: &str,
+    organization_id: Uuid,
+    explicit: Option<MemberResponse>,
+    catalog: impl IntoIterator<Item = String>,
+    now: DateTime<Utc>,
+) -> Option<MemberResponse> {
+    if key.organization_id != organization_id
+        || principal != format!("api_key:{}", key.id)
+        || !key.is_valid_at(now)
+    {
+        return None;
+    }
+    if explicit.as_ref().is_some_and(|member| {
+        !member.status.eq_ignore_ascii_case("active")
+            || member.organization_id != organization_id.to_string()
+            || member.user_id != principal
+    }) {
+        return None;
+    }
+    let permissions = catalog
+        .into_iter()
+        .filter(|permission| {
+            marty_api_key_policy::api_key_allowed(permission, &key.scopes)
+                && explicit
+                    .as_ref()
+                    .is_none_or(|member| member.permissions.contains(permission))
+        })
+        .collect();
+    Some(MemberResponse {
+        id: key.id.to_string(),
+        organization_id: organization_id.to_string(),
+        user_id: principal.into(),
+        permissions,
+        status: "ACTIVE".into(),
+        joined_at: key.created_at.to_rfc3339(),
+        // Service principals never inherit human console/owner roles.
+        roles: Vec::new(),
+        has_org_console_access: false,
+        is_owner: false,
+        email: String::new(),
+        invited_at: String::new(),
+    })
 }
 
 #[tonic::async_trait]
@@ -184,13 +276,10 @@ impl OrganizationService for OrganizationGrpcService {
         self.authenticate(&request)?;
         let input = request.into_inner();
         let organization_id = parse_uuid(&input.organization_id, "organization_id")?;
-        let member = self
-            .application
-            .get_membership(&input.user_id, organization_id)
-            .await
-            .map_err(application_status)?
-            .ok_or_else(|| Status::not_found("ORGANIZATION.MEMBERSHIP_NOT_FOUND"))?;
-        Ok(Response::new(member_response(&member)))
+        Ok(Response::new(
+            self.principal_membership(&input.user_id, organization_id)
+                .await?,
+        ))
     }
 
     async fn add_member(
@@ -301,16 +390,13 @@ impl OrganizationService for OrganizationGrpcService {
         let input = request.into_inner();
         let organization_id = parse_uuid(&input.organization_id, "organization_id")?;
         let member = self
-            .application
-            .get_membership(&input.user_id, organization_id)
-            .await
-            .map_err(application_status)?
-            .ok_or_else(|| Status::not_found("ORGANIZATION.MEMBERSHIP_NOT_FOUND"))?;
+            .principal_membership(&input.user_id, organization_id)
+            .await?;
         Ok(Response::new(GetMemberPermissionsResponse {
-            permissions: member.effective_permissions().into_iter().collect(),
-            roles: member.roles.iter().map(role_summary).collect(),
-            has_org_console_access: member.has_org_console_access(),
-            is_owner: member.is_owner(),
+            permissions: member.permissions,
+            roles: member.roles,
+            has_org_console_access: member.has_org_console_access,
+            is_owner: member.is_owner,
         }))
     }
 
@@ -475,6 +561,132 @@ fn authenticate_service_token<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn api_key_principal_resolves_only_live_tenant_bound_scopes_without_human_privilege() {
+        let now = Utc::now();
+        let (key, _) = crate::ApiKey::create(
+            crate::ApiKeySpec {
+                organization_id: Uuid::new_v4(),
+                name: "scoped service principal".into(),
+                created_by: "operator".into(),
+                scopes: Some(vec!["templates:read".into(), "applications:approve".into()]),
+                description: None,
+                expires_at: Some(now + chrono::Duration::hours(1)),
+                now,
+            },
+            true,
+        );
+        let principal = format!("api_key:{}", key.id);
+        let catalog = || {
+            [
+                "credential-template:view",
+                "credential-template:edit",
+                "application:approve",
+                "api-key:create",
+                "passport-certificate:issue",
+                "audit:ingest",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+        };
+        let resolved =
+            api_key_member_response(&key, &principal, key.organization_id, None, catalog(), now)
+                .unwrap();
+        assert_eq!(
+            resolved.permissions,
+            vec!["credential-template:view", "application:approve"]
+        );
+        assert!(
+            resolved.roles.is_empty() && !resolved.is_owner && !resolved.has_org_console_access
+        );
+        let mut legacy_admin = key.clone();
+        legacy_admin.scopes = vec!["admin:full".into()];
+        let admin = api_key_member_response(
+            &legacy_admin,
+            &principal,
+            key.organization_id,
+            None,
+            catalog(),
+            now,
+        )
+        .unwrap();
+        assert!(!admin
+            .permissions
+            .iter()
+            .any(|p| p == "passport-certificate:issue" || p == "audit:ingest"));
+        assert!(!admin.is_owner && !admin.has_org_console_access && admin.roles.is_empty());
+        assert!(
+            api_key_member_response(&key, &principal, Uuid::new_v4(), None, catalog(), now)
+                .is_none()
+        );
+        assert!(api_key_member_response(
+            &key,
+            "api_key:other",
+            key.organization_id,
+            None,
+            catalog(),
+            now
+        )
+        .is_none());
+        for failure in ["expired", "disabled", "revoked"] {
+            let mut invalid = key.clone();
+            match failure {
+                "expired" => invalid.expires_at = Some(now - chrono::Duration::seconds(1)),
+                "disabled" => invalid.enabled = false,
+                _ => invalid.revoke(now),
+            }
+            assert!(
+                api_key_member_response(
+                    &invalid,
+                    &principal,
+                    key.organization_id,
+                    None,
+                    catalog(),
+                    now
+                )
+                .is_none(),
+                "{failure}"
+            );
+        }
+        let mut restricted = resolved.clone();
+        restricted.permissions = vec!["credential-template:view".into(), "api-key:create".into()];
+        restricted.is_owner = true;
+        restricted.has_org_console_access = true;
+        let narrowed = api_key_member_response(
+            &key,
+            &principal,
+            key.organization_id,
+            Some(restricted.clone()),
+            catalog(),
+            now,
+        )
+        .unwrap();
+        assert_eq!(narrowed.permissions, vec!["credential-template:view"]);
+        assert!(
+            narrowed.roles.is_empty() && !narrowed.is_owner && !narrowed.has_org_console_access
+        );
+        for failure in ["inactive", "foreign_tenant", "foreign_principal"] {
+            let mut invalid = restricted.clone();
+            match failure {
+                "inactive" => invalid.status = "SUSPENDED".into(),
+                "foreign_tenant" => invalid.organization_id = Uuid::new_v4().to_string(),
+                _ => invalid.user_id = "different-principal".into(),
+            }
+            assert!(
+                api_key_member_response(
+                    &key,
+                    &principal,
+                    key.organization_id,
+                    Some(invalid),
+                    catalog(),
+                    now
+                )
+                .is_none(),
+                "{failure}"
+            );
+        }
+    }
 
     #[test]
     fn parsing_and_normalized_statuses_fail_closed() {

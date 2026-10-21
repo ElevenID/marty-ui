@@ -3639,6 +3639,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "112b39cec0b298b6c1999fee3e31427f74f676e4cb9879ed1a121b43661a4154"
 
 [[package]]
+name = "marty-api-key-policy"
+version = "0.1.0"
+
+[[package]]
 name = "marty-applicant"
 version = "0.1.0"
 dependencies = [
@@ -4201,6 +4205,7 @@ dependencies = [
  "hex",
  "hmac 0.12.1",
  "http 1.5.0",
+ "marty-api-key-policy",
  "marty-deployment-profile",
  "marty-oid4vci",
  "marty-passport-auth",
@@ -4478,6 +4483,7 @@ dependencies = [
  "async-trait",
  "axum",
  "chrono",
+ "marty-api-key-policy",
  "marty-key-material-policy",
  "mmf-core",
  "mmf-data",

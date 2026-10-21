@@ -73,6 +73,15 @@ portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs
 
 ## Local runner and beta prerequisites
 
+Organization's authenticated `GetMember` and `GetMemberPermissions` calls resolve
+`api_key:<id>` service principals from the live, tenant-bound key. They use the
+same scope policy as the gateway, reject expired/disabled/revoked keys, and
+intersect any explicit membership restrictions. These principals have no human
+owner role or organization-console access. Create the bounded test key through
+the native key API; do not add a demo-only human membership to make integration
+reads or approval pass. Verify both permitted tenant operations and denied
+foreign-tenant/administrative operations before the real journey.
+
 For an organization without the learning Open Badge template, the Rust
 `canvas-native-template-inputs` binary renders native credential/application
 create bodies from nonsecret JSON profile bindings on stdin. Its input fields
