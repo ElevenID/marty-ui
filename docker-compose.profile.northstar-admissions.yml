@@ -34,7 +34,7 @@ services:
       - no-new-privileges:true
     restart: "no"
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --output-document=- http://127.0.0.1:4175/health | grep --quiet '\"status\":\"healthy\"'"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:4175/health | grep -q '\"status\":\"healthy\"'"]
       interval: 5s
       timeout: 3s
       retries: 12
