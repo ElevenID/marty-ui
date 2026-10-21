@@ -743,7 +743,7 @@ test('fixture ACK rejection or changed input cannot seal, and prior attempt inpu
           return Buffer.from(JSON.stringify(input));
         },
         seal: async () => assert.fail('Rejected fixture must not be sealed'),
-      }), /ACK rejected|differs from lifecycle run inputs/);
+      }), /ACK rejected|differs from actual demo inputs/);
       const before = fs.readFileSync(path.join(directory, 'lifecycle-fixture-input.json'));
       await assert.rejects(prepareLiveInputs(directory, 'different-run', {}), { code: 'EEXIST' });
       assert.deepEqual(fs.readFileSync(path.join(directory, 'lifecycle-fixture-input.json')), before);
