@@ -13,6 +13,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import urllib.request
 from datetime import datetime, timezone
@@ -40,6 +41,45 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 class ContractError(RuntimeError):
     pass
+
+
+def verify_base_image(lock: dict[str, Any]) -> dict[str, str]:
+    """Verify the pinned registry bytes without resolving a mutable source tag."""
+    base = lock["image"]["base_image"]
+    reference = base["reference"]
+
+    def raw(digest: str) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                ["docker", "buildx", "imagetools", "inspect", "--raw",
+                 f"{reference}@{digest}"],
+                capture_output=True, check=True, timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ContractError("Cannot fetch the locked Canvas base manifest") from exc
+        _require(len(result.stdout) <= 2 * 1024 * 1024, "Base manifest exceeds size limit")
+        actual = "sha256:" + hashlib.sha256(result.stdout).hexdigest()
+        _require(actual == digest, "Canvas base manifest bytes differ from locked digest")
+        try:
+            manifest = json.loads(result.stdout)
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise ContractError("Canvas base manifest is not JSON") from exc
+        _require(isinstance(manifest, dict), "Canvas base manifest must be an object")
+        return manifest
+
+    index = raw(base["index_digest"])
+    descriptors = index.get("manifests")
+    _require(isinstance(descriptors, list), "Canvas base index has no descriptors")
+    children = [item.get("digest") for item in descriptors if isinstance(item, dict)
+                and isinstance(item.get("platform"), dict)
+                and item.get("platform", {}).get("os") == "linux"
+                and item.get("platform", {}).get("architecture") == "amd64"]
+    _require(children == [base["linux_amd64_digest"]],
+             "Canvas base index must bind exactly the locked Linux/amd64 child")
+    child = raw(base["linux_amd64_digest"])
+    _require(child.get("schemaVersion") == 2 and isinstance(child.get("layers"), list)
+             and isinstance(child.get("config"), dict), "Canvas base child is not an image manifest")
+    return {name: base[name] for name in ("reference", "index_digest", "linux_amd64_digest")}
 
 
 def _load(path: Path) -> Any:
@@ -617,6 +657,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lock", type=Path, default=Path("deploy-config/catalog/canvas-oss.lock.json"))
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--validate-config", action="store_true")
+    action.add_argument("--verify-base-image", action="store_true")
     action.add_argument("--capture-runtime-context", type=Path)
     action.add_argument("--validate-runtime-binding", type=Path)
     action.add_argument("--finalize", action="store_true")
@@ -638,7 +679,11 @@ def main() -> int:
         validate_lock(lock)
         validate_execution_assets(lock)
         validate_catalog(_load(args.config))
-        if args.capture_runtime_context:
+        if args.verify_base_image:
+            verified = verify_base_image(lock)
+            if args.output:
+                _write(args.output, verified)
+        elif args.capture_runtime_context:
             capture_runtime_context(args.capture_runtime_context)
         elif args.validate_runtime_binding:
             _require(args.runtime_context is not None, "Runtime binding validation requires --runtime-context")
