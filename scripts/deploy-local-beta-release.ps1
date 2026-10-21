@@ -1574,7 +1574,7 @@ try {
     Invoke-Checked -FilePath docker -Arguments @("cp", (Join-Path $preflightBackupDir "postgres-marty.dump"), "${copyContainer}:/tmp/marty.dump")
     Invoke-Checked -FilePath docker -Arguments @("exec", $copyContainer, "pg_restore", "-U", "postgres", "-d", "marty", "--no-owner", "--role=marty", "/tmp/marty.dump")
     $copyUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--no-build', '--env', "DATABASE_URL=$copyUrl", 'revocation-profile-migrate') `
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--env', "DATABASE_URL=$copyUrl", 'revocation-profile-migrate') `
         -LogPath (Join-Path $logsDir 'revocation-migration-rehearsal.log') -FailureMessage 'Native revocation migration rehearsal failed'
     $rehearsalArguments = @(
         "run", "--rm", "--network", "container:$copyOpenBaoContainer",
@@ -1596,9 +1596,9 @@ try {
     $verifyArguments = @("run", "--rm", "--network", "container:$copyOpenBaoContainer", "--mount", $copyCaMount, "--env", "DATABASE_URL=$copyUrl", "--env", "PUBLIC_API_URL=$BetaOrigin", "--env", "MARTY_MIGRATION_PROFILE=beta", "--env", "MARTY_KMS_BOOTSTRAP_ENABLED=false", "--env", "BAO_ADDR=https://localhost:8200", "--env", "BAO_CACERT=/bao-public-ca/ca.crt", $migrationImage, "/usr/local/bin/marty-migration-bootstrap", "--verify-only")
     Invoke-DockerLogged -Arguments $verifyArguments -LogPath (Join-Path $logsDir "migration-rehearsal-verify.log") -FailureMessage "Migration rehearsal verification failed"
     $copyIssuanceUrl = "postgresql://marty:$copyPassword@${copyContainer}:5432/marty"
-    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
+    $rehearsalIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations")
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$copyIssuanceUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-rehearsal.log") `
         -FailureMessage "Issuance migration rehearsal failed"
     Invoke-ComposeLogged `
@@ -1746,10 +1746,10 @@ try {
     $env:PUBLIC_API_URL = $BetaOrigin
     $liveDatabaseUrl = "postgresql://marty:${martyDbPassword}@postgres:5432/marty"
     $liveMutationStarted = $true
-    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--no-build', '--env', "DATABASE_URL=$liveDatabaseUrl", 'revocation-profile-migrate') `
+    Invoke-ComposeLogged -Arguments @('run', '--rm', '--no-deps', '--env', "DATABASE_URL=$liveDatabaseUrl", 'revocation-profile-migrate') `
         -LogPath (Join-Path $logsDir 'revocation-migration-live.log') -FailureMessage 'Native revocation migration failed'
     $migrationArguments = @(
-        "run", "--rm", "--no-deps", "--no-build",
+        "run", "--rm", "--no-deps",
         "--env", "DATABASE_URL=$liveDatabaseUrl",
         "--env", "PUBLIC_API_URL=$BetaOrigin",
         "--env", "MARTY_MIGRATION_PROFILE=beta",
@@ -1762,9 +1762,9 @@ try {
     Invoke-ComposeLogged -Arguments $migrationArguments `
         -LogPath (Join-Path $logsDir "migration-live.log") `
         -FailureMessage "Live migration failed"
-    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
+    $liveIssuanceVerify = @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations")
     Invoke-ComposeLogged `
-        -Arguments @("run", "--rm", "--no-deps", "--no-build", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
+        -Arguments @("run", "--rm", "--no-deps", "--env", "DATABASE_URL=$liveDatabaseUrl", "issuance-migrations") `
         -LogPath (Join-Path $logsDir "issuance-migration-live.log") `
         -FailureMessage "Live issuance migration failed"
     Invoke-ComposeLogged `
