@@ -14,7 +14,11 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock, Thread
 
-from canvas_worker_https_fixture import ObservedRequestHandler, response_headers
+from canvas_worker_https_fixture import (
+    ObservedRequestHandler,
+    assert_stock_submission_requests,
+    response_headers,
+)
 from test_canvas_lti_https import create_loopback_certificate
 
 RETRY_AFTER_TIER = "MARTY_CANVAS_WORKER_RETRY_AFTER_TIER"
@@ -399,7 +403,7 @@ def run_scenario(executable, scenario, spec, reference, matrix_case=None):
                 assert expected == [], (
                     "Resource lookup failure must precede provider I/O"
                 )
-            assert requests == expected, "Actual worker HTTPS requests differ"
+            assert_stock_submission_requests(requests, expected)
             if scenario == "retry-after":
                 assert matrix_case is not None
                 assert_retry_timing(
