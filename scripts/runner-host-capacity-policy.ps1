@@ -1,7 +1,9 @@
 # Read-only host prerequisite; this never deletes data or changes a virtual disk.
 function Get-CanvasDockerBackingCapacity {
     [CmdletBinding()]
-    param([Parameter(Mandatory = $true)][string]$DataDiskPath)
+    param([Parameter(Mandatory = $true)][string]$DataDiskPath,
+          [ValidateSet('SourceBuild', 'PrebuiltRuntime')][string]$Mode = 'SourceBuild',
+          [long]$PrebuiltImageSizeBytes = 0)
 
     $disk = Get-Item -LiteralPath $DataDiskPath -ErrorAction Stop
     if ($disk.PSIsContainer -or $disk.Extension -ine '.vhdx' -or $disk.Length -le 0) {
@@ -16,13 +18,23 @@ function Get-CanvasDockerBackingCapacity {
     }
     $available = [decimal]$volumes[0].SizeRemaining
     $minimum = [decimal](80GB)
+    if ($Mode -eq 'PrebuiltRuntime') {
+        if ($PrebuiltImageSizeBytes -le 0) {
+            throw 'Prebuilt runtime capacity requires the verified present image size'
+        }
+        $minimum = [Math]::Max([decimal](20GB), [decimal]$PrebuiltImageSizeBytes * 2)
+    }
     if ($available -lt $minimum) {
-        throw ('Canvas source build requires at least 80 GiB free on the Windows volume backing Docker Desktop; found {0:N1} GiB. Logical WSL capacity does not satisfy this prerequisite.' -f ($available / 1GB))
+        if ($Mode -eq 'SourceBuild') {
+            throw ('Canvas source build requires at least 80 GiB free on the Windows volume backing Docker Desktop; found {0:N1} GiB. Logical WSL capacity does not satisfy this prerequisite.' -f ($available / 1GB))
+        }
+        throw 'Canvas prebuilt runtime has insufficient physical Docker backing capacity'
     }
     [PSCustomObject]@{
         scope = 'WINDOWS_DOCKER_BACKING_CAPACITY_ONLY'
         production_demo_ready = $false
         required_free_bytes = $minimum
         physical_free_bytes = $available
+        capacity_mode = $Mode
     }
 }

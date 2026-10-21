@@ -571,6 +571,33 @@ test('cleanup recovers an uncertain issuance and preserves its application after
   ]);
 });
 
+test('explicit pending-offer cleanup requires revoked readback and retains application history', async () => {
+  for (const status of ['revoked', 'pending']) {
+    const owned = ownedRun({ credentialId: null });
+    const page = fakePage([
+      { ok: true, status: 200, body: application(owned) },
+      { ok: true, status: 200, body: [transaction(owned, { status: 'pending' })] },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: application(owned) },
+      { ok: true, status: 200, body: transaction(owned, { status: 'pending' }) },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: { status: 'revoked' } },
+      { ok: true, status: 200, body: transaction(owned, { status }) },
+      { ok: true, status: 200, body: [transaction(owned, { status })] },
+      { ok: true, status: 200, body: transaction(owned, { status }) },
+      { ok: true, status: 200, body: [] },
+      { ok: true, status: 200, body: application(owned) },
+    ]);
+    const result = await cleanupApplicationCredential(page, owned, 'Owned failed wallet offer', { cancelPendingOffer: true });
+    assert.equal(result.ok, status === 'revoked');
+    assert.equal(result.applicationHistoryPreserved, true);
+    assert.equal(result.applicationWithdrawn, false);
+    assert.ok(page.requests.every(r => !r.requestPath.endsWith('/withdraw')));
+    assert.equal(page.requests.filter(r => r.requestOptions.method === 'POST').length, 1);
+    if (status === 'pending') assert.deepEqual(owned.uncertainMutations, [{ operation: 'transaction_cancellation' }]);
+  }
+});
+
 test('an outstanding offer, uncertain creation, or unconfirmed reviewer lock prevents complete cleanup', async () => {
   const unknown = ownedRun({ applicationId: null, transactionId: null, credentialId: null, uncertainMutations: [{ operation: 'application_creation' }] });
   const empty = fakePage([]);

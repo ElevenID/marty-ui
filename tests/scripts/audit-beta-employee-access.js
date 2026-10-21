@@ -417,7 +417,7 @@ async function approveAndIssue(page, ownedResources, { recording } = {}) {
 }
 
 async function cleanup(page, ownedResources) {
-  const result = await cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup');
+  const result = await cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup', { cancelPendingOffer: true });
   if (!result.ok) return result;
   try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
   catch (error) {
@@ -593,6 +593,7 @@ async function runEmployeeDemo(evidence) {
 
     const walletReceipt = await receiveCredential(walletPage, offerUri, configuration.credential.vct);
     report.issuance.walletReceived = walletReceipt.ok;
+    report.issuance.walletReceiveStatus = walletReceipt.status;
     if (!walletReceipt.ok) throw new Error('Employee wallet did not accept the credential');
     const credential = await findCurrentCredential(page, {
       ...ownedResources,

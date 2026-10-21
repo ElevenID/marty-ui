@@ -621,7 +621,7 @@ async function cancelOwnedIssuanceTransaction(page, owned, reason) {
   return result;
 }
 
-async function cleanupApplicationCredential(page, owned, reason) {
+async function cleanupApplicationCredential(page, owned, reason, { cancelPendingOffer = false } = {}) {
   const result = {
     ok: false,
     credentialRevoked: false,
@@ -664,6 +664,11 @@ async function cleanupApplicationCredential(page, owned, reason) {
   // unrelated run must never authorize even one revoke or withdrawal.
   if (transaction) {
     let revokeResponse = null;
+    if (!credential && cancelPendingOffer) {
+      // The shared cancellation path rechecks the exact application/transaction
+      // tuple and absence of issued records before the production API mutation.
+      await cancelOwnedIssuanceTransaction(page, owned, reason);
+    }
     if (credential && String(credential.status).toUpperCase() !== 'REVOKED') {
       if (!(owned.uncertainMutations || []).some(({ operation }) => operation === 'credential_revocation')) {
         markApplicationMutation(owned, 'credential_revocation');

@@ -131,6 +131,29 @@ def test_unknown_or_ambiguous_physical_capacity_fails_closed(tmp_path: Path, vol
     assert "Cannot establish physical free space" in result.stderr
 
 
+@pytest.mark.parametrize('available,image_size,expected_ok', [
+    (20 * 1024**3, 3 * 1024**3, True),
+    (20 * 1024**3 - 1, 3 * 1024**3, False),
+    (29 * 1024**3, 15 * 1024**3, False),
+    (30 * 1024**3, 15 * 1024**3, True),
+    (80 * 1024**3, 0, False),
+])
+def test_prebuilt_runtime_capacity_uses_physical_image_bounded_reserve(tmp_path, available, image_size, expected_ok):
+    disk = tmp_path / 'controlled-data.vhdx'
+    disk.write_bytes(b'Policy fixture, never mounted')
+    literal = str(disk).replace("'", "''")
+    body = ('function Get-Volume { param([string]$FilePath) '
+            f'[PSCustomObject]@{{SizeRemaining=[UInt64]{available}}} }}; '
+            f"Get-CanvasDockerBackingCapacity -DataDiskPath '{literal}' -Mode PrebuiltRuntime "
+            f'-PrebuiltImageSizeBytes {image_size} | ConvertTo-Json -Compress')
+    result = run_policy(body, 'runner-host-capacity-policy.ps1')
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    if expected_ok:
+        proof = json.loads(result.stdout)
+        assert proof['required_free_bytes'] == max(20 * 1024**3, 2 * image_size)
+        assert proof['capacity_mode'] == 'PrebuiltRuntime'
+
+
 def test_low_backing_capacity_prevents_wsl_and_github_registration(tmp_path: Path) -> None:
     disk = tmp_path / "controlled-data.vhdx"
     disk.write_bytes(b"Controlled policy fixture")

@@ -3,12 +3,19 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   ContractFailure,
   ObservationLedger,
+  observePipelinePrerequisites,
+  selectProductionBadgeTemplates,
+  contractFailureLocation,
+  martyRequestSummary,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
@@ -24,6 +31,102 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
+  const error = new Error('secret-token request https://issuer.example?code=private-value');
+  error.stack = 'Error: secret-token\n at fill("private-value") (/tests/scripts/run-canvas-oss-standard-contract.js:712:19)';
+  const result = contractFailureLocation(error, 'standard_lti_13_install');
+  assert.deepEqual(result, { activeCase: 'standard_lti_13_install', errorType: 'Error',
+    sourceLocation: { file: 'run-canvas-oss-standard-contract.js', line: 712, column: 19 } });
+  assert.ok(!JSON.stringify(result).includes('secret') && !JSON.stringify(result).includes('private-value'));
+});
+
+test('Marty request failure context preserves static operation but excludes dynamic paths and queries', () => {
+  assert.equal(martyRequestSummary('PUT', '/v1/integrations/canvas/platforms/private-id/lti-installation?token=secret'),
+    'Marty PUT /v1/integrations/canvas/platforms/:resource/lti-installation failed');
+  assert.equal(martyRequestSummary('secret', '/v1/integrations/canvas/lti/config/secret-token'),
+    'Marty REQUEST /v1/integrations/canvas/:resource/:resource/:resource failed');
+});
+
+test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
+  const claims = ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+    .map(name => ({ name }));
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE',
+    credential_type: 'OpenBadgeCredential', claims };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  function client(c, a) { return { get: async path => {
+    const row = path.startsWith('/v1/credential-templates') ? c : a;
+    return path.includes('?') ? [row] : row;
+  } }; }
+  const select = (c, a, selectors = {}) => selectProductionBadgeTemplates(client(c, a), 'org-1', selectors);
+  assert.equal((await select(credential, application)).credential.id, 'learning');
+  assert.equal((await select(credential, application, { applicationTemplateId: 'application', credentialTemplateId: 'learning' })).credential.id, 'learning');
+  await assert.rejects(select(credential, application, { credentialTemplateId: 'different' }), /Exactly one active Open Badge/);
+  for (const c of [
+    { ...credential, credential_type: 'EmployeeBadge' },
+    { ...credential, credential_type: 'open_badge', claims: [{ name: 'email' }] },
+    { ...credential, organization_id: 'foreign' },
+  ]) await assert.rejects(select(c, application), /Exactly one active Open Badge/);
+  await assert.rejects(select(credential,
+    { ...application, organization_id: 'foreign' }), /Exactly one active Open Badge/);
+});
+
+test('explicit learning template selection reads exact resources beyond collection first pages', async () => {
+  const calls = [];
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
+    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  const marty = { get: async path => {
+    calls.push(path);
+    if (path === '/v1/application-templates/application') return application;
+    if (path === '/v1/credential-templates/learning') return credential;
+    assert.fail('Exact selected resources must not depend on a collection first page');
+  } };
+  assert.equal((await selectProductionBadgeTemplates(marty, 'org-1', { applicationTemplateId: 'application' })).credential.id, 'learning');
+  assert.deepEqual(calls, ['/v1/application-templates/application', '/v1/credential-templates/learning']);
+});
+
+test('unconfigured learning selection pages inventories and rejects repeated pages', async () => {
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
+    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  const old = Array.from({ length: 100 }, (_, index) => ({ id: 'old-' + index, status: 'DEPRECATED', organization_id: 'org-1' }));
+  const client = repeated => ({ get: async raw => {
+    const url = new URL(raw, 'https://unit.invalid');
+    assert.equal(url.searchParams.get('limit'), '100');
+    if (url.searchParams.get('offset') === '0' || repeated) return old;
+    assert.equal(url.searchParams.get('offset'), '100');
+    return [url.pathname.includes('credential-templates') ? credential : application];
+  } });
+  assert.equal((await selectProductionBadgeTemplates(client(false), 'org-1', {})).application.id, 'application');
+  await assert.rejects(selectProductionBadgeTemplates(client(true), 'org-1', {}), /repeated or omitted/);
+});
+
+test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-prerequisite-root-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(directory, 'image'));
+  fs.writeFileSync(path.join(directory, 'image/canvas-oss-image-manifest.json'), JSON.stringify({
+    source_repository: 'https://github.com/instructure/canvas-lms.git', source_modified: false,
+    source_commit: 'a'.repeat(40), image_digest: 'sha256:' + 'b'.repeat(64), scope: 'UNIT_FIXTURE_ONLY',
+  }));
+  const bootstrap = { phase: 'pre_start_only', web_started_after_bootstrap: true, forbidden_operation_counts: { rails_runner: 0 } };
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  fs.writeFileSync(path.join(directory, 'runtime-context.json'), JSON.stringify({
+    origin: 'https://beta.elevenidllc.com', source_id: 'c'.repeat(40),
+  }));
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  global.fetch = async () => new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+  const ledger = new ObservationLedger(NOW);
+  await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
+  assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
+  bootstrap.forbidden_operation_counts.rails_runner = 1;
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'bootstrap_audit_invalid');
+});
 
 function readinessSnapshot(overrides = {}) {
   return {

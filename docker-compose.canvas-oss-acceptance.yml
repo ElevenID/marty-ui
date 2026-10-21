@@ -201,7 +201,7 @@ networks:
   canvas-oss-private: {}
   beta-tunnel:
     external: true
-    name: marty-infra-network
+    name: elevenid-beta-network
 
 volumes:
   canvas_oss_postgres:

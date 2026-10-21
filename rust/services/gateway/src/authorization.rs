@@ -786,7 +786,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/internal/v1/resource-owners/issuer-entities/{id}",
             &[],
         ),
-        "compliance-profiles" => ("compliance-profiles", "/v1/compliance-profiles/{id}", &[]),
+        "compliance-profiles" => (
+            "compliance-profiles",
+            "/v1/compliance-profiles/{id}",
+            &["system"],
+        ),
         "presentation-policies" => (
             "presentation-policies",
             "/v1/presentation-policies/{id}",
@@ -894,101 +898,7 @@ pub fn skips_tenant_authorization(path: &str) -> bool {
     SKIP_PATTERNS.iter().any(|pattern| pattern.is_match(path))
 }
 
-pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
-    let scopes = scopes.iter().map(String::as_str).collect::<BTreeSet<_>>();
-    // Offline event ingestion is an explicitly granted reporting capability;
-    // broad legacy keys and audit readers do not gain a new write boundary.
-    if required_permission == "audit:ingest" {
-        return scopes.contains("audit:write");
-    }
-    // DSC issuance requires a tenant-bound human operator grant. API keys,
-    // including broad legacy scopes, must not mint document certificates.
-    if matches!(
-        required_permission,
-        "passport-certificate:issue" | "passport-certificate:issue-csca"
-    ) {
-        return false;
-    }
-    if scopes.contains("admin:full") {
-        return true;
-    }
-    if required_permission == "webhook:test" {
-        return scopes.contains("webhooks:write");
-    }
-    if required_permission == "notification:send" {
-        return scopes.contains("notifications:send");
-    }
-    if required_permission == "application:approve" {
-        return scopes.contains("applications:approve") || scopes.contains("applications:write");
-    }
-
-    let Some((resource, action)) = required_permission.split_once(':') else {
-        return false;
-    };
-    match resource {
-        "wallet" => match action {
-            "view" => scopes.contains("wallet:read") || scopes.contains("wallet:write"),
-            "write" => scopes.contains("wallet:write"),
-            _ => false,
-        },
-        "signing-key" => match action {
-            "view" => scopes.contains("keys:read") || scopes.contains("keys:write"),
-            "activate" | "archive" | "create" | "delete" | "edit" | "rotate" | "update"
-            | "validate" | "write" => scopes.contains("keys:write"),
-            _ => false,
-        },
-        "flow-instance" => scopes.contains("flows:execute") || scopes.contains("flows:write"),
-        "flow-definition" if matches!(action, "view" | "read" | "list") => {
-            scopes.contains("flows:read")
-                || scopes.contains("flows:write")
-                || scopes.contains("flows:execute")
-        }
-        "flow-definition" => scopes.contains("flows:write"),
-        "api-key" => false,
-        "verification" => scopes.contains("flows:execute") || scopes.contains("credentials:read"),
-        "issued-credential" if matches!(action, "issue" | "create") => {
-            scopes.contains("credentials:issue")
-        }
-        "issued-credential" if matches!(action, "revoke" | "delete") => {
-            scopes.contains("credentials:revoke")
-        }
-        "issued-credential" => {
-            scopes.contains("credentials:read") || scopes.contains("credentials:issue")
-        }
-        "issuance" if action == "initiate" => scopes.contains("credentials:issue"),
-        "issuance" if action == "revoke" => scopes.contains("credentials:revoke"),
-        "issuance" => scopes.contains("credentials:read") || scopes.contains("credentials:issue"),
-        _ => mapped_api_key_scope(resource, action, &scopes),
-    }
-}
-
-fn mapped_api_key_scope(resource: &str, action: &str, scopes: &BTreeSet<&str>) -> bool {
-    let (read_scope, write_scope) = match resource {
-        "credential-template" => ("templates:read", "templates:write"),
-        "application-template" | "application" => ("applications:read", "applications:write"),
-        "trust-profile" | "issuer-entity" | "presentation-policy" => ("trust:read", "trust:write"),
-        "compliance-profile" => ("compliance:read", "compliance:write"),
-        "deployment-profile" => ("deployment:read", "deployment:write"),
-        "webhook" => ("webhooks:read", "webhooks:write"),
-        "notification" => ("notifications:read", "notifications:send"),
-        "team" => ("users:read", "users:invite"),
-        "role" => ("roles:read", "roles:write"),
-        "policy-set" => ("trust:read", "trust:admin"),
-        "organization" => ("users:read", "users:invite"),
-        "integration-connector" => ("integrations:read", "integrations:write"),
-        _ => return false,
-    };
-    if matches!(action, "view" | "read" | "list") {
-        scopes.contains(read_scope) || scopes.contains(write_scope)
-    } else if matches!(
-        action,
-        "create" | "edit" | "delete" | "write" | "activate" | "archive" | "validate"
-    ) {
-        scopes.contains(write_scope)
-    } else {
-        false
-    }
-}
+pub use marty_api_key_policy::api_key_allowed;
 
 #[cfg(test)]
 mod tests {
@@ -1198,5 +1108,20 @@ mod tests {
             .expect("approval route");
         assert_eq!(approve.permission, "application:approve");
         assert!(!api_key_allowed(approve.permission, &read_scopes));
+    }
+
+    #[test]
+    fn compliance_system_catalog_is_not_a_resource_id() {
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+        assert!(resolve_resource_lookup(
+            "/v1/compliance-profiles/10000000-0000-0000-0000-000000000003"
+        )
+        .is_some());
+        assert_eq!(
+            resolve_action("GET", "/v1/compliance-profiles/system/discoverable")
+                .unwrap()
+                .permission,
+            "compliance-profile:view"
+        );
     }
 }

@@ -341,6 +341,15 @@ async function responseJson(response, code, summary, expectedStatuses = [200]) {
   }
 }
 
+function martyRequestSummary(method, requestPath) {
+  // Only static contract route vocabulary may enter public failure evidence.
+  const words = new Set(['v1', 'integrations', 'canvas', 'platforms', 'registration-config',
+    'lti-installation', 'integration-secrets', 'oauth', 'authorizations', 'program-bindings',
+    'validate', 'activate', 'applications', 'approve', 'credentials', 'evidence-sync-jobs']);
+  const route = requestPath.split('?')[0].split('/').map(word => words.has(word) ? word : word ? ':resource' : '').join('/');
+  return `Marty ${['GET', 'POST', 'PUT', 'DELETE'].includes(method) ? method : 'REQUEST'} ${route} failed`;
+}
+
 class MartyClient {
   constructor(origin, apiKey) {
     this.origin = origin;
@@ -361,7 +370,7 @@ class MartyClient {
       body = JSON.stringify(json);
     }
     const response = await fetchWithTimeout(url, { method, headers, body, redirect: 'manual' });
-    return responseJson(response, 'marty_request_failed', 'Marty API request failed', expected);
+    return responseJson(response, 'marty_request_failed', martyRequestSummary(method, requestPath), expected);
   }
 
   get(requestPath, expected = [200]) {
@@ -459,7 +468,9 @@ async function loginCanvas(page, origin, email, password) {
 }
 
 async function createPersonalAccessToken(page, origin, purpose) {
-  await page.goto(`${origin}/profile/settings`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
+  // Canvas resets the session at login; select the stock session locale after authentication.
+  // Accessible dialog/button names below are deliberately the English contract.
+  await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
   const add = page.locator('.add_access_token_link').first();
   await add.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await add.click();
@@ -490,7 +501,7 @@ async function openDeveloperKeyModal(page, origin, accountId, kind) {
   const trigger = page.locator('#add-developer-key-button').or(page.getByRole('button', { name: /create.*developer key|developer key/i })).first();
   await trigger.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await trigger.click();
-  const menuName = kind === 'lti' ? /^LTI Key$/i : /^API Key$/i;
+  const menuName = kind === 'lti' ? /LTI Key$/i : /API Key$/i;
   await page.getByRole('menuitem', { name: menuName }).click();
   // Canvas labels the dialog "Create Developer Key"; "Key Settings" is its
   // visible heading, not the dialog's accessible name.
@@ -538,7 +549,7 @@ async function createLtiDeveloperKey(page, config) {
   const method = modal.getByLabel(/^method$/i);
   await method.click();
   await page.getByRole('option', { name: /^enter url$/i }).click();
-  await modal.getByLabel(/^json url$/i).fill(config.registrationConfigUrl);
+  await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
   const record = await saveDeveloperKey(page, modal, config.name);
   await enableDeveloperKey(page, config.name);
   return { clientId: String(record.id) };
@@ -590,23 +601,47 @@ function safeList(value) {
   return [];
 }
 
-async function selectProductionBadgeTemplates(marty, organizationId) {
-  const explicitApplicationId = String(process.env.CANVAS_OSS_APPLICATION_TEMPLATE_ID || '').trim();
-  const explicitCredentialId = String(process.env.CANVAS_OSS_CREDENTIAL_TEMPLATE_ID || '').trim();
-  const applications = safeList(await marty.get(`/v1/application-templates?organization_id=${encodeURIComponent(organizationId)}`));
-  const credentials = safeList(await marty.get(`/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`));
+async function selectProductionBadgeTemplates(marty, organizationId, selectors = {
+  applicationTemplateId: process.env.CANVAS_OSS_APPLICATION_TEMPLATE_ID,
+  credentialTemplateId: process.env.CANVAS_OSS_CREDENTIAL_TEMPLATE_ID,
+}) {
+  const explicitApplicationId = String(selectors.applicationTemplateId || '').trim();
+  const explicitCredentialId = String(selectors.credentialTemplateId || '').trim();
+  async function inventory(collection) {
+    const rows = [];
+    const seen = new Set();
+    for (let offset = 0; offset < 10_000; offset += 100) {
+      const page = safeList(await marty.get(`${collection}?organization_id=${encodeURIComponent(organizationId)}&limit=100&offset=${offset}`));
+      for (const row of page) {
+        requireCondition(row?.id && !seen.has(String(row.id)), 'template_inventory_pagination_invalid', 'Template inventory repeated or omitted a stable resource ID.');
+        seen.add(String(row.id)); rows.push(row);
+      }
+      if (page.length < 100) return rows;
+    }
+    fail('template_inventory_limit', 'Template inventory exceeded the bounded selection limit.');
+  }
+  const applications = explicitApplicationId
+    ? [await marty.get(`/v1/application-templates/${encodeURIComponent(explicitApplicationId)}`)]
+    : await inventory('/v1/application-templates');
+  const referencedCredentialId = explicitCredentialId
+    || (explicitApplicationId ? String(applications[0]?.credential_template_id || '') : '');
+  const credentials = referencedCredentialId
+    ? [await marty.get(`/v1/credential-templates/${encodeURIComponent(referencedCredentialId)}`)]
+    : await inventory('/v1/credential-templates');
   const credentialById = new Map(credentials.map((item) => [String(item.id), item]));
   const candidates = applications.filter((application) => {
+    if (String(application.organization_id) !== organizationId) return false;
     if (String(application.status || '').toUpperCase() !== 'ACTIVE') return false;
     if (explicitApplicationId && String(application.id) !== explicitApplicationId) return false;
     const credential = credentialById.get(String(application.credential_template_id || ''));
     if (!credential || String(credential.status || '').toUpperCase() !== 'ACTIVE') return false;
+    if (String(credential.organization_id) !== organizationId) return false;
     if (explicitCredentialId && String(credential.id) !== explicitCredentialId) return false;
-    const descriptor = [credential.name, credential.credential_type, credential.vct]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return /open.?badge|badge|achievement/.test(descriptor);
+    const type = String(credential.credential_type || '').replace(/[^a-z]/gi, '').toLowerCase();
+    const claims = new Set((credential.claims || []).map(claim => claim.name));
+    return ['openbadge', 'openbadgecredential'].includes(type)
+      && ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+        .every(name => claims.has(name));
   });
   requireCondition(candidates.length === 1, 'badge_template_selection_ambiguous', 'Exactly one active Open Badge application/template pair must be selected for the portability lane.');
   const application = candidates[0];
@@ -614,9 +649,9 @@ async function selectProductionBadgeTemplates(marty, organizationId) {
   return { application, credential };
 }
 
-async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive = () => {}) {
+async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive = () => {}, prerequisiteDirectory = '/artifacts') {
   markActive('upstream_source_and_image_provenance');
-  const artifactRoot = path.resolve('tests/artifacts/canvas-oss-portability');
+  const artifactRoot = path.resolve(prerequisiteDirectory);
   const image = readJsonFile(path.join(artifactRoot, 'image', 'canvas-oss-image-manifest.json'), 'image_manifest_unavailable');
   requireCondition(
     image.source_repository === 'https://github.com/instructure/canvas-lms.git'
@@ -1457,6 +1492,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function contractFailureLocation(error, activeCase) {
+  // Retain actionable driver location without request bodies, URLs, credentials
+  // or Playwright action arguments from the original exception message.
+  const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
+  const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
+  return { activeCase, errorType: name,
+    sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+}
+
 async function finishRecordedVideo(context, page, destination) {
   const video = page.video();
   await context.close();
@@ -1467,7 +1511,7 @@ async function finishRecordedVideo(context, page, destination) {
 }
 
 async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () => {},
-  pass = () => {}, runSuffix, state = {} }) {
+  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts' }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
@@ -1491,7 +1535,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     state.marty = marty = new MartyClient(martyOrigin, martyApiKey);
 
 
-    await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive);
+    await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive, prerequisiteDirectory);
+
+    markActive('standard_lti_13_install');
 
     state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const adminPage = await adminContext.newPage();
@@ -1677,6 +1723,7 @@ async function main() {
     const setup = await prepareCanvasCaptureFixtures({
       browser: browser = await chromium.launch({ headless: true }), ledger, markActive, pass, state: preparationState,
       runSuffix: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
+      prerequisiteDirectory: path.dirname(args.observations),
     });
     ({ marty, adminContext, learnerContext, platformId, integrationSecretId } = setup);
     const { canvasOrigin, martyOrigin, organizationId, martyApiKey, learnerCanvas, adminCanvas,
@@ -1857,6 +1904,7 @@ async function main() {
     requireCondition(activityResults.nativeSubmission && activityResults.quizSubmissionRecord, 'activity_observations_missing', 'Canvas activity observations were not retained in memory.');
     requireCondition(ledger.allOssRequiredPassed(), 'required_observation_missing', 'One or more required OSS observations did not pass.');
   } catch (error) {
+    ledger.driverFailure = contractFailureLocation(error, activeCase);
     failure = error instanceof ContractFailure
       ? error
       : new ContractFailure('unexpected_driver_failure', 'The standard Canvas contract stopped on an unexpected driver error.');
@@ -1865,6 +1913,8 @@ async function main() {
     }
   } finally {
     ledger.write(args.observations);
+    if (ledger.driverFailure) fs.writeFileSync(path.join(path.dirname(args.observations), 'driver-failure-location.json'),
+      JSON.stringify(ledger.driverFailure, null, 2) + '\n');
 
     if (recordedContext) {
       try {
@@ -1905,6 +1955,10 @@ async function main() {
 }
 
 module.exports = {
+  contractFailureLocation,
+  martyRequestSummary,
+  selectProductionBadgeTemplates,
+  observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
   launchLearnerResource,
   triggerLearnerSync,

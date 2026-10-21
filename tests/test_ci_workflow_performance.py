@@ -2589,6 +2589,7 @@ def test_runner_registration_inputs_keep_release_coverage_without_full_pr_matrix
             "tests/test_runner_routing_labels.py",
         },
         "runner-host-capacity-policy.ps1": {
+            "scripts/check-canvas-prebuilt-backing-capacity.ps1",
             "scripts/register-canvas-oss-runner.ps1",
             "tests/test_runner_routing_labels.py",
         },
