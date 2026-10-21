@@ -1294,15 +1294,15 @@ def active_organization_id(page: Page) -> str:
     return str(organization_id or '').strip()
 
 
-def require_created_organization(page: Page, slug: str | None, before: dict[str, Any], after: dict[str, Any]) -> str:
-    """Do not install a real provider credential in a previous active organization."""
+def require_created_organization(page: Page, name: str | None, before: dict[str, Any], after: dict[str, Any]) -> str:
+    """Bind the public organization name and fresh active ID before installing credentials."""
     old_probe = before.get("/v1/organizations/mine") or {}
     new_probe = after.get("/v1/organizations/mine") or {}
     old, new = old_probe.get("body"), new_probe.get("body")
-    if not slug or old_probe.get("status") != 200 or new_probe.get("status") != 200 or not isinstance(old, list) or not isinstance(new, list):
+    if not name or old_probe.get("status") != 200 or new_probe.get("status") != 200 or not isinstance(old, list) or not isinstance(new, list):
         raise ValueError("D10 could not bind the newly created organization before signer setup")
     active = active_organization_id(page)
-    matching = [item for item in new if isinstance(item, dict) and item.get("id") == active and item.get("slug") == slug]
+    matching = [item for item in new if isinstance(item, dict) and item.get("id") == active and item.get("name") == name]
     if (not active or len(matching) != 1
             or any(isinstance(item, dict) and item.get("id") == active for item in old)):
         raise ValueError("D10 signer setup requires the exact fresh organization created by this run")

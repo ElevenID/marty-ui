@@ -89,13 +89,28 @@ def test_preflight_reads_token_file_without_passing_secret_to_validator(monkeypa
 def test_signer_setup_is_bound_to_the_new_active_organization(monkeypatch):
     audit = _audit()
     monkeypatch.setattr(audit, "active_organization_id", lambda _page: "new-org")
-    before = {"/v1/organizations/mine": {"status": 200, "body": [{"id": "old-org", "slug": "old"}]}}
-    after = {"/v1/organizations/mine": {"status": 200, "body": [{"id": "new-org", "slug": "new-run"}]}}
+    before = {"/v1/organizations/mine": {"status": 200, "body": [{"id": "old-org", "name": "old"}]}}
+    after = {"/v1/organizations/mine": {"status": 200, "body": [{"id": "new-org", "name": "new-run"}]}}
     assert audit.require_created_organization(object(), "new-run", before, after) == "new-org"
     for old, new, slug in [(after, after, "new-run"), (before, after, None), (before, after, "wrong-run"),
                            (before, {"/v1/organizations/mine": {"status": 503}}, "new-run")]:
         with pytest.raises(ValueError, match="organization"):
             audit.require_created_organization(object(), slug, old, new)
+
+
+@pytest.mark.parametrize("rows", [
+    [{"id": "new-org", "slug": "new-run"}],  # An imagined slug is not the public name contract.
+    [{"id": "new-org", "name": "wrong", "slug": "new-run"}],
+    [{"id": "foreign-org", "name": "new-run"}],
+    [{"id": "new-org", "name": "new-run"}, {"id": "new-org", "name": "new-run"}],
+])
+def test_new_organization_binding_rejects_wrong_public_identity(monkeypatch, rows):
+    audit = _audit()
+    monkeypatch.setattr(audit, "active_organization_id", lambda _page: "new-org")
+    before = {"/v1/organizations/mine": {"status": 200, "body": []}}
+    after = {"/v1/organizations/mine": {"status": 200, "body": rows}}
+    with pytest.raises(ValueError, match="exact fresh organization"):
+        audit.require_created_organization(object(), "new-run", before, after)
 
 
 def test_registration_requires_masked_transit_token_before_fill(monkeypatch):
