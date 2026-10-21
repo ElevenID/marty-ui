@@ -1033,7 +1033,8 @@ $OfficialStackRelease = [bool]$data.official
 $componentRevisions = [ordered]@{}
 foreach ($property in $data.revisions.PSObject.Properties) { $componentRevisions[$property.Name] = $property.Value }
 $martyRs = $null
-''' + block + '\n@{ wheelLoaded = ($null -ne $martyRs); apiCommit = $martyApiCore.Commit; blogCommit = $martyBlog.Commit } | ConvertTo-Json -Compress\n', encoding="utf8")
+try {
+''' + block + '\n@{ wheelLoaded = ($null -ne $martyRs); apiCommit = $martyApiCore.Commit; blogCommit = $martyBlog.Commit } | ConvertTo-Json -Compress\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n', encoding="utf8")
     result = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Fixture", str(fixture)],
         capture_output=True, text=True, timeout=20)
     if expected:
