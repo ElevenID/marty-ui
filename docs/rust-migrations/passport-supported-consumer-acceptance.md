@@ -15,3 +15,16 @@ The Kubernetes component at `k8s/passport-supported-disposable/01-simulator.yaml
 The protected Flow gate is frozen in `contracts/passport-supported-flow-acceptance.json`. The direct route probe uses placeholder application template, credential template, and delivery destination IDs and a caller supplied synthetic Flow ID. The separate Flow producer provisions tenant-bound references in the owned disposable project, starts a real physical-document Flow, advances its nine steps, and checks the durable instance, native job, managed signer, same-job signed Gateway callback, and restart checkpoint. After the restart it submits that selected job in a two-job native batch through the public Gateway, proves the first accepted SOD/DSC material in the exact owned PostgreSQL container, and binds the final native container and issued DSC to the protected receipt. Private pending batch state remains until verified disposable teardown. A successful protected run and attested receipt are still required as live evidence. A capability response or copied Flow ID cannot satisfy that gate.
 
 Before removing migrated Python passport code, the team must review the Rust parity tests and packaged image, run the protected acceptance evidence, and find every remaining consumer of the migrated Python path. Failed gates block deletion. After those gates pass, delete the superseded Python passport routes and runtime wiring, deploy one aggregate Rust-only release to beta, record the demo and soak, and leave production unchanged. The optional reusable integration/compliance fixture remains later work.
+
+## Provisioning record check ownership
+
+The uncalled `check_passport_supported_provisioning_record.py` and
+`check_passport_supported_record_handoff.py` argument/report wrappers are retired.
+The tested `verify_record` and `verify_handoff` functions in
+`passport_supported_provisioning_plan.py` remain, along with their attested-plan,
+exact-record, expiry, source/run and live-resource checks. Their blocked status
+is intentional: a source-bound record or a hosted signature alone does not
+qualify the disposable deployment or its Rust routes. Keep future protected
+record/handoff qualification open with that owner. The separate active
+`check_passport_supported_producer_handoff.py` and its richer protected-producer
+receipt, runtime and route evidence are unchanged.

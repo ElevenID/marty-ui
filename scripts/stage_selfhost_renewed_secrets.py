@@ -17,6 +17,7 @@ import sys
 
 # Keep a receipt-verified extracted bundle immutable while importing siblings.
 sys.dont_write_bytecode = True
+from selfhost_operator_inputs import private_empty_or_source as private_empty_or_source  # noqa: E402
 from passport_remote_tls import SELFHOST_CERT_FILES, SELFHOST_TLS_FILES  # noqa: E402
 from provision_selfhost_disposable_tls import KEY_METADATA_FILE, verified_key_metadata  # noqa: E402
 from provision_selfhost_keycloak_kms import OUTPUTS as KEYCLOAK_OUTPUTS  # noqa: E402
@@ -32,15 +33,6 @@ RENEWED_CERT_FILES = SELFHOST_CERT_FILES | {
 RENEWED_TOKEN_FILES = RENEWED_FILES - RENEWED_CERT_FILES
 
 
-def private_empty_or_source(path: Path, *, empty: bool) -> Path:
-    if os.name != "posix" or not path.is_absolute() or path.is_symlink() or not path.is_dir():
-        raise ValueError("secret generation requires an existing POSIX private directory")
-    info = path.stat()
-    if stat.S_IMODE(info.st_mode) != 0o700:
-        raise ValueError("secret generation directory must be owner-private")
-    if empty and any(path.iterdir()):
-        raise ValueError("new secret generation directory must be empty")
-    return path.resolve()
 
 
 def bounded_file(path: Path, *, allow_empty: bool = False) -> bytes:

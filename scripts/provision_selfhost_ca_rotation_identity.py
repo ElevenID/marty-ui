@@ -20,14 +20,10 @@ import tempfile
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from activate_selfhost_renewed_secrets import private_file  # noqa: E402
-from provision_selfhost_renewal_identity import (  # noqa: E402
-    NAME, existing_policy_names, operator_acl, write_private,
-)
+from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
+from provision_selfhost_renewal_identity import NAME, existing_policy_names, operator_acl  # noqa: E402
 from provision_selfhost_disposable_tls import KEY_NAMES  # noqa: E402
-from provision_selfhost_snapshot_identity import snapshot_origin  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
-from stage_selfhost_renewed_secrets import private_empty_or_source  # noqa: E402
 
 
 AUTH_MOUNT = "selfhost-ca-rotation"

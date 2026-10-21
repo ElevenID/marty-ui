@@ -24,6 +24,7 @@ if os.name == "posix":
     import fcntl
 
 sys.dont_write_bytecode = True
+from selfhost_operator_inputs import private_file as private_file  # noqa: E402
 from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
 from selfhost_openbao_client import (  # noqa: E402
     Bao, certificate_public_key_der, public_key_der, require_ca_rotation_authority,
@@ -74,12 +75,6 @@ def checked_overlap_mounts(enabled: bool, workload: str | None,
         raise ValueError("CA replacement mounts are outside reviewed versions")
 
 
-def private_file(path: Path) -> str:
-    if (not path.is_absolute() or path.is_symlink() or not path.is_file()
-            or path.stat().st_size > 64 * 1024
-            or stat.S_IMODE(path.stat().st_mode) & 0o077):
-        raise ValueError("operator input file is absent or not private")
-    return path.read_text(encoding="utf-8")
 
 
 def checked_env(path: Path, secret_root: Path) -> list[str]:

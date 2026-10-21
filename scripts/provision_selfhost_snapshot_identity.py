@@ -8,13 +8,11 @@ import os
 from pathlib import Path
 import sys
 from urllib.error import HTTPError
-from urllib.parse import urlsplit
 
 sys.dont_write_bytecode = True
-from activate_selfhost_renewed_secrets import private_file  # noqa: E402
-from provision_selfhost_renewal_identity import write_private  # noqa: E402
+from selfhost_operator_inputs import private_file, write_private, private_empty_or_source  # noqa: E402
+from selfhost_operator_inputs import snapshot_origin as snapshot_origin  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
-from stage_selfhost_renewed_secrets import private_empty_or_source  # noqa: E402
 
 
 AUTH_MOUNT = "selfhost-snapshot"
@@ -25,14 +23,6 @@ SECRET_ID_FILE = "snapshot-secret-id"
 ACL = 'path "sys/storage/raft/snapshot" { capabilities = ["read"] }'
 
 
-def snapshot_origin(value: str) -> str:
-    parsed = urlsplit(value)
-    if (parsed.scheme != "https" or parsed.hostname not in
-            ("127.0.0.1", "localhost", "::1") or not parsed.port
-            or parsed.username or parsed.password or parsed.path not in ("", "/")
-            or parsed.query or parsed.fragment):
-        raise ValueError("snapshot OpenBao URL must be a local loopback HTTPS origin")
-    return value.rstrip("/")
 
 
 def bootstrap(bao: Bao, output: Path) -> None:
