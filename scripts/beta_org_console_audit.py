@@ -1687,8 +1687,10 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
     audit.snapshot("kms-connection-filled", "Entered the declared OpenBao connection; the token is hidden and this setup interval is excluded from the trace.")
     if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
         raise ValueError("The declared OpenBao connection did not pass form validation")
-    if not audit.fill_label(re.compile(r"^transit key name$", re.I), inputs["key_reference"]):
-        raise ValueError("The real transit key selector is unavailable")
+    key_field = page.get_by_label(re.compile(r"^transit key name(?:\s*\*)?$", re.I))
+    if key_field.count() != 1:
+        raise ValueError("The real transit key selector is unavailable or ambiguous")
+    key_field.fill(inputs["key_reference"], timeout=5000)
     for purpose in [r"^VC JWT / SD-JWT issuer", r"^OID4VP request signing"]:
         page.get_by_role("checkbox", name=re.compile(purpose, re.I)).check(timeout=3000)
     page.get_by_role("checkbox", name="Use as the default signing service", exact=True).check(timeout=3000)
