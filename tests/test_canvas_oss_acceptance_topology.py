@@ -62,9 +62,17 @@ def test_instructor_resource_launch_requires_the_stock_canvas_assignment_ui() ->
     implementation = driver.split("async function launchStaffResource", 1)[1].split(
         "function validateReadinessSnapshot", 1
     )[0]
-    assert "/assignments`" in implementation
-    assert "getByRole('link', { name: assignmentName, exact: true })" in implementation
-    assert "waitForEvent('page'" in implementation
+    assert "openCanvasAssignmentResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin)" in implementation
+    shared_launch = driver.split("async function openCanvasAssignmentResource", 1)[1].split(
+        "async function launchStaffResource", 1
+    )[0]
+    assert "/assignments`" in shared_launch
+    assert "getByRole('link', { name: assignmentName, exact: true })" in shared_launch
+    assert "waitForEvent('page'" in shared_launch
+    assert "frame === page.mainFrame()" in shared_launch
+    assert "new URL(frame.url()).origin === martyOrigin" in shared_launch
+    assert "Canvas launch verified" in shared_launch
+    assert "requireCondition(verification.verified" in shared_launch
     assert "sessionless" not in driver.lower()
 
 
@@ -75,10 +83,11 @@ def test_learner_launch_requires_the_stock_canvas_assignment_ui() -> None:
     implementation = driver.split("async function launchLearnerResource", 1)[1].split(
         "async function reloadLearnerExperience", 1
     )[0]
-    assert "/assignments`" in implementation
-    assert "getByRole('link', { name: assignmentName, exact: true })" in implementation
+    assert "openCanvasAssignmentResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin)" in implementation
+    assert "launch.surface.getByTestId('canvas-lti-continue').click()" in implementation
+    assert "'/lti/experience-sessions/current/bootstrap'" in implementation
+    assert "bootstrapResponse" in implementation
     assert "sessionlessLaunch" not in implementation
-    assert "waitForEvent('page'" in implementation
 
 
 def test_live_contract_races_approval_and_requires_one_claim_transaction() -> None:

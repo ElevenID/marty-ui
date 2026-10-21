@@ -74,7 +74,7 @@ async function main() {
     browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
     const ledger = new stock.ObservationLedger(report.startedAt, { scope: 'CURRENT_RUN_SETUP_PREREQUISITES_ONLY' });
     setup = await stock.prepareCanvasCaptureFixtures({ browser, ledger, state: setupState,
-      runSuffix: actual.runId, pass: (id, detail) => ledger.pass(id, detail),
+      runSuffix: actual.runId, ownershipDirectory: dir, pass: (id, detail) => ledger.pass(id, detail),
       prerequisiteDirectory: path.dirname(path.resolve(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)) });
     assert.equal(setup.organizationId, actual.organizationId);
     const policyId = process.env.CANVAS_CAPTURE_PRESENTATION_POLICY_ID;

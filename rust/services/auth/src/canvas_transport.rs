@@ -48,7 +48,9 @@ impl HttpCanvasExperienceSessionProvider {
 
     async fn get(&self, path: &str, bearer_token: Option<&str>) -> Result<Value, PortError> {
         let mut url = self.issuance_base_url.clone();
-        url.set_path(&format!("{}{path}", self.issuance_base_url.path()));
+        // Url canonicalizes an origin's empty path to "/"; trim at the join.
+        let prefix = self.issuance_base_url.path().trim_end_matches('/');
+        url.set_path(&format!("{prefix}{path}"));
         let mut headers = BTreeMap::from([("accept".into(), "application/json".into())]);
         if let Some(token) = bearer_token {
             headers.insert("authorization".into(), format!("Bearer {token}"));

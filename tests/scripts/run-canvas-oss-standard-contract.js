@@ -467,7 +467,27 @@ async function loginCanvas(page, origin, email, password) {
   if (await accepted.isVisible().catch(() => false)) await accepted.click();
 }
 
-async function createPersonalAccessToken(page, origin, purpose) {
+function canvasTokenExpiration(now, timeZone, deadlineEpoch = process.env.CANVAS_OSS_CONTRACT_DEADLINE_EPOCH || '') {
+  const runDeadline = deadlineEpoch === '' ? now + 9_000_000 : Number(deadlineEpoch) * 1000;
+  requireCondition(Number.isSafeInteger(runDeadline) && runDeadline > now && runDeadline <= now + 24 * 3600000,
+    'canvas_contract_deadline_invalid', 'Canvas contract deadline must be future and within the bounded daily run window.');
+  const timestamp = Math.ceil((runDeadline + 30 * 60 * 1000) / (30 * 60 * 1000)) * (30 * 60 * 1000);
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone, year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: 'numeric', minute: '2-digit', hour12: true }).formatToParts(new Date(timestamp));
+  const part = type => parts.find(item => item.type === type).value;
+  return { timestamp, date: `${part('month')}/${part('day')}/${part('year')}`,
+    time: `${part('hour')}:${part('minute')} ${part('dayPeriod')}` };
+}
+
+function freshCanvasLearnerEmail(base, runSuffix) {
+  const match = /^([a-z0-9._+-]+)@(marty\.demo|[a-z0-9.-]+\.test)$/i.exec(base);
+  requireCondition(match && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix),
+    'canvas_learner_identity_invalid', 'Fresh Canvas fixtures require a synthetic mailbox and a run identity.');
+  const nonce = crypto.createHash('sha256').update(runSuffix).digest('hex').slice(0, 16);
+  return `${match[1].split('+')[0].slice(0, 40)}+${nonce}@${match[2]}`;
+}
+
+async function createPersonalAccessToken(page, origin, purpose, onOwned = () => {}) {
   // Canvas resets the session at login; select the stock session locale after authentication.
   // Accessible dialog/button names below are deliberately the English contract.
   await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
@@ -477,6 +497,23 @@ async function createPersonalAccessToken(page, origin, purpose) {
   const dialog = page.getByRole('dialog', { name: /new access token/i });
   await dialog.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await dialog.getByLabel(/^purpose/i).fill(purpose);
+  const timeZone = await page.evaluate(() => window.ENV.TIMEZONE);
+  const expiration = canvasTokenExpiration(Date.now(), timeZone);
+  const date = dialog.getByLabel(/^expiration date\b/i);
+  const time = dialog.getByLabel(/^expiration time\b/i);
+  await date.fill(expiration.date); await date.press('Tab');
+  // DateTimeInput asynchronously initializes an empty time when its date is
+  // committed. Let that stock UI update finish before choosing a time.
+  await page.waitForTimeout(400);
+  await time.fill(expiration.time);
+  // InstUI commits a combobox choice asynchronously. Tab can accept its stale
+  // highlighted option (midnight) before filtering the newly typed time.
+  await page.getByRole('option', { name: expiration.time, exact: true }).click();
+  requireCondition(await time.inputValue() === expiration.time,
+    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
+  const valid = await dialog.locator('input[required]').evaluateAll(inputs =>
+    inputs.every(input => input.checkValidity() && input.getAttribute('aria-invalid') !== 'true'));
+  requireCondition(valid, 'canvas_personal_token_form_invalid', 'Canvas token purpose and bounded expiration must be valid before submission.');
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
       && new URL(response.url()).pathname === '/api/v1/users/self/tokens'
@@ -484,6 +521,10 @@ async function createPersonalAccessToken(page, origin, purpose) {
   await dialog.getByRole('button', { name: /^generate token$/i }).click();
   const response = await responsePromise;
   const payload = await responseJson(response, 'canvas_personal_token_failed', 'Canvas personal token creation failed', [200, 201]);
+  onOwned(payload?.id);
+  const expiresAt = Date.parse(payload?.expires_at || '');
+  requireCondition(Number.isFinite(expiresAt) && Math.abs(expiresAt - expiration.timestamp) <= 60_000,
+    'canvas_personal_token_expiry_mismatch', 'Canvas must confirm the requested bounded token expiration.');
   const visible = String(payload?.visible_token || '').trim();
   requireCondition(visible.length >= 20, 'canvas_personal_token_missing', 'Canvas did not return a one-time personal token.');
   const details = page.getByRole('dialog', { name: /access token details/i });
@@ -531,7 +572,7 @@ async function enableDeveloperKey(page, keyName) {
   const toggle = row.getByRole('checkbox', { name: new RegExp(`(?:off|on).*${escapeRegExp(keyName)}`, 'i') }).first();
   const checked = await toggle.isChecked().catch(() => false);
   if (!checked) {
-    await toggle.click();
+    await clickCanvasCheckboxLabel(row, toggle);
     const confirm = page.getByRole('button', { name: /switch to on|turn on|enable/i }).first();
     if (await confirm.isVisible().catch(() => false)) await confirm.click();
   }
@@ -551,26 +592,52 @@ async function createLtiDeveloperKey(page, config) {
   await page.getByRole('option', { name: /^enter url$/i }).click();
   await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
   const record = await saveDeveloperKey(page, modal, config.name);
+  config.onOwned?.(record.id);
   await enableDeveloperKey(page, config.name);
   return { clientId: String(record.id) };
 }
 
+async function clickCanvasCheckboxLabel(modal, input) {
+  const id = await input.getAttribute('id');
+  requireCondition(id && /^[A-Za-z][\w:-]{0,100}$/.test(id), 'canvas_checkbox_identity_missing', 'Canvas checkbox requires its stock associated label.');
+  await modal.locator(`label[for=${JSON.stringify(id)}]`).click();
+}
+
+async function setCanvasCheckbox(modal, input, desired) {
+  if (await input.isChecked() === desired) return;
+  await clickCanvasCheckboxLabel(modal, input);
+  requireCondition(await input.isChecked() === desired, 'canvas_checkbox_state_mismatch', 'Canvas checkbox did not reach the requested state.');
+}
+
 async function selectCanvasOauthScopes(modal, scopes) {
-  await waitFor(async () => modal.locator('input').evaluateAll(
-    (inputs, values) => values.every((value) => inputs.some((input) => input.value === value)),
-    scopes,
-  ), DEFAULT_TIMEOUT_MS, 500, 'canvas_oauth_scope_controls_missing');
-  const selected = await modal.locator('input').evaluateAll((inputs, values) => {
-    let count = 0;
-    for (const input of inputs) {
-      if (values.includes(input.value)) {
-        if (!input.checked) input.click();
-        if (input.checked) count += 1;
-      }
+  await setCanvasCheckbox(modal, modal.getByRole('checkbox', { name: /enforce scopes/i }), true);
+  await setCanvasCheckbox(modal, modal.getByRole('checkbox', { name: /allow include parameters/i }), false);
+  const search = modal.getByRole('searchbox', { name: /search endpoints/i });
+  for (const scope of scopes) {
+    await search.fill(scope);
+    await modal.page().waitForTimeout(450); // Stock scope filtering is debounced by400ms.
+    // Canvas lazily mounts scope groups inside a separate scroll container.
+    const input = modal.locator(`input[type="checkbox"][value=${JSON.stringify(scope)}]`);
+    for (let step = 0; step < 100 && !(await input.count()); step += 1) {
+      await modal.locator('[data-automation="scopes-list"]').evaluate(node => {
+        for (let current = node.querySelector('[data-automation="scopes-group"]') || node; current; current = current.parentElement) {
+          if (current.scrollHeight > current.clientHeight + 10 && ['auto', 'scroll'].includes(getComputedStyle(current).overflowY)) {
+            current.scrollTop += 800; return;
+          }
+        }
+      });
+      await modal.page().waitForTimeout(100);
     }
-    return count;
-  }, scopes);
-  requireCondition(selected === scopes.length, 'canvas_oauth_scope_selection_failed', 'Canvas did not select the fixed OAuth scope allowlist.');
+    requireCondition(await input.count() === 1, 'canvas_oauth_scope_controls_missing', 'Canvas did not expose one exact requested scope.');
+    await setCanvasCheckbox(modal, input, true);
+  }
+  await search.fill('');
+}
+
+function assertCanvasOauthCompletion(url, martyOrigin, platformId) {
+  requireCondition(url.origin === martyOrigin && url.searchParams.get('outcome') === 'connected'
+    && url.searchParams.get('platform_id') === platformId,
+    'canvas_oauth_callback_not_connected', 'The native OAuth callback must confirm connection to the owned Canvas platform.');
 }
 
 async function createOauthDeveloperKey(page, config) {
@@ -580,6 +647,11 @@ async function createOauthDeveloperKey(page, config) {
   await modal.getByTestId('redirect-uris-input').fill(config.redirectUri);
   await selectCanvasOauthScopes(modal, CANVAS_OAUTH_SCOPES);
   const record = await saveDeveloperKey(page, modal, config.name);
+  config.onOwned?.(record.id);
+  requireCondition(record.require_scopes === true && Array.isArray(record.scopes)
+    && record.scopes.length === CANVAS_OAUTH_SCOPES.length
+    && CANVAS_OAUTH_SCOPES.every(scope => record.scopes.includes(scope)),
+    'canvas_oauth_scope_grant_mismatch', 'Canvas must persist exactly the required enforced OAuth scope allowlist.');
   await enableDeveloperKey(page, config.name);
   const secret = String(record.api_key || record.client_secret || '').trim();
   requireCondition(secret.length >= 20, 'canvas_oauth_secret_missing', 'Canvas did not return the OAuth client secret from the stock Developer Key flow.');
@@ -689,7 +761,16 @@ async function observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, m
   ledger.pass('canvas_public_https_reachable', 'The stock Canvas HTTPS login surface returned HTTP 200 from the reviewed public origin.');
 }
 
-async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learnerEmail, learnerPassword, runSuffix) {
+async function publishCanvasCourse(adminCanvas, courseId) {
+  const published = await adminCanvas.putForm(`/api/v1/courses/${courseId}`, {
+    'course[event]': 'offer',
+  }, [200]);
+  requireCondition(String(published?.id) === String(courseId) && published?.workflow_state === 'available',
+    'canvas_course_not_published', 'Canvas must confirm the owned course is published before learner activity.');
+  return published;
+}
+
+async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learnerEmail, learnerPassword, runSuffix, onOwned = () => {}) {
   const learner = await adminCanvas.postForm(`/api/v1/accounts/${encodeURIComponent(accountId)}/users`, {
     'user[name]': `Portable Learner ${runSuffix}`,
     'user[short_name]': `Portable Learner ${runSuffix}`,
@@ -701,6 +782,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
     'communication_channel[skip_confirmation]': true,
   }, [200, 201]);
   requireCondition(learner?.id, 'canvas_learner_create_failed', 'Canvas did not create the learner through its Users API.');
+  onOwned('learner', learner.id);
 
   const course = await adminCanvas.postForm(`/api/v1/accounts/${encodeURIComponent(accountId)}/courses`, {
     'course[name]': `${RUN_NAME_PREFIX} ${runSuffix}`,
@@ -708,6 +790,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
     'course[is_public]': false,
   }, [200, 201]);
   requireCondition(course?.id, 'canvas_course_create_failed', 'Canvas did not create the portability course.');
+  onOwned('course', course.id);
 
   await adminCanvas.postForm(`/api/v1/courses/${course.id}/enrollments`, {
     'enrollment[user_id]': learner.id,
@@ -731,6 +814,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
     'assignment[published]': true,
   }, [200, 201]);
 
+  onOwned('assignment', assignment?.id);
   const quiz = await adminCanvas.postForm(`/api/v1/courses/${course.id}/quizzes`, {
     'quiz[title]': `Portable Classic Quiz ${runSuffix}`,
     'quiz[description]': 'A stock Classic Quiz used by the portable evidence contract.',
@@ -740,6 +824,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
     'quiz[show_correct_answers]': true,
     'quiz[published]': false,
   }, [200, 201]);
+  onOwned('quiz', quiz?.id);
   const question = await adminCanvas.postForm(`/api/v1/courses/${course.id}/quizzes/${quiz.id}/questions`, {
     'question[question_name]': 'Portable standard',
     'question[question_type]': 'multiple_choice_question',
@@ -750,6 +835,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
       { text: 'A private Canvas plugin and database patch', weight: 0 },
     ]),
   }, [200, 201]);
+  onOwned('question', question?.id);
   const correctAnswer = safeList(question?.answers).find((answer) => Number(answer.weight) === 100);
   requireCondition(assignment?.id && quiz?.id && quiz?.assignment_id && question?.id && correctAnswer?.id, 'canvas_activity_create_failed', 'Canvas did not create the stock assignment and Classic Quiz fixtures.');
   await adminCanvas.putForm(`/api/v1/courses/${course.id}/quizzes/${quiz.id}`, {
@@ -761,6 +847,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
     'module[require_sequential_progress]': false,
     'module[published]': false,
   }, [200, 201]);
+  onOwned('module', module?.id);
   await adminCanvas.postForm(`/api/v1/courses/${course.id}/modules/${module.id}/items`, {
     'module_item[type]': 'Assignment',
     'module_item[content_id]': assignment.id,
@@ -774,7 +861,7 @@ async function createCanvasFixtures(adminCanvas, accountId, adminUserId, learner
   await adminCanvas.putForm(`/api/v1/courses/${course.id}/modules/${module.id}`, {
     'module[published]': true,
   }, [200]);
-  await adminCanvas.putForm(`/api/v1/courses/${course.id}`, { event: 'offer' }, [200]);
+  await publishCanvasCourse(adminCanvas, course.id);
   return { learner, course, assignment, quiz, question, correctAnswer, module };
 }
 
@@ -877,7 +964,14 @@ async function findNewExternalAssignment(adminCanvas, courseId, previousIds) {
   )) || null;
 }
 
-async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanvas, previousIds, martyOrigin) {
+function canvasOwnedToolIndex(ids, toolId) {
+  requireCondition(/^\d+$/.test(toolId), 'canvas_owned_tool_invalid', 'The installed Canvas tool requires an acknowledged numeric ID.');
+  const matches = ids.flatMap((id, index) => String(id) === toolId ? [index] : []);
+  requireCondition(matches.length === 1, 'canvas_owned_tool_ambiguous', 'The stock chooser must contain exactly one owned installed tool.');
+  return matches[0];
+}
+
+async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas, previousIds, martyOrigin) {
   await page.goto(`${adminCanvas.origin}/courses/${fixtures.course.id}/assignments/new`, {
     waitUntil: 'domcontentloaded',
     timeout: DEFAULT_TIMEOUT_MS,
@@ -887,14 +981,28 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanv
   const submissionSelect = page.locator('#assignment_submission_type').or(page.getByLabel(/submission type/i)).first();
   await submissionSelect.selectOption({ value: 'external_tool' });
   await page.getByRole('button', { name: /^find$/i }).click();
-  const chooser = page.getByRole('dialog').filter({ hasText: /external tools/i }).first();
+  const chooser = page.getByRole('dialog', { name: /^configure external tool$/i });
   await chooser.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await chooser.getByText(toolName, { exact: false }).first().click();
+  const tools = chooser.locator('li.tool');
+  await waitFor(async () => (await tools.count()) > 0, DEFAULT_TIMEOUT_MS, 100, 'canvas_tool_chooser_empty');
+  // This is the stock rendered chooser model used by its own click handler.
+  // Read only IDs to distinguish installations with identical visible titles;
+  // navigation itself still uses the real chooser link and LTI launch.
+  const ids = await tools.evaluateAll(nodes => nodes.map(node =>
+    String(window.jQuery(node).data('tool')?.definition_id || '')));
+  await tools.nth(canvasOwnedToolIndex(ids, toolId)).getByRole('link').click();
   const ltiFrame = await waitFor(() => page.frames().find((frame) => {
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
   await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  await page.waitForTimeout(1_000);
+  await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+    .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  await waitFor(async () => {
+    const value = await chooser.locator('#external_tool_create_url').inputValue();
+    try { return new URL(value).origin === martyOrigin; } catch { return false; }
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_deep_link_return_missing');
+  await chooser.getByRole('button', { name: /^select$/i }).click();
+  await chooser.waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
   await page.getByRole('button', { name: /save\s*&\s*publish|save and publish/i }).click();
   return waitFor(
     () => findNewExternalAssignment(adminCanvas, fixtures.course.id, previousIds),
@@ -904,7 +1012,7 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanv
   );
 }
 
-async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolName, martyOrigin) {
+async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId, martyOrigin) {
   const before = safeList(await adminCanvas.get(`/api/v1/courses/${fixtures.course.id}/assignments?per_page=100`));
   const previousIds = new Set(before.map((item) => String(item.id)));
   // The portability claim must exercise the installed stock Canvas chooser and
@@ -913,7 +1021,7 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolNam
   const assignment = await runDeepLinkingViaAssignmentUi(
     page,
     fixtures,
-    toolName,
+    toolId,
     adminCanvas,
     previousIds,
     martyOrigin,
@@ -927,31 +1035,107 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolNam
   return assignment;
 }
 
-async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
-  await page.goto(`${adminCanvas.origin}/courses/${fixtures.course.id}/assignments`, {
-    waitUntil: 'domcontentloaded',
-    timeout: DEFAULT_TIMEOUT_MS,
+function canvasLaunchErrorSummary(value, depth = 0) {
+  if (!value || typeof value !== 'object' || depth > 3) return [];
+  const result = [];
+  for (const key of ['detail', 'details', 'message', 'error', 'error_description', 'code', 'error_code', 'reason']) {
+    const item = value[key];
+    if (typeof item === 'string') result.push(sanitizeEvidence(item)
+      .replace(/https?:\/\/[^\s]+/gi, '[redacted-url]')
+      .replace(/[A-Za-z0-9_-]{24,}/g, '[redacted-opaque]'));
+    else if (Array.isArray(item)) result.push(...item.slice(0, 3).flatMap(entry => canvasLaunchErrorSummary(entry, depth + 1)));
+    else if (item && typeof item === 'object') result.push(...canvasLaunchErrorSummary(item, depth + 1));
+  }
+  return [...new Set(result)].slice(0, 8);
+}
+
+async function openCanvasAssignmentResource(page, canvas, fixtures, externalAssignment, martyOrigin) {
+  const documents = [];
+  const reads = [];
+  let presentation;
+  const observeDocument = response => {
+    const request = response.request();
+    if ((!request.isNavigationRequest() && response.status() < 400) || documents.length >= 40) return;
+    const url = new URL(response.url());
+    const item = { status: response.status(), origin: url.origin === martyOrigin ? 'marty'
+      : url.origin === canvas.origin ? 'canvas' : 'other',
+    kind: url.pathname.startsWith('/v1/auth/canvas-lti/') ? 'canvas_auth_api'
+      : url.pathname.startsWith('/v1/integrations/canvas/lti/') ? 'lti_api'
+      : url.pathname.startsWith('/canvas/lti/') ? 'lti_ui' : 'other',
+    json: (response.headers()['content-type'] || '').includes('application/json') };
+    documents.push(item);
+    if (item.json && item.origin === 'marty' && item.status >= 400) reads.push(response.json().then(value => {
+      item.errors = canvasLaunchErrorSummary(value);
+    }).catch(() => {}));
+  };
+  page.on('response', observeDocument);
+  try {
+  await page.goto(`${canvas.origin}/courses/${fixtures.course.id}/assignments`, {
+    waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
   });
   const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
-  requireCondition(assignmentName, 'canvas_staff_assignment_name_missing', 'The Deep Linked Canvas assignment has no instructor-visible name.');
+  requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment requires a visible name.');
   await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
-  await page.waitForURL(
-    (url) => url.origin === adminCanvas.origin && url.pathname.includes(`/assignments/${externalAssignment.id}`),
-    { timeout: DEFAULT_TIMEOUT_MS },
-  );
-  const launchControl = page
-    .getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
-    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i }))
-    .first();
-  await launchControl.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchControl.click();
-  const launchedPage = await popupPromise;
-  await launchedPage.waitForURL((url) => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByText(/Canvas launch verified/i).waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.close();
+  await page.waitForURL(url => url.origin === canvas.origin
+    && url.pathname === `/courses/${fixtures.course.id}/assignments/${externalAssignment.id}`,
+  { timeout: DEFAULT_TIMEOUT_MS });
+  const launchControl = page.getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
+    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i })).first();
+  presentation = await waitFor(async () => {
+    const frames = [];
+    for (const frame of page.frames()) {
+      if (frame === page.mainFrame()) continue;
+      try {
+        if (new URL(frame.url()).origin === martyOrigin && await (await frame.frameElement()).isVisible()) frames.push(frame);
+      } catch { /* A stock iframe may still be navigating. */ }
+    }
+    requireCondition(frames.length <= 1, 'canvas_resource_launch_ambiguous', 'Canvas must expose exactly one visible Marty resource launch.');
+    if (frames.length === 1) return { surface: frames[0], page, popup: false };
+    return await launchControl.isVisible() ? { popup: true } : null;
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_resource_launch_missing');
+  if (presentation.popup) {
+    const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
+    await launchControl.click();
+    const popup = await popupPromise;
+    await popup.waitForURL(url => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
+    await popup.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
+    presentation.surface = popup; presentation.page = popup;
+  }
+  await presentation.surface.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  const experience = presentation.surface.getByTestId('canvas-lti-login-page');
+  const verification = await waitFor(async () => {
+    if (await experience.getByText(/^Canvas launch verified$/i).isVisible()) return { verified: true };
+    if (await experience.getByRole('alert').first().isVisible()) return { verified: false };
+    return null;
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_resource_ui_pending');
+  requireCondition(verification.verified, 'canvas_resource_ui_not_verified',
+    'The actual Marty resource UI reported an error before its verified state.');
+  return presentation;
+  } catch (error) {
+    await Promise.allSettled(reads);
+    const surface = presentation?.surface;
+    const document = surface ? await surface.evaluate(() => {
+      let body;
+      try { body = JSON.parse(document.body?.textContent || ''); } catch { body = null; }
+      return { contentType: document.contentType, hasAppRoot: Boolean(document.querySelector('#root')),
+        bodyLength: document.body?.textContent?.length || 0, errorBody: body,
+        alerts: [...document.querySelectorAll('[role=alert]')].slice(0, 4).map(node => node.textContent) };
+    }).catch(() => null) : null;
+    if (document) {
+      document.errors = canvasLaunchErrorSummary(document.errorBody);
+      document.alerts = canvasLaunchErrorSummary({ details: document.alerts.map(message => ({ message })) });
+      delete document.errorBody;
+    }
+    error.canvasResourceDiagnostic = { documents, document };
+    throw error;
+  } finally {
+    page.off('response', observeDocument);
+  }
+}
+
+async function launchStaffResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin) {
+  const launch = await openCanvasAssignmentResource(page, adminCanvas, fixtures, externalAssignment, martyOrigin);
+  if (launch.popup) await launch.page.close();
 }
 
 function validateReadinessSnapshot(snapshot, { requireActive = false } = {}) {
@@ -1097,38 +1281,15 @@ async function copyCookies(sourceContext, destinationContext) {
 }
 
 async function launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin) {
-  // Require the learner-visible stock Canvas assignment path. The external
-  // tool launch APIs cannot satisfy the portability/adoption case.
-  await page.goto(`${learnerCanvas.origin}/courses/${fixtures.course.id}/assignments`, {
-    waitUntil: 'domcontentloaded',
-    timeout: DEFAULT_TIMEOUT_MS,
-  });
-  const assignmentName = String(externalAssignment?.name || externalAssignment?.title || '').trim();
-  requireCondition(assignmentName, 'canvas_assignment_name_missing', 'The Deep Linked Canvas assignment has no learner-visible name.');
-  await page.getByRole('link', { name: assignmentName, exact: true }).first().click();
-  await page.waitForURL(
-    (url) => url.origin === learnerCanvas.origin && url.pathname.includes(`/assignments/${externalAssignment.id}`),
-    { timeout: DEFAULT_TIMEOUT_MS },
-  );
-
-  const launchControl = page
-    .getByRole('link', { name: /load .* in a new window|open .* in a new window|launch external tool/i })
-    .or(page.getByRole('button', { name: /load .* in a new window|open .* in a new window|launch external tool/i }))
-    .first();
-  await launchControl.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  const popupPromise = page.context().waitForEvent('page', { timeout: DEFAULT_TIMEOUT_MS });
-  await launchControl.click();
-  const launchedPage = await popupPromise;
-  await launchedPage.waitForURL((url) => url.origin === martyOrigin, { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.waitForLoadState('domcontentloaded', { timeout: DEFAULT_TIMEOUT_MS });
-  requireCondition(new URL(launchedPage.url()).origin === martyOrigin, 'learner_canvas_ui_launch_untrusted', 'The stock Canvas assignment launched outside Marty.');
-  await launchedPage.getByTestId('canvas-lti-login-page').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
+  // Both stock embedded and new-window launches exercise the assignment UI.
+  const launch = await openCanvasAssignmentResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
+  const launchedPage = launch.page;
   const bootstrapPromise = launchedPage.waitForResponse((response) => (
     response.request().method() === 'POST'
       && new URL(response.url()).origin === martyOrigin
       && new URL(response.url()).pathname.endsWith('/lti/experience-sessions/current/bootstrap')
   ), { timeout: DEFAULT_TIMEOUT_MS });
-  await launchedPage.getByTestId('canvas-lti-continue').click();
+  await launch.surface.getByTestId('canvas-lti-continue').click();
   const bootstrapResponse = await bootstrapPromise;
   const bootstrap = await responseJson(bootstrapResponse, 'canvas_application_bootstrap_failed', 'Canvas learner application bootstrap failed', [200]);
   await launchedPage.getByTestId('canvas-evidence-sync-panel').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
@@ -1497,8 +1658,10 @@ function contractFailureLocation(error, activeCase) {
   // or Playwright action arguments from the original exception message.
   const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
   const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
-  return { activeCase, errorType: name,
+  const result = { activeCase, errorType: name,
     sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+  if (error?.canvasResourceDiagnostic) result.canvasResource = error.canvasResourceDiagnostic;
+  return result;
 }
 
 async function finishRecordedVideo(context, page, destination) {
@@ -1511,7 +1674,7 @@ async function finishRecordedVideo(context, page, destination) {
 }
 
 async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () => {},
-  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts' }) {
+  pass = () => {}, runSuffix, state = {}, prerequisiteDirectory = '/artifacts', ownershipDirectory }) {
   requireCondition(browser && /^[A-Za-z0-9-]{8,100}$/.test(runSuffix || ''),
     'canvas_run_identity_invalid', 'A fresh Canvas capture run identity is required.');
   let marty, adminContext, learnerContext, platformId, integrationSecretId;
@@ -1527,12 +1690,23 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     );
     const adminEmail = requireSecretFile('CANVAS_OSS_ADMIN_EMAIL');
     const adminPassword = requireSecretFile('CANVAS_OSS_ADMIN_PASSWORD');
-    const learnerEmail = requireSecretFile('CANVAS_OSS_LEARNER_EMAIL');
+    const learnerEmail = freshCanvasLearnerEmail(requireSecretFile('CANVAS_OSS_LEARNER_EMAIL'), runSuffix);
     const learnerPassword = requireSecretFile('CANVAS_OSS_LEARNER_PASSWORD');
     const organizationId = requireEnv('CANVAS_OSS_ORGANIZATION_ID');
     state.organizationId = organizationId;
     const martyApiKey = requireSecretFile('CANVAS_OSS_MARTY_API_KEY');
     state.marty = marty = new MartyClient(martyOrigin, martyApiKey);
+    const owned = { scope: 'OWNED_CANVAS_SETUP_RESOURCES', runSuffix, learnerEmail, resources: {} };
+    requireCondition(typeof ownershipDirectory === 'string' && path.isAbsolute(ownershipDirectory)
+      && fs.statSync(ownershipDirectory).isDirectory(), 'canvas_ownership_directory_invalid', 'A writable per-run ownership evidence directory is required.');
+    const ownershipPath = path.join(ownershipDirectory, 'owned-canvas-resources.json');
+    fs.writeFileSync(ownershipPath, JSON.stringify(owned, null, 2) + '\n', { flag: 'wx' });
+    const persistOwned = () => fs.writeFileSync(ownershipPath, JSON.stringify(owned, null, 2) + '\n');
+    const remember = (kind, id) => {
+      requireCondition(/^[0-9]+$/.test(String(id || '')), 'canvas_owned_resource_id_missing', 'Canvas must acknowledge an owned resource ID.');
+      owned.resources[kind] = String(id); persistOwned();
+    };
+    persistOwned();
 
 
     await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive, prerequisiteDirectory);
@@ -1542,7 +1716,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const adminPage = await adminContext.newPage();
     await loginCanvas(adminPage, canvasOrigin, adminEmail, adminPassword);
-    const adminBearer = await createPersonalAccessToken(adminPage, canvasOrigin, `OSS contract admin ${runSuffix}`);
+    const adminBearer = await createPersonalAccessToken(adminPage, canvasOrigin, `OSS contract admin ${runSuffix}`, id => remember('adminAccessToken', id));
     const adminCanvas = new CanvasClient(canvasOrigin, adminBearer);
     const accounts = safeList(await adminCanvas.get('/api/v1/accounts?per_page=100'));
     const rootAccount = accounts.find((account) => !account.parent_account_id) || accounts[0];
@@ -1561,6 +1735,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     }, [200]);
     state.platformId = platformId = String(platform?.id || '');
     requireCondition(platformId, 'marty_canvas_platform_missing', 'Marty did not create the organization-owned Canvas draft.');
+    owned.martyPlatformId = platformId; persistOwned();
     requireCondition(String(platform.organization_id) === organizationId, 'marty_canvas_platform_tenant_mismatch', 'Marty created the Canvas draft outside the API key organization.');
     const registration = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/registration-config`);
     const registrationConfigUrl = String(registration?.installation?.config_url || '');
@@ -1572,12 +1747,14 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       accountId: rootAccount.id,
       ownerEmail: adminEmail,
       name: ltiKeyName,
+      onOwned: id => remember('ltiDeveloperKey', id),
       registrationConfigUrl,
     });
     const tool = await adminCanvas.postForm(`/api/v1/accounts/${rootAccount.id}/external_tools`, {
       client_id: ltiKey.clientId,
     }, [200, 201]);
     requireCondition(tool?.id && tool?.deployment_id, 'lti_tool_install_failed', 'Canvas External Tools API did not install the LTI 1.3 deployment.');
+    remember('externalTool', tool.id);
     await marty.put(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}/lti-installation`, {
       lti_client_id: ltiKey.clientId,
       lti_deployment_id: String(tool.deployment_id),
@@ -1593,12 +1770,13 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       learnerEmail,
       learnerPassword,
       runSuffix,
+      remember,
     );
 
     state.learnerContext = learnerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const learnerSetupPage = await learnerContext.newPage();
     await loginCanvas(learnerSetupPage, canvasOrigin, learnerEmail, learnerPassword);
-    const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`);
+    const learnerBearer = await createPersonalAccessToken(learnerSetupPage, canvasOrigin, `OSS contract learner ${runSuffix}`, id => remember('learnerAccessToken', id));
     const learnerCanvas = new CanvasClient(canvasOrigin, learnerBearer);
     const activityResults = await completeLearnerCanvasWork(learnerCanvas, adminCanvas, fixtures, markActive);
     pass('existing_assignment_submission', 'A learner submission and 95% score are authoritative through the documented Assignment Submissions API.');
@@ -1610,6 +1788,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
       accountId: rootAccount.id,
       ownerEmail: adminEmail,
       name: `Marty OAuth ${runSuffix}`,
+      onOwned: id => remember('oauthDeveloperKey', id),
       redirectUri: `${martyOrigin}/v1/integrations/canvas/oauth/callback`,
     });
     state.integrationSecretId = integrationSecretId = String((await marty.post('/v1/integrations/canvas/integration-secrets', {
@@ -1630,9 +1809,12 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     const oauthUrl = new URL(String(oauthStart?.authorization_url || ''));
     requireCondition(oauthUrl.origin === canvasOrigin, 'canvas_oauth_url_unpinned', 'Marty returned an OAuth authorization URL outside Canvas.');
     await adminPage.goto(oauthUrl.href, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
-    const authorize = adminPage.getByRole('button', { name: /^authorize$/i }).or(adminPage.locator('button[type="submit"], input[type="submit"]')).first();
+    // Stock Canvas can render Cancel as an earlier submit button. Bind the
+    // action to the actual acceptance form and its explicit Authorize control.
+    const authorize = adminPage.locator('#oauth2_accept_form').getByRole('button', { name: /^authorize$/i });
     await authorize.click();
-    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.get('outcome') === 'success', { timeout: DEFAULT_TIMEOUT_MS });
+    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.has('outcome'), { timeout: DEFAULT_TIMEOUT_MS });
+    assertCanvasOauthCompletion(new URL(adminPage.url()), martyOrigin, platformId);
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
     requireCondition(connectedPlatform?.connection_config?.oauth_status === 'connected', 'canvas_oauth_not_connected', 'Canvas OAuth callback did not publish a connected organization-scoped connection.');
     state.oauthConnected = true;
@@ -1642,7 +1824,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
 
     markActive('instructor_deep_linking');
-    const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, ltiKeyName, martyOrigin);
+    const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
     requireCondition(externalAssignment?.id, 'canvas_deep_link_assignment_missing', 'Canvas did not create an external-tool assignment from the standard Deep Linking response.');
     pass('instructor_deep_linking', 'An instructor Deep Linking launch created a Marty-bound Canvas assignment without Canvas customization.');
 
@@ -1723,7 +1905,7 @@ async function main() {
     const setup = await prepareCanvasCaptureFixtures({
       browser: browser = await chromium.launch({ headless: true }), ledger, markActive, pass, state: preparationState,
       runSuffix: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`,
-      prerequisiteDirectory: path.dirname(args.observations),
+      prerequisiteDirectory: path.dirname(args.observations), ownershipDirectory: path.dirname(args.observations),
     });
     ({ marty, adminContext, learnerContext, platformId, integrationSecretId } = setup);
     const { canvasOrigin, martyOrigin, organizationId, martyApiKey, learnerCanvas, adminCanvas,
@@ -1955,9 +2137,16 @@ async function main() {
 }
 
 module.exports = {
+  canvasLaunchErrorSummary,
+  canvasOwnedToolIndex,
+  assertCanvasOauthCompletion,
+  publishCanvasCourse,
   contractFailureLocation,
+  canvasTokenExpiration,
+  freshCanvasLearnerEmail,
   martyRequestSummary,
   selectProductionBadgeTemplates,
+  selectCanvasOauthScopes,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
   launchLearnerResource,

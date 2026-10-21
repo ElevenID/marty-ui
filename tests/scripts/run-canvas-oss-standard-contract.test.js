@@ -8,6 +8,10 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  canvasLaunchErrorSummary,
+  canvasOwnedToolIndex,
+  assertCanvasOauthCompletion,
+  publishCanvasCourse,
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   ContractFailure,
@@ -15,6 +19,8 @@ const {
   observePipelinePrerequisites,
   selectProductionBadgeTemplates,
   contractFailureLocation,
+  canvasTokenExpiration,
+  freshCanvasLearnerEmail,
   martyRequestSummary,
   createHolderProof,
   didWebResolutionUrl,
@@ -46,6 +52,23 @@ test('Marty request failure context preserves static operation but excludes dyna
     'Marty PUT /v1/integrations/canvas/platforms/:resource/lti-installation failed');
   assert.equal(martyRequestSummary('secret', '/v1/integrations/canvas/lti/config/secret-token'),
     'Marty REQUEST /v1/integrations/canvas/:resource/:resource/:resource failed');
+});
+
+test('Canvas token expiration uses the account timezone and stays within a bounded window', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const actual = canvasTokenExpiration(now, 'America/Denver', '');
+  assert.deepEqual(actual, { timestamp: Date.parse('2026-10-21T11:00:00Z'), date: '10/21/2026', time: '5:00 AM' });
+  const nextDay = canvasTokenExpiration(Date.parse('2026-12-31T22:45:00Z'), 'UTC', '');
+  assert.equal(nextDay.date, '01/01/2027');
+  assert.ok(actual.timestamp >= now + 3 * 3600000 && actual.timestamp < now + 3.5 * 3600000);
+});
+
+test('Canvas learner fixtures have fresh bounded synthetic identities for each run', () => {
+  const first = freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001');
+  assert.equal(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001'));
+  assert.notEqual(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0002'));
+  assert.ok(freshCanvasLearnerEmail('a'.repeat(100) + '@stage.test', 'owned-run-0001').split('@')[0].length <= 64);
+  assert.throws(() => freshCanvasLearnerEmail('person@example.com', 'owned-run-0001'), /synthetic mailbox/);
 });
 
 test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
@@ -539,4 +562,67 @@ test('credential verifier accepts a valid ES256 JWS and rejects payload tamperin
 test('Developer Key extraction handles the nested stock Canvas response shape', () => {
   const record = extractDeveloperKeyRecord({ developer_key: { id: 42, name: 'Marty LTI run', api_key: 'secret' } }, 'Marty LTI run');
   assert.deepEqual(record, { id: 42, name: 'Marty LTI run', api_key: 'secret' });
+});
+
+
+test('single-course publication uses its documented event and rejects silent unchanged success', async () => {
+  let request;
+  const admin = { putForm: async (...args) => {
+    request = args;
+    return { id: 42, workflow_state: args[1]['course[event]'] === 'offer' ? 'available' : 'unpublished' };
+  } };
+  await publishCanvasCourse(admin, 42);
+  assert.deepEqual(request, ['/api/v1/courses/42', { 'course[event]': 'offer' }, [200]]);
+  for (const result of [{ id: 42, workflow_state: 'unpublished' }, { id: 99, workflow_state: 'available' }]) {
+    await assert.rejects(publishCanvasCourse({ putForm: async () => result }, 42),
+      error => error.code === 'canvas_course_not_published');
+  }
+});
+
+
+test('OAuth completion requires native connected outcome and owned platform binding', () => {
+  const origin = 'https://issuer.test';
+  assert.doesNotThrow(() => assertCanvasOauthCompletion(new URL(origin + '/complete?outcome=connected&platform_id=owned'), origin, 'owned'));
+  for (const value of [
+    origin + '/complete?outcome=success&platform_id=owned',
+    origin + '/complete?outcome=error&platform_id=owned&error_code=private-value',
+    origin + '/complete?outcome=connected&platform_id=other',
+    'https://other.test/complete?outcome=connected&platform_id=owned',
+  ]) {
+    assert.throws(() => assertCanvasOauthCompletion(new URL(value), origin, 'owned'),
+      error => error.code === 'canvas_oauth_callback_not_connected' && !error.message.includes('private-value'));
+  }
+});
+
+
+test('Canvas chooser selects the acknowledged installation among identically named tools', () => {
+  assert.equal(canvasOwnedToolIndex(['1', '2', '9'], '9'), 2);
+  for (const [ids, owned] of [[['1', '2'], '9'], [['9', '9'], '9'], [['9'], 'not-an-id']]) {
+    assert.throws(() => canvasOwnedToolIndex(ids, owned), ContractFailure);
+  }
+});
+
+
+test('Canvas personal tokens cover the actual long-run deadline with a bounded buffer', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const deadline = now + 6 * 3600000;
+  const token = canvasTokenExpiration(now, 'UTC', String(deadline / 1000));
+  assert.ok(token.timestamp >= deadline + 1800000 && token.timestamp < deadline + 3600000);
+  for (const value of ['invalid', String(now / 1000), String((now + 25 * 3600000) / 1000)]) {
+    assert.throws(() => canvasTokenExpiration(now, 'UTC', value), error => error.code === 'canvas_contract_deadline_invalid');
+  }
+});
+
+
+test('resource conflict summaries read wrapped errors without retaining credential fields or URLs', () => {
+  const summary = canvasLaunchErrorSummary({ error: { code: 'canvas_conflict', message: 'Canvas AGS rejection at https://canvas.test/api?state=private-value', detail: [{ message: 'Bearer abcdefghijklmnopqrstuvwxyz' }] }, session_token: 'private-session', ignored: 'private-other' });
+  assert.ok(summary.includes('canvas_conflict'));
+  assert.ok(summary.some(value => value.includes('Canvas AGS rejection')));
+  assert.ok(!JSON.stringify(summary).includes('private') && !JSON.stringify(summary).includes('https://'));
+});
+
+
+test('resource conflict summaries preserve the production MIP error description', () => {
+  assert.deepEqual(canvasLaunchErrorSummary({ error: 'service_error', error_description: 'Canvas launch resource does not match the selected binding', message_id: 'opaque-private-message-id', details: [{ message: 'scope mismatch' }] }),
+    ['scope mismatch', 'service_error', 'Canvas launch resource does not match the selected binding']);
 });
