@@ -44,8 +44,6 @@ NATIVE_ONLY = {
     "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance_tls_kms_token",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": "${ISSUANCE_TLS_KMS_KEY_NAME:?ISSUANCE_TLS_KMS_KEY_NAME must be set}",
     "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "${ISSUANCE_TLS_KMS_KEY_VERSION:?ISSUANCE_TLS_KMS_KEY_VERSION must be set}",
-    "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
-    "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/dev_integration_secret_ca",
     "DIDCOMM_KMS_ADDR": "https://openbao:8200",
     "DIDCOMM_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
     "DIDCOMM_KMS_TOKEN_FILE": "/bao/didcomm-issuance-token/token",
