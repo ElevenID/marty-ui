@@ -5,6 +5,9 @@ const test = require('node:test');
 
 const {
   cleanup,
+  managedTransitEndpoint,
+  externalTransitPrerequisites,
+  restoredConfigurationEvidence,
   governedIssuerRequest,
   identityRequest,
   transitService,
@@ -38,7 +41,7 @@ test('provider-switch configuration is lossless and never persists the managed p
     type_defaults: { vc_jwt_issuer: 'existing-provider' },
     key_reference_purposes: { 'existing-provider': { issuer: ['vc_jwt_issuer'] } },
   };
-  const replacement = transitService('provider-b', 'Provider B', 'issuer-b');
+  const replacement = transitService('provider-b', 'Provider B', 'issuer-b', 'https://openbao:8200', { token: 'test-scoped-token', caCertFile: '/run/secrets/openbao_tls_ca_cert' });
   const payload = writableConfig(original, {
     extraServices: [replacement],
     defaultServiceId: 'provider-b',
@@ -48,8 +51,8 @@ test('provider-switch configuration is lossless and never persists the managed p
   assert.deepEqual(payload.format_defaults, original.format_defaults);
   assert.deepEqual(payload.type_defaults, original.type_defaults);
   assert.deepEqual(payload.key_reference_purposes, original.key_reference_purposes);
-  assert.equal(replacement.auth_mode, 'service_token');
-  assert.equal(replacement.endpoint, 'http://openbao:8200');
+  assert.equal(replacement.auth_mode, 'token');
+  assert.equal(replacement.endpoint, 'https://openbao:8200');
 });
 
 test('release recordings fail closed unless the ElevenID Keycloak theme rendered', () => {
@@ -165,4 +168,35 @@ test('provider-switch cleanup deletes a draft left by a failed setup', async () 
   assert.equal(result.retiredIdentities, 1);
   assert.equal(page.requests[2].requestOptions.method, 'DELETE');
   assert.equal(page.requests[2].requestPath, '/v1/credential-templates/draft-1');
+});
+
+test('provider switch preserves deployed transit transport and rejects missing or unsafe endpoints', () => {
+  const config = (endpoint) => ({ services: [{ id: 'managed-openbao-transit', endpoint }] });
+  for (const endpoint of ['https://openbao:8200', 'http://openbao:8200']) {
+    assert.equal(managedTransitEndpoint(config(endpoint)), endpoint);
+  }
+  for (const endpoint of [undefined, '', 'file:///tmp/key', 'https://user:secret@openbao:8200', 'https://openbao:8200?token=secret']) {
+    assert.throws(() => managedTransitEndpoint(config(endpoint)), /endpoint is invalid/);
+  }
+  assert.throws(() => managedTransitEndpoint({ services: [] }), /one managed transit/);
+  assert.throws(() => transitService('b', 'B', 'key'), /endpoint is invalid/);
+});
+
+
+test('external beta transit fixture fails closed without scoped token and explicit CA', () => {
+ const env={BETA_ORIGIN:'https://beta.elevenidllc.com',D02_SAME_BACKEND_FIXTURE:'1',D02_EXTERNAL_TRANSIT_ENDPOINT:'https://openbao:8200',D02_EXTERNAL_TRANSIT_CA_FILE:'/run/secrets/openbao_tls_ca_cert',D02_EXTERNAL_TRANSIT_KEY:'d02-external-test',D02_EXTERNAL_TRANSIT_TOKEN:'test-scoped-token'};
+ assert.equal(externalTransitPrerequisites(env).keyReference,'d02-external-test');
+ for(const change of [{BETA_ORIGIN:'https://elevenidllc.com'},{D02_SAME_BACKEND_FIXTURE:'0'},{D02_EXTERNAL_TRANSIT_CA_FILE:''},{D02_EXTERNAL_TRANSIT_TOKEN:''},{D02_EXTERNAL_TRANSIT_KEY:'production-key'}]) assert.throws(()=>externalTransitPrerequisites({...env,...change}),/Scoped beta/);
+ assert.throws(()=>transitService('b','B','key','https://openbao:8200'),/explicit token/);
+ assert.throws(()=>transitService('b','B','key','http://openbao:8200',{token:'test',caCertFile:'/ca'}),/HTTPS CA/);
+});
+
+
+test('restoration permits only the exact newly-created non-exportable key record', () => {
+ const original={services:[],default_service_id:'managed-openbao-transit',key_reference_purposes:{'managed-openbao-transit':{existing:['vc_jwt_issuer']}}};
+ const after=structuredClone(original);after.key_reference_purposes['managed-openbao-transit'].created=['vc_jwt_issuer'];
+ assert.equal(restoredConfigurationEvidence(original,after,['created']).ok,true);
+ assert.equal(restoredConfigurationEvidence(original,original,['not-retained']).ok,true);
+ assert.equal(restoredConfigurationEvidence(original,after,[]).ok,false);
+ for(const mutate of [c=>c.default_service_id='other',c=>c.services.push({id:'leaked-provider'}),c=>c.key_reference_purposes['managed-openbao-transit'].existing=['other'],c=>c.key_reference_purposes['managed-openbao-transit'].unexpected=['vc_jwt_issuer']]) {const changed=structuredClone(after);mutate(changed);assert.equal(restoredConfigurationEvidence(original,changed,['created']).ok,false);}
 });
