@@ -58,6 +58,16 @@ def test_relocated_backing_disk_is_forwarded_to_physical_observer(monkeypatch):
         calls.append(arguments)
         return SimpleNamespace(returncode=0, stdout=json.dumps(dict(capacity_mode='PrebuiltRuntime',
             required_free_bytes=20 * GIB, physical_free_bytes=25 * GIB)))
+    conversions = []
+    def convert(arguments, **kwargs):
+        assert arguments[:2] == ['wslpath', '-w']
+        conversions.append(arguments)
+        return r'C:\operator\check-canvas-prebuilt-backing-capacity.ps1'
+    monkeypatch.setattr(runtime.subprocess, 'check_output', convert)
     monkeypatch.setattr(runtime.subprocess, 'run', run)
     physical_runtime_capacity(dict(image_size_bytes=3 * GIB, required_free_bytes=20 * GIB), ROOT / 'scripts', disk)
+    assert len(calls) == 1
     assert calls[0][-2:] == ['-DockerDesktopDataDiskPath', disk]
+    assert len(conversions) == (0 if runtime.os.name == 'nt' else 1)
+    if conversions:
+        assert r'C:\operator\check-canvas-prebuilt-backing-capacity.ps1' in calls[0]

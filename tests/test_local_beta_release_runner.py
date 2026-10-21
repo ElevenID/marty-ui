@@ -997,3 +997,49 @@ def test_beta_compose_requires_credential_login_issuer_identity() -> None:
         "CREDENTIAL_LOGIN_ISSUER_DID: "
         "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}" in beta_compose
     )
+
+
+@pytest.mark.parametrize("official,wheel_matches,npm_matches,expected", [
+    (False, False, True, True),
+    (True, False, True, False),
+    (False, False, False, False),
+    (True, True, True, True),
+])
+def test_native_local_stack_keeps_used_artifact_and_official_wheel_provenance(
+    tmp_path: Path, official: bool, wheel_matches: bool, npm_matches: bool, expected: bool,
+) -> None:
+    shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if not shell:
+        pytest.skip("PowerShell required for executable admission check")
+    source = text("scripts/deploy-local-beta-release.ps1")
+    block = source[source.index("function Get-StackArtifact("):source.index('$backupDir =')]
+    current, archived = "3" * 40, "1" * 40
+    components = []
+    for name in ["marty-core-python", "marty-verification-python", "marty-iso18013-python"]:
+        components.append(dict(name=name, commit=current if wheel_matches else archived,
+            version="0.2.2", artifacts=[dict(type="python", uri="https://artifact.invalid/wheel.whl", digest="sha256:" + "a" * 64)]))
+    for name in ["marty-api-core", "marty-blog"]:
+        components.append(dict(name=name, commit=current if npm_matches else archived,
+            version="0.2.2", artifacts=[dict(type="npm", uri="https://artifact.invalid/package.tgz", digest="sha256:" + "b" * 64)]))
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps(dict(official=official, stack=dict(components=components),
+        revisions={name: current for name in ["marty-core", "marty-cli", "marty-blog"]})))
+    script = tmp_path / "admit.ps1"
+    script.write_text('''param([string]$Fixture)
+$ErrorActionPreference = "Stop"
+$data = Get-Content -LiteralPath $Fixture -Raw | ConvertFrom-Json
+$stackLock = $data.stack
+$OfficialStackRelease = [bool]$data.official
+$componentRevisions = [ordered]@{}
+foreach ($property in $data.revisions.PSObject.Properties) { $componentRevisions[$property.Name] = $property.Value }
+$martyRs = $null
+''' + block + '\n@{ wheelLoaded = ($null -ne $martyRs); apiCommit = $martyApiCore.Commit; blogCommit = $martyBlog.Commit } | ConvertTo-Json -Compress\n', encoding="utf8")
+    result = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Fixture", str(fixture)],
+        capture_output=True, text=True, timeout=20)
+    if expected:
+        assert result.returncode == 0, result.stderr
+        observed = json.loads(result.stdout)
+        assert observed == dict(wheelLoaded=official, apiCommit=current, blogCommit=current)
+    else:
+        assert result.returncode != 0
+        assert "commit must match source manifest repository" in result.stderr

@@ -1134,9 +1134,13 @@ function Get-StackArtifact([string]$Name, [string]$Type, [string]$SourceReposito
         Digest = [string]$artifact[0].digest
     }
 }
-$martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
-$martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
-$martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
+# Official releases retain wheel provenance admission. Local native services
+# consume the source-pinned Rust SDK; these unused wheels are never build inputs.
+if ($OfficialStackRelease) {
+    $martyRs = Get-StackArtifact "marty-core-python" "python" "marty-core"
+    $martyVerification = Get-StackArtifact "marty-verification-python" "python" "marty-core"
+    $martyIso18013 = Get-StackArtifact "marty-iso18013-python" "python" "marty-core"
+}
 $martyApiCore = Get-StackArtifact "marty-api-core" "npm" "marty-cli"
 $martyBlog = Get-StackArtifact "marty-blog" "npm" "marty-blog"
 

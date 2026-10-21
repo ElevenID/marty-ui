@@ -5,8 +5,8 @@ import sys
 import tomllib
 from pathlib import Path
 
-CORE_REVISION = "f0819fa0a7783eaebc2efaa105908809244c75a4"
-CORE_REF = "f0819fa"
+CORE_REVISION = "3f5dbb20999f773a765fd0b427a9050a6dc99fed"
+CORE_REF = CORE_REVISION
 CORE_SOURCE = (
     "git+https://github.com/ElevenID/marty-core"
     f"?rev={CORE_REF}#{CORE_REVISION}"

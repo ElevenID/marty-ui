@@ -549,7 +549,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": ".require_active(user_id, organization_id)",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_handler_marker": "async fn get_member(",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
             "deployment_evidence": "docker-compose.base.yml",
@@ -570,7 +570,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-deployment-profile",
@@ -586,7 +586,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "shared_request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-revocation-profile",
@@ -599,7 +599,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "OrganizationServiceClient::new(channel)",
             "request_marker": "client.get_member(request).await",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-presentation-policy",
@@ -612,7 +612,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "connection_marker": "OrganizationServiceClient::new(channel)",
             "request_marker": "client.get_member(request).await",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             # Issuance initiation validates the organization through a real
@@ -643,7 +643,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "request_evidence": "rust/services/flow/src/grpc_providers.rs",
             "request_marker": ".get_member(self.auth.request(GetMemberRequest {",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
         {
             "package": "marty-credential-template",
@@ -686,7 +686,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_auth_marker": "self.authenticate(&request)?;",
             "add_provider_marker": ".add_member_direct(AddMemberDirectCommand {",
-            "member_provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "member_provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "organization_provider_marker": ".get_organization(organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
@@ -719,7 +719,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": '.require_permission(user_id, organization_id, "trust-profile", "view")',
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
             "provider_authentication_marker": "self.authenticate(&request)?;",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
             "provider_registration_evidence": "rust/services/organization/src/main.rs",
             "provider_registration_marker": "OrganizationServiceServer::new(grpc_service)",
             "deployment_evidence": "docker-compose.base.yml",
@@ -741,7 +741,7 @@ OBSERVED_NON_CARGO_CONSUMERS = {
             "callsite_marker": ".membership(principal_id, organization_id)",
             "identity_marker": "response.user_id.is_empty() || response.organization_id.is_empty()",
             "provider_evidence": "rust/services/organization/src/grpc_service.rs",
-            "provider_marker": ".get_membership(&input.user_id, organization_id)",
+            "provider_marker": ".principal_membership(&input.user_id, organization_id)",
         },
     ],
     "marty-credential-template": [
@@ -1582,7 +1582,7 @@ next(
         "grpc_connection_marker": "OrganizationServiceClient::new(organizations)",
         "grpc_request_marker": "self.organizations.lock().await.get_member(request).await",
         "grpc_provider_evidence": "rust/services/organization/src/grpc_service.rs",
-        "grpc_provider_marker": ".get_membership(&input.user_id, organization_id)",
+        "grpc_provider_marker": ".principal_membership(&input.user_id, organization_id)",
     }
 )
 
