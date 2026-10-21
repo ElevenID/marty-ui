@@ -146,13 +146,52 @@ def test_validator_requires_native_dependency_and_retained_readiness(
         validator["validate_model"](candidate, authcrypt_enabled=False)
 
 
+def https_model(enabled):
+    candidate = model(enabled)
+    native = candidate['services']['issuance-native']
+    native['environment'].update(
+        DIDCOMM_KMS_ADDR='https://openbao:8200',
+        DIDCOMM_KMS_CA_CERT_FILE='/bao/public-ca/ca.crt',
+        DIDCOMM_KMS_TOKEN_FILE='/bao/didcomm-issuance-token/token',
+    )
+    native['volumes'] = [mount for mount in native.get('volumes', [])
+                         if mount['target'] != '/run/secrets/didcomm-kms'] + [
+        {'type': 'volume', 'source': source, 'target': target, 'read_only': True}
+        for source, target in (
+            ('openbao_public_ca', '/bao/public-ca'),
+            ('openbao_didcomm_issuance_token', '/bao/didcomm-issuance-token'),
+        )
+    ]
+    return candidate
+
+
+@pytest.mark.parametrize('mutation', ['http', 'missing_ca', 'writable_token', 'legacy_custody'])
+def test_compose_gate_requires_current_tls_custody(validator, mutation):
+    candidate = https_model(False)
+    native = candidate['services']['issuance-native']
+    if mutation == 'http':
+        native['environment']['DIDCOMM_KMS_ADDR'] = 'http://openbao:8200'
+    elif mutation == 'missing_ca':
+        native['volumes'] = native['volumes'][1:]
+    elif mutation == 'writable_token':
+        native['volumes'][-1]['read_only'] = False
+    else:
+        candidate['services']['issuance']['environment']['DIDCOMM_KMS_TOKEN_FILE'] = '/foreign/token'
+    with pytest.raises(validator['DidcommConfigurationError']):
+        validator['validate_compose'](
+            project='elevenid-beta', env_files=['controlled.env'], files=['controlled.yml'],
+            authcrypt_enabled=False,
+            runner=lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout=json.dumps(candidate).encode()),
+        )
+
+
 @pytest.mark.parametrize("enabled", (False, True))
 def test_validator_captures_actual_model_with_closed_output(validator, enabled, capsys):
     calls = []
 
     def run(command, **kwargs):
         calls.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout=json.dumps(model(enabled)).encode())
+        return SimpleNamespace(returncode=0, stdout=json.dumps(https_model(enabled)).encode())
 
     validator["validate_compose"](
         project="elevenid-beta",
@@ -306,8 +345,11 @@ def test_runner_selects_and_revalidates_before_mutations():
     )
     assert "$script:ComposeFiles += (Join-Path $script:RepoRoot $profile)" in source
     marker = "Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot"
-    assert source.count(marker) == 2
-    first, second = source.index(marker), source.rindex(marker)
+    assert source.count(marker) >= 2
+    first = source.index(marker, source.index("$script:ComposeFiles += $releaseComposeFile"))
+    second = source.rindex(marker)
+    assert first < second
+    assert second > source.index('Write-Step "Reverify coordinated source after image builds"')
     assert source.index("$script:ComposeFiles += $releaseComposeFile") < first
     assert source.index("$env:MARTY_DOCS_IMAGE =") < first
     assert first < source.index('Invoke-Checked -FilePath docker -Arguments @("pull",')

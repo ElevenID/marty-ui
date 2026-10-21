@@ -280,9 +280,24 @@ services:
       - openbao_didcomm_issuance_token:/bao/didcomm-issuance-token
       - openbao_haip_token:/bao/haip-token
       - openbao_grant_tokens:/bao/grant-tokens
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh:/scripts/openbao-init.sh:ro
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
-      - ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-init.sh
+        target: /scripts/openbao-init.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-selfhost-init.sh
+        target: /scripts/openbao-selfhost-init.sh
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MARTY_RUNTIME_CONFIG_ROOT:-.}/docker/openbao-haip-workload-policy.hcl
+        target: /scripts/openbao-haip-workload-policy.hcl
+        read_only: true
+        bind:
+          create_host_path: false
       - openbao_flow_grant:/bao/flow-grant
       - openbao_verify_grant:/bao/verify-grant
       - openbao_gateway_grant:/bao/gateway-grant
@@ -348,6 +363,7 @@ services:
       BAO_CACERT: /bao/public-ca/ca.crt
       BAO_TOKEN_FILE: /bao/bootstrap-token/token
       NOTIFICATION_OPENBAO_TOKEN_FILE: /bao/notification/token
+      NOTIFICATION_OPENBAO_CA_CERT_FILE: /bao/public-ca/ca.crt
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_bootstrap_token:/bao/bootstrap-token:ro
@@ -1087,6 +1103,8 @@ services:
       SIGNING_KEYS_INTERNAL_URL: http://gateway:8000/internal/signing-keys
       SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       SIGNING_KEYS_INTEGRATION_SECRET_KEY: ${SIGNING_KEYS_INTEGRATION_SECRET_KEY:-dev-signing-keys-integration-secret-key}
+      INTEGRATION_SECRET_KMS_URL: https://signing-keys:8018/internal
+      INTEGRATION_SECRET_KMS_CA_FILE: /run/secrets/dev_integration_secret_ca
       SIGNING_KEYS_ISSUER_SIGN_KEY: ${SIGNING_KEYS_ISSUER_SIGN_KEY:-dev-signing-keys-issuer-did-sign-key}
       CANVAS_CREDENTIALS_SHARED_SECRET: ${CANVAS_CREDENTIALS_SHARED_SECRET:-}
       CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS: ${CANVAS_CREDENTIALS_SIGNATURE_TOLERANCE_SECONDS:-300}
@@ -1125,6 +1143,8 @@ services:
       # Managed path-scoped did:web issuer documents are resolved through the
       # stack-owned gateway, never by caller-selected or public-network URLs.
       DIDCOMM_DID_WEB_INTERNAL_BASE_URL: ${DIDCOMM_DID_WEB_INTERNAL_BASE_URL:-http://gateway:8000}
+    secrets:
+      - dev_integration_secret_ca
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_service_token:/bao/service-token:ro
@@ -1253,6 +1273,9 @@ services:
       db-migrate:
         condition: service_completed_successfully
       redis:
+        condition: service_healthy
+      # Native TLS startup eagerly connects to organization before binding HTTP.
+      organization:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8013/health"]

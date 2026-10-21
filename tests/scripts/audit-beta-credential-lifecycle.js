@@ -864,6 +864,7 @@ async function present(walletPage, requestUri) {
     ok: response.ok() && body?.ok === true,
     status: response.status(),
     error: response.ok() ? null : body?.error || 'Presentation failed',
+    submission: body?.submission || null,
   };
 }
 

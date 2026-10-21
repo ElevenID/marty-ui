@@ -8,6 +8,8 @@ param(
 
     [switch]$OfficialStackRelease,
 
+    [switch]$UsePreparedLocalImages,
+
     [string]$RecorderRevision,
 
     [switch]$EnablePassportNative,
@@ -15,6 +17,8 @@ param(
     [switch]$EnableDidcommAuthcrypt,
 
     [string]$TunnelEnvFile,
+
+    [string]$TunnelTokenEnvFile,
 
     [string]$GeneratedEnvFile,
 
@@ -111,10 +115,12 @@ function New-BetaDeployArguments {
     param(
         [string]$ArtifactDir,
         [switch]$OfficialStackRelease,
+        [switch]$UsePreparedLocalImages,
         [string]$RecorderRevision,
         [switch]$EnablePassportNative,
         [switch]$EnableDidcommAuthcrypt,
         [string]$TunnelEnvFile,
+        [string]$TunnelTokenEnvFile,
         [string]$GeneratedEnvFile
     )
     $arguments = @{
@@ -129,9 +135,13 @@ function New-BetaDeployArguments {
         $arguments.RecorderRevision = $RecorderRevision
     }
     if ($EnablePassportNative) { $arguments.EnablePassportNative = $true }
+    if ($UsePreparedLocalImages) { $arguments.UsePreparedLocalImages = $true }
     if ($EnableDidcommAuthcrypt) { $arguments.EnableDidcommAuthcrypt = $true }
     if (-not [string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
         $arguments.TunnelEnvFile = $TunnelEnvFile
+    }
+    if (-not [string]::IsNullOrWhiteSpace($TunnelTokenEnvFile)) {
+        $arguments.TunnelTokenEnvFile = $TunnelTokenEnvFile
     }
     if (-not [string]::IsNullOrWhiteSpace($GeneratedEnvFile)) {
         $arguments.GeneratedEnvFile = $GeneratedEnvFile
@@ -196,10 +206,12 @@ try {
     $deployArguments = New-BetaDeployArguments `
         -ArtifactDir $resolvedArtifacts `
         -OfficialStackRelease:$OfficialStackRelease `
+        -UsePreparedLocalImages:$UsePreparedLocalImages `
         -RecorderRevision $RecorderRevision `
         -EnablePassportNative:$EnablePassportNative `
         -EnableDidcommAuthcrypt:$EnableDidcommAuthcrypt `
         -TunnelEnvFile $TunnelEnvFile `
+        -TunnelTokenEnvFile $TunnelTokenEnvFile `
         -GeneratedEnvFile $GeneratedEnvFile
     & (Join-Path $PSScriptRoot "deploy-local-beta-release.ps1") @deployArguments
     $exitCode = 0

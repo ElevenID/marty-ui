@@ -725,28 +725,47 @@ pub fn router(service: PassportHttpService) -> Router {
 }
 
 async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value> {
+    Json(capability_document(Some(&service)))
+}
+
+/// Discovery remains available when the feature is off; no operation routes,
+/// database repository or signing authority are installed in this mode.
+pub fn disabled_router() -> Router {
+    Router::new().route(
+        "/v1/passport/capabilities",
+        get(|| async { Json(capability_document(None)) }),
+    )
+}
+
+fn capability_document(service: Option<&PassportHttpService>) -> Value {
+    let signer = service.and_then(|service| service.signer.as_ref());
+    let encrypted =
+        service.is_some_and(|service| matches!(&service.cipher, ArtifactAvailability::Ready(_)));
+    let bureau = service.is_some_and(|service| service.bureau.is_some());
     let mut blockers = Vec::new();
-    if service.signer.is_none() {
+    if service.is_none() {
+        blockers.push("Passport issuance is disabled in this deployment.");
+    }
+    if signer.is_none() {
         blockers
             .push("Configure managed passport issuer signing with a KMS-backed issuer profile.");
     }
     let signer_blockers = blockers.clone();
-    match &service.cipher {
-        ArtifactAvailability::Missing => blockers.push(
+    if !encrypted {
+        blockers.push(
             "Configure managed KMS passport artifact custody for encrypted sensitive artifacts.",
-        ),
-        ArtifactAvailability::Ready(_) => {}
+        );
     }
-    if service.bureau.is_none() {
+    if !bureau {
         blockers.push("Configure PERSONALIZATION_BUREAU_URL for production handoff.");
     }
-    Json(json!({
+    json!({
         "supported": blockers.is_empty(),
-        "signer": {"configured": service.signer.is_some(), "mode": service.signer.as_ref().map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
-        "bureau_configured": service.bureau.is_some(),
-        "encrypted_artifact_store": matches!(&service.cipher, ArtifactAvailability::Ready(_)),
+        "signer": {"configured": signer.is_some(), "mode": signer.map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
+        "bureau_configured": bureau,
+        "encrypted_artifact_store": encrypted,
         "blockers": blockers,
-    }))
+    })
 }
 
 async fn create_application(
@@ -2450,6 +2469,41 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn disabled_discovery_does_not_install_passport_operations() {
+        let response = disabled_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(value["supported"], false);
+        assert_eq!(value["signer"]["configured"], false);
+        assert_eq!(value["encrypted_artifact_store"], false);
+        assert!(value["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str().unwrap().contains("disabled")));
+        let operation = disabled_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(operation.status(), StatusCode::NOT_FOUND);
+    }
 
     #[test]
     fn beta_receipt_requires_every_first_accepted_digest() {

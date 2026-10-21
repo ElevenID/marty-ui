@@ -29,6 +29,7 @@ if ($PlanOnly -and -not $PhysicalProviderSnapshot) {
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 . (Join-Path $PSScriptRoot "beta-worker-launch-contract.ps1")
+. (Join-Path $PSScriptRoot "beta-state-volume-plan.ps1")
 if ([string]::IsNullOrWhiteSpace($TunnelEnvFile)) {
     $TunnelEnvFile = Join-Path $repoRoot ".env.tunnel.beta.local"
 }
@@ -147,16 +148,6 @@ function Find-ServiceContainer([string]$Service) {
     return [string]$ids[0]
 }
 
-function Assert-BetaVolume([string]$Name) {
-    $raw = & docker volume inspect $Name
-    if ($LASTEXITCODE -ne 0) { throw "Required beta volume is absent: $Name" }
-    $volume = ($raw -join "`n") | ConvertFrom-Json
-    if ($volume.Count -ne 1 -or $volume[0].Labels.'com.docker.compose.project' -ne $project) {
-        throw "Refusing volume outside ${project}: $Name"
-    }
-    return $Name
-}
-
 function Get-ServiceContainer([string]$Service) {
     $container = Find-ServiceContainer $Service
     if (-not $container) { throw "Expected one beta container for $Service" }
@@ -193,7 +184,7 @@ $manifest = Get-Content -LiteralPath $backupManifestPath -Raw | ConvertFrom-Json
 if ($manifest.schema_version -ne 1 -or $manifest.phase -ne "maintenance_quiesced" -or $manifest.application_writers_stopped -ne $true) {
     throw "Backup is not a quiesced beta maintenance snapshot"
 }
-$requiredFiles = @("applicant_store.json", "openbao-data.tar.gz", "postgres-globals.sql", "postgres-keycloak.dump", "postgres-marty.dump", "redis-dump.rdb")
+$requiredFiles = @("applicant_store.json", "openbao-data.tar.gz", "openbao-raft.snap", "postgres-globals.sql", "postgres-keycloak.dump", "postgres-marty.dump", "redis-dump.rdb")
 foreach ($name in $requiredFiles) {
     $record = @($manifest.files | Where-Object name -eq $name)
     $path = Join-Path $backupDir $name
@@ -461,8 +452,16 @@ if ($uiRecord.Count -eq 1 -and $uiRecord[0].image_id -notmatch '^sha256:[0-9a-f]
 # Resolve every existing data target before stopping services or restoring any
 # earlier store. A missing/mislabeled later volume must fail without partial restore.
 $postgres = Get-ServiceContainer "postgres"
-$redisVolumeName = Assert-BetaVolume "elevenid-beta_redis_data"
-$applicantVolumeName = Assert-BetaVolume "elevenid-beta_applicant_data"
+if (-not $manifest.PSObject.Properties['state_volumes']) {
+    throw 'Restore requires a backup with explicit beta state-volume bindings'
+}
+$stateVolumes = @($manifest.state_volumes)
+Assert-BetaStateVolumePlan -Expected $stateVolumes
+$redisVolumeName = ($stateVolumes | Where-Object logical_name -eq 'redis_data').volume_name
+$applicantVolumeName = ($stateVolumes | Where-Object logical_name -eq 'applicant_data').volume_name
+$volumeOverride = Join-Path $resolvedArtifacts 'restore-state-volumes.json'
+(ConvertTo-BetaStateVolumeOverride -Plan $stateVolumes) | Set-Content -LiteralPath $volumeOverride -Encoding utf8
+$composeFiles += $volumeOverride
 Assert-LegacyBetaDatabaseUnfenced -PostgresContainer $postgres
 $yaml -join "`n" | Set-Content -LiteralPath $restoreImages -Encoding utf8
 $composeFiles += $restoreImages
