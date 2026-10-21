@@ -14,6 +14,7 @@ const {
   ObservationLedger,
   observePipelinePrerequisites,
   selectProductionBadgeTemplates,
+  contractFailureLocation,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
@@ -29,6 +30,15 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
+  const error = new Error('secret-token request https://issuer.example?code=private-value');
+  error.stack = 'Error: secret-token\n at fill("private-value") (/tests/scripts/run-canvas-oss-standard-contract.js:712:19)';
+  const result = contractFailureLocation(error, 'standard_lti_13_install');
+  assert.deepEqual(result, { activeCase: 'standard_lti_13_install', errorType: 'Error',
+    sourceLocation: { file: 'run-canvas-oss-standard-contract.js', line: 712, column: 19 } });
+  assert.ok(!JSON.stringify(result).includes('secret') && !JSON.stringify(result).includes('private-value'));
+});
 
 test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
   const claims = ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']

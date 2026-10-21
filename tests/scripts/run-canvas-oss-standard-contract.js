@@ -1459,6 +1459,15 @@ function escapeHtml(value) {
   })[character]);
 }
 
+function contractFailureLocation(error, activeCase) {
+  // Retain actionable driver location without request bodies, URLs, credentials
+  // or Playwright action arguments from the original exception message.
+  const frame = String(error?.stack || '').match(/run-canvas-oss-standard-contract\.js:(\d+):(\d+)/);
+  const name = /^[A-Za-z][A-Za-z0-9]{0,50}$/.test(String(error?.name || '')) ? error.name : 'Error';
+  return { activeCase, errorType: name,
+    sourceLocation: frame ? { file: 'run-canvas-oss-standard-contract.js', line: Number(frame[1]), column: Number(frame[2]) } : null };
+}
+
 async function finishRecordedVideo(context, page, destination) {
   const video = page.video();
   await context.close();
@@ -1860,6 +1869,7 @@ async function main() {
     requireCondition(activityResults.nativeSubmission && activityResults.quizSubmissionRecord, 'activity_observations_missing', 'Canvas activity observations were not retained in memory.');
     requireCondition(ledger.allOssRequiredPassed(), 'required_observation_missing', 'One or more required OSS observations did not pass.');
   } catch (error) {
+    ledger.driverFailure = contractFailureLocation(error, activeCase);
     failure = error instanceof ContractFailure
       ? error
       : new ContractFailure('unexpected_driver_failure', 'The standard Canvas contract stopped on an unexpected driver error.');
@@ -1868,6 +1878,8 @@ async function main() {
     }
   } finally {
     ledger.write(args.observations);
+    if (ledger.driverFailure) fs.writeFileSync(path.join(path.dirname(args.observations), 'driver-failure-location.json'),
+      JSON.stringify(ledger.driverFailure, null, 2) + '\n');
 
     if (recordedContext) {
       try {
@@ -1908,6 +1920,7 @@ async function main() {
 }
 
 module.exports = {
+  contractFailureLocation,
   selectProductionBadgeTemplates,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
