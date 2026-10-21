@@ -17,8 +17,13 @@ five exact merge-group workflows passed. Main subsequently advanced through
 protected #1450 to `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`, retaining
 the `v1.1.261` lock. Separate full exact-main
 [CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803)
-was dispatched on the new SHA and is still running. Require its success and
-unchanged main before the no-write release claim, promoted tag,
+passed all 23 jobs on the new SHA. No-write
+[claim 39525624090](https://github.com/ElevenID/marty-ui/actions/runs/39525624090)
+passed and produced its exact transaction. First
+[Stack release 39525728437](https://github.com/ElevenID/marty-ui/actions/runs/39525728437)
+is running to qualify and promote the five images before the intentionally
+stopping late-tag gate. Require its promotion-complete artifact and current
+main before pushing the exact annotated tag, then resume for the
 signed `v1.1.261` release, exact installed business/session/expiry journey,
 and fresh replacement/cutover or rollback proof. The two old installations
 can be replaced fresh without data migration. Work on this 16 GiB machine
@@ -24887,3 +24892,5 @@ Installed-run preparation (2026-10-21 UTC): Three other dated, source-independen
 Exact-main CI superseded (2026-10-21 UTC): While full [CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929) on #1446's merge commit had 21 successful jobs and only Canvas live, protected [#1450](https://github.com/ElevenID/marty-ui/pull/1450) merged as `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`. Its five protected merge-group workflows passed; the change affects acceptance fixture ownership, Docker ignore and CI planning, and retains `marty-ui@1.1.261` as eligible. The obsolete exact-main run was cancelled to avoid further runner cost. New [full CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803) is a `workflow_dispatch` on `2e0b27242e`; the clean local release-helper worktree was fast-forwarded to that commit. The native Ubuntu checkout remains on the earlier SHA and must be advanced or recreated only after the release source is final. No release claim or tag yet.
 
 WSL local-runner finding (2026-10-21 UTC): This host reports WSL 2.6.3.0 and kernel 6.6.87.2-1. Ubuntu and the separate recovery distro now time out with `Wsl/Service/0x8007274c` on new commands, even after terminating only Ubuntu; Docker Desktop production remains HTTP 200. A [Microsoft WSL issue](https://github.com/microsoft/WSL/issues/14541) documents the same version/error during `systemd=true` startup and says a 2.7.3 fix was offered. That is a plausible diagnosis, not proven root cause on this host. Avoid `wsl --shutdown`, WSL update or Docker Desktop restart while the production website is live; those global actions may interrupt it. Continue hosted release qualification and revisit the local runner with a controlled production-safe maintenance decision before the installed journey.
+
+Exact-main release claim (2026-10-21 UTC): [full CI 39521170803](https://github.com/ElevenID/marty-ui/actions/runs/39521170803) completed **success** on `2e0b27242ec80ccb0454beb8a8d4e2aaa514194e`, all 23 jobs including Canvas and CI Gate; protected main still equaled that SHA and the queue was empty. [No-write claim 39525624090](https://github.com/ElevenID/marty-ui/actions/runs/39525624090) passed both jobs and uploaded exactly one `stack-release-claim-v1.1.261` artifact. Its downloaded transaction reports `claimed`, the exact source SHA, tag and claim run ID. No tag or public release existed. First [Stack release 39525728437](https://github.com/ElevenID/marty-ui/actions/runs/39525728437) was dispatched on the same SHA with `prepare_selfhost_lock=false`; this run is expected to stop at the late tag gate only **after** promotion-complete checkpoint. An earlier failure is a real failure to diagnose. Do not tag until the five images and promotion checkpoint are verified.
