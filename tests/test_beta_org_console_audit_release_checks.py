@@ -18,6 +18,14 @@ def _load_audit_module():
     return module
 
 
+def _cleanup_fixture():
+    return {
+        "created_api_keys": [{"id": "owned-key", "organization_id": "org-fixture"}],
+        "cleanup_actions": [{"type": "revoke_api_key", "id": "owned-key",
+                             "organization_id": "org-fixture", "status": "204", "ok": "true"}],
+    }
+
+
 def _required_steps():
     # Report-contract fixtures only; actual ES256 response bytes are exercised
     # by the native signing-capability suite and Python/CLI adapter test.
@@ -133,6 +141,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.steps = _required_steps()
+            self.created_api_keys = _cleanup_fixture()["created_api_keys"]
 
         def attach_events(self):
             pass
@@ -143,6 +152,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
 
         def cleanup_created_api_keys(self):
             events.append("cleanup")
+            self.cleanup_actions = _cleanup_fixture()["cleanup_actions"]
 
     monkeypatch.setattr(audit, "Audit", FixtureAudit)
     monkeypatch.setattr(audit, "sync_playwright", Playwright)
@@ -252,6 +262,7 @@ def test_release_checks_block_audit_log_501() -> None:
 
     report = {
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 501,
@@ -337,6 +348,7 @@ def test_release_checks_accept_typed_plan_entitlement_response() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 403,
@@ -371,6 +383,7 @@ def test_release_checks_accept_only_exact_cross_org_admin_denials() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": denied,
         "failed_requests": [],
         "page_errors": [],
@@ -466,6 +479,7 @@ def test_release_checks_block_unexplained_failed_request() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -492,6 +506,7 @@ def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [cancelled],
         "page_errors": [],
@@ -506,6 +521,7 @@ def test_release_checks_block_cancelled_document_navigation() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -788,3 +804,38 @@ def test_beta_audit_waits_for_the_exact_verifier_identity_tuple(monkeypatch) -> 
 
     assert identity == verifier_identity
     assert observed_probe == probe
+
+
+@pytest.mark.parametrize("change", ["missing", "failed", "foreign-org", "foreign-key", "contradictory", "unowned", "unknown-status", "pending"])
+def test_run_owned_key_cleanup_cannot_be_missing_failed_or_substituted(change):
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    action = report["cleanup_actions"][0]
+    if change == "missing":
+        report.pop("cleanup_actions")
+    elif change == "failed":
+        action.update(status="500", ok="false")
+    elif change == "foreign-org":
+        action["organization_id"] = "another-organization"
+    elif change == "foreign-key":
+        action["id"] = "another-key"
+    elif change == "contradictory":
+        report["cleanup_actions"].append({**action, "ok": "false", "status": "500"})
+    elif change == "unowned":
+        report["created_api_keys"] = []
+    elif change == "unknown-status":
+        action["status"] = "404"
+    elif change == "pending":
+        action["status"] = "202"
+    checks = audit.evaluate_release_checks(report)
+    assert checks["status"] == "blocked"
+    assert "owned_api_key_cleanup_unverified" in {item["code"] for item in checks["blockers"]}
+
+
+def test_exact_owned_key_cleanup_succeeds_but_partial_cleanup_does_not():
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    assert audit.owned_api_key_cleanup_proven(report)
+    assert audit.evaluate_release_checks(report)["status"] == "pass"
+    report["created_api_keys"].append({"id": "second-owned-key", "organization_id": "org-fixture"})
+    assert not audit.owned_api_key_cleanup_proven(report)
