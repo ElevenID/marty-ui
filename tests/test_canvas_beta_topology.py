@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from scripts.canvas_beta_topology import BETA_NETWORK, inspect_beta_tunnel
+from scripts.canvas_beta_topology import BETA_NETWORK, assert_canvas_route_owner, inspect_beta_tunnel
 
 
 @pytest.mark.parametrize('mutation', ['none', 'missing_owner', 'duplicate', 'wrong_network', 'replaced'])
@@ -38,3 +38,26 @@ def test_tunnel_observation_requires_unique_running_beta_services_on_exact_netwo
     else:
         with pytest.raises(RuntimeError, match='beta-owned|different network|changed during'):
             inspect_beta_tunnel(docker)
+
+
+@pytest.mark.parametrize('mutation', ['none', 'legacy_collision', 'wrong_project', 'wrong_role', 'before_free', 'before_owned'])
+def test_canvas_public_alias_requires_one_stock_edge_or_no_owner_before_bootstrap(mutation):
+    ids = ['a' * 64, 'b' * 64] if mutation == 'legacy_collision' else ['a' * 64]
+
+    def docker(*args):
+        if args[0] == 'network':
+            return json.dumps({cid: {} for cid in ids})
+        cid = args[1]
+        if 'NetworkSettings' in args[-1]:
+            return json.dumps({BETA_NETWORK: {'Aliases': [] if mutation == 'before_free' else ['canvas-real']}})
+        return json.dumps(dict(id=cid, running=True, labels={
+            'com.docker.compose.project': 'foreign' if mutation == 'wrong_project' else 'canvas-oss-portability',
+            'com.docker.compose.service': 'other' if mutation == 'wrong_role' else 'canvas-edge'}))
+
+    expected = None if mutation.startswith('before_') else ids[0]
+    if mutation in ['none', 'before_free']:
+        proof = assert_canvas_route_owner(docker, expected)
+        assert proof['running_owners'] == ([] if expected is None else [expected])
+    else:
+        with pytest.raises(RuntimeError, match='route'):
+            assert_canvas_route_owner(docker, expected)

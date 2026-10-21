@@ -38,15 +38,18 @@ def inspect_prebuilt_image(root: Path, docker) -> dict:
                 required_free_bytes=max(20 * GIB, 2 * size), canvas_source_build_allowed=False)
 
 
-def physical_runtime_capacity(image: dict, scripts: Path) -> dict:
+def physical_runtime_capacity(image: dict, scripts: Path, data_disk_path: str | None = None) -> dict:
     powershell = shutil.which('powershell.exe')
     if not powershell:
         raise RuntimeError('Runtime-only admission requires Windows backing-volume observation')
     wrapper = str(scripts / 'check-canvas-prebuilt-backing-capacity.ps1')
     if os.name != 'nt':
         wrapper = subprocess.check_output(['wslpath', '-w', wrapper], text=True).strip()
-    result = subprocess.run([powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapper,
-                             '-PrebuiltImageSizeBytes', str(image['image_size_bytes'])],
+    arguments = [powershell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', wrapper,
+                 '-PrebuiltImageSizeBytes', str(image['image_size_bytes'])]
+    if data_disk_path:
+        arguments.extend(['-DockerDesktopDataDiskPath', data_disk_path])
+    result = subprocess.run(arguments,
                             capture_output=True, text=True, timeout=30)
     if result.returncode:
         raise RuntimeError('Windows Docker backing volume does not satisfy prebuilt runtime capacity')

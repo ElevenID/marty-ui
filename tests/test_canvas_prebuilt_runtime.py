@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.canvas_prebuilt_runtime import GIB, inspect_prebuilt_image
+from scripts.canvas_prebuilt_runtime import GIB, inspect_prebuilt_image, physical_runtime_capacity
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,3 +46,18 @@ def test_prebuilt_admission_binds_published_digest_source_platform_and_measured_
         with pytest.raises(RuntimeError):
             inspect_prebuilt_image(tmp_path, docker)
     assert original['image']['required_oci_labels']['org.opencontainers.image.revision'] != '2' * 40
+
+
+def test_relocated_backing_disk_is_forwarded_to_physical_observer(monkeypatch):
+    from types import SimpleNamespace
+    from scripts import canvas_prebuilt_runtime as runtime
+    monkeypatch.setattr(runtime.shutil, 'which', lambda _: 'powershell.exe')
+    calls = []
+    disk = 'E:\\Docker Data\\docker_data.vhdx'
+    def run(arguments, **kwargs):
+        calls.append(arguments)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(dict(capacity_mode='PrebuiltRuntime',
+            required_free_bytes=20 * GIB, physical_free_bytes=25 * GIB)))
+    monkeypatch.setattr(runtime.subprocess, 'run', run)
+    physical_runtime_capacity(dict(image_size_bytes=3 * GIB, required_free_bytes=20 * GIB), ROOT / 'scripts', disk)
+    assert calls[0][-2:] == ['-DockerDesktopDataDiskPath', disk]

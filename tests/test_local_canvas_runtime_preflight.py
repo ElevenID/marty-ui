@@ -38,3 +38,32 @@ def test_local_preflight_refuses_substituted_engine_or_beta_before_capacity_admi
         with pytest.raises(RuntimeError, match='Docker Desktop|Actual beta'):
             runtime.preflight(deployment)
         assert admitted == []
+
+
+@pytest.mark.parametrize('mutation', ['none', 'wrong_web_image', 'duplicate_edge'])
+def test_stock_route_observation_checks_role_image_and_unique_edge(monkeypatch, mutation):
+    stock = 'sha256:' + '1' * 64
+    edge = 'sha256:' + '2' * 64
+    ids = {'canvas-edge': 'a' * 64, 'canvas-web': 'b' * 64}
+    def docker(*args):
+        if args[0] == 'ps':
+            role = args[-1].split('=')[-1]
+            if mutation == 'duplicate_edge' and role == 'canvas-edge':
+                return ids[role] + '\n' + 'c' * 64
+            return ids[role]
+        if args[0] == 'image':
+            return edge
+        if args[1] == ids['canvas-edge']:
+            return edge
+        return 'sha256:' + '9' * 64 if mutation == 'wrong_web_image' else stock
+    monkeypatch.setattr(runtime, 'docker', docker)
+    calls = []
+    monkeypatch.setattr(runtime, 'assert_canvas_route_owner', lambda _, cid: calls.append(cid) or {'verified': True})
+    if mutation == 'none':
+        proof = runtime.inspect_stock_route(stock)
+        assert proof['roles']['canvas-web']['image_id'] == stock
+        assert calls == [ids['canvas-edge']]
+    else:
+        with pytest.raises(RuntimeError, match='image differs|identity is ambiguous'):
+            runtime.inspect_stock_route(stock)
+        assert calls == []

@@ -8,6 +8,29 @@ BETA_PROJECT = 'elevenid-beta'
 BETA_NETWORK = 'elevenid-beta-network'
 
 
+def assert_canvas_route_owner(docker, expected_edge_id=None) -> dict:
+    """Refuse ambiguous tunnel DNS, including aliases on unrelated containers."""
+    members = json.loads(docker('network', 'inspect', BETA_NETWORK, '--format', '{{json .Containers}}'))
+    owners = []
+    for cid in members:
+        networks = json.loads(docker('inspect', cid, '--format', '{{json .NetworkSettings.Networks}}'))
+        aliases = networks.get(BETA_NETWORK, {}).get('Aliases') or []
+        if 'canvas-real' in aliases:
+            owner = json.loads(docker('inspect', cid, '--format',
+                '{"id":{{json .Id}},"running":{{json .State.Running}},"labels":{{json .Config.Labels}}}'))
+            if owner['running']:
+                owners.append(owner)
+    if expected_edge_id is None:
+        if owners:
+            raise RuntimeError('Canvas public route is already owned; inspect the recorded beta lifecycle state')
+        return dict(alias='canvas-real', running_owners=[])
+    if (len(owners) != 1 or owners[0]['id'] != expected_edge_id
+            or owners[0]['labels'].get('com.docker.compose.project') != 'canvas-oss-portability'
+            or owners[0]['labels'].get('com.docker.compose.service') != 'canvas-edge'):
+        raise RuntimeError('Canvas public route must have exactly one stock Compose edge owner')
+    return dict(alias='canvas-real', running_owners=[expected_edge_id], compose_project='canvas-oss-portability')
+
+
 def inspect_beta_tunnel(docker) -> dict:
     network_id = docker('network', 'inspect', BETA_NETWORK, '--format', '{{.Id}}')
     if not re.fullmatch('[0-9a-f]{64}', network_id):

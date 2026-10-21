@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param([Parameter(Mandatory = $true)][string]$ArtifactDir,
       [Parameter(Mandatory = $true)][string]$BetaDeploymentManifest,
+      [string]$DockerDesktopDataDiskPath,
       [switch]$Bootstrap)
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,7 @@ try {
     $arguments = @((Join-Path $PSScriptRoot 'run_local_canvas_runtime.py'),
                    '--artifact-dir', $ArtifactDir, '--beta-deployment-manifest', $BetaDeploymentManifest)
     if ($Bootstrap) { $arguments += '--bootstrap' }
+    if ($DockerDesktopDataDiskPath) { $arguments += @('--docker-desktop-data-disk-path', $DockerDesktopDataDiskPath) }
     & python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'Local Canvas runtime failed; inspect its retained evidence before retrying' }
 }

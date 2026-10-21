@@ -17,13 +17,13 @@ import sys
 import uuid
 
 if __package__:
-    from .canvas_beta_topology import inspect_beta_tunnel
-    from .canvas_oss_beta_lifecycle import assert_beta, assert_canvas, assert_monitor
+    from .canvas_beta_topology import assert_canvas_route_owner, inspect_beta_tunnel
+    from .canvas_oss_beta_lifecycle import assert_beta, assert_canvas, assert_monitor, prepare
     from .canvas_prebuilt_runtime import inspect_prebuilt_image, physical_runtime_capacity
     from .check_canvas_oss_runner import check_passport_host_quarantine
 else:
-    from canvas_beta_topology import inspect_beta_tunnel
-    from canvas_oss_beta_lifecycle import assert_beta, assert_canvas, assert_monitor
+    from canvas_beta_topology import assert_canvas_route_owner, inspect_beta_tunnel
+    from canvas_oss_beta_lifecycle import assert_beta, assert_canvas, assert_monitor, prepare
     from canvas_prebuilt_runtime import inspect_prebuilt_image, physical_runtime_capacity
     from check_canvas_oss_runner import check_passport_host_quarantine
 
@@ -48,7 +48,25 @@ def production_invariant():
     return sorted(rows, key=lambda row: row['id'])
 
 
-def preflight(deployment):
+def inspect_stock_route(expected_canvas_image_id):
+    lock = json.loads((ROOT / 'deploy-config/catalog/canvas-oss.lock.json').read_text(encoding='utf8'))
+    identities = {}
+    for service in ['canvas-edge', 'canvas-web']:
+        ids = docker('ps', '-q', '--no-trunc', '--filter', 'label=com.docker.compose.project=canvas-oss-portability',
+                     '--filter', 'label=com.docker.compose.service=' + service).splitlines()
+        if len(ids) != 1:
+            raise RuntimeError('Stock Canvas role identity is ambiguous: ' + service)
+        image_id = docker('inspect', ids[0], '--format', '{{.Image}}')
+        expected = expected_canvas_image_id if service == 'canvas-web' else docker(
+            'image', 'inspect', lock['runtime_dependencies']['edge'], '--format', '{{.Id}}')
+        if image_id != expected:
+            raise RuntimeError('Stock Canvas role image differs: ' + service)
+        identities[service] = dict(container_id=ids[0], image_id=image_id)
+    route = assert_canvas_route_owner(docker, identities['canvas-edge']['container_id'])
+    return dict(route=route, roles=identities)
+
+
+def preflight(deployment, data_disk_path=None):
     if sys.platform != 'win32':
         raise RuntimeError('This local entrypoint requires Windows; WSL/GitHub admission remains separate')
     endpoint = json.loads(docker('context', 'inspect', 'desktop-linux'))[0]['Endpoints']['docker']['Host']
@@ -62,7 +80,7 @@ def preflight(deployment):
     if release['source_id'] != deployment['marty_ui_sha'] or release['release_version'] != deployment['release_version']:
         raise RuntimeError('Actual beta differs from the supplied deployment manifest')
     image = inspect_prebuilt_image(ROOT, docker)
-    capacity = physical_runtime_capacity(image, ROOT / 'scripts')
+    capacity = physical_runtime_capacity(image, ROOT / 'scripts', data_disk_path)
     check_passport_host_quarantine(runner=docker)
     return dict(scope='LOCAL_WINDOWS_PREBUILT_CANVAS_RUNTIME', daemon_id=daemon, topology=topology,
         observed_beta=release, image=image, backing_capacity=capacity, github_labels_verified=False,
@@ -94,6 +112,7 @@ def main():
     parser.add_argument('--artifact-dir', type=Path, required=True)
     parser.add_argument('--beta-deployment-manifest', type=Path, required=True)
     parser.add_argument('--bootstrap', action='store_true')
+    parser.add_argument('--docker-desktop-data-disk-path')
     args = parser.parse_args()
     os.environ['DOCKER_CONTEXT'] = 'desktop-linux'
     for name in ['DOCKER_HOST', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH']:
@@ -109,7 +128,7 @@ def main():
     deployment_bytes = args.beta_deployment_manifest.read_bytes()
     deployment = json.loads(deployment_bytes.decode('utf-8-sig'))
     production = production_invariant()
-    receipt = preflight(deployment)
+    receipt = preflight(deployment, args.docker_desktop_data_disk_path)
     receipt.update(source_revision=revision, deployment_manifest_sha256=hashlib.sha256(deployment_bytes).hexdigest(),
         started_at=datetime.now(timezone.utc).isoformat(), bootstrap_requested=args.bootstrap,
         full_contract_credentials_configured=False,
@@ -120,6 +139,8 @@ def main():
         return
     if docker('ps', '-aq', '--filter', 'label=com.docker.compose.project=canvas-oss-portability'):
         raise RuntimeError('An existing Canvas attempt requires inspection; do not overwrite its state')
+    if docker('volume', 'ls', '-q', '--filter', 'label=com.docker.compose.project=canvas-oss-portability'):
+        raise RuntimeError('Existing Canvas project volumes require explicit fresh-state cleanup before bootstrap')
     private = Path.home() / '.codex/private' / ('canvas-stock-local-' + uuid.uuid4().hex)
     secret_dir, config_dir = protected_inputs(private)
     lock = json.loads((ROOT / 'deploy-config/catalog/canvas-oss.lock.json').read_text(encoding='utf8'))
@@ -171,6 +192,11 @@ def main():
         base_image=settings['CANVAS_OSS_PLAYWRIGHT_IMAGE'], secret_transport='compose_secret_files',
         host_browser_processes=False, unit_test_exit_code=0, contract_exit_code=None, labels=required_labels)
     (artifact_dir / 'contract-driver-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf8')
+    # Preserve the exact replaceable legacy state before claiming its tunnel alias.
+    # Unknown route owners fail closed; production containers are never stopped.
+    prepare(artifact_dir / 'beta-canvas-lifecycle-state.json')
+    receipt['route_before_bootstrap'] = assert_canvas_route_owner(docker)
+    receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf8')
     with (private / 'monitor-start.log').open('wb') as log:
         subprocess.run(compose + ['--profile', 'monitor', 'up', '--detach', '--no-deps', 'canvas-continuity-monitor'],
                        cwd=ROOT, env=env, check=True, stdout=log, stderr=subprocess.STDOUT, timeout=120)
@@ -183,6 +209,7 @@ def main():
         receipt['bootstrap_exit_code'] = result.returncode
         if result.returncode:
             raise RuntimeError('Stock Canvas bootstrap failed; inspect the private log and retained state')
+        receipt['stock_route'] = inspect_stock_route(receipt['image']['image_id'])
         assert_canvas()
         if assert_beta() != receipt['observed_beta']:
             raise RuntimeError('Beta release changed during Canvas bootstrap')

@@ -83,10 +83,19 @@ present image size; upstream source builds retain the80GiB prerequisite. The
 runtime mode cannot compile a Canvas source image or substitute an unreviewed
 image. It uses the existing Windows `desktop-linux` endpoint, so a WSL socket
 pointing at another daemon cannot silently select a different environment.
+If the Docker data disk was relocated, supply `-DockerDesktopDataDiskPath
+<actual-vhdx-path>`; the same physical-volume observer measures that file.
 
 Add `-Bootstrap` to run the existing approved stock lifecycle and start its
 isolated services. The wrapper holds the Docker runner and beta deployment
 locks. Canvas, databases, the contract browser and continuity monitor remain
+Compose containers. Bootstrap refuses existing project containers or volumes,
+records and stops only the existing lifecycle's replaceable beta Canvas
+allowlist, and requires the public tunnel alias to be unowned before startup.
+After startup, exactly one stock Compose edge must own that alias and the web
+and edge images must match their pinned runtime identities. Unknown or duplicate
+route owners fail closed; an HTTP200 response alone cannot prove stock Canvas.
+The browser, databases and monitor remain
 Compose containers. Source/image bindings, actual contract unit results, stock
 bootstrap audit, public login, beta continuity and the self-host production
 invariant are retained. Private operator keys/passwords remain under
