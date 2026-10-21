@@ -234,12 +234,20 @@ async fn bootstrap_issuer(
     if issuer.organization_id.as_deref() != Some(&config.organization_id) {
         return Err(TrustCatalogError::InvalidConfig("issuer_tenant_conflict"));
     }
+    let issuer_changed = issuer.issuer_id != config.issuer_did;
     issuer.issuer_id.clone_from(&config.issuer_did);
     issuer.display_name = "Marty Managed Issuer".into();
     issuer.description = Some("Default issuer for Marty credential-login bootstrap.".into());
     let mut metadata = issuer.metadata.as_object().cloned().unwrap_or_default();
     metadata.insert("issuer_url".into(), json!(config.issuer_url));
-    metadata.insert("verification_keys".into(), json!([]));
+    if issuer_changed {
+        metadata.insert("verification_keys".into(), json!([]));
+        metadata.remove("verification_key_resolution");
+    } else {
+        metadata
+            .entry("verification_keys")
+            .or_insert_with(|| json!([]));
+    }
     issuer.metadata = serde_json::Value::Object(metadata);
     issuer.updated_at = now;
     repository.save_issuer_entity(&issuer).await?;

@@ -94,6 +94,55 @@ async fn complete_system_catalog_is_idempotent_and_repairs_managed_issuer_deriva
 }
 
 #[tokio::test]
+async fn repeated_bootstrap_retains_pinned_keys_only_for_the_same_issuer() {
+    let repository = MemoryTrustProfileRepository::default();
+    let original = config("did:web:beta.example.test:orgs:marty");
+    bootstrap_system_catalog(&repository, &original, now())
+        .await
+        .unwrap();
+    let mut issuer = repository
+        .issuer_entity_by_identifier(Some(&original.organization_id), &original.issuer_did)
+        .await
+        .unwrap()
+        .unwrap();
+    issuer.metadata["verification_keys"] = serde_json::json!([
+        {"kty": "EC", "crv": "P-256", "kid": "governed-issuer-key"}
+    ]);
+    issuer.metadata["verification_key_resolution"] = serde_json::json!({
+        "source": "reviewed-did-document", "content_sha256": "original-digest"
+    });
+    issuer.metadata["operator_note"] = serde_json::json!("preserved");
+    repository.save_issuer_entity(&issuer).await.unwrap();
+
+    bootstrap_system_catalog(&repository, &original, now() + Duration::minutes(1))
+        .await
+        .unwrap();
+    let unchanged = repository
+        .issuer_entity_by_id(issuer.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(unchanged.metadata, issuer.metadata);
+
+    let replacement = config("did:web:replacement.example.test:orgs:marty");
+    bootstrap_system_catalog(&repository, &replacement, now() + Duration::minutes(2))
+        .await
+        .unwrap();
+    let changed = repository
+        .issuer_entity_by_id(issuer.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(changed.issuer_id, replacement.issuer_did);
+    assert_eq!(changed.metadata["verification_keys"], serde_json::json!([]));
+    assert!(changed
+        .metadata
+        .get("verification_key_resolution")
+        .is_none());
+    assert_eq!(changed.metadata["operator_note"], "preserved");
+}
+
+#[tokio::test]
 async fn disposable_loopback_issuer_origin_is_accepted_without_remote_http() {
     let repository = MemoryTrustProfileRepository::default();
     for issuer_url in ["http://localhost:29876", "http://localhost:1024"] {
