@@ -242,7 +242,8 @@ struct OrganizationLifecycleResponse {
 #[derive(Serialize)]
 struct OrganizationEnvironmentResponse {
     organization_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // The dashboard contract distinguishes an explicit unset value from an
+    // incomplete response. Preserve the field even when no environment is set.
     environment: Option<String>,
 }
 
@@ -1586,6 +1587,50 @@ pub(crate) const fn not_found(detail: &'static str) -> OrganizationHttpError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn environment_response_preserves_explicit_unset_and_configured_values() {
+        let (mut organization, _) = Organization::create(crate::OrganizationCreate {
+            name: "environment-contract".into(),
+            owner_id: "owner".into(),
+            org_type: OrganizationType::Startup,
+            display_name: None,
+            description: None,
+            join_mechanism: JoinMechanism::Invite,
+            requires_approval: false,
+            is_discoverable: false,
+            now: Utc::now(),
+        })
+        .unwrap();
+        for setting in [
+            None,
+            Some(json!("")),
+            Some(json!("invalid")),
+            Some(json!(true)),
+        ] {
+            organization.settings.remove("environment");
+            if let Some(value) = setting {
+                organization.settings.insert("environment".into(), value);
+            }
+            assert_eq!(
+                serde_json::to_value(environment_response(&organization)).unwrap(),
+                json!({"organization_id": organization.id.to_string(), "environment": null})
+            );
+        }
+        for (setting, expected) in [
+            ("development", "development"),
+            (" STAGING ", "staging"),
+            ("production", "production"),
+        ] {
+            organization
+                .settings
+                .insert("environment".into(), json!(setting));
+            assert_eq!(
+                serde_json::to_value(environment_response(&organization)).unwrap(),
+                json!({"organization_id": organization.id.to_string(), "environment": expected})
+            );
+        }
+    }
 
     #[test]
     fn strict_update_parsing_preserves_omit_clear_and_replace() {
