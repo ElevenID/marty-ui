@@ -596,8 +596,27 @@ async function selectProductionBadgeTemplates(marty, organizationId, selectors =
 }) {
   const explicitApplicationId = String(selectors.applicationTemplateId || '').trim();
   const explicitCredentialId = String(selectors.credentialTemplateId || '').trim();
-  const applications = safeList(await marty.get(`/v1/application-templates?organization_id=${encodeURIComponent(organizationId)}`));
-  const credentials = safeList(await marty.get(`/v1/credential-templates?organization_id=${encodeURIComponent(organizationId)}`));
+  async function inventory(collection) {
+    const rows = [];
+    const seen = new Set();
+    for (let offset = 0; offset < 10_000; offset += 100) {
+      const page = safeList(await marty.get(`${collection}?organization_id=${encodeURIComponent(organizationId)}&limit=100&offset=${offset}`));
+      for (const row of page) {
+        requireCondition(row?.id && !seen.has(String(row.id)), 'template_inventory_pagination_invalid', 'Template inventory repeated or omitted a stable resource ID.');
+        seen.add(String(row.id)); rows.push(row);
+      }
+      if (page.length < 100) return rows;
+    }
+    fail('template_inventory_limit', 'Template inventory exceeded the bounded selection limit.');
+  }
+  const applications = explicitApplicationId
+    ? [await marty.get(`/v1/application-templates/${encodeURIComponent(explicitApplicationId)}`)]
+    : await inventory('/v1/application-templates');
+  const referencedCredentialId = explicitCredentialId
+    || (explicitApplicationId ? String(applications[0]?.credential_template_id || '') : '');
+  const credentials = referencedCredentialId
+    ? [await marty.get(`/v1/credential-templates/${encodeURIComponent(referencedCredentialId)}`)]
+    : await inventory('/v1/credential-templates');
   const credentialById = new Map(credentials.map((item) => [String(item.id), item]));
   const candidates = applications.filter((application) => {
     if (String(application.organization_id) !== organizationId) return false;
@@ -1506,6 +1525,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 
 
     await observePipelinePrerequisites(ledger, martyOrigin, canvasOrigin, markActive, prerequisiteDirectory);
+
+    markActive('standard_lti_13_install');
 
     state.adminContext = adminContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     const adminPage = await adminContext.newPage();
