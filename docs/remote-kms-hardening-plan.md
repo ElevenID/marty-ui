@@ -1,6 +1,6 @@
 # Remote KMS hardening implementation and landing plan
 
-Status: active; maintainer resumed the goal on 2026-10-20. Updated: 2026-10-20 UTC.
+Status: active; maintainer resumed the goal on 2026-10-20. Updated: 2026-10-21 UTC.
 
 Owner: Codex working with the repository maintainer. This file is the canonical
 cross-repository progress tracker. Update it at meaningful implementation,
@@ -8,18 +8,15 @@ review, validation, and landing checkpoints, including concrete commit, PR,
 artifact, and test references. A merged library change alone does not complete
 the service or release boundary.
 
-Current handoff gate (2026-10-20 UTC): Core #355, Credentials #313 and the
+Current handoff gate (2026-10-21 UTC): Core #355, Credentials #313 and the
 grouped native UI custody, recovery, renewal and rootless CA-rotation changes
-are merged. The remaining installed-qualification and release-source batch is
-[UI PR #1446](https://github.com/ElevenID/marty-ui/pull/1446), head
-`b4d8fbe9907ed0a499dfb2107ae2067126dfc1d7`. Its exact-head
-[CI 39505402981](https://github.com/ElevenID/marty-ui/actions/runs/39505402981)
-passed all 23 jobs and the four other PR checks passed. It is in the protected
-merge queue; its candidate `8a973836a70f1cb21151ec3bf0d6fd1cc5fd4bef`
-has five merge-group workflows pending. A preceding queue group had a Cargo
-git-fetch SSL/network failure, so the candidate may be regenerated. Require
-the actual merge and successful protected checks on the final candidate,
-followed by separate exact-main full CI, no-write release claim, promoted tag,
+are merged. The installed-qualification and release-source batch
+[UI PR #1446](https://github.com/ElevenID/marty-ui/pull/1446) merged into
+protected main at `a2fb60a21cf7dd1f91e49019efb6785368b77e04` after all
+five exact merge-group workflows passed. Separate full exact-main
+[CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929)
+was dispatched on that SHA and is still running. Require its success and
+unchanged main before the no-write release claim, promoted tag,
 signed `v1.1.261` release, exact installed business/session/expiry journey,
 and fresh replacement/cutover or rollback proof. The two old installations
 can be replaced fresh without data migration. Work on this 16 GiB machine
@@ -24880,3 +24877,5 @@ Local release-input availability checkpoint (2026-10-20 UTC): The owner-side `v1
 Protected queue regeneration (2026-10-20 UTC): The first two preceding merge-group candidates passed all five required workflows and advanced protected main to `a5f9725432ba059567aa81babd715f065689cdcc`. The next preceding candidate `7350e0f438` failed its Rust Service Images job when Cargo's git fetch of the pinned MMF commit returned an SSL/network error; this was a runner fetch failure, not evidence of a missing pinned revision. GitHub removed that predecessor and regenerated #1446 as queue position 1, candidate `a2fb60a21cf7dd1f91e49019efb6785368b77e04`. Its previous candidate `8a973836a7` is stale, and its still-running CI was cancelled to avoid runner cost. All four non-CI protected workflows passed on `a2fb60a21c`; its CI currently has 20 successful jobs and the Canvas/contracts shards still running, with no failures. Require the final completed CI and actual merge before exact-main release qualification.
 
 Local acceptance-host recovery (2026-10-20 UTC): The Windows C: volume had about 4.2 GiB free and Ubuntu WSL initially failed to start promptly. Two verified disposable Cargo target caches under the OS temp directory were cleaned through `cargo clean --target-dir`, removing 10.9 GiB of rebuildable artifacts; C: then had about 13.9 GiB free. Ubuntu WSL starts, its native rootful Docker daemon responds on `/var/run/docker.sock`, and its CLI was switched from a broken `desktop-linux` named-pipe context to `default` (native Unix socket). The Windows Docker Desktop production site continued to return HTTP 200. No installed release was started, no production Docker project was changed, and 13.9 GiB host free space remains below the runbook's 20 GiB target; check actual usage again before staging the signed bundle.
+
+Protected merge and exact-main dispatch (2026-10-21 UTC): [PR #1446](https://github.com/ElevenID/marty-ui/pull/1446) merged at `a2fb60a21cf7dd1f91e49019efb6785368b77e04` after [merge-group CI 39516051065](https://github.com/ElevenID/marty-ui/actions/runs/39516051065) passed all 23 jobs and Open-source policy, Organization Quality, CodeQL Actions and CodeQL Rust also passed on the same candidate. The remote protected main exactly matched that merge commit; the `v1.1.261` tag was absent. A separate [full CI 39518833929](https://github.com/ElevenID/marty-ui/actions/runs/39518833929) was dispatched as `workflow_dispatch` on that exact SHA. The clean local release-helper main worktree was fast-forwarded to the merge commit. Do not claim the release until full CI succeeds and main remains unchanged.
