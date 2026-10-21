@@ -961,7 +961,14 @@ async function findNewExternalAssignment(adminCanvas, courseId, previousIds) {
   )) || null;
 }
 
-async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanvas, previousIds, martyOrigin) {
+function canvasOwnedToolIndex(ids, toolId) {
+  requireCondition(/^\d+$/.test(toolId), 'canvas_owned_tool_invalid', 'The installed Canvas tool requires an acknowledged numeric ID.');
+  const matches = ids.flatMap((id, index) => String(id) === toolId ? [index] : []);
+  requireCondition(matches.length === 1, 'canvas_owned_tool_ambiguous', 'The stock chooser must contain exactly one owned installed tool.');
+  return matches[0];
+}
+
+async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas, previousIds, martyOrigin) {
   await page.goto(`${adminCanvas.origin}/courses/${fixtures.course.id}/assignments/new`, {
     waitUntil: 'domcontentloaded',
     timeout: DEFAULT_TIMEOUT_MS,
@@ -971,9 +978,16 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanv
   const submissionSelect = page.locator('#assignment_submission_type').or(page.getByLabel(/submission type/i)).first();
   await submissionSelect.selectOption({ value: 'external_tool' });
   await page.getByRole('button', { name: /^find$/i }).click();
-  const chooser = page.getByRole('dialog').filter({ hasText: /external tools/i }).first();
+  const chooser = page.getByRole('dialog', { name: /^configure external tool$/i });
   await chooser.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
-  await chooser.getByText(toolName, { exact: false }).first().click();
+  const tools = chooser.locator('li.tool');
+  await waitFor(async () => (await tools.count()) > 0, DEFAULT_TIMEOUT_MS, 100, 'canvas_tool_chooser_empty');
+  // This is the stock rendered chooser model used by its own click handler.
+  // Read only IDs to distinguish installations with identical visible titles;
+  // navigation itself still uses the real chooser link and LTI launch.
+  const ids = await tools.evaluateAll(nodes => nodes.map(node =>
+    String(window.jQuery(node).data('tool')?.definition_id || '')));
+  await tools.nth(canvasOwnedToolIndex(ids, toolId)).getByRole('link').click();
   const ltiFrame = await waitFor(() => page.frames().find((frame) => {
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
@@ -988,7 +1002,7 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolName, adminCanv
   );
 }
 
-async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolName, martyOrigin) {
+async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolId, martyOrigin) {
   const before = safeList(await adminCanvas.get(`/api/v1/courses/${fixtures.course.id}/assignments?per_page=100`));
   const previousIds = new Set(before.map((item) => String(item.id)));
   // The portability claim must exercise the installed stock Canvas chooser and
@@ -997,7 +1011,7 @@ async function performInstructorDeepLinking(page, adminCanvas, fixtures, toolNam
   const assignment = await runDeepLinkingViaAssignmentUi(
     page,
     fixtures,
-    toolName,
+    toolId,
     adminCanvas,
     previousIds,
     martyOrigin,
@@ -1745,7 +1759,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     requireCondition(binding?.id, 'canvas_binding_create_failed', 'Marty did not create the typed Canvas program binding.');
 
     markActive('instructor_deep_linking');
-    const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, ltiKeyName, martyOrigin);
+    const externalAssignment = await performInstructorDeepLinking(adminPage, adminCanvas, fixtures, String(tool.id), martyOrigin);
     requireCondition(externalAssignment?.id, 'canvas_deep_link_assignment_missing', 'Canvas did not create an external-tool assignment from the standard Deep Linking response.');
     pass('instructor_deep_linking', 'An instructor Deep Linking launch created a Marty-bound Canvas assignment without Canvas customization.');
 
@@ -2058,6 +2072,7 @@ async function main() {
 }
 
 module.exports = {
+  canvasOwnedToolIndex,
   assertCanvasOauthCompletion,
   publishCanvasCourse,
   contractFailureLocation,

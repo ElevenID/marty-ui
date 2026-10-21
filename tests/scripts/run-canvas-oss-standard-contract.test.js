@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  canvasOwnedToolIndex,
   assertCanvasOauthCompletion,
   publishCanvasCourse,
   BLOCKING_READINESS_CHECK_CODES,
@@ -589,5 +590,13 @@ test('OAuth completion requires native connected outcome and owned platform bind
   ]) {
     assert.throws(() => assertCanvasOauthCompletion(new URL(value), origin, 'owned'),
       error => error.code === 'canvas_oauth_callback_not_connected' && !error.message.includes('private-value'));
+  }
+});
+
+
+test('Canvas chooser selects the acknowledged installation among identically named tools', () => {
+  assert.equal(canvasOwnedToolIndex(['1', '2', '9'], '9'), 2);
+  for (const [ids, owned] of [[['1', '2'], '9'], [['9', '9'], '9'], [['9'], 'not-an-id']]) {
+    assert.throws(() => canvasOwnedToolIndex(ids, owned), ContractFailure);
   }
 });
