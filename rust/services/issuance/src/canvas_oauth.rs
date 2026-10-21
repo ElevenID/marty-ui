@@ -39,7 +39,10 @@ const CAPABILITY_SCOPES: &[(&str, &[&str])] = &[
     ),
     (
         "native_activity_scores",
-        &["url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id"],
+        &[
+            "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id",
+            "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id",
+        ],
     ),
     (
         "course_completion",
