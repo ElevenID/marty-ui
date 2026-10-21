@@ -2,9 +2,13 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
   cleanup,
+  prepareProviderInputs,
   managedTransitEndpoint,
   externalTransitPrerequisites,
   restoredConfigurationEvidence,
@@ -168,6 +172,44 @@ test('provider-switch cleanup deletes a draft left by a failed setup', async () 
   assert.equal(result.retiredIdentities, 1);
   assert.equal(page.requests[2].requestOptions.method, 'DELETE');
   assert.equal(page.requests[2].requestPath, '/v1/credential-templates/draft-1');
+});
+
+test('provider input acknowledgement supplies the actual owned identity and service IDs before actions', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'd02-live-input-'));
+  const events = [];
+  try {
+    const client = {
+      readFixture: async (file) => {
+        events.push(['read', file]);
+        return fs.readFileSync(path.join(directory, file));
+      },
+      seal: async () => { events.push(['seal']); },
+    };
+    const input = await prepareProviderInputs(directory, 'owned-stamp', client);
+    assert.equal(input.issuerDid, 'did:web:beta.elevenidllc.com:orgs:d02-provider-switch-owned-stamp');
+    assert.equal(input.providerBId, 'd02-provider-b-owned-stamp');
+    assert.equal(input.providerCId, 'd02-provider-unpublished-owned-stamp');
+    assert.ok(input.organizationId && input.sourceTemplateId);
+    assert.deepEqual(events, [['read', 'provider-switch-fixture-input.json'], ['seal']]);
+    assert.equal(JSON.stringify(input).includes('TOKEN'), false);
+    await assert.rejects(() => prepareProviderInputs(directory, 'reused-stamp', client), /EEXIST/);
+  } finally {
+    fs.rmSync(directory, { recursive: true });
+  }
+});
+
+test('provider input acknowledgement rejects changed bytes without sealing the fixture', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'd02-live-input-'));
+  let sealed = false;
+  try {
+    await assert.rejects(() => prepareProviderInputs(directory, 'owned-stamp', {
+      readFixture: async () => Buffer.from(JSON.stringify({ schemaVersion: 1, stamp: 'different-input' })),
+      seal: async () => { sealed = true; },
+    }), /fixture differs/);
+    assert.equal(sealed, false);
+  } finally {
+    fs.rmSync(directory, { recursive: true });
+  }
 });
 
 test('provider switch preserves deployed transit transport and rejects missing or unsafe endpoints', () => {
