@@ -1,5 +1,5 @@
 //! Native API inputs only. No database, Canvas authority or signing custody.
-use crate::{badge_credential_definition, BADGE_VCT};
+use crate::{badge_application_fields, badge_credential_definition, BADGE_VCT};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -50,7 +50,10 @@ pub fn native_badge_templates(input: &NativeBadgeTemplateInput) -> Result<Value,
         "name": "Interoperable Credentials Foundations Application",
         "description": "Canvas learning evidence and explicit scoped approval before Open Badge issuance.",
         "credential_template_id": id,
-        "form_fields": [],
+        "form_fields": badge_application_fields().into_iter().map(|(name, label, kind)| json!({
+            "field_id": name, "label": label, "field_type": kind.to_ascii_uppercase(),
+            "required": true, "claim_mapping": name
+        })).collect::<Vec<_>>(),
         "evidence_requirements": [],
         "claim_collection_rules": [],
         "required_checks": [],
@@ -98,6 +101,12 @@ mod tests {
             );
         }
         assert_eq!(output["application"]["approval_strategy"], "MANUAL");
+        let fields = output["application"]["form_fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 6);
+        assert!(fields
+            .iter()
+            .all(|field| field["field_id"] == field["claim_mapping"]));
+        assert_eq!(fields[0]["field_type"], "EMAIL");
         assert_eq!(output["application"]["evidence_requirements"], json!([]));
         input.compliance_profile_id = "unbound".into();
         assert!(native_badge_templates(&input).is_err());

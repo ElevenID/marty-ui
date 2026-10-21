@@ -338,20 +338,24 @@ pub fn open_badge_evidence_requirement(cfg: &GatewaySeedConfig, scope: &Value) -
     })
 }
 
-pub fn application_template_payload(
-    cfg: &GatewaySeedConfig,
-    scope: &Value,
-    issuer: &IssuerProfileContext,
-) -> Value {
-    let badge_vct = &cfg.badge_vct;
-    let fields = [
+fn badge_application_fields() -> [(&'static str, &'static str, &'static str); 6] {
+    [
         ("email", "Email", "email"),
         ("given_name", "Given name", "text"),
         ("family_name", "Family name", "text"),
         ("course_name", "Canvas course", "text"),
         ("quiz_name", "Canvas quiz", "text"),
         ("score_percent", "Score percent", "number"),
-    ];
+    ]
+}
+
+pub fn application_template_payload(
+    cfg: &GatewaySeedConfig,
+    scope: &Value,
+    issuer: &IssuerProfileContext,
+) -> Value {
+    let badge_vct = &cfg.badge_vct;
+    let fields = badge_application_fields();
     json!({
         "id": cfg.application_template_id,
         "organization_id": cfg.organization_id,
