@@ -121,6 +121,14 @@ fn api_key_member_response(
     {
         return None;
     }
+    // A deployment-scoped key cannot gain a new organization-wide membership.
+    // Existing explicit service memberships remain bounded by their own grants.
+    if explicit.is_none()
+        && (key.scope_type != crate::ApiKeyScopeType::Organization.as_str()
+            || key.deployment_profile_id.is_some())
+    {
+        return None;
+    }
     if explicit.as_ref().is_some_and(|member| {
         !member.status.eq_ignore_ascii_case("active")
             || member.organization_id != organization_id.to_string()
@@ -629,11 +637,23 @@ mod tests {
             now
         )
         .is_none());
-        for failure in ["expired", "disabled", "revoked"] {
+        for failure in [
+            "expired",
+            "disabled",
+            "revoked",
+            "deployment_scoped",
+            "unproven_deployment_binding",
+        ] {
             let mut invalid = key.clone();
             match failure {
                 "expired" => invalid.expires_at = Some(now - chrono::Duration::seconds(1)),
                 "disabled" => invalid.enabled = false,
+                "deployment_scoped" => {
+                    invalid.scope_type = crate::ApiKeyScopeType::DeploymentProfile.as_str().into()
+                }
+                "unproven_deployment_binding" => {
+                    invalid.deployment_profile_id = Some(Uuid::new_v4())
+                }
                 _ => invalid.revoke(now),
             }
             assert!(
