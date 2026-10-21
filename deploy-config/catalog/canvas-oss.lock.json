@@ -12,8 +12,8 @@
   },
   "image": {
     "repository": "ghcr.io/elevenid/canvas-oss-portability",
-    "digest": null,
-    "digest_state": "pending_source_build",
+    "digest": "sha256:70745c55755d3b7f013837e8d3bce749bedcfaebdd332c2747841adc0abe466b",
+    "digest_state": "published",
     "publication_workflow": ".github/workflows/canvas-oss-image.yml",
     "base_image": {
       "reference": "instructure/ruby-passenger:3.4-jammy",
@@ -52,10 +52,22 @@
   "bootstrap": {
     "phase": "pre_start_only",
     "allowed_commands": [
-      ["bin/rails", "db:create"],
-      ["bin/rails", "db:migrate"],
-      ["bin/rails", "db:initial_setup"],
-      ["bin/rails", "brand_configs:generate_and_upload_all"]
+      [
+        "bin/rails",
+        "db:create"
+      ],
+      [
+        "bin/rails",
+        "db:migrate"
+      ],
+      [
+        "bin/rails",
+        "db:initial_setup"
+      ],
+      [
+        "bin/rails",
+        "brand_configs:generate_and_upload_all"
+      ]
     ],
     "forbidden_after_start": [
       "rails_runner",
@@ -72,7 +84,12 @@
     "canvas_origin": "https://canvas-test.elevenidllc.com",
     "timezone": "America/Denver",
     "overnight_window": "02:00-06:00",
-    "runner_labels": ["self-hosted", "linux", "x64", "canvas-oss-wsl2"],
+    "runner_labels": [
+      "self-hosted",
+      "linux",
+      "x64",
+      "canvas-oss-wsl2"
+    ],
     "docker_network": "marty-infra-network",
     "tunnel_owner": "existing_beta_stack",
     "contract_service": "canvas-contract",

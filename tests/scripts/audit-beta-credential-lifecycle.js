@@ -5,7 +5,8 @@ const fs = require('fs');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
-const { createHash, randomUUID } = require('node:crypto');
+const { randomUUID } = require('node:crypto');
+const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
 const { loadEnvFile, redact } = require('./verify-beta-waltid-acceptance');
@@ -68,13 +69,7 @@ function lifecycleFixture(stamp) {
 }
 
 async function prepareLiveInputs(artifactDir, stamp, client) {
-  const relative = 'lifecycle-fixture-input.json';
-  const expected = lifecycleFixture(stamp);
-  fs.writeFileSync(path.join(artifactDir, relative), JSON.stringify(expected, null, 2), { flag: 'wx' });
-  const input = JSON.parse((await client.readFixture(relative)).toString('utf8'));
-  assert.deepEqual(input, expected, 'Recorder fixture differs from lifecycle run inputs');
-  await client.seal();
-  return input;
+  return acknowledgeDemoInputs(artifactDir, 'lifecycle-fixture-input.json', lifecycleFixture(stamp), client);
 }
 
 async function finalizeLiveRun({ cleanup, closeBrowser, writeReport, complete, closeEvidence, successful }) {
@@ -98,19 +93,8 @@ async function finalizeLiveRun({ cleanup, closeBrowser, writeReport, complete, c
 }
 
 async function liveClient() {
-  assert.equal(BETA_ORIGIN, 'https://beta.elevenidllc.com', 'Canonical evidence requires the deployed beta origin');
-  assert.equal(TEST_WALLET_ORIGIN, 'http://127.0.0.1:8787', 'Canonical evidence requires the recorder test wallet');
-  assert.equal(LOCAL_BETA_PROXY, false, 'Canonical evidence cannot use a local beta proxy');
-  assert.ok(!process.env.NODE_TLS_REJECT_UNAUTHORIZED || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '1',
-    'Canonical evidence requires TLS verification');
-  assert.ok(!process.env.MARTY_UI_CANDIDATE_DIST,
-    'Local UI candidates are engineering-only; canonical lifecycle evidence requires the deployed UI');
   assert.equal(VERIFIER_DID, '', 'Canonical verifier identity must come from the issued credential');
-  const helper = process.env.DEMO_EXECUTION_EVIDENCE_HELPER;
-  assert.ok(helper && process.connected, 'Standalone lifecycle runs require recorder-owned live IPC');
-  assert.equal(createHash('sha256').update(fs.readFileSync(helper)).digest('hex'),
-    process.env.DEMO_EXECUTION_EVIDENCE_HELPER_SHA256, 'Recorder evidence helper hash mismatch');
-  return require(helper).createLiveEvidenceClient();
+  return createDemoLiveEvidence();
 }
 
 function resolveUiCandidateDist(

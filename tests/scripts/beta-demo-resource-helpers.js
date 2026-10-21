@@ -260,16 +260,21 @@ async function ensureActiveResource(page, {
   payload,
   idempotencyKey,
   validate = false,
+  requireCreated = false,
+  onCreating = () => {},
+  onCreated = () => {},
 }) {
   const matches = (await listResources(page, collectionPath, organizationId))
     .filter((resource) => resource.name === name);
   if (matches.length > 1) throw new Error(`Multiple resources named '${name}' exist`);
   let resource = matches[0] || null;
+  if (resource && requireCreated) throw new Error(`${name} already exists; this run cannot acquire its ownership`);
   let created = false;
   if (resource && resource.organization_id !== organizationId) {
     throw new Error(`${name} belongs to another organization`);
   }
   if (!resource) {
+    await onCreating();
     resource = await requireJson(page, collectionPath, {
       method: 'POST',
       headers: { 'Idempotency-Key': idempotencyKey },
@@ -281,6 +286,7 @@ async function ensureActiveResource(page, {
     throw new Error(`${name} has no stable identifier`);
   }
   if (resource.organization_id !== organizationId) throw new Error(`${name} belongs to another organization`);
+  if (created) await onCreated(resource);
   const resourceId = resource.id;
   if (String(resource.status || '').toUpperCase() === 'DRAFT') {
     if (!created) throw new Error(`${name} is an existing draft; this run does not own its activation`);

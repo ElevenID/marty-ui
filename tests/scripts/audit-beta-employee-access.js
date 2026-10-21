@@ -6,6 +6,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { chromium } = require('@playwright/test');
+const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
+const { createOwnedActiveConfiguration, retireOwnedConfiguration } = require('./demo-owned-configuration');
 const { acquireWalletSession } = require('./demo-wallet-session');
 
 const {
@@ -285,7 +287,7 @@ function requireConfigurationBinding(configuration) {
   return configuration;
 }
 
-async function ensureConfiguration(page, stamp) {
+async function ensureConfiguration(page, stamp, ownedResources) {
   const source = await requireJson(
     page,
     `/v1/credential-templates/${encodeURIComponent(SOURCE_TEMPLATE_ID)}`,
@@ -314,7 +316,7 @@ async function ensureConfiguration(page, stamp) {
   if (!revocationProfile.ok || !revocationProfile.id) {
     throw new Error(`D-04 target revocation profile unavailable: ${revocationProfile.error || 'unknown error'}`);
   }
-  const credential = await ensureActiveResource(page, {
+  const credential = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/credential-templates',
     name: RESOURCE_NAMES.credential,
@@ -326,7 +328,7 @@ async function ensureConfiguration(page, stamp) {
     ),
     idempotencyKey: 'demo-d04-employee-credential-v3',
   });
-  const application = await ensureActiveResource(page, {
+  const application = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/application-templates',
     name: RESOURCE_NAMES.application,
@@ -334,14 +336,14 @@ async function ensureConfiguration(page, stamp) {
     idempotencyKey: 'demo-d04-employee-application-v1',
     validate: true,
   });
-  const policy = await ensureActiveResource(page, {
+  const policy = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/presentation-policies',
     name: RESOURCE_NAMES.policy,
     payload: employeePolicyPayload(credential),
     idempotencyKey: 'demo-d04-employee-access-policy-v1',
   });
-  const flow = await ensureActiveResource(page, {
+  const flow = await createOwnedActiveConfiguration(page, ownedResources, {
     organizationId: ORG_ID,
     collectionPath: '/v1/flows/definitions',
     name: RESOURCE_NAMES.flow,
@@ -361,8 +363,8 @@ async function ensureConfiguration(page, stamp) {
   return requireConfigurationBinding({ credential, application, policy, flow });
 }
 
-async function createAndSubmitApplication(page, ownedResources, employeeId) {
-  const formData = {
+function employeeFormData(employeeId) {
+  return {
     employee_id: employeeId,
     given_name: process.env.TEST_APPLICANT_FIRST_NAME || 'Jamie',
     family_name: process.env.TEST_APPLICANT_LAST_NAME || 'Lee',
@@ -370,6 +372,10 @@ async function createAndSubmitApplication(page, ownedResources, employeeId) {
     access_level: 'Beta Facility',
     employment_status: 'Active',
   };
+}
+
+async function createAndSubmitApplication(page, ownedResources, employeeId, formData = employeeFormData(employeeId)) {
+  if (formData.employee_id !== employeeId) throw new Error('Employee fixture ID does not match this run');
   const created = await createOwnedApplication(page, ownedResources, {
     formData, label: 'Create employee application',
   });
@@ -411,7 +417,14 @@ async function approveAndIssue(page, ownedResources, { recording } = {}) {
 }
 
 async function cleanup(page, ownedResources) {
-  return cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup');
+  const result = await cleanupApplicationCredential(page, ownedResources, 'D-04 release qualification cleanup');
+  if (!result.ok) return result;
+  try { result.configuration = await retireOwnedConfiguration(page, ownedResources); }
+  catch (error) {
+    result.configuration = { ok: false, retired: ownedResources.configurationRetirement || [], error: redact(error.message) };
+  }
+  result.ok = result.configuration.ok === true;
+  return result;
 }
 
 async function showEmployeeStep(page, title, detail) {
@@ -421,7 +434,7 @@ async function showEmployeeStep(page, title, detail) {
   });
 }
 
-async function main() {
+async function runEmployeeDemo(evidence) {
   const adminEmail = process.env.TEST_VENDOR_EMAIL || process.env.TEST_ADMIN_EMAIL;
   const adminPassword = process.env.TEST_VENDOR_PASSWORD || process.env.TEST_ADMIN_PASSWORD;
   const applicantEmail = process.env.TEST_APPLICANT_EMAIL || process.env.TEST_APPLICANT1_EMAIL;
@@ -434,6 +447,10 @@ async function main() {
   const stamp = `${new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '').toLowerCase()}-${randomUUID()}`;
   const artifactDir = createArtifactDir(ROOT, `beta-employee-access-${stamp}`);
   const employeeId = `EMP-D04-${stamp}`;
+  const input = await acknowledgeDemoInputs(artifactDir, 'employee-run-input.json', {
+    schemaVersion: 1, runId: stamp, organizationId: ORG_ID, sourceTemplateId: SOURCE_TEMPLATE_ID,
+    verifierDid: VERIFIER_DID, formData: employeeFormData(employeeId),
+  }, evidence);
   const ownedResources = {
     organizationId: ORG_ID,
     runId: stamp,
@@ -493,7 +510,10 @@ async function main() {
       verification: 'REAL_WALLET_PRESENTATION_WITH_API_RESULT',
     };
     const walletPage = await adminContext.newPage();
+    evidence.bindPage(page);
+    evidence.bindPage(walletPage);
     const applicantPage = await applicantContext.newPage();
+    evidence.bindPage(applicantPage);
     adminVideo = page.video();
     walletVideo = walletPage.video();
     page.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
@@ -511,7 +531,7 @@ async function main() {
     await login(page, adminEmail, adminPassword);
     report.orgSelection = await selectOrg(page);
     if (!report.orgSelection.ok) throw new Error(`Cannot select organization ${ORG_ID}`);
-    const configuration = await ensureConfiguration(page, stamp);
+    const configuration = await ensureConfiguration(page, stamp, ownedResources);
     ownedResources.applicationTemplateId = configuration.application.id;
     ownedResources.credentialTemplateId = configuration.credential.id;
     report.configuration = {
@@ -539,6 +559,7 @@ async function main() {
       applicantPage,
       ownedResources,
       employeeId,
+      input.formData,
     );
     applicationId = application.created.id;
     report.application = {
@@ -689,11 +710,24 @@ async function main() {
     });
     report.releaseReady = Boolean(journeyReady && walletClosed
       && report.cleanup?.ok === true && !report.cleanupError && report.finalizationFailures.length === 0);
+    if (report.releaseReady) {
+      try { await evidence.complete(); }
+      catch (error) {
+        report.releaseReady = false;
+        report.finalizationFailures.push({ operation: 'live_evidence_completion', error: redact(error.message) });
+      }
+    }
     report.finishedAt = new Date().toISOString();
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
   }
+}
+
+async function main() {
+  const evidence = await createDemoLiveEvidence();
+  try { return await runEmployeeDemo(evidence); }
+  finally { evidence.close(); }
 }
 
 if (require.main === module) {

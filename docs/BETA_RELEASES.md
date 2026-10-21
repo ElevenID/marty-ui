@@ -98,7 +98,13 @@ For a failed cutover whose application state is unchanged,
 `recover-unchanged-local-beta.ps1` can inspect the retained quiesced backup and
 the exact prior container set. It holds the host deployment mutex, checks volume
 identities and backup hashes, compares both databases with native dumps while
-preserving SQL/data bytes, and checks the applicant store. With `-Apply` it starts
+preserving SQL/data bytes, and checks the applicant store. It also requires the
+exact Redis RDB with zero unsnapshotted changes or persistence operations,
+compares every OpenBao FSM byte through a fresh native Raft snapshot, and checks
+static custody file bytes and modes. Snapshot transport timestamps and Raft
+consensus metadata are not KMS domain state. A background KMS change can make
+this deliberately conservative comparison refuse recovery; use forward repair
+rather than excluding changed records. With `-Apply` it starts
 only those stopped prior containers, verifies their health and original local/
 tunneled API/UI bindings, then clears the pending marker. It restores no database
 and modifies no KMS state. A changed database, image, owner, volume or active job

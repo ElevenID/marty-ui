@@ -324,6 +324,11 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
             "revocation-profile",
         ),
         rule(
+            r"^/v1/presentation-policies/[^/]+/suspend$",
+            &[("POST", "presentation-policy:edit")],
+            "presentation-policy",
+        ),
+        rule(
             r"^/v1/issued-credentials/[^/]+/(?:revoke|suspend|reinstate)$",
             &[("POST", "issuance:revoke")],
             "issued-credential",
