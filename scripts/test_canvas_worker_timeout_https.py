@@ -17,6 +17,8 @@ import sys
 import tempfile
 import time
 
+from canvas_native_rest_contract import native_requests
+
 from canvas_worker_output_capture import owned_log_streams
 from canvas_worker_owned_process import OwnedProcess
 from canvas_worker_timeout_https_fixture import TimeoutHttpsFixture
@@ -270,7 +272,7 @@ def receive_marker(
 def assert_requests(fixture, reference):
     require(not fixture.failures, "Owned native timeout HTTPS handler failed")
     require(
-        fixture.requests == reference["requests"],
+        fixture.requests == native_requests(reference["requests"]),
         "Native timeout request transcript differs from the frozen reference",
     )
 
@@ -445,7 +447,7 @@ def run_case(executable, matrix, case, reference, response):
         stderr_writer, stderr = owned_log_streams(owner, owned_root)
         fixture = owner.enter_context(
             TimeoutHttpsFixture(
-                reference["requests"][0],
+                native_requests(reference["requests"])[0],
                 response,
                 delay_seconds=timing["delay_seconds"] if case["delayed"] else 0,
             )

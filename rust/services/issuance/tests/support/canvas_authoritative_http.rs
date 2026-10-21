@@ -242,8 +242,8 @@ async fn actual_rest_provider_reads_all_four_fact_types_with_typed_paths() {
     assert_eq!(
         requests.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
         [
-            "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment",
-            "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment",
+            "/api/v1/courses/42/assignments/9/submissions/7",
+            "/api/v1/courses/42/assignments/9/submissions/7",
             "/api/v1/courses/42/modules/3?student_id=7",
             "/api/v1/courses/42/users/7/progress",
         ]

@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 
+from canvas_native_rest_contract import native_requests
+
 from canvas_worker_body_timeout_https_fixture import BodyTimeoutHttpsFixture
 from canvas_worker_output_capture import owned_log_streams
 from canvas_worker_owned_process import OwnedProcess
@@ -311,7 +313,7 @@ def run_case(executable, case, observed, response):
         fixture = owner.enter_context(
             owned_fixture(
                 BodyTimeoutHttpsFixture(
-                    observed["requests"][0],
+                    native_requests(observed["requests"])[0],
                     response,
                     chunk_offsets=reference.SCHEDULE,
                     late_disconnect_from_index=4
@@ -341,7 +343,7 @@ def run_case(executable, case, observed, response):
 
         def guard():
             require(
-                not fixture.failures and fixture.requests == observed["requests"],
+                not fixture.failures and fixture.requests == native_requests(observed["requests"]),
                 "Native expiry HTTPS transcript differs",
             )
 
