@@ -1047,9 +1047,9 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     )
     assert record["gate"] == "test-rust-services/selfhost"
     assert record["owner"] == INVENTORY.SELFHOST_OWNER
-    assert len(record["selected"]) == 12
+    assert len(record["selected"]) == 17
     assert record["selected"] == record["executed"]
-    assert record["passed"] == 12 and record["failed"] == 0
+    assert record["passed"] == 17 and record["failed"] == 0
     assert record["configured_input_identities"] == {
         "image_id": "sha256:" + "a" * 64,
         "source_revision": "b" * 40,
@@ -1063,6 +1063,25 @@ def test_selfhost_inventory_real_outer_libtest_and_fail_closed(
     assert output.count("test result: ok.") == 1
     assert "nested child summary captured" in output
     assert "private-runtime-value" not in json.dumps(record)
+    for cardinality, ignored in [(12, set()), (16, set()), (18, set()), (17, {"case17"})]:
+        names = {f"case{number:02d}" for number in range(1, cardinality + 1)}
+        with monkeypatch.context() as scoped:
+            scoped.setattr(
+                INVENTORY,
+                "expected_cases",
+                lambda *_args, **_kwargs: (names, ignored),
+            )
+            assert INVENTORY.run_contract("selfhost_acceptance", command, "selfhost") != 0
+        rejected = capsys.readouterr().out
+        refusal = next(
+            json.loads(line.removeprefix(INVENTORY.PREFIX))
+            for line in rejected.splitlines()
+            if line.startswith(INVENTORY.PREFIX)
+        )
+        assert refusal["reason"] == "selfhost_selection_drift"
+        assert "selected" not in refusal
+        assert "observed_cases" not in refusal
+        assert "test result:" not in rejected
     assert INVENTORY.run_contract("selfhost_acceptance", command, "canvas") == 0
     assert '"gate":"test-rust-services/canvas"' in capsys.readouterr().out
     packager.write_bytes(b"mutated owned test packager")
