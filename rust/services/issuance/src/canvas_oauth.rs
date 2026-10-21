@@ -41,7 +41,7 @@ const CAPABILITY_SCOPES: &[(&str, &[&str])] = &[
         "native_activity_scores",
         &[
             "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id",
-            "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id",
+            "url:GET|/api/v1/courses/:course_id/assignments/:id",
         ],
     ),
     (
@@ -1749,6 +1749,20 @@ fn disconnected_response(platform_id: &str) -> CanvasOAuthConnectionResponse {
 #[cfg(test)]
 mod tests {
     use super::{normalize_capabilities, scopes_for_capabilities, CanvasOAuthError};
+
+    #[test]
+    fn stock_canvas_native_score_scope_matches_documented_assignment_show() {
+        // Canvas AssignmentsApiController#show uses :id; submission reads use
+        // :assignment_id. These are distinct exact OAuth scope identifiers.
+        // https://canvas.instructure.com/doc/api/assignments.html#method.assignments_api.show
+        assert_eq!(
+            scopes_for_capabilities(&["native_activity_scores".to_owned()]),
+            [
+                "url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id",
+                "url:GET|/api/v1/courses/:course_id/assignments/:id",
+            ]
+        );
+    }
 
     #[test]
     fn capability_aliases_deduplicate_and_derive_the_frozen_scope_order() {

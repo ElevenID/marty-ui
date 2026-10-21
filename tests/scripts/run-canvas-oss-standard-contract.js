@@ -70,7 +70,7 @@ const CANVAS_OAUTH_SCOPES = [
   'url:GET|/api/v1/courses/:course_id/assignments',
   'url:GET|/api/v1/courses/:course_id/modules',
   'url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id',
-  'url:GET|/api/v1/courses/:course_id/assignments/:assignment_id',
+  'url:GET|/api/v1/courses/:course_id/assignments/:id',
   'url:GET|/api/v1/courses/:course_id/users/:user_id/progress',
   'url:GET|/api/v1/courses/:course_id/modules/:id',
   'url:GET|/api/v1/courses/:course_id/users',
