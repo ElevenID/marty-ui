@@ -325,3 +325,41 @@ test('valid events update enrollment once and invalid signatures do not', async 
   assert.equal((await app.receiveWebhook(webhookRequest(invalid, 'sha256=bad'))).status, 401);
   assert.equal(app.safeState().webhookEvents.length, 1);
 });
+
+test('beta receiver fails one verified delivery before state change, then accepts the real retry once', async () => {
+  const app = createNorthstarApp({ ...config, transientFailureOnce: true }, {
+    fetchImpl: async (url, options) => options.method === 'POST'
+      ? new Response(JSON.stringify({ status: 'APPROVED' }), {
+        status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0', 'x-request-id': approvalRequestId },
+      })
+      : new Response(JSON.stringify({ applicants: [{ id: 'app-1', status: 'APPROVED' }] }), {
+        status: 200, headers: { 'content-type': 'application/json', 'x-mip-version': '0.5.0' },
+      }),
+  });
+  const payload = {
+    id: 'retry-event-1', type: 'application.approved', timestamp: '2026-08-30T00:00:00Z',
+    organization_id: 'org-1', correlation_id: approvalRequestId,
+    data: { application_id: 'app-1', status: 'APPROVED' },
+  };
+  assert.equal((await app.approve('runtime')).status, 200);
+  assert.equal((await app.receiveWebhook(webhookRequest(payload, 'sha256=bad'))).status, 401);
+  assert.equal(app.safeState().receiverTests.transientFailures, 0);
+  assert.deepEqual(await app.receiveWebhook(webhookRequest(payload)), {
+    status: 503, body: { status: 'unavailable', code: 'TRANSIENT_RECEIVER_UNAVAILABLE' },
+  });
+  assert.equal(app.safeState().webhookEvents.length, 0);
+  assert.equal(app.safeState().enrollmentStatus, 'Waiting for approval');
+  assert.equal(app.safeState().receiverTests.transientFailures, 1);
+  assert.equal((await app.receiveWebhook(webhookRequest(payload))).body.status, 'processed');
+  assert.equal((await app.receiveWebhook(webhookRequest(payload))).body.status, 'duplicate_ignored');
+  assert.equal(app.safeState().webhookEvents.length, 1);
+  assert.equal(app.safeState().receiverTests.transientFailures, 1);
+});
+
+test('transient receiver fault cannot be enabled outside guarded beta test controls', () => {
+  assert.throws(() => loadRunConfig({ NORTHSTAR_TRANSIENT_FAILURE_ONCE: 'true' }), /beta test controls/);
+  assert.throws(() => loadRunConfig({ NORTHSTAR_TRANSIENT_FAILURE_ONCE: 'true', ENVIRONMENT: 'production',
+    NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED: 'true' }), /beta test controls/);
+  assert.equal(loadRunConfig({ NORTHSTAR_TRANSIENT_FAILURE_ONCE: 'true', ENVIRONMENT: 'beta',
+    NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED: 'true' }).transientFailureOnce, true);
+});
