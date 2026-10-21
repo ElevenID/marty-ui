@@ -992,7 +992,14 @@ async function runDeepLinkingViaAssignmentUi(page, fixtures, toolId, adminCanvas
     try { return new URL(frame.url()).origin === martyOrigin; } catch { return false; }
   }), DEFAULT_TIMEOUT_MS, 500, 'deep_link_iframe_missing');
   await ltiFrame.getByRole('button', { name: /add marty activity to canvas/i }).click();
-  await page.waitForTimeout(1_000);
+  await page.getByRole('dialog', { name: /^link resource from external tool$/i })
+    .waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
+  await waitFor(async () => {
+    const value = await chooser.locator('#external_tool_create_url').inputValue();
+    try { return new URL(value).origin === martyOrigin; } catch { return false; }
+  }, DEFAULT_TIMEOUT_MS, 100, 'canvas_deep_link_return_missing');
+  await chooser.getByRole('button', { name: /^select$/i }).click();
+  await chooser.waitFor({ state: 'hidden', timeout: DEFAULT_TIMEOUT_MS });
   await page.getByRole('button', { name: /save\s*&\s*publish|save and publish/i }).click();
   return waitFor(
     () => findNewExternalAssignment(adminCanvas, fixtures.course.id, previousIds),
