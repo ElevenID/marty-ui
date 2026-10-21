@@ -325,7 +325,7 @@ static SPECIAL_RULES: LazyLock<Vec<RouteRule>> = LazyLock::new(|| {
         ),
         rule(
             r"^/v1/presentation-policies/[^/]+/suspend$",
-            &[("POST", "presentation-policy:suspend")],
+            &[("POST", "presentation-policy:edit")],
             "presentation-policy",
         ),
         rule(
@@ -958,7 +958,6 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
         "issuance" if action == "initiate" => scopes.contains("credentials:issue"),
         "issuance" if action == "revoke" => scopes.contains("credentials:revoke"),
         "issuance" => scopes.contains("credentials:read") || scopes.contains("credentials:issue"),
-        "presentation-policy" if action == "suspend" => scopes.contains("trust:write"),
         _ => mapped_api_key_scope(resource, action, &scopes),
     }
 }

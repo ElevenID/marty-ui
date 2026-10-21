@@ -8,10 +8,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import io
 from pathlib import Path
 import re
 import subprocess
+import tarfile
 import time
+import uuid
 from urllib.request import Request, urlopen
 
 
@@ -36,6 +39,109 @@ def normalized_dump(value: bytes) -> bytes:
             raise RuntimeError('Unrecognized native pg_dump safety nonce boundary')
         return b'\n'.join(item for i, item in enumerate(lines) if i not in (index, endings[0]))
     return value
+
+
+def archive_inventory(value: bytes) -> dict:
+    """Compare custody bytes/modes, without unstable tar timestamps or headers."""
+    inventory = {}
+    with tarfile.open(fileobj=io.BytesIO(value), mode='r:*') as archive:
+        for member in archive:
+            name = member.name.removeprefix('./').rstrip('/')
+            if name in ('', '.'):
+                continue
+            if (name.startswith('/') or '..' in name.split('/') or name in inventory
+                    or not (member.isfile() or member.isdir())):
+                raise RuntimeError('Unrecognized state archive member')
+            digest = None
+            if member.isfile():
+                with archive.extractfile(member) as stream:
+                    digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+            inventory[name] = dict(mode=member.mode, directory=member.isdir(), sha256=digest)
+    if not inventory:
+        raise RuntimeError('Empty state archive')
+    return inventory
+
+
+def archive_file(value: bytes, name: str) -> bytes:
+    with tarfile.open(fileobj=io.BytesIO(value), mode='r:*') as archive:
+        members = archive.getmembers()
+        if len(members) != 1 or members[0].name != name or not members[0].isfile():
+            raise RuntimeError('Unrecognized Docker state-file transfer')
+        return archive.extractfile(members[0]).read()
+
+
+def raft_state_digest(snapshot: bytes) -> str:
+    inventory = archive_inventory(snapshot)
+    if set(inventory) != {'meta.json', 'state.bin', 'SHA256SUMS', 'SHA256SUMS.sealed'}:
+        raise RuntimeError('Unrecognized native OpenBao snapshot')
+    if any(entry['directory'] for entry in inventory.values()):
+        raise RuntimeError('Invalid native OpenBao snapshot member')
+    # Raft term/index and sealed archive checksums can change for consensus or
+    # snapshot transport. Every persisted FSM byte, including key/token state,
+    # must match; no KMS domain records are removed or normalized.
+    return inventory['state.bin']['sha256']
+
+
+def require_redis_quiescent(value: bytes) -> None:
+    fields = {}
+    for line in value.decode('ascii').splitlines():
+        if line and not line.startswith('#'):
+            name, separator, data = line.partition(':')
+            if not separator or name in fields:
+                raise RuntimeError('Unrecognized Redis persistence observation')
+            fields[name] = data
+    for name in ['loading', 'rdb_changes_since_last_save', 'rdb_bgsave_in_progress', 'aof_rewrite_in_progress']:
+        if fields.get(name) != '0':
+            raise RuntimeError('Redis has unsnapshotted or in-flight state; unchanged recovery is forbidden')
+
+
+def verify_auxiliary_state(manifest: dict, artifacts: Path) -> dict:
+    roles = {}
+    for service in ['redis', 'openbao']:
+        records = [row for row in manifest['state_volumes'] if row['service'] == service]
+        if len(records) != 1:
+            raise RuntimeError('Ambiguous persistent state coverage: ' + service)
+        row = records[0]
+        current = inspect(row['container_id'])
+        if (not current['Id'].startswith(row['container_id']) or not current['State']['Running']
+                or current['Config']['Labels'].get('com.docker.compose.project') != 'elevenid-beta'
+                or current['Config']['Labels'].get('com.docker.compose.service') != service
+                or row['volume_name'] not in [m.get('Name') for m in current['Mounts'] if m['Type'] == 'volume']):
+            raise RuntimeError('Persistent beta service identity or volume changed')
+        roles[service] = row
+    redis = roles['redis']['container_id']
+    info_command = ('exec', redis, 'sh', '-ec',
+                    'test -n "$REDIS_PASSWORD"; export REDISCLI_AUTH="$REDIS_PASSWORD"; exec redis-cli --raw INFO persistence')
+    require_redis_quiescent(docker(*info_command))
+    current_rdb = archive_file(docker('cp', redis + ':/data/dump.rdb', '-'), 'dump.rdb')
+    expected_rdb = (artifacts / 'backup/redis-dump.rdb').read_bytes()
+    if current_rdb != expected_rdb:
+        raise RuntimeError('Redis snapshot changed; unchanged-state recovery is forbidden')
+    require_redis_quiescent(docker(*info_command))
+
+    openbao = roles['openbao']['container_id']
+    filename = 'marty-unchanged-recovery-' + uuid.uuid4().hex + '.snap'
+    temporary = '/tmp/' + filename
+    command = ('BAO_TOKEN=$(cat /bao/data/root.token) BAO_ADDR=https://127.0.0.1:8200 '
+               'BAO_CACERT=/bao/data/tls/ca.crt bao operator raft snapshot save ' + temporary)
+    try:
+        docker('exec', openbao, 'sh', '-ec', command)
+        current_snapshot = archive_file(docker('cp', openbao + ':' + temporary, '-'), filename)
+    finally:
+        docker('exec', openbao, 'rm', '-f', temporary)
+    expected_state = raft_state_digest((artifacts / 'backup/openbao-raft.snap').read_bytes())
+    if raft_state_digest(current_snapshot) != expected_state:
+        raise RuntimeError('OpenBao state changed; unchanged-state recovery is forbidden')
+    current_custody = docker('run', '--rm', '--network', 'none', '--mount',
+        'type=volume,src=' + roles['openbao']['volume_name'] + ',dst=/source,readonly',
+        '--entrypoint', 'sh', 'alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc',
+        '-ec', 'cd /source && test -d raft && tar -czf - --exclude=./raft .')
+    expected_custody = archive_inventory((artifacts / 'backup/openbao-data.tar.gz').read_bytes())
+    if archive_inventory(current_custody) != expected_custody:
+        raise RuntimeError('OpenBao static custody changed; unchanged-state recovery is forbidden')
+    return dict(redisSnapshotSha256=hashlib.sha256(current_rdb).hexdigest(),
+                redisUnsnapshottedChanges=0, openBaoStateSha256=expected_state,
+                openBaoStaticCustodyUnchanged=True)
 
 
 def check_container(record, current, *, stopped=True):
@@ -147,7 +253,9 @@ def recover(artifacts: Path, apply: bool):
     expected = next(row for row in manifest['files'] if row['name'] == 'applicant_store.json')['sha256']
     if hashlib.sha256(data).hexdigest() != expected:
         raise RuntimeError('Applicant store changed; unchanged-state recovery is forbidden')
+    auxiliary_state = verify_auxiliary_state(manifest, artifacts)
     result = {'scope': 'UNCHANGED_LOCAL_BETA_CONTAINER_RECOVERY', 'databases': comparisons,
+              'auxiliaryState': auxiliary_state,
               'applicantStoreUnchanged': True, 'priorContainerCount': len(records),
               'databaseRestored': False, 'kmsModifiedByRecovery': False, 'applied': False,
               'productionDemoQualified': False}

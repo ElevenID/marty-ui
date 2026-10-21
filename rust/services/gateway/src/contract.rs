@@ -804,7 +804,9 @@ mod tests {
 
     #[test]
     fn policy_suspension_requires_tenant_bound_write_scope() {
-        use crate::authorization::{api_key_allowed, authorize_api_key, resolve_action};
+        use crate::authorization::{
+            api_key_allowed, authorize_api_key, resolve_action, OrganizationMembership,
+        };
         let path = "/v1/presentation-policies/policy-one/suspend";
         let table = GatewayContract::load()
             .unwrap()
@@ -814,7 +816,18 @@ mod tests {
         assert_eq!(route.route.upstream_service, "presentation-policies");
         assert!(route.route.auth_required);
         let permission = resolve_action("POST", path).unwrap();
-        assert_eq!(permission.permission, "presentation-policy:suspend");
+        assert_eq!(permission.permission, "presentation-policy:edit");
+        let mut membership = OrganizationMembership {
+            user_id: "editor".into(),
+            organization_id: "org-one".into(),
+            status: "active".into(),
+            role_names: Default::default(),
+            permissions: ["presentation-policy:edit".into()].into(),
+            is_owner: false,
+        };
+        assert!(membership.allows(permission.permission));
+        membership.permissions = ["presentation-policy:view".into()].into();
+        assert!(!membership.allows(permission.permission));
         assert!(api_key_allowed(
             permission.permission,
             &["trust:write".into()]
