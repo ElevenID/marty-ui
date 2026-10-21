@@ -786,7 +786,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
             "/internal/v1/resource-owners/issuer-entities/{id}",
             &[],
         ),
-        "compliance-profiles" => ("compliance-profiles", "/v1/compliance-profiles/{id}", &[]),
+        "compliance-profiles" => (
+            "compliance-profiles",
+            "/v1/compliance-profiles/{id}",
+            &["system"],
+        ),
         "presentation-policies" => (
             "presentation-policies",
             "/v1/presentation-policies/{id}",
@@ -1198,5 +1202,20 @@ mod tests {
             .expect("approval route");
         assert_eq!(approve.permission, "application:approve");
         assert!(!api_key_allowed(approve.permission, &read_scopes));
+    }
+
+    #[test]
+    fn compliance_system_catalog_is_not_a_resource_id() {
+        assert!(resolve_resource_lookup("/v1/compliance-profiles/system/discoverable").is_none());
+        assert!(resolve_resource_lookup(
+            "/v1/compliance-profiles/10000000-0000-0000-0000-000000000003"
+        )
+        .is_some());
+        assert_eq!(
+            resolve_action("GET", "/v1/compliance-profiles/system/discoverable")
+                .unwrap()
+                .permission,
+            "compliance-profile:view"
+        );
     }
 }

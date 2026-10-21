@@ -173,6 +173,17 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let body = self.bounded_body(response).await?;
         let value: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|_| SecurityError::InvalidAuthenticationResult)?;
+        // System compliance profiles deliberately have no tenant owner. Keep
+        // normal gateway membership/scope authorization and native immutability;
+        // do not mistake this explicit catalog shape for a failed owner lookup.
+        if service == "compliance-profiles"
+            && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true)
+            && value
+                .get("organization_id")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            return Ok(None);
+        }
         let organization_id = value
             .get("organization_id")
             .and_then(serde_json::Value::as_str)
@@ -711,6 +722,15 @@ mod tests {
                 (StatusCode::OK, Json(json!({"organization_id": "org-2"})))
             }
             "/malformed" => (StatusCode::OK, Json(json!({"unexpected": true}))),
+            "/system-profile" => (StatusCode::OK, Json(json!({"is_system": true}))),
+            "/system-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": true, "organization_id": null})),
+            ),
+            "/tenant-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": false, "organization_id": null})),
+            ),
             _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "not found"}))),
         }
     }
@@ -726,6 +746,49 @@ mod tests {
                 .expect("fixture server");
         });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn system_compliance_owner_is_explicit_without_relaxing_other_owner_contracts() {
+        let url = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("compliance-profiles".into(), url.clone()),
+                ("trust-profiles".into(), url),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        for path in ["/system-profile", "/system-profile-null"] {
+            assert_eq!(
+                provider
+                    .resolve_organization(
+                        "compliance-profiles",
+                        path,
+                        &ResourceOwnerContext::default()
+                    )
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(provider
+                .resolve_organization("trust-profiles", path, &ResourceOwnerContext::default())
+                .await
+                .is_err());
+        }
+        for path in ["/tenant-profile-null", "/malformed"] {
+            assert!(provider
+                .resolve_organization(
+                    "compliance-profiles",
+                    path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]

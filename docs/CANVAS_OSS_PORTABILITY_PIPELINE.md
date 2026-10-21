@@ -73,6 +73,20 @@ portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs
 
 ## Local runner and beta prerequisites
 
+For an organization without the learning Open Badge template, the Rust
+`canvas-native-template-inputs` binary renders native credential/application
+create bodies from nonsecret JSON profile bindings on stdin. Its input fields
+are `organization_id`, `issuer_did`, `compliance_profile_id`, `trust_profile_id`,
+`revocation_profile_id` and optional `credential_template_id`. Resolve and verify
+those references through the production APIs first. The renderer shares the
+existing learning-badge definition, emits no custody configuration or Canvas
+evidence, and makes no network or database calls. Create and activate the
+credential through the native API, then render again with its returned ID to
+create the linked manual-approval application. The real program binding supplies
+the actual course/evidence requirements. Do not run the legacy database/Rails
+seeder against the stock portability instance. Template setup is not a passed
+learning or issuance scenario.
+
 For local development with the reviewed Canvas image already pulled, use
 `scripts/run-local-canvas-runtime.ps1 -ArtifactDir <new-output-directory>
 -BetaDeploymentManifest <actual-local-deployment-manifest>`. It checks the exact
