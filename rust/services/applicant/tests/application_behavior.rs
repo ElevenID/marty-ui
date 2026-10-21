@@ -28,6 +28,110 @@ impl TemplateProvider for TemplateMock {
     }
 }
 
+struct RetirableTemplate(StdMutex<ApplicationTemplate>);
+
+#[async_trait]
+impl TemplateProvider for RetirableTemplate {
+    async fn get(&self, _: &str, _: &str) -> Result<ApplicationTemplate, ProviderError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn retired_template_blocks_new_claim_cached_offer_and_reissuance_without_mutation() {
+    let templates = Arc::new(RetirableTemplate(StdMutex::new(template())));
+    let flow = Arc::new(FlowMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        templates.clone(),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        Arc::new(EventsMock::default()),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    for template_status in ["DEPRECATED", "DRAFT"] {
+        templates.0.lock().unwrap().status = template_status.into();
+        for status in [
+            LifecycleStatus::Approved,
+            LifecycleStatus::Offered,
+            LifecycleStatus::Credentialed,
+        ] {
+            {
+                let mut store = service.store().write().await;
+                let application = &mut store.applications[0];
+                application.status = status;
+                application.claim_state = ClaimState::OfferReady;
+                application.issued_at = Some(application.created_at);
+                application.system_data.insert(
+                    "credential_offer_uri".into(),
+                    json!("openid-credential-offer://existing-offer"),
+                );
+                application.system_data.insert(
+                    "offer_expires_at".into(),
+                    json!((application.created_at + chrono::Duration::hours(1)).to_rfc3339()),
+                );
+            }
+            let before = serde_json::to_value(service.store().read().await.clone()).unwrap();
+            let persisted_before = persistence.0.lock().unwrap().len();
+            assert!(matches!(
+                service.issue(&application.id, application.created_at).await,
+                Err(ServiceError::InactiveTemplate)
+            ));
+            assert!(matches!(
+                service.claim(&application.id, application.created_at).await,
+                Err(ServiceError::InactiveTemplate)
+            ));
+            assert_eq!(
+                serde_json::to_value(service.store().read().await.clone()).unwrap(),
+                before,
+                "Retirement must not rewrite status, offer, issued_at or attempt state"
+            );
+            assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
+            assert!(flow.calls.lock().await.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn retired_template_blocks_uncertain_flow_retry_without_losing_reserved_attempt() {
+    let templates = Arc::new(RetirableTemplate(StdMutex::new(template())));
+    let flow = Arc::new(FlowMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        templates.clone(),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        Arc::new(EventsMock::default()),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    service.store().write().await.applications[0].status = LifecycleStatus::Approved;
+    assert!(matches!(
+        service.issue(&application.id, application.created_at).await,
+        Err(ServiceError::Provider(ProviderError::Unavailable(_)))
+    ));
+    templates.0.lock().unwrap().status = "DEPRECATED".into();
+    let before = serde_json::to_value(service.store().read().await.clone()).unwrap();
+    let persisted_before = persistence.0.lock().unwrap().len();
+    for claim in [false, true] {
+        let result = if claim {
+            service.claim(&application.id, application.created_at).await
+        } else {
+            service.issue(&application.id, application.created_at).await
+        };
+        assert!(matches!(result, Err(ServiceError::InactiveTemplate)));
+    }
+    assert_eq!(flow.calls.lock().await.len(), 1);
+    assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
+    assert_eq!(
+        serde_json::to_value(service.store().read().await.clone()).unwrap(),
+        before
+    );
+}
+
 #[derive(Default)]
 struct FlowMock {
     calls: Mutex<Vec<(Uuid, Map<String, Value>)>>,

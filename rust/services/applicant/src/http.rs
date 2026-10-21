@@ -772,28 +772,9 @@ async fn claim(
         .self_application(&user(&headers)?, &application_id)
         .await?;
     ClaimRequest::parse(&body)?;
-    let application = sync_issuance(&state, &application).await?;
-    let has_offer = application
-        .system_data
-        .get("credential_offer_uri")
-        .and_then(Value::as_str)
-        .is_some_and(|value| !value.is_empty())
-        || application
-            .system_data
-            .get("credential_offer_uris")
-            .and_then(Value::as_object)
-            .is_some_and(|value| !value.is_empty());
-    let valid_expiry = application
-        .system_data
-        .get("offer_expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-        .is_some_and(|expiry| expiry > Utc::now());
-    if application.claim_state == crate::ClaimState::OfferReady && has_offer && valid_expiry {
-        return Ok(Json(application_json(&application)));
-    }
+    sync_issuance(&state, &application).await?;
     Ok(Json(application_json(
-        &state.service.issue(&application_id, Utc::now()).await?,
+        &state.service.claim(&application_id, Utc::now()).await?,
     )))
 }
 
