@@ -491,7 +491,9 @@ function freshCanvasLearnerEmail(base, runSuffix) {
 async function createPersonalAccessToken(page, origin, purpose, onOwned = () => {}) {
   // Canvas resets the session at login; select the stock session locale after authentication.
   // Accessible dialog/button names below are deliberately the English contract.
-  await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
+  // Stock profile scripts bind the visible token button after DOMContentLoaded.
+  // Wait for those scripts before the single UI click; never retry token creation.
+  await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'load', timeout: DEFAULT_TIMEOUT_MS });
   const add = page.locator('.add_access_token_link').first();
   await add.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await add.click();
