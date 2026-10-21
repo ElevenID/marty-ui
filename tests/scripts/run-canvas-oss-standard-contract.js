@@ -492,7 +492,7 @@ async function openDeveloperKeyModal(page, origin, accountId, kind) {
   const trigger = page.locator('#add-developer-key-button').or(page.getByRole('button', { name: /create.*developer key|developer key/i })).first();
   await trigger.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await trigger.click();
-  const menuName = kind === 'lti' ? /^LTI Key$/i : /^API Key$/i;
+  const menuName = kind === 'lti' ? /LTI Key$/i : /API Key$/i;
   await page.getByRole('menuitem', { name: menuName }).click();
   // Canvas labels the dialog "Create Developer Key"; "Key Settings" is its
   // visible heading, not the dialog's accessible name.
@@ -540,7 +540,7 @@ async function createLtiDeveloperKey(page, config) {
   const method = modal.getByLabel(/^method$/i);
   await method.click();
   await page.getByRole('option', { name: /^enter url$/i }).click();
-  await modal.getByLabel(/^json url$/i).fill(config.registrationConfigUrl);
+  await modal.getByLabel(/^json url\b/i).fill(config.registrationConfigUrl);
   const record = await saveDeveloperKey(page, modal, config.name);
   await enableDeveloperKey(page, config.name);
   return { clientId: String(record.id) };
