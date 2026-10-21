@@ -345,8 +345,11 @@ def test_runner_selects_and_revalidates_before_mutations():
     )
     assert "$script:ComposeFiles += (Join-Path $script:RepoRoot $profile)" in source
     marker = "Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot"
-    assert source.count(marker) == 2
-    first, second = source.index(marker), source.rindex(marker)
+    assert source.count(marker) >= 2
+    first = source.index(marker, source.index("$script:ComposeFiles += $releaseComposeFile"))
+    second = source.rindex(marker)
+    assert first < second
+    assert second > source.index('Write-Step "Reverify coordinated source after image builds"')
     assert source.index("$script:ComposeFiles += $releaseComposeFile") < first
     assert source.index("$env:MARTY_DOCS_IMAGE =") < first
     assert first < source.index('Invoke-Checked -FilePath docker -Arguments @("pull",')

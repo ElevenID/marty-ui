@@ -135,7 +135,8 @@ def test_beta_mutations_hold_one_lock_and_recheck_live_writers(tmp_path) -> None
     assert deploy.index('Assert-MaintenanceContainersRestored $maintenanceContainers') < deploy.index(
         'Complete-BetaMutation\n            Write-Warning')
     assert deploy.index('$liveMutationStarted = $true') < deploy.index(
-        '"openbao-init")')
+        'Invoke-ComposeLogged -Arguments @(',
+        deploy.index('Write-Step "Verify preserved beta OpenBao readiness"'))
 
 
 @pytest.mark.parametrize("outside", ["marker", "stop", "reversed"])
