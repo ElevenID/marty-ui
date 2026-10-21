@@ -499,6 +499,9 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   const date = dialog.getByLabel(/^expiration date\b/i);
   const time = dialog.getByLabel(/^expiration time\b/i);
   await date.fill(expiration.date); await date.press('Tab');
+  // DateTimeInput asynchronously initializes an empty time when its date is
+  // committed. Let that stock UI update finish before choosing a time.
+  await page.waitForTimeout(400);
   await time.fill(expiration.time);
   // InstUI commits a combobox choice asynchronously. Tab can accept its stale
   // highlighted option (midnight) before filtering the newly typed time.
