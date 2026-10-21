@@ -115,6 +115,15 @@ pub trait InternalApplicationRepository: Send + Sync {
         application_id: &str,
     ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError>;
 
+    /// Select persisted authoritative heads, not terminal-looking audit rows.
+    /// Unsupported adapters must fail closed rather than infer current state.
+    async fn list_current_evidence_facts_for_application(
+        &self,
+        _application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        Err(InternalApplicationRepositoryError::Unavailable)
+    }
+
     async fn list_events_for_application(
         &self,
         application_id: &str,
@@ -328,14 +337,41 @@ impl InternalApplicationService {
         trusted_organization: Option<&str>,
         application_id: &str,
     ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationServiceError> {
+        self.read_evidence_facts(api_key, trusted_organization, application_id, false)
+            .await
+    }
+
+    pub async fn list_current_evidence_facts(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationServiceError> {
+        self.read_evidence_facts(api_key, trusted_organization, application_id, true)
+            .await
+    }
+
+    async fn read_evidence_facts(
+        &self,
+        api_key: Option<&str>,
+        trusted_organization: Option<&str>,
+        application_id: &str,
+        current_only: bool,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationServiceError> {
         self.security.authorize(api_key)?;
         let trusted_organization = required_organization(trusted_organization)?;
         self.load_managed(application_id, trusted_organization)
             .await?;
-        self.repository
-            .list_evidence_facts_for_application(application_id)
-            .await
-            .map_err(Into::into)
+        if current_only {
+            self.repository
+                .list_current_evidence_facts_for_application(application_id)
+                .await
+        } else {
+            self.repository
+                .list_evidence_facts_for_application(application_id)
+                .await
+        }
+        .map_err(Into::into)
     }
 
     pub async fn evidence_summary(

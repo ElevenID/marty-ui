@@ -1958,7 +1958,7 @@ async function main() {
     const initialSync = await triggerLearnerSync(recordedPage, marty);
     requireCondition(Number(initialSync.job?.result?.requirements_checked) === 5 && initialSync.job?.result?.policy_allowed === true, 'authoritative_sync_incomplete', 'Marty did not verify every typed Canvas requirement.');
     const evidenceFacts = safeList(await marty.get(
-      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(firstBootstrap.application_id)}/evidence-facts`,
+      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(firstBootstrap.application_id)}/evidence-facts?current_only=true`,
     ));
     const currentHeads = validateAuthoritativeEvidenceHeads(
       evidenceFacts,
