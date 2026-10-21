@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const {
+  assertCanvasOauthCompletion,
   publishCanvasCourse,
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
@@ -573,5 +574,20 @@ test('single-course publication uses its documented event and rejects silent unc
   for (const result of [{ id: 42, workflow_state: 'unpublished' }, { id: 99, workflow_state: 'available' }]) {
     await assert.rejects(publishCanvasCourse({ putForm: async () => result }, 42),
       error => error.code === 'canvas_course_not_published');
+  }
+});
+
+
+test('OAuth completion requires native connected outcome and owned platform binding', () => {
+  const origin = 'https://issuer.test';
+  assert.doesNotThrow(() => assertCanvasOauthCompletion(new URL(origin + '/complete?outcome=connected&platform_id=owned'), origin, 'owned'));
+  for (const value of [
+    origin + '/complete?outcome=success&platform_id=owned',
+    origin + '/complete?outcome=error&platform_id=owned&error_code=private-value',
+    origin + '/complete?outcome=connected&platform_id=other',
+    'https://other.test/complete?outcome=connected&platform_id=owned',
+  ]) {
+    assert.throws(() => assertCanvasOauthCompletion(new URL(value), origin, 'owned'),
+      error => error.code === 'canvas_oauth_callback_not_connected' && !error.message.includes('private-value'));
   }
 });

@@ -631,6 +631,12 @@ async function selectCanvasOauthScopes(modal, scopes) {
   await search.fill('');
 }
 
+function assertCanvasOauthCompletion(url, martyOrigin, platformId) {
+  requireCondition(url.origin === martyOrigin && url.searchParams.get('outcome') === 'connected'
+    && url.searchParams.get('platform_id') === platformId,
+    'canvas_oauth_callback_not_connected', 'The native OAuth callback must confirm connection to the owned Canvas platform.');
+}
+
 async function createOauthDeveloperKey(page, config) {
   const modal = await openDeveloperKeyModal(page, config.canvasOrigin, config.accountId, 'api');
   await modal.getByTestId('key-name-input').fill(config.name);
@@ -1728,7 +1734,8 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     // action to the actual acceptance form and its explicit Authorize control.
     const authorize = adminPage.locator('#oauth2_accept_form').getByRole('button', { name: /^authorize$/i });
     await authorize.click();
-    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.get('outcome') === 'success', { timeout: DEFAULT_TIMEOUT_MS });
+    await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.has('outcome'), { timeout: DEFAULT_TIMEOUT_MS });
+    assertCanvasOauthCompletion(new URL(adminPage.url()), martyOrigin, platformId);
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
     requireCondition(connectedPlatform?.connection_config?.oauth_status === 'connected', 'canvas_oauth_not_connected', 'Canvas OAuth callback did not publish a connected organization-scoped connection.');
     state.oauthConnected = true;
@@ -2051,6 +2058,7 @@ async function main() {
 }
 
 module.exports = {
+  assertCanvasOauthCompletion,
   publishCanvasCourse,
   contractFailureLocation,
   canvasTokenExpiration,
