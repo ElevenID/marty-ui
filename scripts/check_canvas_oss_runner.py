@@ -17,8 +17,10 @@ from pathlib import Path
 
 if __package__:
     from .canvas_beta_topology import inspect_beta_tunnel
+    from .canvas_prebuilt_runtime import inspect_prebuilt_image, physical_runtime_capacity
 else:
     from canvas_beta_topology import inspect_beta_tunnel
+    from canvas_prebuilt_runtime import inspect_prebuilt_image, physical_runtime_capacity
 
 
 GIB = 1024**3
@@ -112,6 +114,8 @@ def check_runner_process_quiescence(runner=runner_process_inventory) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument('--prebuilt-runtime', action='store_true',
+                        help='Require the reviewed image already present; forbid Canvas source builds.')
     parser.add_argument(
         "--host-setup",
         action="store_true",
@@ -151,7 +155,11 @@ def main() -> int:
         docker_memory = int(docker("info", "--format", "{{.MemTotal}}"))
         if server_os != "linux" or docker_memory < 12 * GIB:
             raise RuntimeError("Docker Desktop Linux daemon must expose at least 12 GiB")
-        if shutil.disk_usage(Path.cwd()).free < 80 * GIB:
+        runtime_capacity = None
+        if args.prebuilt_runtime:
+            image = inspect_prebuilt_image(Path(__file__).resolve().parents[1], docker)
+            runtime_capacity = dict(image=image, backing=physical_runtime_capacity(image, Path(__file__).resolve().parent))
+        elif shutil.disk_usage(Path.cwd()).free < 80 * GIB:
             raise RuntimeError("Canvas source image/runtime requires at least 80 GiB free")
         topology = inspect_beta_tunnel(docker)
         check_passport_host_quarantine()
@@ -170,6 +178,7 @@ def main() -> int:
             "free_disk_gib": round(shutil.disk_usage(Path.cwd()).free / GIB, 1),
             **topology,
             "docker_desktop_shutdown_allowed": False,
+            "prebuilt_runtime_capacity": runtime_capacity,
         }
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

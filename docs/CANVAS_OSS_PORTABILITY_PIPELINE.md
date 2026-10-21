@@ -73,6 +73,27 @@ portability, and hosted-Canvas workflows are pinned to reviewed full commit SHAs
 
 ## Local runner and beta prerequisites
 
+For local development with the reviewed Canvas image already pulled, use
+`scripts/run-local-canvas-runtime.ps1 -ArtifactDir <new-output-directory>
+-BetaDeploymentManifest <actual-local-deployment-manifest>`. It checks the exact
+published digest, upstream/base labels, Linux/amd64 platform, beta source and
+Compose ownership, and physical free space on the Windows volume containing
+Docker Desktop's actual VHDX. Runtime reserves the larger of20GiB or twice the
+present image size; upstream source builds retain the80GiB prerequisite. The
+runtime mode cannot compile a Canvas source image or substitute an unreviewed
+image. It uses the existing Windows `desktop-linux` endpoint, so a WSL socket
+pointing at another daemon cannot silently select a different environment.
+
+Add `-Bootstrap` to run the existing approved stock lifecycle and start its
+isolated services. The wrapper holds the Docker runner and beta deployment
+locks. Canvas, databases, the contract browser and continuity monitor remain
+Compose containers. Source/image bindings, actual contract unit results, stock
+bootstrap audit, public login, beta continuity and the self-host production
+invariant are retained. Private operator keys/passwords remain under
+`~/.codex/private`. Learner/API-key inputs are deliberately empty until real
+full-contract authority is configured; unit results and bootstrap never qualify
+D07/D08. This path neither registers a GitHub runner nor claims GitHub labels.
+
 The required labels are `self-hosted`, `linux`, `x64`, and `canvas-oss-wsl2`. The overnight window is 02:00-06:00 `America/Denver`. GitHub schedules both 08:07 and 09:07 UTC and admits only the trigger that is 02:07 in Denver, so daylight-saving changes do not shift the local window. The job timeout leaves time for teardown before 06:00.
 
 The timezone gate runs first on `ubuntu-latest`, so the out-of-window UTC trigger never consumes the one-job local runner. Scheduled admission also requires repository variable `CANVAS_OSS_NIGHTLY_ENABLED=true`; it must remain absent/false until runner setup and a dry run succeed. Once provisioned, the WSL runner is ephemeral: it registers with `--ephemeral` for one job using a fresh short-lived GitHub registration token. A Windows Scheduled Task must bring it online; a workflow cannot create an offline local runner.
