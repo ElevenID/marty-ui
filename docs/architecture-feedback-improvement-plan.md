@@ -2,6 +2,19 @@
 
 Status: active requirements and queue, 2026-10-20.
 
+October 21 maintenance reconciliation: Adam Burdett's integration writer is
+resuming the existing `selfhost-log-boundary-20261004` checkout on
+`reconcile/selfhost-log-boundary-20261021`, based on published main
+`e02276e92775c330a0c52280b6eca91d34358dca`. The useful portion of local
+`ec53f05348ee70f59cde87c82780071eead599da` is a delayed-startup-log marker
+retry, ported to the maintained self-host acceptance owner. Reads and polling
+share a five-second budget, while the existing owned-command runner retains
+its separate bounded shutdown. Secret exposure, empty secrets, invalid UTF-8
+and Docker failures are not retried; late success is rejected. This changes
+no production runtime, required assertion or CI selector. Exact-candidate
+checks, independent review and protected merge remain the next action; remove
+this sole integration checkout after accepted merge and verified consumer cleanup.
+
 October 20 release-path checkpoint: exact-main full CI
 [39425370404](https://github.com/ElevenID/marty-ui/actions/runs/39425370404)
 passed at `d74f0133d2b6f0056b79a9f145842791bc1f04f8`; its Canvas job took
