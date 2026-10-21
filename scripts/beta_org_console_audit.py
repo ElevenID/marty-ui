@@ -49,6 +49,15 @@ SIGNING_CAPABILITY_SCHEMA = "marty.signing-capability/v1"
 SIGNING_PURPOSES = ("vc_jwt_issuer", "oid4vp_request_signing")
 KNOWN_SECRETS: set[str] = set()
 
+# Shared with production-component checks; no guessed DOM fixture defines these controls.
+D10_UI_CONTROLS = json.loads((ROOT / "scripts/d10_ui_controls.json").read_text(encoding="utf8"))
+
+
+def d10_control_name(key: str) -> str | re.Pattern[str]:
+    definition = D10_UI_CONTROLS[key]
+    return re.compile(definition["regex"], re.I) if "regex" in definition else definition["name"]
+
+
 
 SECRET_PATTERNS = [
     re.compile(r"mk_live_[A-Za-z0-9_-]*"),
@@ -1664,44 +1673,45 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
         raise ValueError("D10 requires a fresh active organization before service registration")
     audit.goto("/console/org/deploy/key-management/services/new")
     audit.snapshot("kms-service-wizard-opened", "Opened Register Key Management Service.")
-    if not audit.click_role("button", re.compile(r"^OpenBao Transit", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["kmsProvider"]["role"], d10_control_name("kmsProvider"), timeout=3000):
         raise ValueError("The declared OpenBao Transit provider control is unavailable")
     audit.snapshot("kms-provider-selected", "Selected the declared OpenBao Transit provider.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The OpenBao connection step is unavailable")
-    fields = [(r"^service name", f"Audit Transit Service {run_id}"),
-              (r"^service url", inputs["endpoint"]), (r"^transit mount", inputs["mount"]),
-              (r"^transit token", inputs["token"])]
+    fields = [("kmsServiceName", f"Audit Transit Service {run_id}"),
+              ("kmsUrl", inputs["endpoint"]), ("kmsMount", inputs["mount"]),
+              ("kmsToken", inputs["token"])]
     if inputs["namespace"]:
-        fields.append((r"^namespace", inputs["namespace"]))
+        fields.append(("kmsNamespace", inputs["namespace"]))
     if inputs.get("ca_cert_file"):
-        fields.append((r"^TLS CA certificate file", inputs["ca_cert_file"]))
-    if page.get_by_label(re.compile(r"^transit token", re.I)).first.get_attribute("type") != "password":
+        fields.append(("kmsCaFile", inputs["ca_cert_file"]))
+    if page.get_by_label(d10_control_name("kmsToken")).first.get_attribute("type") != "password":
         raise ValueError("The deployed transit token field must mask its value before capture")
     for label, value in fields:
-        if not audit.fill_label(re.compile(label, re.I), value):
+        if not audit.fill_label(d10_control_name(label), value):
             raise ValueError("A required OpenBao connection control is unavailable")
     # Password input masking protects the video. Playwright tracing has not yet
     # started: neither fill arguments nor request bodies containing this token
     # may be captured. Known token values are also excluded from audit logs.
     audit.snapshot("kms-connection-filled", "Entered the declared OpenBao connection; the token is hidden and this setup interval is excluded from the trace.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The declared OpenBao connection did not pass form validation")
-    key_field = page.get_by_label(re.compile(r"^transit key name(?:\s*\*)?$", re.I))
+    key_field = page.get_by_label(d10_control_name("kmsKey"))
     if key_field.count() != 1:
         raise ValueError("The real transit key selector is unavailable or ambiguous")
     key_field.fill(inputs["key_reference"], timeout=5000)
-    for purpose in [r"^VC JWT \/ SD-JWT issuer(?:\s|$)", r"^OID4VP request signing(?:\s|$)"]:
-        page.get_by_role("checkbox", name=re.compile(purpose, re.I)).check(timeout=3000)
-    page.get_by_role("switch", name="Use as the default signing service", exact=True).check(timeout=3000)
+    for purpose in ["kmsIssuerPurpose", "kmsVerifierPurpose"]:
+        page.get_by_role(D10_UI_CONTROLS[purpose]["role"], name=d10_control_name(purpose)).check(timeout=3000)
+    default = D10_UI_CONTROLS["kmsDefault"]
+    page.get_by_role(default["role"], name=d10_control_name("kmsDefault"), exact=default["exact"]).check(timeout=3000)
     audit.snapshot("kms-key-access-filled", "Selected the existing ES256 key for credential issuance and OID4VP request signing.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The declared OpenBao key access did not pass form validation")
     audit.snapshot("kms-review", "Reviewed the real OpenBao registration before submission.")
     endpoint = f"/v1/signing-keys/config?organization_id={quote(organization_id, safe='')}"
     with page.expect_response(lambda response: response.request.method == "PATCH"
                               and response.url == audit.base_url + endpoint, timeout=30000) as observed:
-        if not audit.click_role("button", re.compile(r"^register service$", re.I), timeout=5000):
+        if not audit.click_role(D10_UI_CONTROLS["kmsRegister"]["role"], d10_control_name("kmsRegister"), timeout=5000):
             raise ValueError("The real service registration control is unavailable")
     if not observed.value.ok:
         raise ValueError("The public signing service registration did not succeed")
@@ -1735,19 +1745,7 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
     audit.goto("/console/org/deploy/issuer-identity/new")
     audit.snapshot("issuer-identity-wizard-opened", "Opened issuer identity wizard.")
 
-    if text_visible(page, "No key management service", 1000) or text_visible(page, "No signing service registered", 1000):
-        audit.snapshot("issuer-identity-blocked", "Issuer identity creation is blocked because no signing service is registered.")
-        return
-
-    if text_visible(page, "No signing keys discovered", 1000):
-        audit.snapshot("issuer-identity-recommendation", "Issuer identity wizard warned that the signing service has no keys yet.")
-        if not audit.click_role("button", re.compile(r"use managed key creation|continue and create key", re.I), timeout=4000):
-            audit.click_role("button", re.compile(r"continue anyway", re.I), timeout=3000)
-        if not text_visible(page, "Choose a DID method", 1000) and text_visible(page, "No signing keys discovered", 1000):
-            audit.snapshot("issuer-identity-continue-unavailable", "Continue Anyway was unavailable after the signing-key recommendation.")
-            return
-
-    issuer_did_input = page.get_by_label(re.compile(r"^Issuer DID", re.I)).first
+    issuer_did_input = page.get_by_label(d10_control_name("issuerDid")).first
     issuer_did = issuer_did_input.input_value(timeout=3000).strip()
     if not issuer_did.startswith("did:"):
         audit.snapshot("issuer-identity-invalid-did", "Issuer identity wizard did not provide a valid DID.")
@@ -1758,8 +1756,8 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
         {"issuer_did": issuer_did},
     )
     if not audit.click_role(
-        "button",
-        re.compile(r"^create managed identity$", re.I),
+        D10_UI_CONTROLS["issuerSubmit"]["role"],
+        d10_control_name("issuerSubmit"),
         timeout=5000,
     ):
         audit.snapshot("issuer-identity-submit-blocked", "Create managed identity was unavailable.")

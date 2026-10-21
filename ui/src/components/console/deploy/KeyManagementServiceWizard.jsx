@@ -242,7 +242,6 @@ const KeyManagementServiceWizard = () => {
 
   const currentConfig = normalizeKeyManagementConfig(configData || DEFAULT_KEY_MANAGEMENT_CONFIG);
   const serviceCatalog = currentConfig.service_type_catalog;
-  const currentDefaultService = currentConfig.services.find((service) => service.id === currentConfig.default_service_id) || null;
 
   const validateStep = useCallback((stepIndex, data) => {
     const definition = getServiceTypeDefinition(serviceCatalog, data.service_type);
@@ -354,9 +353,7 @@ const KeyManagementServiceWizard = () => {
     [selectedDefinition, wizard.data]
   );
   const registeredServiceIsManagedOpenBao = registeredService?.id === MANAGED_OPENBAO_SERVICE_ID;
-  const currentDefaultIsManagedOpenBao = currentDefaultService?.id === MANAGED_OPENBAO_SERVICE_ID;
   const issuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
-  const managedIssuerIdentityCreateUrl = '/console/org/deploy/issuer-identity/new';
 
   const copyText = useCallback(async (text) => {
     try {
@@ -886,9 +883,9 @@ const KeyManagementServiceWizard = () => {
         </Box>
 
         <Alert severity="info" sx={{ mt: 2 }}>
-          Registering a service does not create a signing key. The issuer identity wizard can create keys only with the
-          Marty managed OpenBao service. For registered external KMS services, create the key in the provider first,
-          validate the key reference, then choose "Use existing key from KMS" in the issuer identity wizard.
+          Registering a service does not create a signing key. For external KMS services, create the key in the provider
+          and validate its reference first. The issuer identity form asks for the public DID and signing compatibility;
+          Marty resolves the authorized signing profile and key custody on the server.
         </Alert>
       </Paper>
     </Box>
@@ -948,8 +945,8 @@ const KeyManagementServiceWizard = () => {
 
           <Alert severity={registeredServiceIsManagedOpenBao ? 'success' : 'info'} sx={{ mt: 3 }}>
             {registeredServiceIsManagedOpenBao
-              ? 'Next, create an issuer identity and choose "Create new key in KMS". The wizard will call the signing-key create endpoint, refresh the discovered key inventory, and bind the new key to the DID identity.'
-              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity and choose "Use existing key from KMS". Console key creation is available only for the Marty managed OpenBao transit service.'}
+              ? 'Next, create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized managed signing profile and provisions its key internally.'
+              : 'Next, create or verify the signing key in the KMS provider you just registered, then create an issuer identity with its public DID and signing compatibility. Marty resolves the authorized signing profile and key custody on the server.'}
           </Alert>
 
           {!registeredServiceIsManagedOpenBao && (
@@ -975,15 +972,10 @@ const KeyManagementServiceWizard = () => {
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} justifyContent="center" sx={{ mt: 3 }}>
             <Button
               variant="contained"
-              onClick={() => navigate(registeredServiceIsManagedOpenBao ? issuerIdentityCreateUrl : '/console/org/deploy/issuer-identity/new')}
+              onClick={() => navigate(issuerIdentityCreateUrl)}
             >
               Create issuer identity
             </Button>
-            {!registeredServiceIsManagedOpenBao && currentDefaultIsManagedOpenBao && (
-              <Button variant="outlined" onClick={() => navigate(managedIssuerIdentityCreateUrl)}>
-                Use managed OpenBao key creation
-              </Button>
-            )}
             <Button variant="outlined" onClick={() => navigate('/console/org/deploy/key-management/services')}>
               View key management
             </Button>

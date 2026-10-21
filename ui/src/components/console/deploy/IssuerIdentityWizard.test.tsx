@@ -1,3 +1,4 @@
+import d10Controls from '../../../../../scripts/d10_ui_controls.json'
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderWithRouter, screen, waitFor } from '@test/utils';
 
@@ -42,6 +43,21 @@ describe('IssuerIdentityWizard', () => {
       },
     });
   });
+
+  it('D10 adapter selectors match the rendered production DID-first issuer submission', async () => {
+    const { user } = renderWithRouter(<IssuerIdentityWizard />)
+    const did = await screen.findByLabelText(d10Name('issuerDid'))
+    const issuerDid = (did as HTMLInputElement).value
+    expect(issuerDid).toMatch(/^did:/)
+    expect(screen.getByRole('combobox', { name: /Signing purpose/ })).toHaveTextContent('Credential issuance')
+    expect(screen.getByRole('combobox', { name: /Credential format/ })).toHaveTextContent('SD_JWT_VC')
+    expect(screen.getByRole('combobox', { name: /Algorithm/ })).toHaveTextContent('ES256')
+    await user.click(screen.getByRole(d10Controls.issuerSubmit.role, { name: d10Name('issuerSubmit') }))
+    await waitFor(() => expect(createIssuerIdentity).toHaveBeenCalledWith({
+      organization_id: 'org-test-1', issuer_did: issuerDid,
+      key_purpose: 'vc_jwt_issuer', credential_format: 'SD_JWT_VC', algorithm: 'ES256',
+    }))
+  })
 
   it('exposes only provider-neutral issuer identity inputs', async () => {
     renderWithRouter(<IssuerIdentityWizard />, {
@@ -131,3 +147,8 @@ describe('IssuerIdentityWizard', () => {
     expect(createIssuerIdentity).not.toHaveBeenCalled();
   });
 });
+
+const d10Name = (key: keyof typeof d10Controls) => {
+  const definition = d10Controls[key] as { regex?: string; name?: string }
+  return definition.regex ? new RegExp(definition.regex, 'i') : definition.name!
+}
