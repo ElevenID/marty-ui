@@ -1724,7 +1724,9 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     const oauthUrl = new URL(String(oauthStart?.authorization_url || ''));
     requireCondition(oauthUrl.origin === canvasOrigin, 'canvas_oauth_url_unpinned', 'Marty returned an OAuth authorization URL outside Canvas.');
     await adminPage.goto(oauthUrl.href, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
-    const authorize = adminPage.getByRole('button', { name: /^authorize$/i }).or(adminPage.locator('button[type="submit"], input[type="submit"]')).first();
+    // Stock Canvas can render Cancel as an earlier submit button. Bind the
+    // action to the actual acceptance form and its explicit Authorize control.
+    const authorize = adminPage.locator('#oauth2_accept_form').getByRole('button', { name: /^authorize$/i });
     await authorize.click();
     await adminPage.waitForURL((url) => url.origin === martyOrigin && url.searchParams.get('outcome') === 'success', { timeout: DEFAULT_TIMEOUT_MS });
     const connectedPlatform = await marty.get(`/v1/integrations/canvas/platforms/${encodeURIComponent(platformId)}`);
