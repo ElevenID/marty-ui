@@ -168,18 +168,24 @@ class OwnedPassportResources:
                 "scopes": ["credentials:issue"],
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
         code, key = self.call("flow", "POST", self.scoped("/v1/api-keys"), body)
-        require(code == 200 and key.get("organization_id") == self.organization
-                and key.get("name") == body["name"] and key.get("scopes") == body["scopes"]
-                and key.get("scope_type") == "ORGANIZATION" and key.get("enabled") is True
-                and isinstance(key.get("id"), str) and isinstance(key.get("key"), str)
-                and len(key["key"]) >= 32, "Scoped passport API key was not newly created")
+        # Retain the exact newly created authority before checking every
+        # response field, so a contract mismatch cannot orphan a live key.
+        require(code == 200 and isinstance(key, dict)
+                and key.get("organization_id") == self.organization
+                and key.get("name") == body["name"] and isinstance(key.get("id"), str)
+                and bool(key["id"]), "Scoped passport API key identity was not returned")
         self.value["api_key_id"] = key["id"]
-        self.api_key = key["key"]
         self.save()
-        batch._write_private_state(self.key_path, {"schema": "marty.passport-owned-api-key/v1",
-            "run_id": self.value["run_id"], "organization_id": self.organization,
-            "key_id": key["id"], "key": key["key"]}, initial=True)
-        return key["key"]
+        raw_key = key.get("key")
+        if isinstance(raw_key, str) and len(raw_key) >= 32:
+            self.api_key = raw_key
+            batch._write_private_state(self.key_path, {"schema": "marty.passport-owned-api-key/v1",
+                "run_id": self.value["run_id"], "organization_id": self.organization,
+                "key_id": key["id"], "key": raw_key}, initial=True)
+        require(key.get("scopes") == body["scopes"] and key.get("scope_type") == "ORGANIZATION"
+                and key.get("enabled") is True and isinstance(raw_key, str) and len(raw_key) >= 32,
+                "Scoped passport API key was not newly created")
+        return raw_key
 
     def create_issuers(self, plan):
         certificate = plan["certificate_plan"]

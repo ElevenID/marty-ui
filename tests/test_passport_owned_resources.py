@@ -123,6 +123,22 @@ def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
     assert not journal.key_path.exists()
 
 
+def test_rejected_key_response_retains_exact_authority_for_teardown(tmp_path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    org = "00000000-0000-0000-0000-000000000001"
+    journal = OwnedPassportResources(private / "owned.json", org,
+        request=lambda role, method, path, body, headers=None: (200, {
+            **body, "id": "new-key", "organization_id": org,
+            "scope_type": "WRONG", "enabled": True, "key": "k" * 40}),
+        private_signing=lambda *args: None)
+    with pytest.raises(PassportOwnershipError, match="Scoped passport API key"):
+        journal.create_key()
+    assert json.loads(journal.path.read_text())["api_key_id"] == "new-key"
+    assert "k" * 40 not in journal.path.read_text()
+    assert journal.key_path.exists()
+
+
 @pytest.mark.parametrize("failure", ["foreign-job", "duplicate-job", "pending-mutation", "changed-resource", "key-revived", "session-revived"])
 def test_cleanup_never_qualifies_incomplete_or_changed_authority(owned, failure):
     journal, calls, records, kwargs, status = owned
