@@ -102,7 +102,12 @@ def test_worker_fixture_integrity_and_process_containment_have_linux_ci_dependen
         for line in installation.splitlines()
         if "uv pip install --system pytest" in line
     )
-    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy"} <= set(command.split())
+    assert {"pytest", "pytest-xdist==3.8.0", "sqlalchemy", "playwright"} <= set(command.split())
+    browser = steps["Install Python browser transport runtime"]
+    assert browser["run"] == "python -m playwright install --with-deps --only-shell chromium"
+    assert browser["if"] == steps["Run repository release checks"]["if"]
+    assert job["steps"].index(steps["Install released test dependencies"]) < job["steps"].index(browser)
+    assert job["steps"].index(browser) < job["steps"].index(steps["Run repository release checks"])
     assert (
         steps["Run repository release checks"]["run"]
         == RELEASE_TEST_COMMAND
@@ -2108,6 +2113,8 @@ def test_canvas_inventory_inputs_select_their_actual_owners_without_full_pr_matr
         },
         "canvas-worker-timeout-current-inputs.json": {
             ".github/workflows/ci.yml",
+            "scripts/canvas_native_rest_contract.py",
+            "tests/test_canvas_native_rest_contract.py",
             "tests/test_canvas_worker_timeout_input_evidence.py",
             "tests/test_ci_workflow_performance.py",
         },

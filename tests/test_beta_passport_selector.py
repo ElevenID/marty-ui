@@ -938,18 +938,23 @@ def test_selected_bureau_has_a_packaged_rust_entrypoint():
 
 def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
     source = (ROOT / "docker/openbao-init.sh").read_text(encoding="utf-8")
-    for key, kind in (
-        ("passport-artifact-marty-aes256", "aes256-gcm96"),
-        ("passport-bureau-callback-marty-hmac", "hmac"),
+    for key, kind, target in (
+        ("passport-artifact-marty-aes256", "aes256-gcm96", "transit/keys/passport-artifact-marty-aes256"),
+        ("passport-bureau-callback-marty-hmac", "hmac", '"${callback_path}"'),
     ):
         assert f"transit/keys/{key}" in source
-        creation = source.split(f"transit/keys/{key} \\\n", 1)[1].split("2>/dev/null", 1)[0]
+        creation = re.search(
+            r"bao write[^\n]*" + re.escape(target) + r"((?:[^\n]*\\\n)*[^\n]*)", source
+        )
+        assert creation, f"Missing key creation for {key}"
+        creation = creation.group(1)
         assert f"type={kind}" in creation
         assert "exportable=false" in creation
         if kind == "hmac":
             assert "key_size=32" in creation
-        assert f"-field=type transit/keys/{key}" in source
-        assert f"-field=exportable transit/keys/{key}" in source
+            assert f'callback_path="transit/keys/{key}"' in source
+        assert f"-field=type {target}" in source
+        assert f"-field=exportable {target}" in source
 
 
 def synthetic_beta_compose_env(tmp_path):
