@@ -301,7 +301,7 @@ def test_parent_checks_actual_zero_requests_and_exact_child_selection(
         native.run_scenario(*arguments)
     else:
         message = {
-            "unexpected_https": "Actual worker HTTPS requests differ",
+            "unexpected_https": "Actual stock worker HTTPS requests differ",
             "child_exit": "Native worker replay failed",
             "reference_io": "Resource lookup failure must precede provider I/O",
         }[failure]

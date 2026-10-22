@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 
-from canvas_native_rest_contract import native_requests
+from canvas_native_rest_contract import native_requests, bind_current_capture_inputs
 
 from canvas_worker_body_timeout_https_fixture import BodyTimeoutHttpsFixture
 from canvas_worker_output_capture import owned_log_streams
@@ -130,6 +130,7 @@ def load_inputs(root):
         "Native body frozen raw corpus differs",
     )
     reports = json.loads(raw)
+    bind_current_capture_inputs(root, reports[0]["worker_body_timeout"]["capture_source_sha256"])
     responses = {}
     matrix = None
     for name, report in zip(CASE_NAMES, reports, strict=True):

@@ -5,6 +5,9 @@ import http.client
 import ssl
 import unittest
 import sys
+import hashlib
+import json
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -105,6 +108,64 @@ class TestNativeRestContract(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 guard(SimpleNamespace(failures=["failure"], requests=expected), reference)
         self.assertEqual(reference, frozen)
+
+
+class TestCurrentCaptureBinding(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / "scripts").mkdir()
+        (self.root / "contracts").mkdir()
+        self.helper = self.root / "scripts/canvas_worker_https_fixture.py"
+        self.helper.write_bytes(b"reviewed expectation helper\r\n")
+        self.actual = hashlib.sha256(b"reviewed expectation helper\n").hexdigest()
+        self.captured = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
+        self.contract = {"schema": "marty.canvas-worker-timeout-current-inputs/v1",
+                         "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+                         "sha256": {"scripts/canvas_worker_https_fixture.py": self.actual}}
+        self.contract_path = self.root / "contracts/canvas-worker-timeout-current-inputs.json"
+        self.contract_path.write_text(json.dumps(self.contract), encoding="utf8")
+
+    def bind(self, pins=None):
+        from scripts.canvas_native_rest_contract import bind_current_capture_inputs
+        return bind_current_capture_inputs(self.root, pins or {self.helper.name: self.captured})
+
+    def test_current_and_historical_hashes_are_explicitly_different(self):
+        binding = self.bind()[self.helper.name]
+        self.assertEqual(binding, {"captured_sha256": self.captured,
+                                  "current_sha256": self.actual, "reviewed_harness_delta": True})
+        self.assertNotEqual(binding["captured_sha256"], binding["current_sha256"])
+
+    def test_actual_current_helper_drift_cannot_reuse_capture(self):
+        self.helper.write_text("unreviewed edit\n", encoding="utf8")
+        with self.assertRaisesRegex(AssertionError, "Current Canvas replay input differs"):
+            self.bind()
+
+    def test_unknown_historical_pin_does_not_gain_compatibility(self):
+        with self.assertRaisesRegex(AssertionError, "Unreviewed historical"):
+            self.bind({self.helper.name: "a" * 64})
+
+    def test_other_source_cannot_gain_helper_compatibility(self):
+        (self.root / "scripts/other.py").write_text("different source\n", encoding="utf8")
+        with self.assertRaisesRegex(AssertionError, "Unreviewed historical"):
+            self.bind({"other.py": self.captured})
+
+    def test_unchanged_source_retains_exact_digest(self):
+        raw = "unchanged source\n"
+        digest = hashlib.sha256(raw.encode()).hexdigest()
+        (self.root / "scripts/other.py").write_text(raw, encoding="utf8")
+        binding = self.bind({"other.py": digest})["other.py"]
+        self.assertEqual(binding["current_sha256"], binding["captured_sha256"])
+        self.assertIs(binding["reviewed_harness_delta"], False)
+
+    def test_paths_cannot_escape_reviewed_root(self):
+        with self.assertRaises(AssertionError):
+            self.bind({"../other.py": self.captured})
+        self.contract["sha256"] = {"../other.py": self.actual}
+        self.contract_path.write_text(json.dumps(self.contract), encoding="utf8")
+        with self.assertRaises(AssertionError):
+            self.bind()
 
 
 if __name__ == "__main__":
