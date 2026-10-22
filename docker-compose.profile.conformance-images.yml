@@ -21,10 +21,10 @@ services:
     image: axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
     pull_policy: always
   openbao:
-    image: quay.io/openbao/openbao@sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?pin the released OpenBao DIDComm KMS image}
     pull_policy: always
   openbao-init:
-    image: quay.io/openbao/openbao@sha256:900bb64d0671cd1d82b693c56206f7263b582445f3a3bb6ba6e5213f524a6653
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?pin the released OpenBao DIDComm KMS image}
     pull_policy: always
   envoy:
     image: envoyproxy/envoy@sha256:5a292b91adc87aa56146fb9ee52fc85c30570d0f175d95b48cde8035a2e641dd
