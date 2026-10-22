@@ -856,7 +856,9 @@ async function verify(page, walletPage, label, {
   organizationId = ORG_ID,
   presentationPolicyId = POLICY_ID,
   issuerDid = VERIFIER_DID,
+  onPhase = () => {},
 } = {}) {
+  onPhase('session-request');
   const request = verificationSessionRequest({
     organizationId,
     presentationPolicyId,
@@ -899,7 +901,9 @@ async function verify(page, walletPage, label, {
     return { session: sanitizedSession };
   }
 
+  onPhase('wallet-presentation');
   const wallet = await present(walletPage, session.requestUri);
+  onPhase('verifier-result');
   const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
