@@ -42,7 +42,7 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       if (url.startsWith('/v1/issued-credentials?')) return state.issued ? [record] : [];
       if (url === '/v1/issued-credentials/credential') return record;
       if (url.startsWith('/v1/issuance/tx?')) return { ...scope, id: 'tx' };
-      if (url.endsWith('/evidence-facts')) {
+      if (url.endsWith('/evidence-facts?current_only=true') || url.endsWith('/evidence-facts')) {
         if ((fail === 'post-denial-stale-evidence' && state.jobs === 4)
           || (fail === 'post-recovery-stale-evidence' && state.jobs === 5)) return state.lastFacts;
         const facts = [{ id: `fact-${state.revision}`, provider: 'canvas',

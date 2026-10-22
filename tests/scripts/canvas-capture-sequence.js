@@ -126,7 +126,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     const job = requireJobBinding(observed, scope, seen, started);
     assert.equal(job.result?.policy_allowed, permitted);
     assert.equal(Number(job.result?.requirements_checked), pinnedBinding.evidence_requirements.length);
-    const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`);
+    const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts?current_only=true`);
     const heads = operations.validateAuthoritativeEvidenceHeads(facts, pinnedBinding.evidence_requirements);
     report.currentOperation = `${phase}-policy-ui`;
     await page.getByTestId(permitted ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
