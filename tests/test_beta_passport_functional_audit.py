@@ -332,6 +332,41 @@ def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_r
     assert len(observed) == 8
 
 
+@pytest.mark.parametrize("owned_marker", [True, False])
+def test_setup_failure_retires_only_exact_owned_issuer_before_sessions(owned_marker):
+    from types import SimpleNamespace
+    observed = []
+    run_id = "a" * 32
+    identity = {"issuer_did": "did:web:beta.elevenidllc.com:orgs:owned-demo-" +
+                (run_id if owned_marker else "b" * 32), "key_purpose": "csca",
+                "credential_format": "ICAO_EMRTD", "algorithm": "ES256"}
+    class Api:
+        def fetch(self, url, **options):
+            observed.append((url, options["method"]))
+            if "/issuer-identities/resolve?" in url:
+                return SimpleNamespace(status=404, body=lambda: b'{}')
+            if "/issuer-identities?" in url:
+                assert options["method"] == "DELETE" and json.loads(options["data"]) == identity
+                return SimpleNamespace(status=200, body=lambda: json.dumps({"deleted": identity}).encode())
+            if url.endswith("/auth/me"):
+                return SimpleNamespace(status=200, body=lambda: b'{"authenticated":false}')
+            assert url.endswith("/auth/logout")
+            return SimpleNamespace(status=302, body=lambda: b'')
+    ports = object.__new__(audit.ObservedPassportRequests)
+    ports.api_key = ""
+    ports.sessions = {role: "sessionId=" + role for role in ("csca", "dsc", "flow")}
+    ports.pages = {role: SimpleNamespace(context=SimpleNamespace(request=Api(), add_cookies=lambda _: None))
+                   for role in ("api", "csca", "dsc", "flow")}
+    result = ports.failure_teardown(organization="00000000-0000-0000-0000-000000000001",
+        key_id=None, old_key="", probe_path="/v1/passport/applications/uncreated/production-status",
+        owned_issuers=[{"role": "csca", "tuple": identity, "creation_returned": True}],
+        owned_run_id=run_id)
+    assert result["qualificationEligible"] is False and result["sessionsRetired"] == 3
+    assert result["issuerIdentitiesRetired"] == int(owned_marker)
+    assert result["complete"] is owned_marker
+    assert sum("/issuer-identities?" in url for url, _ in observed) == int(owned_marker)
+
+
 @pytest.mark.parametrize("proxy", [None, "", "0", "1", "true", "false", "http://localhost:8443"])
 def test_direct_beta_transport_uses_explicit_disabled_proxy_flag(monkeypatch, proxy):
     monkeypatch.setenv("BETA_ORIGIN", audit.ORIGIN)

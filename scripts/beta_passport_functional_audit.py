@@ -313,20 +313,23 @@ class ObservedPassportRequests:
             require(status == 200 and _ == {"authenticated": False}, "Old owned passport session remains accepted")
         return True
 
-    def failure_teardown(self, *, organization, key_id, old_key, probe_path):
+    def failure_teardown(self, *, organization, key_id, old_key, probe_path,
+                         owned_issuers=(), owned_run_id=None):
         """Bounded custody teardown, even when Page evidence has already failed.
 
         Actual API-context responses are inspected without fabricating Page/IPC
         observations. This path can never turn the failed scenario into a pass.
         """
         result = {"complete": False, "qualificationEligible": False, "keyDenied": key_id is None,
-                  "sessionsRetired": 0, "errors": []}
+                  "issuerIdentitiesRetired": 0, "sessionsRetired": 0, "errors": []}
 
-        def response(role, method, path, headers=None):
+        def response(role, method, path, headers=None, payload=None):
             require(path.startswith("/") and not path.startswith("//") and ".." not in path,
                     "Invalid bounded passport teardown path")
             actual = self.pages[role].context.request.fetch(ORIGIN + path, method=method,
-                headers=headers or {}, max_redirects=0, timeout=30000, fail_on_status_code=False)
+                headers=({"content-type": "application/json", **(headers or {})} if payload is not None else headers or {}),
+                data=json.dumps(payload, separators=(",", ":")) if payload is not None else None,
+                max_redirects=0, timeout=30000, fail_on_status_code=False)
             raw = actual.body()
             require(len(raw) <= 131072, "Passport teardown response exceeds bounds")
             body = json.loads(raw) if raw and method != "POST" else {}
@@ -344,6 +347,27 @@ class ObservedPassportRequests:
                 result["keyDenied"] = True
             except Exception as error:
                 result["errors"].append(type(error).__name__)
+        for owned in owned_issuers:
+            try:
+                role, identity = owned["role"], owned["tuple"]
+                require(role in ("csca", "dsc") and owned.get("creation_returned") is True
+                        and isinstance(owned_run_id, str) and re.fullmatch(r"[a-f0-9]{32}", owned_run_id)
+                        and identity == {"issuer_did": identity["issuer_did"],
+                            "key_purpose": "csca" if role == "csca" else "x509_doc_signer",
+                            "credential_format": "ICAO_EMRTD", "algorithm": "ES256"}
+                        and identity["issuer_did"].startswith("did:web:beta.elevenidllc.com:orgs:")
+                        and identity["issuer_did"].endswith("-demo-" + owned_run_id),
+                        "Cannot retire an unproven passport issuer identity")
+                route = "/v1/signing-keys/issuer-identities?organization_id=" + quote(organization, safe="")
+                code, deleted = response(role, "DELETE", route, payload=identity)
+                require(code == 200 and all(deleted.get("deleted", {}).get(k) == v for k, v in identity.items()),
+                        "Owned passport issuer deletion failed")
+                code, _ = response(role, "POST", "/v1/signing-keys/issuer-identities/resolve?organization_id="
+                                   + quote(organization, safe=""), payload=identity)
+                require(code == 404, "Retired passport issuer identity still resolves")
+                result["issuerIdentitiesRetired"] += 1
+            except Exception as error:
+                result["errors"].append(type(error).__name__)
         for role in ("csca", "dsc", "flow"):
             try:
                 code, _ = response(role, "POST", "/v1/auth/logout")
@@ -355,7 +379,8 @@ class ObservedPassportRequests:
                 result["sessionsRetired"] += 1
             except Exception as error:
                 result["errors"].append(type(error).__name__)
-        result["complete"] = result["keyDenied"] and result["sessionsRetired"] == 3
+        result["complete"] = (result["keyDenied"] and result["sessionsRetired"] == 3
+                              and result["issuerIdentitiesRetired"] == len(owned_issuers))
         return result
 
     def flow_request(self, method, path, body, session):
@@ -622,7 +647,10 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                             # dedicated sessions; unresolved resources stay journaled.
                             authority = ports.failure_teardown(
                                 organization=fixture["plan"]["application"]["organization_id"],
-                                key_id=key_id, old_key=ports.api_key, probe_path=probe_path)
+                                key_id=key_id, old_key=ports.api_key, probe_path=probe_path,
+                                owned_issuers=(owned.value["issuer_identities"] if owned
+                                    and capture._passport_failure_stage == "OWNED_SETUP" else ()),
+                                owned_run_id=owned.value["run_id"] if owned else None)
                             if owned:
                                 owned.value["authority_retirement"] = authority
                                 if authority["keyDenied"] and owned.key_path.exists():
