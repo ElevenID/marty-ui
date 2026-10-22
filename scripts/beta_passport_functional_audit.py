@@ -707,6 +707,12 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                         with cleanup_path.open("x", encoding="utf8") as output:
                             json.dump(cleanup, output, indent=2)
                             output.write("\n")
+                        if result is not None and cleanup["complete"] is True:
+                            # Detach live Page listeners while Playwright's event
+                            # loop still exists. The recorder client cannot remove
+                            # them after the sync_playwright context exits.
+                            capture._passport_failure_stage = "EVIDENCE_COMPLETION"
+                            capture.complete()
                 finally:
                     try:
                         if ports:
@@ -733,7 +739,6 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     with output.open("x", encoding="utf8") as stream:
         json.dump(result, stream, indent=2)
         stream.write("\n")
-    capture.complete()
     return result
 
 
