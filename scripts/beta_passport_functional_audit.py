@@ -8,9 +8,15 @@ and actual public HTTP responses through the existing owned Python protocol.
 from __future__ import annotations
 
 import json
+import hashlib
+import importlib.util
+import os
 import re
 import subprocess
+import sys
+from functools import partial
 from http.cookies import SimpleCookie
+from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import quote, urlsplit
 
@@ -268,3 +274,179 @@ class ObservedPassportRequests:
         status, result = self._fetch("api", "POST", "/v1/passport/webhooks/personalization",
                                      encoded, headers)
         return status, denial_projection(result)
+
+
+def bound_json(binding: dict[str, str], *, private: bool = False) -> dict[str, Any]:
+    require(isinstance(binding, dict) and set(binding) == {"path", "sha256"}
+            and re.fullmatch(r"[0-9a-f]{64}", str(binding.get("sha256", ""))),
+            "Passport input file binding is invalid")
+    path = Path(binding["path"])
+    require(path.is_absolute() and path.is_file() and not path.is_symlink(),
+            "Passport input must be an absolute regular file")
+    if private:
+        root = Path.home() / ".codex/private"
+        require(path.resolve().is_relative_to(root.resolve()),
+                "Passport custody fixture must remain in the protected private directory")
+        require(all(not parent.is_symlink() for parent in (path, *path.parents)),
+                "Passport custody fixture must not traverse symbolic links")
+        if os.name == "posix":
+            require(path.stat().st_mode & 0o077 == 0, "Passport custody fixture is not private")
+    raw = path.read_bytes()
+    require(len(raw) <= 2 * 1024 * 1024 and hashlib.sha256(raw).hexdigest() == binding["sha256"],
+            "Passport acknowledged input bytes changed")
+    result = json.loads(raw)
+    require(isinstance(result, dict), "Passport input must be a JSON object")
+    return result
+
+
+def run_bound_capture(capture) -> dict[str, Any]:
+    """Fulfil sealed source/fixture/runtime boundaries before fresh operations.
+
+    The invoking engineering wrapper owns the existing global beta operation
+    lock. Canonical D12 qualification remains disabled pending real run/cleanup
+    review; this component emits only fresh operation evidence and its limits.
+    """
+    root = Path(__file__).resolve().parents[1]
+    # Isolated Python is launched by the owned Node bridge. Import only this
+    # already Git-bound repository, never PYTHONPATH or fixture-specified code.
+    sys.path.insert(0, str(root))
+    from scripts import create_local_release_manifest as source_manifest
+    from scripts import passport_fresh_operations as fresh
+    from scripts import probe_passport_beta_chain as chain
+    from scripts import probe_passport_beta_selected_flow as flow
+    from scripts import probe_passport_beta_native_batch as batch
+    from scripts import probe_passport_beta_negative_callbacks as negative
+    from scripts.probe_passport_beta_host import production_snapshot, production_attachment_sha256
+    from scripts.canvas_oss_beta_lifecycle import assert_beta
+    from playwright.sync_api import sync_playwright
+
+    require(not os.environ.get("BETA_LOCAL_PROXY")
+            and os.environ.get("BETA_ORIGIN", ORIGIN) == ORIGIN
+            and os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED", "1") == "1",
+            "Passport fresh operations require the exact beta origin and normal TLS")
+    scenario = capture.inputs.get("scenario")
+    require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
+            and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
+                                  "privateFixture", "productWorkspace"},
+            "Passport acknowledged operation inputs are incomplete")
+    receipt = bound_json(scenario["runtimeReceipt"])
+    deployment = bound_json(scenario["deploymentManifest"])
+    manifest = bound_json(scenario["sourceManifest"])
+    stack_manifest = bound_json(scenario["stackManifest"])
+    require(Path(receipt.get("deploymentManifest", "")).resolve()
+                == Path(scenario["deploymentManifest"]["path"]).resolve()
+            and Path(receipt.get("sourceManifest", "")).resolve()
+                == Path(scenario["sourceManifest"]["path"]).resolve()
+            and receipt.get("sourceManifestSha256") == scenario["sourceManifest"]["sha256"]
+            and manifest.get("marty_ui_sha") == receipt.get("sourceId"),
+            "Passport product source and deployment manifest bindings differ")
+    require((Path(scenario["deploymentManifest"]["path"]).parent
+                / deployment.get("deployed_demo_manifest", "")).resolve()
+                == Path(scenario["stackManifest"]["path"]).resolve()
+            and deployment.get("deployed_demo_manifest_sha256") == scenario["stackManifest"]["sha256"]
+            and stack_manifest.get("deployment_release_marker") == receipt.get("release")
+            and stack_manifest.get("release_ready") is False
+            and stack_manifest.get("public_demo_ready") is False,
+            "Passport local stack manifest differs from the actual deployment")
+    workspace = Path(scenario["productWorkspace"])
+    require(workspace.is_absolute(), "Passport fixed product workspace is unavailable")
+    source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+    # On ordinary beta this fails here, before custody is read or any HTTP call:
+    # the simulator profile must have actually been deployed and independently
+    # receipt-bound, never inferred from a services image containing its binary.
+    initial_runtime = verify_runtime(receipt, deployment)
+    public = assert_beta()
+    require(public.get("source_id") == receipt["sourceId"]
+            and public.get("release_version") == receipt["release"],
+            "Public beta markers differ from the protected passport product")
+    fixture = bound_json(scenario["privateFixture"], private=True)
+    require(set(fixture) == {"schema", "plan", "custody", "privateStatePath", "privateHandoffPath"}
+            and fixture.get("schema") == "marty.passport-fresh-private/v1"
+            and isinstance(fixture.get("custody"), dict)
+            and set(fixture["custody"]) == {"cscaSession", "dscSession", "flowSession", "apiKey",
+                                           "serviceToken", "operatorToken"},
+            "Fresh passport custody fixture cannot adopt prior results")
+    custody = fixture["custody"]
+    private_root = (Path.home() / ".codex/private").resolve()
+    state = Path(fixture["privateStatePath"])
+    handoff = Path(fixture["privateHandoffPath"])
+    require(all(path.is_absolute() and path.resolve().is_relative_to(private_root)
+                and not path.is_symlink() for path in (state, handoff)),
+            "Passport recovery output must remain private")
+    batch.ensure_private_state_available(state)
+    batch.ensure_private_state_available(handoff)
+    before = production_snapshot()
+    attachments = production_attachment_sha256()
+
+    def recheck():
+        for name in ("runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest", "privateFixture"):
+            bound_json(scenario[name], private=name == "privateFixture")
+        require(verify_runtime(receipt, deployment) == initial_runtime,
+                "Protected passport runtime changed during fresh operations")
+        require(assert_beta() == public, "Public beta source changed during fresh operations")
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            ports = None
+            try:
+                ports = ObservedPassportRequests(capture, browser,
+                    csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
+                    flow_session=custody["flowSession"], api_key=custody["apiKey"])
+                result = fresh.exercise(fixture["plan"], source_commit=receipt["sourceRevision"],
+                    stack_manifest_sha256=scenario["stackManifest"]["sha256"],
+                    csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
+                    flow_session=custody["flowSession"], api_key=custody["apiKey"],
+                    service_token=custody["serviceToken"], operator_token=custody["operatorToken"],
+                    native_container_id=initial_runtime["containers"]["issuance-native"],
+                    simulator_container_id=initial_runtime["containers"]["passport-beta-bureau"],
+                    private_state_path=state, private_handoff_path=handoff, verify_runtime=recheck,
+                    chain_probe=partial(chain.exercise, request=ports.chain_request),
+                    flow_probe=partial(flow.exercise, request=ports.flow_request,
+                                       passport_request=ports.passport_request),
+                    batch_probe=partial(batch.exercise, gateway_request=ports.passport_request),
+                    negative_probe=partial(negative.exercise, request=ports.passport_request,
+                                           post=ports.negative_post))
+            finally:
+                if ports:
+                    ports.close()
+                browser.close()
+    finally:
+        require(production_snapshot() == before and production_attachment_sha256() == attachments,
+                "Production changed during the fresh passport operation window")
+        recheck()
+        source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+    result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
+                  productionInvariantPreserved=True, qualification="LOCAL_ENGINEERING_OPERATIONS_ONLY",
+                  stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
+    output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
+    require(output.parent.is_dir() and not output.is_symlink() and not output.exists(),
+            "Owned passport operation output is unavailable")
+    with output.open("x", encoding="utf8") as stream:
+        json.dump(result, stream, indent=2)
+        stream.write("\n")
+    capture.complete()
+    return result
+
+
+def main() -> int:
+    client = Path(os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT", ""))
+    require(client.is_absolute() and client.is_file() and not client.is_symlink()
+            and hashlib.sha256(client.read_bytes()).hexdigest()
+                == os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT_SHA256"),
+            "Passport functional actions require the recorder-owned Python client")
+    specification = importlib.util.spec_from_file_location("passport_recorder_client", client)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    run_bound_capture(module.PythonCapture())
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as error:
+        # Private producer response bodies, sessions and IDs never enter stdout
+        # or the recorder's public child-error artifact. Recovery files survive.
+        print("Fresh passport operation failed: " + type(error).__name__, file=sys.stderr)
+        raise SystemExit(1) from None

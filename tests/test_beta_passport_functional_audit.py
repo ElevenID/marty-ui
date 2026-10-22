@@ -1,6 +1,11 @@
 """Local prerequisite contract controls; these do not qualify a demo run."""
 from copy import deepcopy
 import json
+import hashlib
+import os
+from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -204,3 +209,42 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             ports.close()
         finally:
             browser.close()
+
+
+def test_bound_input_tampering_fails_before_any_operation(tmp_path):
+    file = tmp_path / "bound.json"
+    file.write_text('{"scope":"reviewed"}', encoding="utf8")
+    binding = {"path": str(file), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+    assert audit.bound_json(binding) == {"scope": "reviewed"}
+    file.write_text('{"scope":"changed"}', encoding="utf8")
+    with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged input bytes"):
+        audit.bound_json(binding)
+
+
+def test_custody_file_cannot_be_imported_from_public_artifacts(tmp_path):
+    file = tmp_path / "public-fixture.json"
+    file.write_text('{"schema":"not-private"}', encoding="utf8")
+    binding = {"path": str(file), "sha256": hashlib.sha256(file.read_bytes()).hexdigest()}
+    with pytest.raises(audit.PassportPrerequisiteError, match="protected private directory"):
+        audit.bound_json(binding, private=True)
+
+
+def test_actual_isolated_child_refuses_to_act_without_owned_ipc_client():
+    environment = dict(os.environ)
+    environment.pop("DEMO_PYTHON_CAPTURE_CLIENT", None)
+    environment.pop("DEMO_PYTHON_CAPTURE_CLIENT_SHA256", None)
+    result = subprocess.run([sys.executable, "-I", str(Path(audit.__file__).resolve())],
+                            capture_output=True, env=environment, timeout=15)
+    assert result.returncode == 1 and result.stdout == b""
+    assert result.stderr.decode().strip() == "Fresh passport operation failed: PassportPrerequisiteError"
+
+
+def test_caller_rejects_imported_report_instead_of_loading_or_mutating(monkeypatch):
+    class Capture:
+        inputs = {"origin": audit.ORIGIN, "scenario": {"importedReport": "prior-result.json"}}
+
+    calls = []
+    monkeypatch.setattr(audit, "bound_json", lambda *args, **kwargs: calls.append("read"))
+    with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged operation inputs"):
+        audit.run_bound_capture(Capture())
+    assert calls == []
