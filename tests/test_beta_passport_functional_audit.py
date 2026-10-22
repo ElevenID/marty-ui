@@ -324,3 +324,39 @@ def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_r
     assert result["sessionsRetired"] == 3 and result["complete"] is (not key_revived)
     assert result["keyDenied"] is (not key_revived)
     assert len(observed) == 8
+
+
+@pytest.mark.parametrize("proxy", [None, "", "0", "1", "true", "false", "http://localhost:8443"])
+def test_direct_beta_transport_uses_explicit_disabled_proxy_flag(monkeypatch, proxy):
+    monkeypatch.setenv("BETA_ORIGIN", audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "1")
+    if proxy is None:
+        monkeypatch.delenv("BETA_LOCAL_PROXY", raising=False)
+    else:
+        monkeypatch.setenv("BETA_LOCAL_PROXY", proxy)
+    if proxy in (None, "", "0"):
+        audit.require_direct_beta_transport()
+    else:
+        with pytest.raises(audit.PassportPrerequisiteError, match="exact beta origin and normal TLS"):
+            audit.require_direct_beta_transport()
+
+
+@pytest.mark.parametrize("changed", ["origin", "tls"])
+def test_disabled_proxy_does_not_bypass_exact_origin_or_tls(monkeypatch, changed):
+    monkeypatch.setenv("BETA_LOCAL_PROXY", "0")
+    monkeypatch.setenv("BETA_ORIGIN", "https://other.invalid" if changed == "origin" else audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "0" if changed == "tls" else "1")
+    with pytest.raises(audit.PassportPrerequisiteError, match="exact beta origin and normal TLS"):
+        audit.require_direct_beta_transport()
+
+
+def test_bound_capture_accepts_runner_proxy_zero_before_any_input_read(monkeypatch):
+    class Capture:
+        inputs = {"origin": audit.ORIGIN, "scenario": {"importedReport": "prior-result.json"}}
+    monkeypatch.setenv("BETA_LOCAL_PROXY", "0")
+    monkeypatch.setenv("BETA_ORIGIN", audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "1")
+    monkeypatch.setattr(audit, "bound_json", lambda *_args, **_kw: pytest.fail("No input may be read"))
+    monkeypatch.setattr(audit, "docker_json", lambda *_args: pytest.fail("No runtime call may occur"))
+    with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged operation inputs"):
+        audit.run_bound_capture(Capture())

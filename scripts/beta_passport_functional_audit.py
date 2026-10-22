@@ -64,6 +64,15 @@ def require(condition: bool, message: str) -> None:
         raise PassportPrerequisiteError(message)
 
 
+def require_direct_beta_transport() -> None:
+    # The shared Node/Python runner explicitly sets "0" for disabled proxy mode.
+    # Reject every other nonempty value; string truthiness cannot express this flag.
+    require(os.environ.get("BETA_LOCAL_PROXY", "") in ("", "0")
+            and os.environ.get("BETA_ORIGIN", ORIGIN) == ORIGIN
+            and os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED", "1") == "1",
+            "Passport fresh operations require the exact beta origin and normal TLS")
+
+
 def docker_json(*arguments: str) -> list[dict[str, Any]]:
     try:
         result = subprocess.run(["docker", *arguments], capture_output=True,
@@ -421,10 +430,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
     from scripts.canvas_oss_beta_lifecycle import assert_beta
     from playwright.sync_api import sync_playwright
 
-    require(not os.environ.get("BETA_LOCAL_PROXY")
-            and os.environ.get("BETA_ORIGIN", ORIGIN) == ORIGIN
-            and os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED", "1") == "1",
-            "Passport fresh operations require the exact beta origin and normal TLS")
+    require_direct_beta_transport()
     scenario = capture.inputs.get("scenario")
     require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
             and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
