@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import uuid
 from functools import partial
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -407,13 +408,71 @@ def bound_json(binding: dict[str, str], *, private: bool = False) -> dict[str, A
     return result
 
 
+FAILURE_STAGES = frozenset({
+    "SOURCE_IMPORTS", "DIRECT_TRANSPORT", "ACKNOWLEDGED_INPUTS", "COORDINATED_SOURCE",
+    "PROTECTED_RUNTIME", "PUBLIC_MARKERS", "PRIVATE_CUSTODY", "PRODUCTION_INVARIANTS",
+    "BROWSER_CONTEXT", "OWNED_SETUP", "FRESH_OPERATIONS", "OWNED_RETIREMENT",
+    "FINAL_INVARIANTS", "EVIDENCE_COMPLETION",
+})
+
+
+def coordinated_product_workspace(repository: Path, manifest_file: Path) -> Path:
+    """The acknowledged product input names marty-ui, not its ten-repo workspace."""
+    require(repository.is_absolute() and repository.is_dir() and repository.name == "marty-ui"
+            and (repository / ".git").exists()
+            and manifest_file.resolve().is_relative_to((repository / "tests/artifacts").resolve()),
+            "Passport fixed product repository or source manifest is unavailable")
+    return repository.parent
+
+
+def retain_private_failure(capture, error: Exception) -> None:
+    """Bounded stage/type only; never exception text, frames, IDs or custody."""
+    try:
+        binding = capture.inputs.get("scenario", {}).get("privateFixture", {})
+        fixture = Path(binding.get("path", ""))
+        private = (Path.home() / ".codex/private").resolve()
+        require(fixture.is_absolute() and fixture.is_file()
+                and fixture.resolve().is_relative_to(private)
+                and all(not parent.is_symlink() for parent in (fixture, *fixture.parents)),
+                "Diagnostic custody unavailable")
+        if os.name == "posix":
+            require(fixture.parent.stat().st_mode & 0o077 == 0, "Diagnostic directory is not private")
+        stage = getattr(capture, "_passport_failure_stage", "SOURCE_IMPORTS")
+        require(stage in FAILURE_STAGES, "Unknown diagnostic stage")
+        known = {"PassportPrerequisiteError", "RuntimeError", "ValueError", "OSError",
+                 "FileNotFoundError", "PermissionError", "AssertionError", "ImportError", "ModuleNotFoundError"}
+        error_type = type(error).__name__
+        record = {"schema": "marty.passport-private-failure/v1", "stage": stage,
+                  "errorType": error_type if error_type in known else "Exception",
+                  "qualificationEligible": False}
+        output = fixture.with_name("passport-failure-" + uuid.uuid4().hex + ".json")
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf8") as stream:
+            json.dump(record, stream, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        # Retention must never hide the original failed operation or adopt a path.
+        return
+
+
 def run_bound_capture(capture) -> dict[str, Any]:
+    try:
+        return _run_bound_capture(capture)
+    except Exception as error:
+        retain_private_failure(capture, error)
+        raise
+
+
+def _run_bound_capture(capture) -> dict[str, Any]:
     """Fulfil sealed source/fixture/runtime boundaries before fresh operations.
 
     The invoking engineering wrapper owns the existing global beta operation
     lock. Canonical functional completion requires fresh operations and owned cleanup
     review; this component emits only fresh operation evidence and its limits.
     """
+    capture._passport_failure_stage = "SOURCE_IMPORTS"
     root = Path(__file__).resolve().parents[1]
     # Isolated Python is launched by the owned Node bridge. Import only this
     # already Git-bound repository, never PYTHONPATH or fixture-specified code.
@@ -430,7 +489,9 @@ def run_bound_capture(capture) -> dict[str, Any]:
     from scripts.canvas_oss_beta_lifecycle import assert_beta
     from playwright.sync_api import sync_playwright
 
+    capture._passport_failure_stage = "DIRECT_TRANSPORT"
     require_direct_beta_transport()
+    capture._passport_failure_stage = "ACKNOWLEDGED_INPUTS"
     scenario = capture.inputs.get("scenario")
     require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
             and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
@@ -455,17 +516,21 @@ def run_bound_capture(capture) -> dict[str, Any]:
             and stack_manifest.get("release_ready") is False
             and stack_manifest.get("public_demo_ready") is False,
             "Passport local stack manifest differs from the actual deployment")
-    workspace = Path(scenario["productWorkspace"])
-    require(workspace.is_absolute(), "Passport fixed product workspace is unavailable")
+    capture._passport_failure_stage = "COORDINATED_SOURCE"
+    workspace = coordinated_product_workspace(Path(scenario["productWorkspace"]),
+        Path(scenario["sourceManifest"]["path"]))
     source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     # On ordinary beta this fails here, before custody is read or any HTTP call:
     # the simulator profile must have actually been deployed and independently
     # receipt-bound, never inferred from a services image containing its binary.
+    capture._passport_failure_stage = "PROTECTED_RUNTIME"
     initial_runtime = verify_runtime(receipt, deployment)
+    capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
     require(public.get("source_id") == receipt["sourceId"]
             and public.get("release_version") == receipt["release"],
             "Public beta markers differ from the protected passport product")
+    capture._passport_failure_stage = "PRIVATE_CUSTODY"
     fixture = bound_json(scenario["privateFixture"], private=True)
     require(os.environ.get("RECORD_VIDEO") == "0", "Fresh passport adapter currently requires a recording-free functional run")
     require(set(fixture) == {"schema", "plan", "resourcePlan", "custody", "privateStatePath", "privateHandoffPath"}
@@ -487,6 +552,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
     batch.ensure_private_state_available(ownership_path)
     require(len({session_id(custody["cscaSession"]), session_id(custody["dscSession"]), session_id(custody["flowSession"])}) == 3,
             "Canonical passport operations require three distinct dedicated sessions")
+    capture._passport_failure_stage = "PRODUCTION_INVARIANTS"
     before = production_snapshot()
     attachments = production_attachment_sha256()
 
@@ -498,6 +564,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 
     try:
+        capture._passport_failure_stage = "BROWSER_CONTEXT"
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             ports = None
@@ -507,6 +574,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                 ports = ObservedPassportRequests(capture, browser,
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
                     flow_session=custody["flowSession"], api_key="")
+                capture._passport_failure_stage = "OWNED_SETUP"
                 owned = OwnedPassportResources(ownership_path, fixture["plan"]["application"]["organization_id"],
                     request=ports.resource_request,
                     private_signing=partial(private_signing_request, initial_runtime["containers"]["signing-keys"]))
@@ -514,6 +582,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                 owned.create_issuers(owned_plan)
                 api_key = owned.create_key()
                 ports.api_key = api_key
+                capture._passport_failure_stage = "FRESH_OPERATIONS"
                 result = fresh.exercise(owned_plan, source_commit=receipt["sourceRevision"],
                     stack_manifest_sha256=scenario["stackManifest"]["sha256"],
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
@@ -533,6 +602,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                                            post=ports.negative_post))
                 selected = json.loads(handoff.read_text(encoding="utf8"))
                 key_probe = "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/production-status"
+                capture._passport_failure_stage = "OWNED_RETIREMENT"
                 result["cleanup"] = owned.retire(selected=selected,
                     certificate_id=owned_plan["certificate_plan"]["csca"]["certificate_id"],
                     check_key_denied=lambda: ports.passport_request("GET", key_probe, None, api_key)[0] == 401,
@@ -576,6 +646,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                 "Production changed during the fresh passport operation window")
         recheck()
         source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+    capture._passport_failure_stage = "EVIDENCE_COMPLETION"
     result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
                   productionInvariantPreserved=True, qualification="CURRENT_SOURCE_FUNCTIONAL_OPERATIONS",
                   ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),

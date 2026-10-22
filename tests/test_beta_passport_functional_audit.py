@@ -360,3 +360,51 @@ def test_bound_capture_accepts_runner_proxy_zero_before_any_input_read(monkeypat
     monkeypatch.setattr(audit, "docker_json", lambda *_args: pytest.fail("No runtime call may occur"))
     with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged operation inputs"):
         audit.run_bound_capture(Capture())
+
+
+@pytest.mark.parametrize("changed", [None, "repository", "manifest"])
+def test_product_repository_binds_parent_coordinated_workspace(tmp_path, changed):
+    repository = tmp_path / "workspace" / "marty-ui"
+    artifacts = repository / "tests/artifacts/current"
+    artifacts.mkdir(parents=True)
+    (repository / ".git").write_text("gitdir: retained-fixed-source")
+    manifest = artifacts / "source-manifest.json"
+    manifest.write_text("{}")
+    if changed == "repository":
+        repository = repository.parent
+    elif changed == "manifest":
+        manifest = tmp_path / "foreign.json"
+    if changed:
+        with pytest.raises(audit.PassportPrerequisiteError, match="fixed product repository"):
+            audit.coordinated_product_workspace(repository, manifest)
+    else:
+        assert audit.coordinated_product_workspace(repository, manifest) == repository.parent
+
+
+def test_private_stage_diagnostic_never_retains_exception_or_custody(tmp_path, monkeypatch):
+    private = tmp_path / ".codex/private/owned-run"
+    private.mkdir(parents=True, mode=0o700)
+    fixture = private / "fixture.json"
+    fixture.write_text('{"token":"DO-NOT-RETAIN-CUSTODY"}')
+    monkeypatch.setattr(audit.Path, "home", lambda: tmp_path)
+    class Capture:
+        inputs = {"scenario": {"privateFixture": {"path": str(fixture)}}}
+        _passport_failure_stage = "COORDINATED_SOURCE"
+    audit.retain_private_failure(Capture(), RuntimeError("DO-NOT-RETAIN-EXCEPTION"))
+    outputs = list(private.glob("passport-failure-*.json"))
+    assert len(outputs) == 1
+    raw = outputs[0].read_text()
+    assert json.loads(raw) == {"schema": "marty.passport-private-failure/v1",
+        "stage": "COORDINATED_SOURCE", "errorType": "RuntimeError", "qualificationEligible": False}
+    assert "DO-NOT-RETAIN" not in raw
+
+
+def test_private_stage_diagnostic_refuses_foreign_fixture(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text("{}")
+    monkeypatch.setattr(audit.Path, "home", lambda: tmp_path)
+    class Capture:
+        inputs = {"scenario": {"privateFixture": {"path": str(fixture)}}}
+        _passport_failure_stage = "COORDINATED_SOURCE"
+    audit.retain_private_failure(Capture(), RuntimeError("unlogged"))
+    assert list(tmp_path.glob("passport-failure-*.json")) == []
