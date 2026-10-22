@@ -444,26 +444,34 @@ def test_explicit_owner_pairs_files_and_models(local, authcrypt):
     )
 
 
-def test_native_ca_mount_requires_unnormalized_no_create_declaration():
-    declared = model()
-    normalized = deepcopy(declared)
-    mount = next(item for item in normalized["services"]["issuance-native"]["volumes"]
-                 if item.get("target") == native.CA_TARGET)
+def test_native_ca_mount_accepts_compose_2382_omitted_false():
+    normalized = model()
+    mount = next(
+        item for item in normalized["services"]["issuance-native"]["volumes"]
+        if item.get("target") == native.CA_TARGET
+    )
     mount["bind"].pop("create_host_path")
-    native.validate_model(normalized, project=PROJECT, authcrypt=False,
-                          local_build=False, source_model=declared)
+    native.validate_model(
+        normalized, project=PROJECT, authcrypt=False, local_build=False
+    )
 
-    unsafe = deepcopy(declared)
-    source_mount = next(item for item in unsafe["services"]["issuance-native"]["volumes"]
-                        if item.get("target") == native.CA_TARGET)
-    source_mount["bind"]["create_host_path"] = True
-    with pytest.raises(ValueError, match="may create a host path"):
-        native.validate_model(normalized, project=PROJECT, authcrypt=False,
-                              local_build=False, source_model=unsafe)
     mount["bind"]["create_host_path"] = True
     with pytest.raises(ValueError, match="may create a host path"):
-        native.validate_model(normalized, project=PROJECT, authcrypt=False,
-                              local_build=False, source_model=declared)
+        native.validate_model(
+            normalized, project=PROJECT, authcrypt=False, local_build=False
+        )
+
+
+def test_native_ca_source_keeps_explicit_no_create_declaration():
+    import yaml
+
+    source = yaml.safe_load((stack.ROOT / stack.NATIVE_CA_FILE).read_text())
+    mounts = source["services"]["issuance-native"]["volumes"]
+    assert len(mounts) == 1
+    assert mounts[0]["type"] == "bind"
+    assert mounts[0]["target"] == native.CA_TARGET
+    assert mounts[0]["read_only"] is True
+    assert mounts[0]["bind"] == {"create_host_path": False}
 
 
 @pytest.mark.parametrize("owner", ["", "rust", "native-legacy", None])
