@@ -148,7 +148,10 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       state.issued = true;
       return { ok: true, receipt: { id: 'wallet-record', vct: setup.templates.credential.vct } };
     },
-    async verify() { return { session: { ok: true }, wallet: { ok: true }, result: {
+    async verify() { if (fail === 'wallet-presentation-rejected') return {
+      session: { ok: true, status: 200, requestUri: '[present]' },
+      wallet: { ok: false, status: 400 }, result: null };
+    return { session: { ok: true }, wallet: { ok: true }, result: {
       httpStatus: 200, status: fail === 'verification-missing-status' ? undefined
         : fail === 'verification-pending' ? 'PENDING' : 'COMPLETED',
       evaluation: fail === 'verification-missing-evaluation' ? undefined : fail === 'verification-denied' ? 'failed' : 'passed',
@@ -189,6 +192,14 @@ test('recovery requires a new permitting job after transient course recalculatio
   assert.equal(h.report.recoveryRetries[0].policyAllowed, false);
   assert.equal(h.report.preIssuanceCorrection.recovered.policyAllowed, true);
   assert.equal(h.report.preIssuanceCorrection.recovered.jobId, 'job-4');
+});
+
+test('rejected wallet presentation cannot qualify verification', async () => {
+  const h = harness({ scenario: 'canvas-learning-achievement', fail: 'wallet-presentation-rejected' });
+  await assert.rejects(h.run(), /completed wallet presentation/);
+  assert.equal(h.report.verificationAttempt.walletStatus, 400);
+  assert.equal(h.report.verification, undefined);
+  assert.deepEqual(h.report.behaviorAssertions, {});
 });
 
 for (const fail of ['foreign-claim-application', 'foreign-claim-organization', 'foreign-claim-transaction', 'claim-http-failed']) {

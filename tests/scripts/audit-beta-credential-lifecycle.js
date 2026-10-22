@@ -857,6 +857,7 @@ async function verify(page, walletPage, label, {
   presentationPolicyId = POLICY_ID,
   issuerDid = VERIFIER_DID,
   onPhase = () => {},
+  returnOnWalletFailure = false,
 } = {}) {
   onPhase('session-request');
   const request = verificationSessionRequest({
@@ -903,6 +904,13 @@ async function verify(page, walletPage, label, {
 
   onPhase('wallet-presentation');
   const wallet = await present(walletPage, session.requestUri);
+  onPhase('wallet-presentation-result', { instanceId: session.instanceId,
+    walletOk: wallet.ok === true, walletStatus: wallet.status,
+    submitted: wallet.submission?.submitted === true,
+    verifierHttpStatus: wallet.submission?.verifier_http_status || null,
+    verifierErrorCode: /^[a-z][a-z0-9_]{0,79}$/.test(wallet.submission?.verifier_error || '')
+      ? wallet.submission.verifier_error : null });
+  if (returnOnWalletFailure && !wallet.ok) return { session: sanitizedSession, wallet, result: null };
   onPhase('verifier-result', { instanceId: session.instanceId,
     walletOk: wallet.ok === true, walletStatus: wallet.status });
   const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
@@ -919,7 +927,7 @@ async function verify(page, walletPage, label, {
     onPhase('verifier-result-poll', { instanceId: session.instanceId,
       httpStatus: observed.httpStatus,
       flowStatus: ['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
-        .includes(observed.status.toUpperCase()) ? observed.status.toUpperCase() : 'OTHER' });
+        .includes(String(observed.status || '').toUpperCase()) ? String(observed.status).toUpperCase() : 'OTHER' });
     return observed.terminal ? observed : null;
   }));
   const result = rawResult
