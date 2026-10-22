@@ -34,3 +34,7 @@ path = "tests/selfhost_public_image_contract.rs"
 
 [lints.rust]
 unsafe_code = "forbid"
+
+[[test]]
+name = "native_kms_schema_contract"
+path = "tests/native_kms_schema_contract.rs"
