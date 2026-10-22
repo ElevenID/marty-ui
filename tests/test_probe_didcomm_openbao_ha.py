@@ -172,3 +172,43 @@ def test_revocation_response_diagnostics_are_opt_in(monkeypatch: pytest.MonkeyPa
                          revocation_error_diagnostics=True) == (
         500, {"error_classes": ["REVOCATION_FAILED"]},
     )
+
+
+def test_active_node_waits_for_leadership_and_healthy_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    replies = iter([(200, {"is_self": False}), (503, {"is_self": True}),
+                    (200, {"is_self": True}), (503, {}),
+                    (200, {"is_self": True}), (200, {})])
+    calls = []
+    ca = Path("owned-ca.crt")
+
+    def request(base, method, path, **kwargs):
+        assert base == "https://127.0.0.1:12345" and method == "GET"
+        assert kwargs == {"ca_file": ca}
+        calls.append(path)
+        return next(replies)
+
+    def wait(operation, check, seconds):
+        assert operation == "replacement leader" and seconds == 17
+        assert [check(), check(), check(), check()] == [False, False, False, True]
+
+    monkeypatch.setattr(probe, "request", request)
+    monkeypatch.setattr(probe, "wait_for", wait)
+    probe.wait_for_active_node("https://127.0.0.1:12345", ca_file=ca,
+                               operation="replacement leader", seconds=17)
+    assert calls == ["sys/leader", "sys/leader", "sys/leader", "sys/health",
+                     "sys/leader", "sys/health"]
+
+
+def test_missing_leadership_is_fatal_without_attempting_a_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    def request(_base, method, path, **_kwargs):
+        assert method == "GET" and path == "sys/leader"
+        return 200, {"is_self": False}
+
+    def wait(_operation, check, seconds):
+        assert not check() and seconds == 30
+        raise RuntimeError("no active leader")
+
+    monkeypatch.setattr(probe, "request", request)
+    monkeypatch.setattr(probe, "wait_for", wait)
+    with pytest.raises(RuntimeError, match="no active leader"):
+        probe.wait_for_active_node("https://127.0.0.1:12345")

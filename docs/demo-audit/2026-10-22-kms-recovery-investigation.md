@@ -29,7 +29,21 @@ and cleanup ownership; Ruff passes. No beta or real self-host custody state was
 used. The successful local recovery is not official conformance, current-image
 qualification, or a passing D07/D08 demo.
 
-Next, retain the first restore process's classified failure diagnostics and
-determine the actual persisted-state failure before claiming a reliable repair.
+A follow-up run retained the original replacement process's logs before removal:
+OpenBao acknowledged the force-restore request, then its asynchronous restore
+failed with `node is not the leader`. The following seal was a failure state,
+not evidence that the source snapshot had been applied. Submitting the source
+key to that still-fresh custody state consequently failed. Process reload alone
+cannot fix a restore that never completed.
+
+One shared read-only readiness helper now requires both `sys/leader.is_self`
+and healthy HTTP 200 before mutations. The self-host probe waits after cold-copy
+unseal, before force restore, and after both restored-node unseals. The HA and
+coordinated restore probes reuse that helper instead of separate predicates.
+No failed mutation is retried, and existing original-key/ciphertext/plugin-key
+recovery assertions remain required. Sixteen focused checks and Ruff pass. A
+fresh actual cached-image execution with the readiness change passed;
+reliable current-source-image recovery and root-revocation500 disposition remain
+unproved until their corresponding executions establish them.
 The official release prerequisite remains exact-main qualification followed by
 the real seven-lane candidate run. Source and fixture checks cannot replace it.

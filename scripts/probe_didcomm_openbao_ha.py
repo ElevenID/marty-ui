@@ -160,6 +160,18 @@ def wait_for(operation: str, check, seconds: float = 30) -> object:
     raise RuntimeError(f"Disposable HA probe timed out: {operation}")
 
 
+def wait_for_active_node(base: str, *, ca_file: Path | None = None,
+                         operation: str = "active Raft leader", seconds: float = 30) -> None:
+    """Unseal completion is not write readiness; only poll public read endpoints."""
+    def active() -> bool:
+        status, leader = request(base, "GET", "sys/leader", ca_file=ca_file)
+        if status != 200 or leader.get("is_self") is not True:
+            return False
+        return request(base, "GET", "sys/health", ca_file=ca_file)[0] == 200
+
+    wait_for(operation, active, seconds=seconds)
+
+
 def require_status(
     base: str,
     method: str,
@@ -249,10 +261,7 @@ def run() -> None:
         unseal_key = initialized["keys"][0]
         root = initialized["root_token"]
         require_status(bases[0], "PUT", "sys/unseal", "", {"key": unseal_key})
-        wait_for(
-            "first leader",
-            lambda: request(bases[0], "GET", "sys/leader")[1].get("is_self"),
-        )
+        wait_for_active_node(bases[0], operation="first leader")
         for base in bases[1:]:
             require_status(
                 base,

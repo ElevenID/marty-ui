@@ -51,6 +51,7 @@ from probe_didcomm_openbao_ha import (
     request as http_request,
     require_status as http_require_status,
     wait_for,
+    wait_for_active_node,
 )
 from selfhost_openbao_client import (Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_LEAF_ACL,
                                    CUSTODY_SIGNER_POLICY)
@@ -391,6 +392,8 @@ def run() -> None:
         cold_base = start_node(cold_name, cold_state, ca_file)
         require_status(cold_base, "POST", "sys/unseal", "",
                        {"key": volume_file(state, "unseal.key")})
+        wait_for_active_node(cold_base, ca_file=ca_file,
+                             operation="cold-copy Raft leader after unseal")
         cold = partial(http_require_status, ca_file=ca_file)
         if cold(cold_base, "POST", f"transit/decrypt/{key_name}", root,
                 {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
@@ -570,6 +573,8 @@ def run() -> None:
                             timeout=30)
         fresh(snapshot_base, "POST", "sys/unseal", "",
               {"key": initialized["keys_base64"][0]})
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="replacement Raft leader before restore")
         restore_request = urllib.request.Request(
             snapshot_base + "/v1/sys/storage/raft/snapshot-force",
             data=snapshot, method="POST",
@@ -617,6 +622,8 @@ def run() -> None:
                 f"{sorted(unseal_statuses)}; classified errors "
                 f"{sorted(unseal_error_classes)}"
             ) from error
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="restored Raft leader after original-key unseal")
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Force-restored Raft node lost Transit ciphertext")
@@ -627,6 +634,8 @@ def run() -> None:
         if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
             fresh(snapshot_base, "POST", "sys/unseal", "",
                   {"key": original_unseal_key})
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="restarted restored Raft leader")
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")
