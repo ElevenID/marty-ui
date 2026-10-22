@@ -799,13 +799,13 @@ jobs:
       contents: read
       packages: read
       attestations: read
-    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@4b86dced7bacb54df225d46080bd080f3af344d8
+    uses: ElevenID/marty-integration-tests/.github/workflows/official-interoperability.yml@641af7793867bae9bc64b7c40ed5a0e721dc4e80
     with:
       lane: all
       candidate_artifact: stack-release-official-candidate-${{ github.run_id }}
       candidate_manifest_sha256: ${{ needs.prepare-official-candidate.outputs.manifest_sha256 }}
       candidate_tag: ${{ needs.resolve-transaction.outputs.tag }}
-      harness_revision: 4b86dced7bacb54df225d46080bd080f3af344d8
+      harness_revision: 641af7793867bae9bc64b7c40ed5a0e721dc4e80
 
   official-gate-evidence:
     needs: [resolve-transaction, prepare-official-candidate, official-interoperability]
@@ -835,7 +835,7 @@ jobs:
           set -euo pipefail
           cargo run --locked --manifest-path rust/Cargo.toml -p marty-release-evidence \
             --bin validate-official-suite -- candidate/stack-manifest.json "$SOURCE_SHA" \
-            4b86dced7bacb54df225d46080bd080f3af344d8 "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
+            641af7793867bae9bc64b7c40ed5a0e721dc4e80 "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" \
             official-summaries > official-interoperability.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

@@ -2,8 +2,16 @@
 
 Product CD prepares and attests the exact five-role manifest from its durable
 digest transaction before version-tag promotion. It calls the shared official
-suite at immutable integration source `4b86dced7bacb54df225d46080bd080f3af344d8`,
+suite at immutable integration main source `641af7793867bae9bc64b7c40ed5a0e721dc4e80`,
 including the product's KMS-only setup. All seven lanes must succeed.
+
+The no-write release claim checks that the literal harness pin is an ancestor
+of integration `main`, and matches the caller's `harness_revision`. Pin the
+accepted merge commit after integration, rather than a squash-merged PR head
+whose branch can be deleted. Candidate run 39873517844 could not resolve the
+old PR-head reusable workflow; restoring its original branch allowed run
+39874228600 to start. That ref remains required by the in-flight older source.
+The accepted merge commit has the identical Git tree to the reviewed PR head.
 
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not
