@@ -246,6 +246,16 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   const verification = await wallet.verify(adminPage, walletPage, `Canvas ${applicationId}`, {
     organizationId, presentationPolicyId: templates.policy.id, issuerDid: issued.issuer_did,
   });
+  report.verificationAttempt = { sessionOk: verification?.session?.ok === true,
+    sessionStatus: verification?.session?.status || null,
+    requestUriPresent: Boolean(verification?.session?.requestUri),
+    walletOk: verification?.wallet?.ok === true,
+    walletStatus: verification?.wallet?.status || null,
+    verifierStatus: verification?.result?.status || null,
+    verifierEvaluation: verification?.result?.evaluation || null,
+    verifierDecision: verification?.result?.decision || null,
+    verifierHttpStatus: verification?.result?.httpStatus || null };
+  report.currentOperation = 'wallet-verification-decision';
   requireVerificationDecision(verification, 'allow');
   report.verification = verification;
   report.currentOperation = 'verifier-checkpoint';
