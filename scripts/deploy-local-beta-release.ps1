@@ -121,6 +121,7 @@ $script:ApplicationServices = @(
     "gateway"
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
+$script:PreparedPassportServicesImage = ""
 if ($EnablePassportNative) {
     if ($EnablePassportPhysicalProvider) {
         $script:SelectedApplicationServices += "passport-callback-signer-supported"
@@ -1166,7 +1167,13 @@ if ($migrationAdminFiles.Count -eq 0) { throw 'MARTY_ORG_ADMIN_EMAIL must be con
 $migrationAdminEmail = (Get-DotEnvValue -Path $migrationAdminFiles[-1] -Name 'MARTY_ORG_ADMIN_EMAIL').Trim().Trim('"').Trim("'")
 if ($migrationAdminEmail -cnotmatch '^[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+$') { throw 'Invalid migration admin email' }
 if ($UsePreparedLocalImages) {
-    $null = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    $preparedServicesForValidation = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        $script:PreparedPassportServicesImage = $preparedServicesForValidation
+        # Freeze the already source/role/architecture-verified immutable image
+        # before the simulator profile and application image plan are validated.
+        $env:MARTY_SERVICES_IMAGE = $script:PreparedPassportServicesImage
+    }
     $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
     $null = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
 }
@@ -1174,7 +1181,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"
@@ -1271,6 +1279,9 @@ if ($OfficialStackRelease) {
 }
 if ($UsePreparedLocalImages) {
     $preparedServices = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($script:PreparedPassportServicesImage -and $preparedServices -cne $script:PreparedPassportServicesImage) {
+        throw "Prepared local passport services image changed after validation"
+    }
     $migrationImage = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
     $uiImage = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
     $prepared = @{}
@@ -1323,7 +1334,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 Assert-BetaKeycloakDatabaseRemoteProviders
 if ($EnablePassportNative) {
     $existingPassportServices = @{}
@@ -1709,7 +1721,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })

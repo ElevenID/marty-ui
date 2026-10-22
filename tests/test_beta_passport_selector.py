@@ -141,6 +141,63 @@ def validate(candidate, enabled=True):
     )
 
 
+def test_caller_verified_prepared_image_is_exact_and_does_not_relax_default(tmp_path):
+    candidate = model(tmp_path)
+    prepared = "sha256:" + "b" * 64
+    for role in ("passport-beta-bureau", "passport-callback-signer"):
+        candidate["services"][role]["image"] = prepared
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        validate(candidate)
+    VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                prepared_services_image=prepared)
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                    prepared_services_image="sha256:" + "c" * 64)
+    candidate["services"]["passport-callback-signer"]["image"] = "sha256:" + "c" * 64
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                    prepared_services_image=prepared)
+
+
+@pytest.mark.parametrize("prepared,enabled,physical", [
+    ("services:latest", True, False), ("elevenid-local/services:dev", True, False),
+    ("sha256:" + "b" * 64, False, False), ("sha256:" + "b" * 64, True, True),
+])
+def test_prepared_local_validation_cannot_select_tag_or_non_simulator_mode(tmp_path, prepared, enabled, physical):
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="explicit native simulator"):
+        VALIDATOR["validate_model"](model(tmp_path), passport_enabled=enabled, files=[PROFILE],
+                                    physical_provider=physical, prepared_services_image=prepared)
+
+
+def test_prepared_image_cli_projection_keeps_read_only_compose_and_exact_binding(tmp_path):
+    candidate = model(tmp_path)
+    prepared = "sha256:" + "b" * 64
+    for role in ("passport-beta-bureau", "passport-callback-signer"):
+        candidate["services"][role]["image"] = prepared
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(candidate).encode())
+
+    VALIDATOR["validate_compose"](project="elevenid-beta", env_files=["synthetic.env"],
+        files=[PROFILE], passport_enabled=True, prepared_services_image=prepared,
+        runner=run, keycloak_validator=lambda *args, **kwargs: None)
+    assert len(calls) == 1 and calls[0][-3:] == ["config", "--format", "json"]
+
+
+def test_runner_freezes_prepared_id_before_all_passport_validation_calls():
+    source = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text()
+    capture = '$script:PreparedPassportServicesImage = $preparedServicesForValidation'
+    assert source.index(capture) > source.index('Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"')
+    assert source.index(capture) < source.index('Assert-BetaPassportConfiguration -RepoRoot')
+    assert source.count('-PreparedServicesImage $script:PreparedPassportServicesImage') == 3
+    assert '$preparedServices -cne $script:PreparedPassportServicesImage' in source
+    wrapper = (ROOT / "scripts/beta-passport-configuration.ps1").read_text()
+    assert '@("--prepared-services-image", $PreparedServicesImage)' in wrapper
+    assert '-not $PassportEnabled -or $PhysicalProvider' in wrapper
+
+
 @pytest.mark.parametrize("mutation", [
     "wrong_target", "other_holder", "inline_key", "same_key", "missing_file",
     "other_setting", "line_ending", "wrong_root", "wrong_source",
