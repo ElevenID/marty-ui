@@ -316,7 +316,7 @@ def validate_model(
             # Compose 2.38.2 serializes a false CreateHostPath as bind: {}
             # (including with --no-normalize). Omitted bools are false in its
             # typed model; an explicit true must still fail this guard.
-            and mounts[1]["bind"].get("create_host_path", False) is False,
+            and POLICY["bind_does_not_create_host_path"](mounts[1]),
             "Native CA mount is not paired or may create a host path",
         )
         POLICY["validate_model"](
