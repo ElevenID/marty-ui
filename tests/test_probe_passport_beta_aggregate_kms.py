@@ -23,6 +23,28 @@ SIGNING_KEYS = "a" * 64
 OPENBAO = "b" * 64
 
 
+def test_scoped_owned_csca_retirement_uses_existing_private_transport(monkeypatch):
+    observed = []
+    monkeypatch.setattr(gate, "docker_json", lambda command, payload, **options:
+                        observed.append((command, json.loads(payload))) or {"status": "REVOKED"})
+    assert gate.private_signing_request(SIGNING_KEYS,
+        "/internal/documents/org-a/csca-certificates/demo-owned/revoke",
+        {"reason": "Owned demo retired"}) == {"status": "REVOKED"}
+    command, payload = observed[0]
+    assert command[-1].endswith("/internal/documents/org-a/csca-certificates/demo-owned/revoke")
+    assert '--data-binary @-' in command[-3]
+    assert payload == {"reason": "Owned demo retired"}
+
+
+@pytest.mark.parametrize("body", [None, {}, {"reason": ""}, {"reason": "bad\nreason"},
+                                  {"reason": "Owned", "key": "unexpected"}])
+def test_scoped_csca_retirement_rejects_unbounded_or_missing_reason(monkeypatch, body):
+    monkeypatch.setattr(gate, "docker_json", lambda *_args, **_kwargs: pytest.fail("No transport allowed"))
+    with pytest.raises(ValueError, match="retirement reason"):
+        gate.private_signing_request(SIGNING_KEYS,
+            "/internal/documents/org-a/csca-certificates/demo-owned/revoke", body)
+
+
 def selected() -> dict[str, str]:
     return {
         "organization_id": "org-a",

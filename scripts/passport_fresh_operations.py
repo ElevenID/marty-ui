@@ -49,6 +49,8 @@ def exercise(
     batch_probe: Callable[..., tuple[str, dict[str, Any]]] = batch.exercise,
     material_receipt: Callable[..., dict[str, Any]] = beta_material_receipt,
     negative_probe: Callable[..., dict[str, Any]] = negatives.exercise,
+    on_owned_job: Callable[[str, dict[str, Any]], None] | None = None,
+    prepare_selected_flow: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Produce a new Flow/batch and attack that returned job, preserving recovery.
 
@@ -113,6 +115,20 @@ def exercise(
             "Fresh governed certificate chain did not verify")
     require(flow.selected_plan_commitment(plan, api_key) == fingerprint,
             "Passport plan changed during certificate operations")
+    if prepare_selected_flow:
+        prepared = prepare_selected_flow(plan)
+        require(flow.selected_plan_commitment(plan, api_key) == fingerprint
+                and isinstance(prepared, dict) and set(prepared) == {
+                    "flow_definition_id", "references", "physical_document"}
+                and prepared["physical_document"] == selected["physical_document"],
+                "Owned Flow preparation changed the governed passport plan")
+        selected = prepared
+        plan = {**plan, "selected_flow": selected}
+        flow.validate_inputs(selected["flow_definition_id"], application["organization_id"],
+                             application["issuer_did"], selected["references"],
+                             selected["physical_document"], flow_session, api_key,
+                             simulator_container_id)
+        fingerprint = flow.selected_plan_commitment(plan, api_key)
 
     def bind_batch(instance: str, application_id: str, job: str, sod: str) -> str:
         require(not binding, "Fresh Flow requested more than one native batch")
@@ -120,7 +136,7 @@ def exercise(
             {**application, **selected["references"]}, selected["physical_document"], api_key, service_token,
             operator_token, native_container_id, simulator_container_id, instance,
             application_id, job, sod, dsc["der"], dsc["pem"], material_receipt,
-            private_state_path)
+            private_state_path, **({"on_owned_job": on_owned_job} if on_owned_job else {}))
         require(proof.get("verified") is True, "Fresh native batch did not verify")
         binding.update(instance=instance, application=application_id, job=job,
                        sod=sod, bureau=bureau, proof=proof)
@@ -195,4 +211,11 @@ def exercise(
             "physical_claim": "not_claimed", "selected_job_commitment": commitment,
             "negative_http_statuses": [422, 404], "private_handoff_retained": True,
             "cleanup_scope": "native_batch_wire_state_only",
-            "demo_qualified": False}
+            "demo_qualified": False,
+            "behaviorAssertions": {
+                "managed_csca_dsc_issuer_profiles": True,
+                "nine_step_passport_issuance_flow": True,
+                "simulator_bureau_job_correlated": True,
+                "signed_simulator_callback_verified": True,
+                "physical_claim": "not_claimed", "booklet_verified": False,
+                "unsigned_or_foreign_callback_denied": True}}

@@ -1,0 +1,324 @@
+"""Fresh passport setup/retirement through existing production lifecycle APIs.
+
+The request ports must be the already-bound recorder transport. This module
+does not accept prior resource IDs or imported cleanup reports as ownership.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import quote
+from uuid import uuid4
+
+if __package__:
+    from . import probe_passport_beta_native_batch as batch
+else:
+    import probe_passport_beta_native_batch as batch
+
+
+class PassportOwnershipError(ValueError):
+    pass
+
+
+def require(value, message):
+    if not value:
+        raise PassportOwnershipError(message)
+
+
+def public_key(value):
+    require(isinstance(value, dict) and isinstance(value.get("kty"), str), "Owned issuer public key is unavailable")
+    return {key: value[key] for key in ("kty", "crv", "x", "y", "n", "e") if key in value}
+
+
+COLLECTIONS = {
+    "application_template_id": "/v1/application-templates",
+    "credential_template_id": "/v1/credential-templates",
+    "delivery_destination_profile_id": "/v1/delivery-destinations",
+    "flow_definition_id": "/v1/flows/definitions",
+}
+
+
+class OwnedPassportResources:
+    def __init__(self, path: Path, organization: str, *, request, private_signing):
+        batch.ensure_private_state_available(path)
+        require(isinstance(organization, str) and bool(organization), "Owned passport organization is missing")
+        self.path, self.organization = path, organization
+        self.key_path = path.with_name(path.stem + ".key-recovery.json")
+        batch.ensure_private_state_available(self.key_path)
+        self.api_key = None
+        self.request, self.private_signing = request, private_signing
+        self.value = {"schema": "marty.passport-owned-resources/v1", "run_id": uuid4().hex,
+                      "organization_id": organization, "resources": {}, "issuer_identities": [],
+                      "jobs": [], "operations": [], "cleanup_complete": False}
+        self.save(initial=True)
+
+    def save(self, *, initial=False):
+        batch._write_private_state(self.path, self.value, initial=initial)
+
+    def call(self, role, method, path, body=None):
+        # Commit intent before dispatch: ambiguous failures remain recoverable.
+        item = {"role": role, "method": method, "path": path,
+                "request_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
+                "response_received": False}
+        self.value["operations"].append(item)
+        self.save()
+        status, response = self.request(role, method, path, body)
+        require(type(status) is int and 100 <= status <= 599 and isinstance(response, dict),
+                "Owned passport response is malformed")
+        item.update(response_received=True, http_status=status)
+        self.save()
+        return status, response
+
+    def scoped(self, path):
+        return path + "?organization_id=" + quote(self.organization, safe="")
+
+    def private_call(self, path, body=None):
+        item = {"role": "governed-signing-service", "method": "POST" if body else "GET",
+                "path": path, "response_received": False}
+        self.value["operations"].append(item)
+        self.save()
+        response = self.private_signing(path, body)
+        require(isinstance(response, dict), "Owned certificate response is malformed")
+        item["response_received"] = True
+        self.save()
+        return response
+
+    def fresh_plan(self, plan):
+        result = copy.deepcopy(plan)
+        issuer = result["application"]["issuer_did"]
+        require(issuer.startswith("did:web:beta.elevenidllc.com:"), "Owned passport issuer must be local")
+        issuer = issuer + ":demo:" + self.value["run_id"]
+        result["application"]["issuer_did"] = issuer
+        certificate = result["certificate_plan"]
+        certificate["csca"]["issuer_did"] = issuer
+        certificate["dsc"].update(dsc_issuer_did=issuer, csca_issuer_did=issuer)
+        certificate["csca"]["certificate_id"] = "demo-csca-" + self.value["run_id"]
+        certificate["dsc"]["csca_certificate_id"] = certificate["csca"]["certificate_id"]
+        certificate["dsc"]["idempotency_key"] = "demo-dsc-" + self.value["run_id"]
+        # No fixture-supplied definition or template ID can become owned. These
+        # placeholders are replaced by successful create responses after the
+        # governed chain exists, before the first real Flow operation.
+        result["selected_flow"]["flow_definition_id"] = "UNBOUND"
+        result["selected_flow"]["references"] = {key: "UNBOUND" for key in COLLECTIONS if key != "flow_definition_id"}
+        self.value["plan"] = result
+        self.save()
+        return result
+
+    def create_inputs(self, plan, blueprints):
+        require(set(blueprints) == set(COLLECTIONS), "Fresh passport resource blueprints are incomplete")
+        require(plan["application"]["organization_id"] == self.organization,
+                "Fresh passport plan belongs to another organization")
+        result = copy.deepcopy(plan)
+        # All IDs come from these actual successful create responses, never the fixture.
+        references = {}
+        for field, collection in COLLECTIONS.items():
+            payload = copy.deepcopy(blueprints[field])
+            require(isinstance(payload, dict) and "id" not in payload
+                    and payload.get("organization_id") in (None, self.organization)
+                    and isinstance(payload.get("name"), str), "Cannot adopt an existing passport resource")
+            payload["organization_id"] = self.organization
+            payload["name"] = (payload["name"][:80] + " " + self.value["run_id"])
+            if field == "credential_template_id":
+                payload["application_template_id"] = references["application_template_id"]
+                payload["issuer_did"] = result["application"]["issuer_did"]
+            if field == "flow_definition_id":
+                require(str(payload.get("flow_type")).lower() == "physical_document_issuance",
+                        "Owned passport Flow must use the production physical document type")
+                payload.update(references)
+            status, created = self.call("flow", "POST", collection, payload)
+            require(status in (200, 201) and isinstance(created, dict)
+                    and isinstance(created.get("id"), str) and bool(created["id"])
+                    and created.get("organization_id") == self.organization
+                    and created.get("name") == payload["name"], "Fresh passport resource was not created exactly")
+            identifier = created["id"]
+            self.value["resources"][field] = {"id": identifier, "name": payload["name"],
+                "organization_id": self.organization, "creation_returned": True}
+            self.save()
+            resource_path = collection + "/" + quote(identifier, safe="")
+            if field != "delivery_destination_profile_id":
+                status, active = self.call("flow", "POST", resource_path + "/activate")
+                require(status == 200 and active.get("id") == identifier
+                        and str(active.get("status")).upper() == "ACTIVE", "Owned passport activation failed")
+            status, actual = self.call("flow", "GET", resource_path)
+            require(status == 200 and actual.get("id") == identifier
+                    and actual.get("organization_id") == self.organization
+                    and actual.get("name") == payload["name"], "Owned passport resource readback changed identity")
+            if field != "flow_definition_id":
+                references[field] = identifier
+            else:
+                require(all(actual.get(key) == value for key, value in references.items()),
+                        "Owned Flow did not retain its exact owned references")
+                result["selected_flow"]["flow_definition_id"] = identifier
+        result["selected_flow"]["references"] = references
+        self.value["plan"] = result
+        self.save()
+        return result
+
+    def create_key(self):
+        body = {"name": "Passport demo " + self.value["run_id"], "is_test": True,
+                "scopes": ["credentials:issue"],
+                "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
+        code, key = self.call("flow", "POST", "/v1/organizations/" + quote(self.organization, safe="") + "/api-keys", body)
+        require(code == 200 and key.get("organization_id") == self.organization
+                and key.get("name") == body["name"] and key.get("scopes") == body["scopes"]
+                and key.get("scope_type") == "organization" and key.get("enabled") is True
+                and isinstance(key.get("id"), str) and isinstance(key.get("key"), str)
+                and len(key["key"]) >= 32, "Scoped passport API key was not newly created")
+        self.value["api_key_id"] = key["id"]
+        self.api_key = key["key"]
+        self.save()
+        batch._write_private_state(self.key_path, {"schema": "marty.passport-owned-api-key/v1",
+            "run_id": self.value["run_id"], "organization_id": self.organization,
+            "key_id": key["id"], "key": key["key"]}, initial=True)
+        return key["key"]
+
+    def create_issuers(self, plan):
+        certificate = plan["certificate_plan"]
+        require(certificate["organization_id"] == self.organization, "Certificate tenant changed")
+        for role, purpose, did in (
+            ("csca", "csca", certificate["csca"]["issuer_did"]),
+            ("dsc", "x509_doc_signer", certificate["dsc"]["dsc_issuer_did"]),
+        ):
+            # A fresh path-scoped identity tuple prevents repair/adoption of a shared profile.
+            require(self.value["run_id"] in did, "Passport issuer DID must contain this genuine run marker")
+            payload = {"issuer_did": did, "key_purpose": purpose,
+                       "credential_format": "ICAO_EMRTD", "algorithm": "ES256"}
+            status, response = self.call(role, "POST", self.scoped("/v1/signing-keys/issuer-identities"), payload)
+            identity = response.get("identity", {})
+            require(status == 200 and response.get("created") is True
+                    and all(identity.get(key) == value for key, value in payload.items()),
+                    "Passport issuer identity is not newly owned")
+            owned = {"role": role, "tuple": payload, "creation_returned": True}
+            self.value["issuer_identities"].append(owned)
+            self.save()
+            code, resolved = self.call(role, "POST", self.scoped("/v1/signing-keys/issuer-identities/resolve"), payload)
+            require(code == 200, "New owned issuer does not resolve")
+            owned["public_key"] = public_key(resolved.get("public_jwk"))
+            self.save()
+
+    def owned_job(self, event, record):
+        require(event in ("companion_created", "batch_bound", "companion_terminal")
+                and record.get("organization_id") == self.organization,
+                "Unexpected owned passport job observation")
+        self.value["jobs"].append({"event": event, **record})
+        self.save()
+
+    def retire(self, *, selected, certificate_id, check_key_denied, retire_sessions):
+        require(self.value.get("plan") and len(self.value["issuer_identities"]) == 2,
+                "Owned passport setup is incomplete")
+        require(all(item["response_received"] for item in self.value["operations"]),
+                "Ambiguous passport mutation requires explicit reconciliation")
+        bound = [item for item in self.value["jobs"] if item["event"] == "batch_bound"]
+        require(len(bound) == 1 and len(bound[0].get("jobs", [])) == 2,
+                "Exact two-job ownership journal is unavailable")
+        jobs = bound[0]["jobs"]
+        require(all(job.get("organization_id") == self.organization and all(
+                    isinstance(job.get(field), str) and bool(job[field]) for field in
+                    ("id", "application_id", "flow_execution_id", "bureau_job_id")) for job in jobs)
+                and all(len({job[field] for job in jobs}) == 2
+                        for field in ("id", "application_id", "bureau_job_id")),
+                "Two-job journal has foreign or duplicated identity")
+        require(any(job.get("application_id") == selected["application_id"]
+                    and job.get("id") == selected["source_job_id"]
+                    and job.get("bureau_job_id") == selected["bureau_job_id"] for job in jobs),
+                "Selected passport job differs from the actual returned batch")
+        for job in jobs:
+            path = "/v1/passport/applications/" + quote(job["application_id"], safe="") + "/production-status"
+            code, actual = self.call("api", "GET", path)
+            require(code == 200 and all(actual.get(field) == job.get(field) for field in
+                    ("id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id"))
+                    and actual.get("status") == "ACTIVE" and bool(actual.get("completed_at")),
+                    "Owned passport job is not terminal with exact identity")
+        require(bound[0].get("owned_flow_instance_ids") == [selected["flow_instance_id"]]
+                and isinstance(bound[0].get("standalone_companion_execution_id"), str)
+                and bound[0]["standalone_companion_execution_id"].startswith("passport-native-batch-")
+                and {row["flow_execution_id"] for row in jobs} == {
+                    selected["flow_instance_id"], bound[0]["standalone_companion_execution_id"]},
+                "Owned Flow instance set differs from native companion correlation")
+        for instance_id in bound[0]["owned_flow_instance_ids"]:
+            instance_path = "/v1/flows/instances/" + quote(instance_id, safe="")
+            code, instance = self.call("flow", "GET", instance_path)
+            require(code == 200 and instance.get("id") == instance_id
+                    and instance.get("organization_id") == self.organization
+                    and instance.get("flow_id") == self.value["resources"]["flow_definition_id"]["id"]
+                    and str(instance.get("status")).upper() == "COMPLETED", "Owned passport Flow is not terminal")
+        owned = self.value["resources"]["flow_definition_id"]
+        path = COLLECTIONS["flow_definition_id"] + "/" + quote(owned["id"], safe="")
+        self.check_resource(path, owned)
+        code, draft = self.call("flow", "PATCH", path, {"organization_id": self.organization, "name": owned["name"]})
+        require(code == 200 and draft.get("id") == owned["id"]
+                and draft.get("organization_id") == self.organization
+                and str(draft.get("status")).upper() == "DRAFT"
+                and all(draft.get(key) == value for key, value in self.value["plan"]["selected_flow"]["references"].items()),
+                "Owned Flow did not enter draft with unchanged references")
+        code, _ = self.call("flow", "DELETE", path)
+        require(code == 200, "Owned draft Flow deletion failed")
+        code, _ = self.call("flow", "GET", path)
+        require(code == 404, "Owned Flow remains reusable")
+        for field in ("credential_template_id", "application_template_id"):
+            owned = self.value["resources"][field]
+            path = COLLECTIONS[field] + "/" + quote(owned["id"], safe="")
+            self.check_resource(path, owned)
+            code, _ = self.call("flow", "POST", path + "/deprecate")
+            require(code == 200, "Owned template deprecation failed")
+            code, actual = self.call("flow", "GET", path)
+            require(code == 200 and actual.get("id") == owned["id"]
+                    and actual.get("organization_id") == self.organization
+                    and str(actual.get("status")).upper() == "DEPRECATED", "Owned template remains active")
+        # Revoke only our genuinely new certificate before removing its issuer tuple.
+        require(certificate_id == self.value["plan"]["certificate_plan"]["csca"]["certificate_id"],
+                "Cannot retire a foreign CSCA certificate")
+        certificate_path = ("/internal/documents/" + quote(self.organization, safe="")
+                            + "/csca-certificates/" + quote(certificate_id, safe=""))
+        prior = self.private_call(certificate_path)
+        csca = next(item for item in self.value["issuer_identities"] if item["role"] == "csca")
+        require(prior.get("certificate_id") == certificate_id
+                and prior.get("metadata", {}).get("issuer_did") == csca["tuple"]["issuer_did"]
+                and public_key(prior.get("public_jwk")) == csca["public_key"],
+                "CSCA lifecycle record no longer matches the genuinely owned issuer")
+        revoked = self.private_call(certificate_path + "/revoke", {"reason": "Owned demo run retired"})
+        readback = self.private_call(certificate_path)
+        require(all(value.get("certificate_id") == certificate_id and value.get("status") == "REVOKED"
+                    and bool(value.get("revoked_at")) for value in (revoked, readback)),
+                "Owned CSCA revocation did not persist")
+        for identity in reversed(self.value["issuer_identities"]):
+            code, current = self.call(identity["role"], "POST", self.scoped("/v1/signing-keys/issuer-identities/resolve"), identity["tuple"])
+            require(code == 200 and public_key(current.get("public_jwk")) == identity["public_key"],
+                    "Owned issuer key changed before retirement")
+            code, retired = self.call(identity["role"], "DELETE", self.scoped("/v1/signing-keys/issuer-identities"), identity["tuple"])
+            require(code == 200 and all(retired.get("deleted", {}).get(key) == value
+                    for key, value in identity["tuple"].items()), "Owned issuer retirement failed")
+            code, _ = self.call(identity["role"], "POST", self.scoped("/v1/signing-keys/issuer-identities/resolve"), identity["tuple"])
+            require(code == 404, "Retired issuer tuple still resolves")
+        destination = self.value["resources"]["delivery_destination_profile_id"]
+        path = COLLECTIONS["delivery_destination_profile_id"] + "/" + quote(destination["id"], safe="")
+        self.check_resource(path, destination)
+        code, _ = self.call("flow", "DELETE", path)
+        require(code == 200, "Owned delivery destination retirement failed")
+        code, _ = self.call("flow", "GET", path)
+        require(code == 404, "Owned delivery destination remains available")
+        # Key ownership is supplied only by the same run's actual create port.
+        api_key_id = self.value.get("api_key_id")
+        require(isinstance(api_key_id, str) and bool(api_key_id), "Cannot revoke unowned passport API authority")
+        code, response = self.call("flow", "DELETE", "/v1/organizations/" + quote(self.organization, safe="")
+                                   + "/api-keys/" + quote(api_key_id, safe=""))
+        require(code == 200 and response.get("success") is True, "Owned passport key revocation failed")
+        require(check_key_denied() is True, "Retired passport key is still accepted")
+        batch.clear_private_state(self.key_path)
+        require(retire_sessions() is True, "Owned passport session retirement is incomplete")
+        self.value["cleanup_complete"] = True
+        self.save()
+        return {"complete": True, "terminal_jobs": 2, "flow_retired": True,
+                "templates_deprecated": True, "issuer_tuples_retired": True,
+                "csca_revoked": True, "api_key_denied": True,
+                "sessions_denied": True, "history_retained": True}
+
+    def check_resource(self, path, owned):
+        require(owned.get("creation_returned") is True, "Resource ownership is unproven")
+        code, current = self.call("flow", "GET", path)
+        require(code == 200 and all(current.get(key) == owned[key]
+                for key in ("id", "organization_id", "name")), "Owned passport resource changed identity")
+        return current

@@ -13,6 +13,11 @@ function boundFile(file) {
 }
 
 async function main() {
+  if (process.env.RECORD_VIDEO !== '0') {
+    const error = new Error('D12 fresh operations require --functional-rerun; recording support remains pending');
+    error.code = 'D12_RECORDING_UNSUPPORTED';
+    throw error;
+  }
   const root = path.resolve(__dirname, '../..');
   const revision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const runtimeReceipt = boundFile(process.env.DEMO_D12_RUNTIME_RECEIPT);
@@ -39,8 +44,10 @@ async function main() {
   }
 }
 
-if (require.main === module) main().catch(() => {
-  console.error('D12 owned fresh-operation adapter failed; private recovery inputs remain private');
+if (require.main === module) main().catch(error => {
+  console.error(error.code === 'D12_RECORDING_UNSUPPORTED'
+    ? 'D12 fresh operations require --functional-rerun; recording support remains pending'
+    : 'D12 owned fresh-operation adapter failed; private recovery inputs remain private');
   process.exitCode = 1;
 });
 module.exports = { boundFile, main };

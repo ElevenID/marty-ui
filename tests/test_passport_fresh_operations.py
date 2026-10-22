@@ -141,6 +141,16 @@ def test_existing_recovery_state_cannot_be_adopted(ports):
     assert calls == [] and state.read_text() == "prior-owned-state"
 
 
+def test_owned_flow_setup_runs_only_after_actual_chain_verification(ports):
+    kwargs, calls, _, _ = ports
+    def setup(value):
+        assert calls == ["runtime", "chain"]
+        calls.append("owned-setup")
+        return value["selected_flow"]
+    fresh.exercise(plan(), **kwargs, prepare_selected_flow=setup)
+    assert calls[:4] == ["runtime", "chain", "owned-setup", "flow"]
+
+
 def test_negative_failure_preserves_wire_state_and_returned_handoff(ports):
     kwargs, calls, state, handoff = ports
     kwargs["negative_probe"] = Mock(side_effect=ValueError("fresh foreign callback changed job"))

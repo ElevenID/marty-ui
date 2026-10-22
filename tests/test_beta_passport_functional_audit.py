@@ -148,6 +148,7 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
     # This is a browser transport control, not a product/UI or live-trace proof.
     capture = Capture()
     observed = []
+    revoked_cookies = set()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True, args=["--host-resolver-rules=MAP * ~NOTFOUND",
@@ -160,6 +161,15 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
                 observed.append({"url": request.url, "method": request.method,
                                  "headers": request.all_headers(), "body": request.post_data})
                 assert request.frame.page in capture.pages
+                if request.url.endswith("/v1/auth/logout"):
+                    revoked_cookies.add(request.all_headers()["cookie"])
+                    handler.fulfill(status=302, headers={"Location": "https://sso.invalid/logout",
+                        "Set-Cookie": "sessionId=; Max-Age=0; Path=/; Secure; HttpOnly"})
+                    return
+                if request.url.endswith("/v1/auth/me"):
+                    assert request.all_headers()["cookie"] in revoked_cookies
+                    handler.fulfill(status=200, content_type="application/json", body='{"authenticated":false}')
+                    return
                 if request.url.endswith("/webhooks/personalization"):
                     payload = {"detail": [{"type": "missing", "loc": ["header", "x-personalization-signature"]}]}
                     status = 422
@@ -197,6 +207,14 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             status, projection = ports.negative_post(body, None)
             assert status == 422 and projection["missing_signature_header"] is True
             assert observed[-1]["body"].encode() == body
+            ports.resource_request("flow", "PATCH", "/v1/flows/definitions/owned",
+                                   {"organization_id": "org-a", "name": "Owned"})
+            assert observed[-1]["method"] == "PATCH" and observed[-1]["headers"]["cookie"] == "sessionId=flow-test"
+            ports.resource_request("csca", "DELETE", "/v1/signing-keys/issuer-identities?organization_id=org-a", {})
+            assert observed[-1]["method"] == "DELETE" and observed[-1]["headers"]["cookie"] == "sessionId=csca-test"
+            assert ports.retire_sessions() is True
+            assert len(revoked_cookies) == 3
+            assert not any("sso.invalid" in row["url"] for row in observed)
             before = len(observed)
             for path in ("//foreign.example/v1/passport/a", "/v1/passport/../admin", "https://foreign.example"):
                 with pytest.raises(audit.PassportPrerequisiteError):
@@ -239,6 +257,14 @@ def test_actual_isolated_child_refuses_to_act_without_owned_ipc_client():
     assert result.stderr.decode().strip() == "Fresh passport operation failed: PassportPrerequisiteError"
 
 
+def test_recording_mode_fails_explicitly_before_fixture_or_runtime_reads():
+    result = subprocess.run(["node", "tests/scripts/audit-beta-passport-functional.js"],
+        capture_output=True, env=dict(os.environ, RECORD_VIDEO="1"), timeout=15)
+    assert result.returncode == 1 and result.stdout == b""
+    assert result.stderr.decode().strip() == (
+        "D12 fresh operations require --functional-rerun; recording support remains pending")
+
+
 def test_caller_rejects_imported_report_instead_of_loading_or_mutating(monkeypatch):
     class Capture:
         inputs = {"origin": audit.ORIGIN, "scenario": {"importedReport": "prior-result.json"}}
@@ -248,3 +274,45 @@ def test_caller_rejects_imported_report_instead_of_loading_or_mutating(monkeypat
     with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged operation inputs"):
         audit.run_bound_capture(Capture())
     assert calls == []
+
+
+def test_duplicate_cookie_values_fail_before_any_browser_context():
+    class NoBrowser:
+        def new_context(self, **_):
+            pytest.fail("Duplicate authority must be rejected before browser creation")
+    with pytest.raises(audit.PassportPrerequisiteError, match="Separate governed"):
+        audit.ObservedPassportRequests(None, NoBrowser(), csca_session="sessionId=same",
+            dsc_session="sessionId=same ", flow_session="sessionId=other", api_key="k" * 40)
+
+
+@pytest.mark.parametrize("key_revived", [False, True])
+def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_revived):
+    """Command-port control only; these responses are not live demo evidence."""
+    from types import SimpleNamespace
+    observed = []
+    class Api:
+        def fetch(self, url, **options):
+            observed.append((url, options))
+            assert url.startswith(audit.ORIGIN + "/") and options["max_redirects"] == 0
+            if url.endswith("/logout"):
+                code, body = 302, b""
+            elif url.endswith("/auth/me"):
+                code, body = 200, b'{"authenticated":false}'
+            elif url.endswith("/production-status"):
+                code, body = (200 if key_revived else 401), b'{}'
+            else:
+                assert options["method"] == "DELETE" and url.endswith("/api-keys/owned-key")
+                code, body = 200, b'{"success":true}'
+            return SimpleNamespace(status=code, body=lambda: body)
+    ports = object.__new__(audit.ObservedPassportRequests)
+    ports.capture = SimpleNamespace(failed=ValueError("Actual trace failed"))
+    ports.api_key = "private-owned-key"
+    ports.sessions = {role: "sessionId=" + role for role in ("csca", "dsc", "flow")}
+    ports.pages = {role: SimpleNamespace(context=SimpleNamespace(request=Api(), add_cookies=lambda _: None))
+                   for role in ("api", "csca", "dsc", "flow")}
+    result = ports.failure_teardown(organization="org-a", key_id="owned-key", old_key=ports.api_key,
+        probe_path="/v1/passport/applications/demo-owned-run/production-status")
+    assert result["qualificationEligible"] is False
+    assert result["sessionsRetired"] == 3 and result["complete"] is (not key_revived)
+    assert result["keyDenied"] is (not key_revived)
+    assert len(observed) == 8

@@ -1,8 +1,9 @@
 """Protected runtime prerequisites for fresh, local-engineering passport actions.
 
-This module does not enable canonical D12 qualification or signed acceptance.
-Runtime observation is read-only. The recording adapter must bind these inputs
-and actual public HTTP responses through the existing owned Python protocol.
+Canonical recording-free D12 uses this source-bound live adapter. It binds the
+protected runtime, produces fresh operations and retires genuinely owned
+authority before completion. Signed release and recording qualification remain
+separate; source tests are not evidence that the live scenario has passed.
 """
 
 from __future__ import annotations
@@ -47,6 +48,15 @@ FEATURES = {
 
 class PassportPrerequisiteError(ValueError):
     pass
+
+
+def session_id(value):
+    require(isinstance(value, str) and not any(c in value for c in "\r\n\0"), "Protected passport session is invalid")
+    cookie = SimpleCookie()
+    cookie.load(value)
+    require(set(cookie) == {"sessionId"} and bool(cookie["sessionId"].value),
+            "Protected passport context requires one exact session cookie")
+    return cookie["sessionId"].value
 
 
 def require(condition: bool, message: str) -> None:
@@ -172,7 +182,8 @@ class ObservedPassportRequests:
 
     def __init__(self, capture, browser, *, csca_session: str, dsc_session: str,
                  flow_session: str, api_key: str):
-        require(csca_session != dsc_session, "Separate governed passport sessions are required")
+        require(len({session_id(csca_session), session_id(dsc_session), session_id(flow_session)}) == 3,
+                "Separate governed passport sessions are required")
         self.capture = capture
         self.api_key = api_key
         self.sessions = {"csca": csca_session, "dsc": dsc_session, "flow": flow_session}
@@ -212,7 +223,7 @@ class ObservedPassportRequests:
     def _fetch(self, role: str, method: str, path: str, encoded_body: str | None,
                headers: dict[str, str] | None = None) -> tuple[int, dict[str, Any]]:
         endpoint = urlsplit(path)
-        require(role in self.pages and method in ("GET", "POST")
+        require(role in self.pages and method in ("GET", "POST", "PATCH", "DELETE")
                 and path.startswith("/") and not path.startswith("//")
                 and not endpoint.scheme and not endpoint.netloc and not endpoint.fragment
                 and ".." not in path and "\\" not in path
@@ -247,6 +258,89 @@ class ObservedPassportRequests:
         route = path + "?organization_id=" + quote(body["organization_id"], safe="")
         payload = {name: value for name, value in body.items() if name != "organization_id"}
         return self._fetch(role, "POST", route, json.dumps(payload, separators=(",", ":")))
+
+    def resource_request(self, role, method, path, body=None):
+        endpoint = urlsplit(path)
+        resource = re.fullmatch(
+            r"/v1/(?:application-templates|credential-templates|delivery-destinations|flows/definitions)"
+            r"(?:/[A-Za-z0-9._:-]{1,255}(?:/(?:activate|validate|deprecate))?)?", endpoint.path)
+        key = re.fullmatch(r"/v1/organizations/[A-Za-z0-9_-]{1,128}/api-keys(?:/[A-Za-z0-9_-]{1,128})?", endpoint.path)
+        identity = endpoint.path in ("/v1/signing-keys/issuer-identities", "/v1/signing-keys/issuer-identities/resolve")
+        require((role == "flow" and (resource or key)) or
+                (role in ("csca", "dsc") and identity) or
+                (role == "flow" and re.fullmatch(r"/v1/flows/instances/[A-Za-z0-9._:-]{1,255}", endpoint.path)) or
+                (role == "api" and endpoint.path.startswith("/v1/passport/")),
+                "Unexpected owned passport resource route")
+        return self._fetch(role, method, path,
+                           None if body is None else json.dumps(body, separators=(",", ":")),
+                           {"x-api-key": self.api_key} if role == "api" else None)
+
+    def retire_sessions(self):
+        require(len({session_id(value) for value in self.sessions.values()}) == 3,
+                "Canonical passport sessions must be distinct and dedicated")
+        for role in ("csca", "dsc", "flow"):
+            page = self.pages[role]
+            # Fetch deliberately hides a manual redirect's HTTP status. Do not
+            # invent a 302 or follow SSO; the subsequent old-cookie
+            # authenticated:false readback proves server-side revocation.
+            redirect = page.evaluate("""async () => {
+                const response = await fetch('/v1/auth/logout', {method:'POST', credentials:'include',
+                    redirect:'manual', cache:'no-store'});
+                return {type:response.type, status:response.status};
+            }""")
+            require(redirect == {"type": "opaqueredirect", "status": 0}, "Owned passport session logout failed")
+            cookie = SimpleCookie()
+            cookie.load(self.sessions[role])
+            page.context.add_cookies([{"name": "sessionId", "value": cookie["sessionId"].value,
+                                      "url": ORIGIN, "secure": True, "httpOnly": True}])
+            status, _ = self._fetch(role, "GET", "/v1/auth/me", None)
+            require(status == 200 and _ == {"authenticated": False}, "Old owned passport session remains accepted")
+        return True
+
+    def failure_teardown(self, *, organization, key_id, old_key, probe_path):
+        """Bounded custody teardown, even when Page evidence has already failed.
+
+        Actual API-context responses are inspected without fabricating Page/IPC
+        observations. This path can never turn the failed scenario into a pass.
+        """
+        result = {"complete": False, "qualificationEligible": False, "keyDenied": key_id is None,
+                  "sessionsRetired": 0, "errors": []}
+
+        def response(role, method, path, headers=None):
+            require(path.startswith("/") and not path.startswith("//") and ".." not in path,
+                    "Invalid bounded passport teardown path")
+            actual = self.pages[role].context.request.fetch(ORIGIN + path, method=method,
+                headers=headers or {}, max_redirects=0, timeout=30000, fail_on_status_code=False)
+            raw = actual.body()
+            require(len(raw) <= 131072, "Passport teardown response exceeds bounds")
+            body = json.loads(raw) if raw and method != "POST" else {}
+            return actual.status, body
+
+        if key_id is not None:
+            try:
+                require(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key_id) and old_key == self.api_key,
+                        "Cannot tear down foreign passport key")
+                route = "/v1/organizations/" + quote(organization, safe="") + "/api-keys/" + quote(key_id, safe="")
+                code, body = response("flow", "DELETE", route)
+                require(code == 200 and body.get("success") is True, "Owned passport key revocation failed")
+                code, _ = response("api", "GET", probe_path, {"x-api-key": old_key})
+                require(code == 401, "Old passport key remains accepted")
+                result["keyDenied"] = True
+            except Exception as error:
+                result["errors"].append(type(error).__name__)
+        for role in ("csca", "dsc", "flow"):
+            try:
+                code, _ = response(role, "POST", "/v1/auth/logout")
+                require(code in (302, 303, 307), "Owned passport logout failed")
+                self.pages[role].context.add_cookies([{"name": "sessionId", "value": session_id(self.sessions[role]),
+                    "url": ORIGIN, "secure": True, "httpOnly": True}])
+                code, body = response(role, "GET", "/v1/auth/me")
+                require(code == 200 and body == {"authenticated": False}, "Old passport session remains accepted")
+                result["sessionsRetired"] += 1
+            except Exception as error:
+                result["errors"].append(type(error).__name__)
+        result["complete"] = result["keyDenied"] and result["sessionsRetired"] == 3
+        return result
 
     def flow_request(self, method, path, body, session):
         require(path.startswith("/v1/flows/") and session == self.sessions["flow"],
@@ -303,7 +397,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
     """Fulfil sealed source/fixture/runtime boundaries before fresh operations.
 
     The invoking engineering wrapper owns the existing global beta operation
-    lock. Canonical D12 qualification remains disabled pending real run/cleanup
+    lock. Canonical functional completion requires fresh operations and owned cleanup
     review; this component emits only fresh operation evidence and its limits.
     """
     root = Path(__file__).resolve().parents[1]
@@ -312,10 +406,12 @@ def run_bound_capture(capture) -> dict[str, Any]:
     sys.path.insert(0, str(root))
     from scripts import create_local_release_manifest as source_manifest
     from scripts import passport_fresh_operations as fresh
+    from scripts.passport_owned_resources import OwnedPassportResources
     from scripts import probe_passport_beta_chain as chain
     from scripts import probe_passport_beta_selected_flow as flow
     from scripts import probe_passport_beta_native_batch as batch
     from scripts import probe_passport_beta_negative_callbacks as negative
+    from scripts.probe_passport_beta_aggregate_kms import private_signing_request
     from scripts.probe_passport_beta_host import production_snapshot, production_attachment_sha256
     from scripts.canvas_oss_beta_lifecycle import assert_beta
     from playwright.sync_api import sync_playwright
@@ -360,10 +456,11 @@ def run_bound_capture(capture) -> dict[str, Any]:
             and public.get("release_version") == receipt["release"],
             "Public beta markers differ from the protected passport product")
     fixture = bound_json(scenario["privateFixture"], private=True)
-    require(set(fixture) == {"schema", "plan", "custody", "privateStatePath", "privateHandoffPath"}
-            and fixture.get("schema") == "marty.passport-fresh-private/v1"
+    require(os.environ.get("RECORD_VIDEO") == "0", "Fresh passport adapter currently requires a recording-free functional run")
+    require(set(fixture) == {"schema", "plan", "resourceBlueprints", "custody", "privateStatePath", "privateHandoffPath"}
+            and fixture.get("schema") == "marty.passport-fresh-private/v2"
             and isinstance(fixture.get("custody"), dict)
-            and set(fixture["custody"]) == {"cscaSession", "dscSession", "flowSession", "apiKey",
+            and set(fixture["custody"]) == {"cscaSession", "dscSession", "flowSession",
                                            "serviceToken", "operatorToken"},
             "Fresh passport custody fixture cannot adopt prior results")
     custody = fixture["custody"]
@@ -375,6 +472,10 @@ def run_bound_capture(capture) -> dict[str, Any]:
             "Passport recovery output must remain private")
     batch.ensure_private_state_available(state)
     batch.ensure_private_state_available(handoff)
+    ownership_path = handoff.with_name(handoff.stem + ".owned-resources.json")
+    batch.ensure_private_state_available(ownership_path)
+    require(len({session_id(custody["cscaSession"]), session_id(custody["dscSession"]), session_id(custody["flowSession"])}) == 3,
+            "Canonical passport operations require three distinct dedicated sessions")
     before = production_snapshot()
     attachments = production_attachment_sha256()
 
@@ -389,35 +490,84 @@ def run_bound_capture(capture) -> dict[str, Any]:
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             ports = None
+            owned = None
+            result = None
             try:
                 ports = ObservedPassportRequests(capture, browser,
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
-                    flow_session=custody["flowSession"], api_key=custody["apiKey"])
-                result = fresh.exercise(fixture["plan"], source_commit=receipt["sourceRevision"],
+                    flow_session=custody["flowSession"], api_key="")
+                owned = OwnedPassportResources(ownership_path, fixture["plan"]["application"]["organization_id"],
+                    request=ports.resource_request,
+                    private_signing=partial(private_signing_request, initial_runtime["containers"]["signing-keys"]))
+                owned_plan = owned.fresh_plan(fixture["plan"])
+                owned.create_issuers(owned_plan)
+                api_key = owned.create_key()
+                ports.api_key = api_key
+                result = fresh.exercise(owned_plan, source_commit=receipt["sourceRevision"],
                     stack_manifest_sha256=scenario["stackManifest"]["sha256"],
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
-                    flow_session=custody["flowSession"], api_key=custody["apiKey"],
+                    flow_session=custody["flowSession"], api_key=api_key,
                     service_token=custody["serviceToken"], operator_token=custody["operatorToken"],
                     native_container_id=initial_runtime["containers"]["issuance-native"],
                     simulator_container_id=initial_runtime["containers"]["passport-beta-bureau"],
                     private_state_path=state, private_handoff_path=handoff, verify_runtime=recheck,
+                    on_owned_job=owned.owned_job,
+                    prepare_selected_flow=lambda verified: owned.create_inputs(
+                        verified, fixture["resourceBlueprints"])["selected_flow"],
                     chain_probe=partial(chain.exercise, request=ports.chain_request),
                     flow_probe=partial(flow.exercise, request=ports.flow_request,
                                        passport_request=ports.passport_request),
                     batch_probe=partial(batch.exercise, gateway_request=ports.passport_request),
                     negative_probe=partial(negative.exercise, request=ports.passport_request,
                                            post=ports.negative_post))
+                selected = json.loads(handoff.read_text(encoding="utf8"))
+                key_probe = "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/production-status"
+                result["cleanup"] = owned.retire(selected=selected,
+                    certificate_id=owned_plan["certificate_plan"]["csca"]["certificate_id"],
+                    check_key_denied=lambda: ports.passport_request("GET", key_probe, None, api_key)[0] == 401,
+                    retire_sessions=ports.retire_sessions)
+                result.update(releaseReady=True, cleanup_scope="owned_flow_templates_issuer_certificate_and_runtime_authority")
             finally:
-                if ports:
-                    ports.close()
-                browser.close()
+                try:
+                    if ports:
+                        if not owned or not owned.value["cleanup_complete"]:
+                            ports.api_key = owned.api_key if owned and owned.api_key else ""
+                            key_id = owned.value.get("api_key_id") if owned else None
+                            probe_path = "/v1/passport/applications/demo-owned-" + (
+                                owned.value["run_id"] if owned else "uncreated") + "/production-status"
+                            # Source/feature failure remains a failure. These actual
+                            # bounded API-context responses close only owned key and
+                            # dedicated sessions; unresolved resources stay journaled.
+                            authority = ports.failure_teardown(
+                                organization=fixture["plan"]["application"]["organization_id"],
+                                key_id=key_id, old_key=ports.api_key, probe_path=probe_path)
+                            if owned:
+                                owned.value["authority_retirement"] = authority
+                                if authority["keyDenied"] and owned.key_path.exists():
+                                    batch.clear_private_state(owned.key_path)
+                                owned.save()
+                            cleanup = {"complete": False, "authorityRetirement": authority,
+                                       "ownedResourcesRetained": True}
+                        else:
+                            cleanup = result["cleanup"]
+                        cleanup_path = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-owned-cleanup.json"
+                        with cleanup_path.open("x", encoding="utf8") as output:
+                            json.dump(cleanup, output, indent=2)
+                            output.write("\n")
+                finally:
+                    try:
+                        if ports:
+                            ports.close()
+                    finally:
+                        browser.close()
     finally:
         require(production_snapshot() == before and production_attachment_sha256() == attachments,
                 "Production changed during the fresh passport operation window")
         recheck()
         source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
-                  productionInvariantPreserved=True, qualification="LOCAL_ENGINEERING_OPERATIONS_ONLY",
+                  productionInvariantPreserved=True, qualification="CURRENT_SOURCE_FUNCTIONAL_OPERATIONS",
+                  ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),
                   stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
     output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
     require(output.parent.is_dir() and not output.is_symlink() and not output.exists(),
