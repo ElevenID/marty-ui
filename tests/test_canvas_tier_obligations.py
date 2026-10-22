@@ -188,7 +188,11 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
     deadline = "worker_deadline_matches_frozen_published_process"
     original = discovered() | {serial, deadline, "unrelated_native_worker_test"}
     omitted = {serial, deadline}
-    historical_serial = {"worker_mixed_roster_reference_matches_published_process"}
+    historical_serial = {
+        "worker_mixed_roster_reference_matches_published_process",
+        "worker_body_timeout_reference_matches_published_process",
+        "worker_lease_expiry_reference_matches_published_process",
+    }
     selected_serial = historical_serial if mode == "full" or qualification == "1" else set()
     omitted |= selected_serial
     if mode == "full-after-preflights":
@@ -208,7 +212,7 @@ def test_exact_selected_set_for_each_tier(mode: str, qualification: str) -> None
     if mode == "full-after-preflights" and qualification == "0":
         assert len(omitted - {serial, deadline}) == 21
     if mode == "full-after-preflights" and qualification == "1":
-        assert len(omitted - {serial, deadline}) == 5
+        assert len(omitted - {serial, deadline}) == 7
 
 
 def test_historical_serial_owner_must_be_registered_for_full_qualification() -> None:

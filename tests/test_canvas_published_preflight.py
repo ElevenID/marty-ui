@@ -31,7 +31,13 @@ BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
 LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
 DEADLINE_TARGET = "worker_deadline_matches_frozen_published_process"
 MIXED_ROSTER_REFERENCE = "worker_mixed_roster_reference_matches_published_process"
-HISTORICAL_SERIAL = (MIXED_ROSTER_REFERENCE,)
+BODY_TIMEOUT_REFERENCE = "worker_body_timeout_reference_matches_published_process"
+LEASE_EXPIRY_REFERENCE = "worker_lease_expiry_reference_matches_published_process"
+HISTORICAL_SERIAL = (
+    MIXED_ROSTER_REFERENCE,
+    BODY_TIMEOUT_REFERENCE,
+    LEASE_EXPIRY_REFERENCE,
+)
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
@@ -224,9 +230,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
     assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
-    assert 'historical_serial_tests=("$mixed_roster_serial_test")' in script
     assert (
-        'timed canvas_serial mixed_roster_reference ' + worker_recorder + '"$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
+        'historical_serial_tests=("$mixed_roster_serial_test" "$body_timeout_serial_test" "$lease_expiry_serial_test")'
+        in script
+    )
+    assert (
+        'timed canvas_serial "$historical_serial_test" ' + worker_recorder + '"$worker_executable" "$historical_serial_test" --exact --nocapture --test-threads=1'
         in script
     )
     assert (
@@ -1351,7 +1360,8 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
         "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:12] == [
+    serial_prefix_len = 11 + len(HISTORICAL_SERIAL)
+    assert children[:serial_prefix_len] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
         ["child", "selfhost-contract", "1", "--list"],
@@ -1401,7 +1411,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[12:]) == sorted(
+    assert sorted(children[serial_prefix_len:]) == sorted(
         [
             [
                 "child",
@@ -1534,7 +1544,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert any(
         call[:2] == ["child", "worker-contract"]
         and "--test-threads=4" in call
-        and call.count("--skip") == 3
+        and call.count("--skip") == 2 + len(HISTORICAL_SERIAL)
         for call in calls
     )
 
