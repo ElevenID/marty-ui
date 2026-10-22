@@ -122,6 +122,9 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     } },
   };
   const operations = { ...stock,
+    async validateAndActivateBinding() { return { activation: { ready: true } }; },
+    async waitForLatestRosterJob() { return { result: { pending_claim: 1 } }; },
+    async waitForCandidate() { return { status: 'pending_claim' }; },
     async launchLearnerResource() { return { page, bootstrap: { application_id: APP,
       organization_id: fail === 'foreign-bootstrap' ? 'foreign' : 'org', application_template_id: 'application-template',
       credential_template_id: 'template', canvas_platform_id: 'platform', canvas_program_binding_id: 'binding' } }; },

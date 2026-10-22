@@ -76,6 +76,20 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     same(launch.bootstrap[field], expected, `Foreign bootstrap ${field}`);
   }
   onApplication(applicationId);
+  report.currentOperation = 'background-roster-activation';
+  const activationAt = new Date().toISOString();
+  await operations.validateAndActivateBinding(marty, binding.id);
+  report.currentOperation = 'background-roster-job';
+  const rosterJob = await operations.waitForLatestRosterJob(marty, organizationId, binding.id, activationAt);
+  report.currentOperation = 'unsigned-pending-candidate';
+  const candidate = await operations.waitForCandidate(marty, organizationId, binding.id, 'pending_claim');
+  assert.ok(Number(rosterJob?.result?.pending_claim || 0) >= 1 || candidate,
+    'Background roster did not produce an unsigned pending claim');
+  report.currentOperation = 'learner-repeat-launch';
+  const repeat = await operations.launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
+  assert.equal(String(repeat.bootstrap?.application_id), applicationId,
+    'Repeat learner launch created a different application');
+  page = repeat.page;
   const scope = { application_id: applicationId, organization_id: organizationId,
     binding_id: binding.id, platform_id: platformId, credential_template_id: templates.credential.id };
   report.scope = scope;
