@@ -676,7 +676,8 @@ def _run_bound_capture(capture) -> dict[str, Any]:
                     certificate_id=owned_plan["certificate_plan"]["csca"]["certificate_id"],
                     check_key_denied=lambda: ports.passport_request("GET", key_probe, None, api_key)[0] == 401,
                     retire_sessions=ports.retire_sessions)
-                result.update(releaseReady=True, cleanup_scope="owned_flow_templates_issuer_certificate_and_runtime_authority")
+                result.update(releaseReady=overlay_binding is None, functionalReady=True,
+                    cleanup_scope="owned_flow_templates_issuer_certificate_and_runtime_authority")
             finally:
                 try:
                     if ports:
