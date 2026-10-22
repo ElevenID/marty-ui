@@ -616,6 +616,7 @@ function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
         "docker/init-databases.sh",
         "config/keycloak",
         "scripts/setup-keycloak.sh",
+        "docker/openbao-selfhost.hcl",
         "docker/openbao-init.sh",
         "docker/openbao-selfhost-init.sh",
         "docker/openbao-haip-workload-policy.hcl",
