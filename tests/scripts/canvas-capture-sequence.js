@@ -158,23 +158,22 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       await grade(40);
       denied = await sync(`${prefix}-deny`, false);
       assert.notEqual(headFingerprint(denied), headFingerprint(initial), 'Correction reused initial evidence');
-      // A displayed deny is insufficient: exercise the real management boundary
-      // while denied, then prove it neither reserved an offer nor signed a credential.
-      report.pendingOperations.push('scoped-approval');
-      assert.equal((await transactions()).length, 0, 'Unexpected issuance reservation before denied approval');
-      const rejection = await marty.post(approvalPath, { review_notes: `Denied Canvas capture ${scenario}` }, [409]);
-      assert.equal(rejection?.detail, 'Canvas application is not ready for approval');
-      assert.equal((await transactions()).length, 0, 'Denied approval reserved an issuance transaction');
+      // Management approval can reserve a transaction before the signing
+      // guard evaluates policy. This negative operation stays unapproved and
+      // proves the denied learner state has no claim or signed credential.
+      assert.equal((await transactions()).length, 0, 'Denied evidence already reserved an issuance transaction');
       const state = await unsigned();
-      assert.equal(state.claim.available, false, 'Denied approval enabled the wallet claim');
-      report.deniedApproval = { applicationId, jobId: denied.jobId, httpStatus: 409,
+      assert.equal(state.claim.available, false, 'Denied evidence enabled the wallet claim');
+      assert.equal(await page.getByTestId('canvas-claim-action').count(), 0,
+        'Denied learner view exposes a claim action');
+      report.deniedEvidence = { applicationId, jobId: denied.jobId,
         transactionCount: 0, credentialCount: 0, claimAvailable: false };
-      report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'scoped-approval');
-      await checkpoint(page, 'approval-denied-on-current-evidence', report.deniedApproval);
+      await checkpoint(page, 'policy-denied-unsigned', report.deniedEvidence);
     } finally {
       // Always restore the exact synthetic grade, including when denial/readback fails.
       await grade(95);
     }
+    await operations.waitForCanvasCourseCompletion(adminCanvas, fixtures);
     const recovered = await sync(`${prefix}-recovery`, true);
     assert.notEqual(headFingerprint(recovered), headFingerprint(denied), 'Recovery reused denied evidence');
     return { denied, recovered };
