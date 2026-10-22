@@ -14,18 +14,18 @@ import pytest
 from scripts import beta_passport_functional_audit as audit
 
 
-def test_negative_callback_import_in_recorder_top_level_loader():
+def test_negative_callback_transport_in_recorder_top_level_loader():
     source = Path(audit.__file__)
     specification = importlib.util.spec_from_file_location('passport_recorder_client', source)
     loaded = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(loaded)
     assert loaded.__package__ == ''
     observed = []
-    port = SimpleNamespace(_fetch=lambda *args: (observed.append(args) or (422, {
-        'detail': [{'type': 'missing', 'loc': ['header', 'x-personalization-signature']}]})))
+    port = SimpleNamespace(callback_container_id='a' * 64,
+        callback_post=lambda *args: (observed.append(args) or (422, {'missing_signature_header': True})))
     status, projection = loaded.ObservedPassportRequests.negative_post(port, b'{}', None)
     assert status == 422 and projection['missing_signature_header'] is True
-    assert observed[0][2] == '/v1/passport/webhooks/personalization'
+    assert observed == [('a' * 64, b'{}', None)]
 
 
 @pytest.fixture
@@ -203,7 +203,9 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
 
             ports = audit.ObservedPassportRequests(
                 capture, RoutedBrowser(), csca_session="sessionId=csca-test", dsc_session="sessionId=dsc-test",
-                flow_session="sessionId=flow-test", api_key="test-api-key-" * 4)
+                flow_session="sessionId=flow-test", api_key="test-api-key-" * 4,
+                callback_container_id='a' * 64,
+                callback_post=lambda container, body, signature: (422, {'missing_signature_header': True}))
             assert len(capture.pages) == 4
             ports.chain_request("/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
                                 {"organization_id": "org-a", "country": "US"}, "sessionId=csca-test")
@@ -222,7 +224,6 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             body = b'{ "organization_id" : "org-a", "status": "SHIPPED" }'
             status, projection = ports.negative_post(body, None)
             assert status == 422 and projection["missing_signature_header"] is True
-            assert observed[-1]["body"].encode() == body
             ports.resource_request("flow", "POST", "/v1/application-templates", {"name": "Fresh"},
                                    {"idempotency-key": "passport-demo-" + "a" * 32})
             assert observed[-1]["headers"]["idempotency-key"] == "passport-demo-" + "a" * 32
@@ -311,7 +312,8 @@ def test_duplicate_cookie_values_fail_before_any_browser_context():
             pytest.fail("Duplicate authority must be rejected before browser creation")
     with pytest.raises(audit.PassportPrerequisiteError, match="Separate governed"):
         audit.ObservedPassportRequests(None, NoBrowser(), csca_session="sessionId=same",
-            dsc_session="sessionId=same ", flow_session="sessionId=other", api_key="k" * 40)
+            dsc_session="sessionId=same ", flow_session="sessionId=other", api_key="k" * 40,
+            callback_container_id='a' * 64)
 
 
 @pytest.mark.parametrize("key_revived", [False, True])

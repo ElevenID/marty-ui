@@ -208,11 +208,17 @@ class ObservedPassportRequests:
     """
 
     def __init__(self, capture, browser, *, csca_session: str, dsc_session: str,
-                 flow_session: str, api_key: str):
+                 flow_session: str, api_key: str, callback_container_id: str,
+                 callback_post=None):
         require(len({session_id(csca_session), session_id(dsc_session), session_id(flow_session)}) == 3,
                 "Separate governed passport sessions are required")
+        require(re.fullmatch(r"[0-9a-f]{64}", callback_container_id) is not None,
+                "Selected callback container is invalid")
+        from scripts.probe_passport_beta_negative_callbacks import post_internal_callback
         self.capture = capture
         self.api_key = api_key
+        self.callback_container_id = callback_container_id
+        self.callback_post = callback_post or post_internal_callback
         self.sessions = {"csca": csca_session, "dsc": dsc_session, "flow": flow_session}
         self.contexts = []
         self.pages = {}
@@ -414,15 +420,9 @@ class ObservedPassportRequests:
                            {"x-api-key": api_key})
 
     def negative_post(self, body: bytes, signature: str | None):
-        from scripts.probe_passport_beta_negative_callbacks import denial_projection
         require(isinstance(body, bytes) and len(body) <= 8192,
                 "Passport callback input exceeds bounds")
-        # Preserve exactly the bytes signed by the production KMS helper.
-        encoded = body.decode("utf8")
-        headers = {"x-personalization-signature": signature} if signature is not None else {}
-        status, result = self._fetch("api", "POST", "/v1/passport/webhooks/personalization",
-                                     encoded, headers)
-        return status, denial_projection(result)
+        return self.callback_post(self.callback_container_id, body, signature)
 
 
 def bound_json(binding: dict[str, str], *, private: bool = False) -> dict[str, Any]:
@@ -629,7 +629,8 @@ def _run_bound_capture(capture) -> dict[str, Any]:
             try:
                 ports = ObservedPassportRequests(capture, browser,
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
-                    flow_session=custody["flowSession"], api_key="")
+                    flow_session=custody["flowSession"], api_key="",
+                    callback_container_id=initial_runtime["containers"]["passport-beta-bureau"])
                 capture._passport_failure_stage = "OWNED_SETUP"
                 owned = OwnedPassportResources(ownership_path, fixture["plan"]["application"]["organization_id"],
                     request=ports.resource_request,
