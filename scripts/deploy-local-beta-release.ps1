@@ -122,6 +122,7 @@ $script:ApplicationServices = @(
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
 $script:PreparedPassportServicesImage = ""
+$script:BetaCallbackNetworkAttachment = $null
 if ($EnablePassportNative) {
     if ($EnablePassportPhysicalProvider) {
         $script:SelectedApplicationServices += "passport-callback-signer-supported"
@@ -414,7 +415,10 @@ function Assert-BetaCallbackSignerNetwork {
         $beforeRaw = & docker network inspect $name
         if ($LASTEXITCODE -ne 0) { throw "Isolated beta callback network is unavailable" }
         $before = @(($beforeRaw -join "`n") | ConvertFrom-Json)
-        if ($before.Count -ne 1 -or $before[0].Internal -ne $true) {
+        if ($before.Count -ne 1 -or $before[0].Internal -ne $true -or
+            $before[0].Name -cne $name -or
+            $before[0].Labels.'com.docker.compose.project' -cne $script:BetaProject -or
+            $before[0].Labels.'com.docker.compose.network' -cne 'passport-callback-signing') {
             throw "Isolated beta callback network is unavailable"
         }
         $beforeMembers = @($before[0].Containers.PSObject.Properties.Name)
@@ -423,6 +427,10 @@ function Assert-BetaCallbackSignerNetwork {
         }
         if ($ids["openbao"] -notin $beforeMembers) {
             Invoke-Checked -FilePath docker -Arguments @("network", "connect", "--alias", "openbao", $name, $ids["openbao"])
+            $script:BetaCallbackNetworkAttachment = @{
+                network_id = [string]$before[0].Id
+                container_id = $ids["openbao"]
+            }
         }
     }
     $networkRaw = & docker network inspect $name
@@ -442,6 +450,23 @@ function Assert-BetaCallbackSignerNetwork {
     if (-not $openbaoEndpoint -or "openbao" -notin @($openbaoEndpoint.Value.Aliases)) {
         throw "OpenBao must have the openbao alias on the isolated beta callback network"
     }
+}
+
+function Restore-BetaCallbackNetworkAttachment {
+    # Undo only the edge this invocation added; never detach a baseline member.
+    if (-not $script:BetaCallbackNetworkAttachment) { return }
+    $edge = $script:BetaCallbackNetworkAttachment
+    $raw = & docker network inspect 'elevenid-beta-passport-callback-signing'
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect added callback network edge for recovery' }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Id -cne $edge.network_id -or
+        $network[0].Labels.'com.docker.compose.project' -cne $script:BetaProject) {
+        throw 'Callback network identity changed; preserve it for explicit recovery'
+    }
+    if ($edge.container_id -in @($network[0].Containers.PSObject.Properties.Name)) {
+        Invoke-Checked -FilePath docker -Arguments @('network', 'disconnect', $edge.network_id, $edge.container_id)
+    }
+    $script:BetaCallbackNetworkAttachment = $null
 }
 
 function Get-FileSha256([string]$Path) {
@@ -1820,16 +1845,25 @@ try {
 
     Write-Step "Recreate application containers from coordinated images"
     $remainingServices = @($script:SelectedApplicationServices)
-    if ($EnablePassportNative) {
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        # Reuse only the scoped callback path. The selfhost entrypoint refuses
+        # initialized Raft and must never be replayed on preserved beta state.
+        Assert-BetaOpenBaoRaftCustody
+        Invoke-ComposeLogged `
+            -Arguments @('run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
+                '--env', 'BAO_PASSPORT_CALLBACK_OPERATOR_TOKEN_FILE=/bao/data/root.token',
+                'openbao-init', '/scripts/openbao-init.sh', '--passport-callback-only') `
+            -LogPath (Join-Path $logsDir 'passport-callback-provision-live.log') `
+            -FailureMessage 'Scoped passport callback provisioning failed'
         $callbackServices = @("passport-callback-signer", "passport-beta-bureau")
         Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $callbackServices)
-        Wait-ForServiceHealth $callbackServices
         Assert-BetaCallbackSignerNetwork -AttachOpenBao
+        Wait-ForServiceHealth $callbackServices
         $remainingServices = @($remainingServices | Where-Object { $_ -notin $callbackServices })
     }
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)
     Wait-ForServiceHealth $script:SelectedApplicationServices
-    if ($EnablePassportNative) { Assert-BetaCallbackSignerNetwork }
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) { Assert-BetaCallbackSignerNetwork }
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
@@ -1840,6 +1874,8 @@ try {
     Wait-ForServiceHealth @("ui-prod") -Ui
 }
 catch {
+    try { Restore-BetaCallbackNetworkAttachment }
+    catch { Write-Warning "Callback network recovery requires explicit inspection: $($_.Exception.Message)" }
     if ($maintenanceStarted -and -not $liveMutationStarted) {
         Start-ContainersBestEffort $maintenanceContainers
         try {

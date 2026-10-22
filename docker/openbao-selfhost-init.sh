@@ -263,29 +263,8 @@ else
     write_secret_file "${BAO_SIGNING_KEYS_TOKEN_FILE}" "${signing_token}" 0444
 fi
 
-if [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ] && [ -s "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
-    callback_token="$(tr -d '\r' < "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}")"
-    if ! bao token lookup -address="${BAO_ADDR}" "${callback_token}" >/dev/null 2>&1; then
-        echo "Existing passport callback token is not accepted by OpenBao; rotate it explicitly." >&2
-        exit 1
-    fi
-    callback_lookup="$(bao token lookup -address="${BAO_ADDR}" -format=json "${callback_token}")"
-    if [ "$(json_array_field "${callback_lookup}" policies)" != '["passport-callback-hmac-service"]' ] ||
-       [ -n "$(json_field "${callback_lookup}" entity_id)" ]; then
-        echo "Existing passport callback token has unexpected authority; rotate it explicitly." >&2
-        exit 1
-    fi
-    echo "Reusing passport callback token at ${BAO_PASSPORT_CALLBACK_TOKEN_FILE}"
-elif [ -n "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" ]; then
-    echo "Minting scoped passport callback token..."
-    callback_token_json="$(bao token create -address="${BAO_ADDR}" -policy=passport-callback-hmac-service -no-default-policy -orphan -format=json)"
-    callback_token="$(json_field "${callback_token_json}" client_token)"
-    if [ -z "${callback_token}" ]; then
-        echo "Failed to mint passport callback token." >&2
-        exit 1
-    fi
-    write_secret_file "${BAO_PASSPORT_CALLBACK_TOKEN_FILE}" "${callback_token}" 0444
-fi
+# Callback key, policy and optional token were provisioned by the shared
+# openbao-init.sh path above; persistent activation uses its scoped mode.
 
 didcomm_token_missing=0
 if [ ! -s "${BAO_DIDCOMM_ISSUANCE_TOKEN_FILE}" ]; then
