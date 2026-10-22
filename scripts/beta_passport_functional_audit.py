@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import sys
+import traceback
 import uuid
 from functools import partial
 from http.cookies import SimpleCookie
@@ -471,6 +472,19 @@ def retain_private_failure(capture, error: Exception) -> None:
         record = {"schema": "marty.passport-private-failure/v1", "stage": stage,
                   "errorType": error_type if error_type in known else "Exception",
                   "qualificationEligible": False}
+        # Locations only: exception text and frame locals can contain session
+        # cookies, API keys or document material. Keep the private diagnostic
+        # useful without copying those values into any recorder artifact.
+        source_root = Path(__file__).resolve().parent.parent
+        source_trace = []
+        for frame in traceback.extract_tb(error.__traceback__)[-20:]:
+            try:
+                relative = Path(frame.filename).resolve().relative_to(source_root)
+            except ValueError:
+                continue
+            source_trace.append({"module": str(relative).replace("\\", "/"),
+                                 "function": frame.name, "line": frame.lineno})
+        record["sourceTrace"] = source_trace
         output = fixture.with_name("passport-failure-" + uuid.uuid4().hex + ".json")
         descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf8") as stream:

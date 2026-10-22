@@ -431,12 +431,21 @@ def test_private_stage_diagnostic_never_retains_exception_or_custody(tmp_path, m
     class Capture:
         inputs = {"scenario": {"privateFixture": {"path": str(fixture)}}}
         _passport_failure_stage = "COORDINATED_SOURCE"
-    audit.retain_private_failure(Capture(), RuntimeError("DO-NOT-RETAIN-EXCEPTION"))
+    try:
+        raise RuntimeError("DO-NOT-RETAIN-EXCEPTION")
+    except RuntimeError as error:
+        audit.retain_private_failure(Capture(), error)
     outputs = list(private.glob("passport-failure-*.json"))
     assert len(outputs) == 1
     raw = outputs[0].read_text()
-    assert json.loads(raw) == {"schema": "marty.passport-private-failure/v1",
+    result = json.loads(raw)
+    assert {key: value for key, value in result.items() if key != "sourceTrace"} == {
+        "schema": "marty.passport-private-failure/v1",
         "stage": "COORDINATED_SOURCE", "errorType": "RuntimeError", "qualificationEligible": False}
+    assert len(result["sourceTrace"]) == 1
+    assert result["sourceTrace"][0]["module"] == "tests/test_beta_passport_functional_audit.py"
+    assert result["sourceTrace"][0]["function"] == "test_private_stage_diagnostic_never_retains_exception_or_custody"
+    assert isinstance(result["sourceTrace"][0]["line"], int)
     assert "DO-NOT-RETAIN" not in raw
 
 
