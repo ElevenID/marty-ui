@@ -1621,9 +1621,20 @@ impl PublishedDatabase {
                 ]
                 .into_iter()
                 .map(|name| {
+                    // The body-timeout and lease-expiry references were captured
+                    // before the stock-request expectation helper was added to
+                    // the shared HTTPS fixture. Bind their exact published input
+                    // without changing either frozen observation corpus.
+                    let source = if name == "canvas_worker_https_fixture.py"
+                        && matches!(script, "worker_body_timeout" | "worker_lease_expiry")
+                    {
+                        "canvas_worker_https_fixture_published.py"
+                    } else {
+                        name
+                    };
                     format!(
                         "type=bind,source={},target=/verification/scripts/{name},readonly",
-                        root.join("scripts").join(name).display()
+                        root.join("scripts").join(source).display()
                     )
                 })
                 .collect()
