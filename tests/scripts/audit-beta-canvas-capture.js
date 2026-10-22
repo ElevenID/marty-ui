@@ -93,8 +93,14 @@ async function main() {
     }
     // This exact recorder checkout is already bound by the parent and helper
     // handshake. The imported report remains a prerequisite, never an assertion.
-    const { loadCanvasPortabilityAttestation } = require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'));
-    const prerequisite = loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
+    const localEngineering = process.env.CANVAS_LOCAL_ENGINEERING_PREREQUISITE === '1';
+    assert.equal(localEngineering, Boolean(overlay),
+      'Local engineering prerequisite requires the exact native overlay binding');
+    const prerequisite = localEngineering
+      ? require(path.join(path.dirname(helper), 'canvasLocalEngineeringPrerequisite.js'))
+        .loadCanvasLocalEngineeringPrerequisite(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)
+      : require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'))
+        .loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
     assert.equal(prerequisite.summary.marty_release_version, report.deployment.marker);
     assert.equal(prerequisite.summary.marty_source_id, report.deployment.source);
     report.prerequisite = prerequisite.summary;
