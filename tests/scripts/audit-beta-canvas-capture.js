@@ -141,13 +141,14 @@ async function main() {
     evidence.bindPage(canvasPage);
     if (recording) videos.set(`${scenario}-canvas.webm`, canvasPage.video());
     const popups = [];
-    // This context records every page. A real assignment popup is retained;
-    // unexpected additional pages fail instead of silently escaping capture.
+    // Initial and repeat assignment launches each open an actual LTI window.
+    // Bind and retain both; any further page fails the capture below.
     learner.on('page', page => {
       popups.push(page);
-      if (popups.length === 1) {
+      if (popups.length <= 2) {
         evidence.bindPage(page);
-        if (recording) videos.set(`${scenario}.webm`, page.video());
+        if (recording) videos.set(popups.length === 1 ? `${scenario}.webm`
+          : `${scenario}-repeat-launch.webm`, page.video());
       }
     });
     const admin = await recordContext();
@@ -167,7 +168,7 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      assert.equal(popups.length, 1, 'Uncaptured or unexpected Canvas launch window');
+      assert.equal(popups.length, 2, 'Uncaptured or unexpected Canvas launch window');
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
         alignment: 'DRIVER_LANDMARK_ONLY_REQUIRES_MEASURED_SOURCE_FRAMES' });
@@ -195,7 +196,7 @@ async function main() {
     phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
       checkpoint, report, onApplication: id => { applicationId = id; } });
-    assert.equal(popups.length, 1, 'Canvas opened an unexpected additional capture page');
+    assert.equal(popups.length, 2, 'Canvas opened an unexpected additional capture page');
     assert.deepEqual(await deployment(), report.deployment, 'Beta deployment changed during Canvas capture');
     complete = true;
   } catch (error) {
