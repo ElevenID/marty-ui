@@ -1365,7 +1365,7 @@ fn api_key_response(api_key: &ApiKey, key: Option<String>) -> ApiKeyResponse {
         scope_type: api_key.scope_type.clone(),
         deployment_profile_id: api_key.deployment_profile_id.map(|value| value.to_string()),
         scopes: api_key.scopes.clone(),
-        enabled: api_key.enabled,
+        enabled: api_key.is_enabled(),
         expires_at: api_key.expires_at.map(|value| value.to_rfc3339()),
         last_used_at: api_key.last_used_at.map(|value| value.to_rfc3339()),
         created_at: api_key.created_at.to_rfc3339(),
@@ -1747,5 +1747,48 @@ mod tests {
         assert!(created["key"].as_str().unwrap().starts_with("mk_test_"));
         assert!(listed.get("key").is_none());
         assert!(listed.get("key_hash").is_none());
+    }
+    #[test]
+    fn api_key_enabled_projection_matches_authentication_lifecycle() {
+        let now = Utc::now();
+        let (active, raw_key) = ApiKey::create(
+            crate::ApiKeySpec {
+                organization_id: Uuid::new_v4(),
+                name: "Revocation metadata".into(),
+                created_by: "owner".into(),
+                scopes: None,
+                description: None,
+                expires_at: None,
+                now,
+            },
+            true,
+        );
+        for (status, configured_enabled, expected) in [
+            (crate::ApiKeyStatus::Active, true, true),
+            (crate::ApiKeyStatus::Active, false, false),
+            // Persisted pre-repair records can retain enabled=true after revocation.
+            (crate::ApiKeyStatus::Revoked, true, false),
+            (crate::ApiKeyStatus::Revoked, false, false),
+            (crate::ApiKeyStatus::Expired, true, false),
+        ] {
+            let mut key = active.clone();
+            key.status = status;
+            key.enabled = configured_enabled;
+            assert!(key.verify(&raw_key));
+            assert_eq!(key.is_valid_at(now), expected);
+            let response = serde_json::to_value(api_key_response(&key, None)).unwrap();
+            assert_eq!(response["enabled"], expected);
+            assert!(response.get("key").is_none());
+            assert!(response.get("key_hash").is_none());
+        }
+        let mut revoked = active;
+        revoked.revoke(now);
+        assert!(!revoked.enabled);
+        assert!(!revoked.is_enabled());
+        assert!(!revoked.is_valid_at(now));
+        assert_eq!(
+            serde_json::to_value(api_key_response(&revoked, None)).unwrap()["enabled"],
+            false
+        );
     }
 }
