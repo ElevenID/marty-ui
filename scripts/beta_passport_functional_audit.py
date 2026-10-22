@@ -28,6 +28,22 @@ ORIGIN = "https://beta.elevenidllc.com"
 ROLES = ("gateway", "flow", "signing-keys", "issuance-native",
          "passport-beta-bureau", "passport-callback-signer")
 CALLBACK_NETWORK = "elevenid-beta-passport-callback-signing"
+
+def local_native_overlay_binding() -> dict[str, Any] | None:
+    """Verify the shared developer overlay independently of release markers."""
+    receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
+    if not receipt:
+        return None
+    binder = Path(os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER", ""))
+    require(binder.is_absolute() and binder.is_file() and not binder.is_symlink()
+            and binder.name == "run-real-canvas-engineering-contract.py"
+            and hashlib.sha256(binder.read_bytes()).hexdigest()
+                == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER_SHA256"),
+            "Local native overlay verifier is unavailable or changed")
+    specification = importlib.util.spec_from_file_location("local_native_overlay_verifier", binder)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module.verify_local_overlay(Path(receipt).resolve(strict=True), docker_context="desktop-linux")
 FEATURES = {
     "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
                 "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -565,6 +581,7 @@ def _run_bound_capture(capture) -> dict[str, Any]:
     # receipt-bound, never inferred from a services image containing its binary.
     capture._passport_failure_stage = "PROTECTED_RUNTIME"
     initial_runtime = verify_runtime(receipt, deployment)
+    overlay_binding = local_native_overlay_binding()
     capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
     require(public.get("source_id") == receipt["sourceId"]
@@ -601,6 +618,8 @@ def _run_bound_capture(capture) -> dict[str, Any]:
             bound_json(scenario[name], private=name == "privateFixture")
         require(verify_runtime(receipt, deployment) == initial_runtime,
                 "Protected passport runtime changed during fresh operations")
+        require(local_native_overlay_binding() == overlay_binding,
+                "Local native overlay changed during fresh operations")
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 
     try:
@@ -691,7 +710,11 @@ def _run_bound_capture(capture) -> dict[str, Any]:
         source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     capture._passport_failure_stage = "EVIDENCE_COMPLETION"
     result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
-                  productionInvariantPreserved=True, qualification="CURRENT_SOURCE_FUNCTIONAL_OPERATIONS",
+                  effectiveNativeProductRevision=(overlay_binding or {}).get("nativeSourceRevision", receipt["sourceRevision"]),
+                  localOverlayBinding=overlay_binding,
+                  productionInvariantPreserved=True,
+                  qualification=("LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS" if overlay_binding
+                                 else "CURRENT_SOURCE_FUNCTIONAL_OPERATIONS"),
                   ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),
                   stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
     output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
