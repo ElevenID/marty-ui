@@ -8,7 +8,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use uuid::Uuid;
 
@@ -259,14 +259,24 @@ pub(super) enum LogExpectation<'a> {
     },
 }
 
-pub(super) fn log_satisfies_boundary(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LogBoundaryStatus {
+    Satisfied,
+    ExpectedMissing,
+    SecretExposed,
+}
+
+fn log_boundary_status(
     log: &str,
     secrets: &[&str],
     expected: Option<LogExpectation<'_>>,
-) -> bool {
+) -> LogBoundaryStatus {
     let secrets_absent = secrets
         .iter()
         .all(|value| !value.is_empty() && !log.contains(value));
+    if !secrets_absent {
+        return LogBoundaryStatus::SecretExposed;
+    }
     let expected_present = match expected {
         None => true,
         Some(LogExpectation::Contains(value)) => log.contains(value),
@@ -280,7 +290,44 @@ pub(super) fn log_satisfies_boundary(
             })
         }),
     };
-    secrets_absent && expected_present
+    if expected_present {
+        LogBoundaryStatus::Satisfied
+    } else {
+        LogBoundaryStatus::ExpectedMissing
+    }
+}
+
+pub(super) fn log_satisfies_boundary(
+    log: &str,
+    secrets: &[&str],
+    expected: Option<LogExpectation<'_>>,
+) -> bool {
+    log_boundary_status(log, secrets, expected) == LogBoundaryStatus::Satisfied
+}
+
+fn wait_for_log_boundary(
+    secrets: &[&str],
+    expected: Option<LogExpectation<'_>>,
+    budget: Duration,
+    mut read_log: impl FnMut(Duration) -> Result<Vec<u8>, String>,
+) -> Result<(), String> {
+    require(secrets.iter().all(|value| !value.is_empty()))?;
+    let deadline = Instant::now().checked_add(budget).ok_or(ERROR)?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        require(!remaining.is_zero())?;
+        let bytes = read_log(remaining)?;
+        let log = String::from_utf8(bytes).map_err(|_| ERROR)?;
+        match log_boundary_status(&log, secrets, expected) {
+            LogBoundaryStatus::SecretExposed => return Err(ERROR.into()),
+            LogBoundaryStatus::Satisfied => return require(Instant::now() < deadline),
+            LogBoundaryStatus::ExpectedMissing => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                require(!remaining.is_zero())?;
+                std::thread::sleep(Duration::from_millis(100).min(remaining));
+            }
+        }
+    }
 }
 
 pub(super) struct PublicImage {
@@ -825,15 +872,18 @@ impl<'a> OwnedNative<'a> {
     ) -> Result<(), String> {
         let id = self.id.as_deref().ok_or(ERROR)?;
         self.checked(&inspect(id)?, id)?;
-        let output = super::canvas_published_database::docker_output_with_timeout(
-            &["logs", id],
-            Duration::from_secs(10),
-            1024 * 1024,
-        )?;
-        let mut bytes = output.stdout;
-        bytes.extend(output.stderr);
-        let log = String::from_utf8(bytes).map_err(|_| ERROR)?;
-        require(log_satisfies_boundary(&log, secrets, expected))
+        // Retry only a delayed marker, never a leak, malformed UTF-8 or CLI failure.
+        // Reads and sleeps share one budget; the command runner separately bounds shutdown.
+        wait_for_log_boundary(secrets, expected, Duration::from_secs(5), |remaining| {
+            let output = super::canvas_published_database::docker_output_with_timeout(
+                &["logs", id],
+                remaining,
+                1024 * 1024,
+            )?;
+            let mut bytes = output.stdout;
+            bytes.extend(output.stderr);
+            Ok(bytes)
+        })
     }
     pub(super) fn state(&self) -> Result<Value, String> {
         let id = self.id.as_deref().ok_or(ERROR)?;
@@ -900,6 +950,118 @@ impl Drop for OwnedNative<'_> {
 #[cfg(test)]
 mod recovery_tests {
     use super::*;
+
+    #[test]
+    fn log_boundary_distinguishes_missing_markers_from_secret_exposure() {
+        let expected = Some(LogExpectation::Contains("startup complete"));
+        assert_eq!(
+            log_boundary_status("starting", &["synthetic-secret"], expected),
+            LogBoundaryStatus::ExpectedMissing
+        );
+        assert_eq!(
+            log_boundary_status("startup complete", &["synthetic-secret"], expected),
+            LogBoundaryStatus::Satisfied
+        );
+        for secret in ["synthetic-secret", ""] {
+            assert_eq!(
+                log_boundary_status("synthetic-secret startup complete", &[secret], expected),
+                LogBoundaryStatus::SecretExposed
+            );
+        }
+        assert!(log_satisfies_boundary(
+            "starting",
+            &["synthetic-secret"],
+            None
+        ));
+    }
+
+    #[test]
+    fn log_boundary_retries_only_delayed_markers_with_decreasing_read_budget() {
+        let mut reads = 0;
+        let mut previous = Duration::from_secs(5);
+        wait_for_log_boundary(
+            &["synthetic-secret"],
+            Some(LogExpectation::Structured {
+                message: "startup complete",
+                field: "state",
+                value: "ready",
+            }),
+            previous,
+            |remaining| {
+                assert!(!remaining.is_zero() && remaining <= previous);
+                if reads > 0 {
+                    assert!(remaining < previous);
+                }
+                previous = remaining;
+                reads += 1;
+                Ok(if reads == 1 {
+                    b"starting".to_vec()
+                } else {
+                    br#"{"fields":{"message":"startup complete","state":"ready"}}"#.to_vec()
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(reads, 2);
+    }
+
+    #[test]
+    fn log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry() {
+        for bytes in [b"synthetic-secret".to_vec(), vec![0xff]] {
+            let mut reads = 0;
+            assert!(wait_for_log_boundary(
+                &["synthetic-secret"],
+                Some(LogExpectation::Contains("startup complete")),
+                Duration::from_secs(5),
+                |_| {
+                    reads += 1;
+                    Ok(bytes.clone())
+                },
+            )
+            .is_err());
+            assert_eq!(reads, 1);
+        }
+        let mut reads = 0;
+        assert_eq!(
+            wait_for_log_boundary(&[], None, Duration::from_secs(5), |_| {
+                reads += 1;
+                Err("Docker logs failed".into())
+            }),
+            Err("Docker logs failed".into())
+        );
+        assert_eq!(reads, 1);
+    }
+
+    #[test]
+    fn log_boundary_rejects_empty_secret_and_zero_budget_before_reading() {
+        for (secrets, budget) in [(vec![""], Duration::from_secs(5)), (vec![], Duration::ZERO)] {
+            assert!(wait_for_log_boundary(&secrets, None, budget, |_| {
+                panic!("invalid boundary must not read Docker logs")
+            })
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn log_boundary_does_not_accept_late_success_or_read_again_after_expiry() {
+        for bytes in [b"startup complete".to_vec(), b"starting".to_vec()] {
+            let mut reads = 0;
+            let budget = Duration::from_millis(50);
+            assert!(wait_for_log_boundary(
+                &["synthetic-secret"],
+                Some(LogExpectation::Contains("startup complete")),
+                budget,
+                |remaining| {
+                    assert!(!remaining.is_zero() && remaining <= budget);
+                    reads += 1;
+                    std::thread::sleep(budget + Duration::from_millis(20));
+                    Ok(bytes.clone())
+                },
+            )
+            .is_err());
+            assert!(reads <= 1);
+        }
+    }
 
     #[test]
     fn pending_operation_record_is_exclusive_validated_and_explicitly_completed() {

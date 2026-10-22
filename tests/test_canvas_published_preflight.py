@@ -65,6 +65,11 @@ SELFHOST_CASES = (
     "selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts",
     "selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed",
     "selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_distinguishes_missing_markers_from_secret_exposure",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_retries_only_delayed_markers_with_decreasing_read_budget",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_empty_secret_and_zero_budget_before_reading",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_does_not_accept_late_success_or_read_again_after_expiry",
 )
 FLOW_CASES = (
     "didcomm_flow_grpc_provider_preserves_keyed_admission",
@@ -1323,13 +1328,23 @@ def test_opt_in_worker_same_count_substitution_fails_before_image_pull(shell_cas
 
 
 @pytest.mark.parametrize("substitution", [False, True])
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_distinguishes_missing_markers_from_secret_exposure",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_retries_only_delayed_markers_with_decreasing_read_budget",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_empty_secret_and_zero_budget_before_reading",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_does_not_accept_late_success_or_read_again_after_expiry",
+    ],
+)
 def test_selfhost_case_inventory_fails_closed_before_image_pull(
-    shell_case, substitution
+    shell_case, substitution, removed
 ):
     names = sorted(
         set(required_registrations()) | set(MIGRATED_CASES) | set(SELFHOST_CASES)
     )
-    removed = "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure"
     cases = [f"{name}: test" for name in names if name != removed]
     if substitution:
         cases.append("substituted_selfhost_cleanup_case: test")

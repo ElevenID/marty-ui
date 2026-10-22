@@ -1,5 +1,5 @@
 // Synthetic libtest protocol only: these names are deliberately not the
-// product's 12-name roster, which remains owned by the shell runner.
+// product's 17-name roster, which remains owned by the shell runner.
 #[test]
 fn case01() {
     let output = std::process::Command::new(std::env::current_exe().unwrap())
@@ -34,3 +34,13 @@ fn case11() {}
 fn case12() {
     assert!(std::env::var_os("MARTY_SELFHOST_SYNTHETIC_FAIL").is_none());
 }
+#[test]
+fn case13() {}
+#[test]
+fn case14() {}
+#[test]
+fn case15() {}
+#[test]
+fn case16() {}
+#[test]
+fn case17() {}
