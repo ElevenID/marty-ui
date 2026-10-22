@@ -919,6 +919,17 @@ fn recovered_course_progress_uses_fresh_observation_order() {
         rest_effective_at("canvas.course_completion", &stale_completion),
         None
     );
+    let mut revised = stale_completion.clone();
+    revised["updated_at"] = json!("2026-10-21T03:00:28Z");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        timestamp(revised.get("updated_at"))
+    );
+    revised["updated_at"] = json!("invalid");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        None
+    );
     assert!(rest_effective_at(
         "canvas.assignment_score",
         &json!({"graded_at": "2026-10-21T03:00:28Z"})

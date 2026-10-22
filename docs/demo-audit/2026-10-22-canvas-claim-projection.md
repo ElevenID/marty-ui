@@ -73,3 +73,13 @@ verification passed six Rust controls (including an actual local REST provider),
 77 Python controls and 70 Node adapter controls. Existing live R34 results remain
 historical and source-bound; this consolidation is not a fresh demo or official
 conformance result.
+
+The next exact-source CI39864089970 passed the timeout/lease preflights and
+109 worker controls, but rejected the course fact in the issued-facts replay:
+its effective_at used the observation clock despite a valid provider updated_at.
+The course helper now preserves explicit revision timestamps and falls back to
+observation time only when no valid revision exists; completed_at remains excluded
+because it identifies the first completion event. Both single and bulk reads use
+that helper. The focused recovery control covers valid/missing/invalid revisions,
+and the real HTTP contract retains all four original timestamp expectations.
+Frozen oracle files and their hashes remain unchanged.

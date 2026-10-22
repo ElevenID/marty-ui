@@ -885,9 +885,11 @@ fn rest_effective_at(fact_type: &str, record: &Value) -> Option<DateTime<Utc>> {
     // revision of the mutable course-progress snapshot. After a downgrade and
     // recovery it can predate the downgrade, which would leave the deny fact
     // current despite a fresh completed=true read. Use observation time for
-    // course progress (the processor fills it when effective_at is absent).
+    // course progress when no explicit revision timestamp is available (the
+    // processor fills it when effective_at is absent). A provider updated_at
+    // still represents the revision and must retain its existing semantics.
     if fact_type == "canvas.course_completion" {
-        return None;
+        return timestamp(record.get("updated_at"));
     }
     ["updated_at", "graded_at", "completed_at"]
         .iter()
