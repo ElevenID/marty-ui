@@ -65,7 +65,7 @@ async function main() {
     nativeIndependentWalletCapture: false, operations: [], behaviorAssertions: {}, failures: [] };
   const setupState = {};
   const contexts = [], videos = new Map();
-  let browser, setup, session, adminPage, complete = false, applicationId;
+  let browser, setup, session, adminPage, complete = false, applicationId, phase = 'deployment';
   const save = (file, value) => fs.writeFileSync(path.join(dir, file), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
   async function recordContext() {
     const context = await browser.newContext({ viewport: VIDEO_SIZE,
@@ -111,6 +111,7 @@ async function main() {
     assert.deepEqual(actual, input);
     browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
     const ledger = new stock.ObservationLedger(report.startedAt, { scope: 'CURRENT_RUN_SETUP_PREREQUISITES_ONLY' });
+    phase = 'canvas-fixture-setup';
     setup = await stock.prepareCanvasCaptureFixtures({ browser, ledger, state: setupState,
       runSuffix: actual.runId, ownershipDirectory: dir, pass: (id, detail) => ledger.pass(id, detail),
       prerequisiteDirectory: path.dirname(path.resolve(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)) });
@@ -153,9 +154,12 @@ async function main() {
     adminPage = await admin.newPage();
     evidence.bindPage(adminPage);
     if (recording) videos.set(`${scenario}-admin.webm`, adminPage.video());
+    phase = 'admin-login';
     await login(adminPage, stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
       stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
+    phase = 'admin-org-selection';
     await selectOrg(adminPage);
+    phase = 'wallet-session';
     const walletContext = await recordContext();
     session = await acquireWalletSession(walletContext, { origin: 'http://127.0.0.1:8787', runId: actual.runId });
     report.walletSession = session.evidence;
@@ -188,6 +192,7 @@ async function main() {
         } else { assert.equal(await card.count(), 0, 'Resolved review remains open in the actual queue'); }
       }
     };
+    phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
       checkpoint, report, onApplication: id => { applicationId = id; } });
     assert.equal(popups.length, 1, 'Canvas opened an unexpected additional capture page');
@@ -195,7 +200,7 @@ async function main() {
     complete = true;
   } catch (error) {
     // Do not put response bodies, bearer offers or credentials in reports.
-    report.failures.push({ stage: 'execution', type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
+    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
   } finally {
     async function cleanup(operation, fn) {
       try { await fn(); return true; } catch (error) {
