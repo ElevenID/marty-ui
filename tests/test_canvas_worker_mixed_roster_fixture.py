@@ -109,6 +109,28 @@ def signing_grant(module, payload):
     )
 
 
+def test_stock_canvas_submission_requires_separate_assignment_read(
+    fixture_module, matrix
+):
+    stage = matrix["cases"][0]["stages"][0]
+    with fixture_module.MixedRosterHttpsFixture(
+        matrix, submission_contract="stock_assignment"
+    ) as fixture:
+        fixture.set_stage(stage)
+        submission = "/api/v1/courses/42/assignments/9/submissions/9"
+        assignment = "/api/v1/courses/42/assignments/9"
+        status, body = request(fixture, "GET", submission)
+        assert status == 200
+        assert body["assignment_id"] == 9
+        assert "assignment" not in body
+        assert request(fixture, "GET", assignment) == (
+            200, {"id": 9, "points_possible": 100}
+        )
+        assert [item["path"] for item in fixture.requests] == [
+            submission, assignment
+        ]
+
+
 def test_every_frozen_stage_serves_distinct_roster_membership_and_scores(
     fixture_module, matrix
 ):

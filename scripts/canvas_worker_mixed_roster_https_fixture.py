@@ -97,11 +97,13 @@ def _validate_signing_grant(value, payload, minted_inputs):
 
 
 class MixedRosterHttpsFixture(WorkerHttpsFixture):
-    def __init__(self, matrix, *, signer_contract="grant_bound"):
+    def __init__(self, matrix, *, signer_contract="grant_bound", submission_contract="published_include"):
         super().__init__()
         assert signer_contract in {"grant_bound", "pinned_published"}
+        assert submission_contract in {"published_include", "stock_assignment"}
         self.matrix = matrix
         self.signer_contract = signer_contract
+        self.submission_contract = submission_contract
         self.signer_requests = []
         self.token_scopes = []
         self.signer_operations = []
@@ -390,9 +392,10 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                 if user == 12
                 else stage["score"]
             )
-            responses[
-                f"/api/v1/courses/42/assignments/9/submissions/{user}?include%5B%5D=assignment"
-            ] = {
+            path = f"/api/v1/courses/42/assignments/9/submissions/{user}"
+            if self.submission_contract == "published_include":
+                path += "?include%5B%5D=assignment"
+            submission = {
                 "status": 503 if failed else 200,
                 "body": {}
                 if failed
@@ -401,9 +404,11 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                     "assignment_id": 9,
                     "score": 90,
                     "workflow_state": "graded",
-                    "assignment": {"points_possible": 100},
+                    **({"assignment": {"points_possible": 100}}
+                       if self.submission_contract == "published_include" else {}),
                 },
             }
+            responses[path] = submission
             responses[
                 f"/api/lti/courses/42/line_items/5/results?user_id=subject-{user}"
             ] = {
@@ -417,6 +422,11 @@ class MixedRosterHttpsFixture(WorkerHttpsFixture):
                         "resultStatus": "FullyGraded",
                     }
                 ],
+            }
+        if self.submission_contract == "stock_assignment":
+            responses["/api/v1/courses/42/assignments/9"] = {
+                "status": 200,
+                "body": {"id": 9, "points_possible": 100},
             }
         self.stage = {"responses": responses}
 
