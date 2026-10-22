@@ -396,6 +396,58 @@ async fn body_timeout_raw_published_reports() -> String {
     format!("[{}]\n", raw_reports.join(",\n"))
 }
 
+fn first_report_difference(
+    expected: &serde_json::Value,
+    actual: &serde_json::Value,
+    path: &str,
+) -> Option<String> {
+    if expected == actual {
+        return None;
+    }
+    match (expected, actual) {
+        (serde_json::Value::Array(left), serde_json::Value::Array(right)) => {
+            for (index, (left_item, right_item)) in left.iter().zip(right).enumerate() {
+                if let Some(difference) =
+                    first_report_difference(left_item, right_item, &format!("{path}/{index}"))
+                {
+                    return Some(difference);
+                }
+            }
+            Some(format!("{path}/length"))
+        }
+        (serde_json::Value::Object(left), serde_json::Value::Object(right)) => {
+            for (key, left_item) in left {
+                let child_path = format!("{path}/{}", key.replace('~', "~0").replace('/', "~1"));
+                let Some(right_item) = right.get(key) else {
+                    return Some(child_path);
+                };
+                if let Some(difference) =
+                    first_report_difference(left_item, right_item, &child_path)
+                {
+                    return Some(difference);
+                }
+            }
+            let extra = right.keys().find(|key| !left.contains_key(*key));
+            extra.map(|key| format!("{path}/{}", key.replace('~', "~0").replace('/', "~1")))
+        }
+        _ => Some(path.to_owned()),
+    }
+}
+
+fn frozen_report_difference(expected: &[u8], actual: &[u8]) -> String {
+    let expected_json: serde_json::Value = serde_json::from_slice(expected).unwrap();
+    let actual_json: serde_json::Value = serde_json::from_slice(actual).unwrap();
+    if let Some(path) = first_report_difference(&expected_json, &actual_json, "") {
+        return format!("first differing JSON pointer: {path}");
+    }
+    let offset = expected
+        .iter()
+        .zip(actual)
+        .position(|(left, right)| left != right)
+        .unwrap_or_else(|| expected.len().min(actual.len()));
+    format!("JSON values match; first differing raw byte: {offset}; expected length: {}; actual length: {}", expected.len(), actual.len())
+}
+
 #[tokio::test]
 async fn worker_body_timeout_reference_matches_published_process() {
     if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
@@ -405,7 +457,8 @@ async fn worker_body_timeout_reference_matches_published_process() {
     let expected = include_bytes!("../../../../contracts/canvas-worker-body-timeout-oracle.json");
     assert!(
         actual.as_bytes() == expected,
-        "published body reference differs from independently frozen raw reports"
+        "published body reference differs from independently frozen raw reports: {}",
+        frozen_report_difference(expected, actual.as_bytes())
     );
 }
 
@@ -460,10 +513,11 @@ async fn worker_lease_expiry_reference_matches_published_process() {
         return;
     }
     let raw = lease_expiry_raw_published_reports().await;
+    let expected = include_bytes!("../../../../contracts/canvas-worker-lease-expiry-oracle.json");
     assert!(
-        raw.as_bytes()
-            == include_bytes!("../../../../contracts/canvas-worker-lease-expiry-oracle.json"),
-        "published lease-expiry reference differs from independent frozen reports"
+        raw.as_bytes() == expected,
+        "published lease-expiry reference differs from independent frozen reports: {}",
+        frozen_report_difference(expected, raw.as_bytes())
     );
 }
 

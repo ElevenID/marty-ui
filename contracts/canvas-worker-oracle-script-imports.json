@@ -209,7 +209,7 @@
     ],
     "dynamic_joins": [
       "root.join(\"contracts\").join(name)",
-      "root.join(\"scripts\").join(name)",
+      "root.join(\"scripts\").join(source)",
       "root.join(&path)",
       "root.join(&scenario_path)",
       "root.join(&script_path)",

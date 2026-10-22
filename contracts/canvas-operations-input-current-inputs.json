@@ -7,7 +7,7 @@
     "contracts/canvas-operations-input-scenarios.json": "d0d23fb1d3594cc08de4ee3bee942b57acea3f82b5a31193ca4841b3a416cedf",
     "contracts/canvas-worker-consumer-range-oracle.json": "0459d9b3ae5409df9e5cb149e13167a13625518bb97dcbf8654631898cc63e0c",
     "rust/services/issuance/tests/support/canvas_operations_input_http.rs": "94cd1fdf90ad518c84d92da2895e5d1cc57462c898f771166e5423b5c18fbade",
-    "rust/services/issuance/tests/support/canvas_published_database.rs": "3a16aac585400e661a91c3333d64c3b55f76902d85f9f5a9bed857e265dcbbbd",
+    "rust/services/issuance/tests/support/canvas_published_database.rs": "8b38d0680c3a0203864163727fd0d8f540f8ac8f2372765d87cce4d95d43e9b1",
     "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
     "scripts/run_canvas_operations_input_oracle.py": "c23aa66d46cacba7d86d97cab6573707a7abe0cc1489bb3c2895b6247f17a0e8"
   }
