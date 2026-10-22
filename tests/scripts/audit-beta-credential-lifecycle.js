@@ -5,7 +5,7 @@ const fs = require('fs');
 const { acquireWalletSession, openIsolatedWallet, resetIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
 const assert = require('node:assert/strict');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { createDemoLiveEvidence, acknowledgeDemoInputs } = require('./demo-live-evidence');
 const { spawnSync } = require('child_process');
 const { chromium } = require('@playwright/test');
@@ -904,12 +904,21 @@ async function verify(page, walletPage, label, {
 
   onPhase('wallet-presentation');
   const wallet = await present(walletPage, session.requestUri);
+  const walletError = String(wallet.error || '');
+  const walletErrorClass = ['Invalid request','SD-JWT error','Key error','JWT error',
+    'Invalid URL','Signing error','Proof verification failed','Unsupported credential format']
+    .find(prefix => walletError.startsWith(`${prefix}:`)) || (walletError ? 'OTHER' : null);
+  const walletErrorIndicators = ['issuer verification failed','holder public key','request object',
+    'presentation request URI','No stored credential','nonce','HTTP 400','HTTP 403','HTTP 404',
+    'HTTP 409','fetch','signature'].filter(marker => walletError.toLowerCase().includes(marker.toLowerCase()));
   onPhase('wallet-presentation-result', { instanceId: session.instanceId,
     walletOk: wallet.ok === true, walletStatus: wallet.status,
     submitted: wallet.submission?.submitted === true,
     verifierHttpStatus: wallet.submission?.verifier_http_status || null,
     verifierErrorCode: /^[a-z][a-z0-9_]{0,79}$/.test(wallet.submission?.verifier_error || '')
-      ? wallet.submission.verifier_error : null });
+      ? wallet.submission.verifier_error : null,
+    walletErrorClass, walletErrorIndicators,
+    walletErrorSha256: walletError ? createHash('sha256').update(walletError).digest('hex') : null });
   if (returnOnWalletFailure && !wallet.ok) return { session: sanitizedSession, wallet, result: null };
   onPhase('verifier-result', { instanceId: session.instanceId,
     walletOk: wallet.ok === true, walletStatus: wallet.status });
