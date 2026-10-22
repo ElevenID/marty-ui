@@ -51,6 +51,7 @@ from probe_didcomm_openbao_ha import (
     request as http_request,
     require_status as http_require_status,
     wait_for,
+    wait_for_active_node,
 )
 from selfhost_openbao_client import (Bao, CUSTODY_SIGNER, CUSTODY_SIGNER_LEAF_ACL,
                                    CUSTODY_SIGNER_POLICY)
@@ -106,6 +107,16 @@ def start_node(name: str, volume: str, ca_file: Path) -> str:
         raise RuntimeError(
             f"Disposable Raft server did not start: {(logs.stdout + logs.stderr)[-2500:]}"
         ) from error
+
+
+def replace_node(name: str, replacement: str, volume: str, ca_file: Path,
+                 started: list[str]) -> str:
+    """Reload restored custody state and resolve the replacement's fresh port."""
+    docker("stop", name)
+    docker("rm", name)
+    started.remove(name)
+    started.append(replacement)
+    return start_node(replacement, volume, ca_file)
 
 
 def run() -> None:
@@ -381,6 +392,8 @@ def run() -> None:
         cold_base = start_node(cold_name, cold_state, ca_file)
         require_status(cold_base, "POST", "sys/unseal", "",
                        {"key": volume_file(state, "unseal.key")})
+        wait_for_active_node(cold_base, ca_file=ca_file,
+                             operation="cold-copy Raft leader after unseal")
         cold = partial(http_require_status, ca_file=ca_file)
         if cold(cold_base, "POST", f"transit/decrypt/{key_name}", root,
                 {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
@@ -394,7 +407,23 @@ def run() -> None:
 
         # The dedicated snapshot identity must survive revocation of the
         # original bootstrap root on the copied Raft state.
-        cold(cold_base, "POST", "auth/token/revoke-self", root)
+        revoked_status, revoked_response = http_request(
+            cold_base, "POST", "auth/token/revoke-self", token=root,
+            ca_file=ca_file, revocation_error_diagnostics=True,
+        )
+        if revoked_status not in (200, 204):
+            root_lookup_status = http_request(
+                cold_base, "GET", "auth/token/lookup-self", token=root,
+                ca_file=ca_file,
+            )[0]
+            health_status = http_request(
+                cold_base, "GET", "sys/health", ca_file=ca_file,
+            )[0]
+            raise RuntimeError(
+                f"Bootstrap root revocation failed: status {revoked_status}; "
+                f"classes {revoked_response.get('error_classes', [])}; "
+                f"root lookup status {root_lookup_status}; health status {health_status}"
+            )
         if http_request(cold_base, "GET", f"transit/keys/{key_name}",
                         token=root, ca_file=ca_file)[0] != 403:
             raise RuntimeError("Revoked bootstrap root still has KMS access")
@@ -544,6 +573,8 @@ def run() -> None:
                             timeout=30)
         fresh(snapshot_base, "POST", "sys/unseal", "",
               {"key": initialized["keys_base64"][0]})
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="replacement Raft leader before restore")
         restore_request = urllib.request.Request(
             snapshot_base + "/v1/sys/storage/raft/snapshot-force",
             data=snapshot, method="POST",
@@ -561,6 +592,14 @@ def run() -> None:
             lambda: http_request(snapshot_base, "GET", "sys/seal-status",
                                  ca_file=snapshot_ca)[1].get("sealed") is True,
         )
+        # A force restore replaces the persisted barrier/seal configuration.
+        # Reload it before submitting the original recovery key, just as the
+        # coordinated restore path does; the fresh process must use a newly
+        # resolved published port rather than the stopped node's endpoint.
+        restored_name = f"{server}-snapshot-reloaded"
+        snapshot_base = replace_node(snapshot_name, restored_name, snapshot_state,
+                                     snapshot_ca, started)
+        snapshot_name = restored_name
         original_unseal_key = volume_file(state, "unseal.key")
         unseal_statuses: set[int] = set()
         unseal_error_classes: set[str] = set()
@@ -583,18 +622,20 @@ def run() -> None:
                 f"{sorted(unseal_statuses)}; classified errors "
                 f"{sorted(unseal_error_classes)}"
             ) from error
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="restored Raft leader after original-key unseal")
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Force-restored Raft node lost Transit ciphertext")
-        docker("stop", snapshot_name)
-        docker("rm", snapshot_name)
-        started.remove(snapshot_name)
-        snapshot_name = f"{server}-restored"
-        started.append(snapshot_name)
-        snapshot_base = start_node(snapshot_name, snapshot_state, snapshot_ca)
+        restored_name = f"{server}-restored"
+        snapshot_base = replace_node(snapshot_name, restored_name, snapshot_state,
+                                     snapshot_ca, started)
+        snapshot_name = restored_name
         if fresh(snapshot_base, "GET", "sys/seal-status", "").get("sealed"):
             fresh(snapshot_base, "POST", "sys/unseal", "",
                   {"key": original_unseal_key})
+        wait_for_active_node(snapshot_base, ca_file=snapshot_ca,
+                             operation="restarted restored Raft leader")
         if fresh(snapshot_base, "POST", f"transit/decrypt/{key_name}", root,
                  {"ciphertext": encrypted})["data"]["plaintext"] != "cHJvYmU=":
             raise RuntimeError("Snapshot restore lost Transit ciphertext")

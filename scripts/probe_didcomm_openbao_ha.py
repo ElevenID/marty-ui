@@ -77,7 +77,7 @@ def docker(*args: str, timeout: int = 90) -> str:
     return result.stdout.strip()
 
 
-def classify_unseal_error(raw: bytes) -> list[str]:
+def classify_api_error(raw: bytes, markers: dict[str, str]) -> list[str]:
     """Return only fixed diagnostics; never reflect a key-bearing error body."""
     try:
         value = json.loads(raw)
@@ -87,15 +87,31 @@ def classify_unseal_error(raw: bytes) -> list[str]:
     if not isinstance(errors, list) or not all(isinstance(item, str) for item in errors):
         return ["UNCLASSIFIED_ERROR"]
     text = " ".join(errors).lower()
-    markers = {
+    return [name for name, marker in markers.items() if marker in text] or ["UNCLASSIFIED_ERROR"]
+
+
+def classify_unseal_error(raw: bytes) -> list[str]:
+    return classify_api_error(raw, {
         "INVALID_KEY_SIZE": "invalid key size",
         "DECRYPTION_FAILED": "failed to decrypt",
         "AUTHENTICATION_FAILED": "message authentication failed",
         "INVALID_UNSEAL_KEY": "invalid key",
         "SEAL_STATE_ERROR": "sealed",
         "UNINITIALIZED": "not initialized",
-    }
-    return [name for name, marker in markers.items() if marker in text] or ["UNCLASSIFIED_ERROR"]
+    })
+
+
+def classify_revocation_error(raw: bytes) -> list[str]:
+    return classify_api_error(raw, {
+        "REVOCATION_FAILED": "failed to revoke",
+        "STORAGE_WRITE_FAILED": "failed to persist",
+        "STORAGE_DELETE_FAILED": "failed to delete",
+        "NODE_NOT_ACTIVE": "not active",
+        "NODE_SEALED": "sealed",
+        "DEADLINE_EXCEEDED": "context deadline exceeded",
+        "CONTEXT_CANCELLED": "context canceled",
+        "PERMISSION_DENIED": "permission denied",
+    })
 
 
 def request(
@@ -108,6 +124,7 @@ def request(
     timeout: float = 10,
     ca_file: Path | None = None,
     unseal_error_diagnostics: bool = False,
+    revocation_error_diagnostics: bool = False,
 ) -> tuple[int, dict]:
     payload = None if body is None else json.dumps(body).encode()
     headers = {"Content-Type": "application/json"}
@@ -125,6 +142,8 @@ def request(
         raw = error.read(16 * 1024)
         if unseal_error_diagnostics:
             return error.code, {"error_classes": classify_unseal_error(raw)}
+        if revocation_error_diagnostics:
+            return error.code, {"error_classes": classify_revocation_error(raw)}
         return error.code, {}
 
 
@@ -139,6 +158,18 @@ def wait_for(operation: str, check, seconds: float = 30) -> object:
             pass
         time.sleep(0.25)
     raise RuntimeError(f"Disposable HA probe timed out: {operation}")
+
+
+def wait_for_active_node(base: str, *, ca_file: Path | None = None,
+                         operation: str = "active Raft leader", seconds: float = 30) -> None:
+    """Unseal completion is not write readiness; only poll public read endpoints."""
+    def active() -> bool:
+        status, leader = request(base, "GET", "sys/leader", ca_file=ca_file)
+        if status != 200 or leader.get("is_self") is not True:
+            return False
+        return request(base, "GET", "sys/health", ca_file=ca_file)[0] == 200
+
+    wait_for(operation, active, seconds=seconds)
 
 
 def require_status(
@@ -230,10 +261,7 @@ def run() -> None:
         unseal_key = initialized["keys"][0]
         root = initialized["root_token"]
         require_status(bases[0], "PUT", "sys/unseal", "", {"key": unseal_key})
-        wait_for(
-            "first leader",
-            lambda: request(bases[0], "GET", "sys/leader")[1].get("is_self"),
-        )
+        wait_for_active_node(bases[0], operation="first leader")
         for base in bases[1:]:
             require_status(
                 base,

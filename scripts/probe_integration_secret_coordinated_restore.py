@@ -32,6 +32,7 @@ from probe_didcomm_openbao_ha import (
     request,
     require_status,
     wait_for,
+    wait_for_active_node,
 )
 from with_disposable_event_stream_kms import execute as with_disposable_tls_kms
 
@@ -924,14 +925,8 @@ def run() -> None:
                 raise RuntimeError(
                     "Disposable source OpenBao did not unseal with saved key"
                 )
-            wait_for(
-                "source Raft leader after unseal",
-                lambda: (
-                    request(bao_url, "GET", "sys/leader", token=root,
-                            ca_file=source_ca)[1].get("is_self")
-                    is True
-                ),
-            )
+            wait_for_active_node(bao_url, ca_file=source_ca,
+                                 operation="source Raft leader after unseal")
 
             export_dir = temp / "exports"
             export_dir.mkdir(mode=0o700)
@@ -1021,16 +1016,8 @@ def run() -> None:
                 ca_file=restored_ca,
             )
             new_root = initialized["root_token"]
-            wait_for(
-                "replacement Raft leader",
-                lambda: (
-                    request(restored_bao_url, "GET", "sys/leader", token=new_root,
-                            ca_file=restored_ca)[
-                        1
-                    ].get("is_self")
-                    is True
-                ),
-            )
+            wait_for_active_node(restored_bao_url, ca_file=restored_ca,
+                                 operation="replacement Raft leader")
             snapshot_request = urllib.request.Request(
                 restored_bao_url + "/v1/sys/storage/raft/snapshot-force",
                 data=snapshot,
@@ -1089,16 +1076,8 @@ def run() -> None:
                     raise RuntimeError(
                         f"Restored OpenBao unseal failed: health {health}, status {unseal_status}"
                     )
-            wait_for(
-                "restored Raft leader",
-                lambda: (
-                    request(restored_bao_url, "GET", "sys/leader", token=root,
-                            ca_file=restored_ca)[1].get(
-                        "is_self"
-                    )
-                    is True
-                ),
-            )
+            wait_for_active_node(restored_bao_url, ca_file=restored_ca,
+                                 operation="restored Raft leader")
             signing_process, signing_url, secret_url = start_signing(
                 binary,
                 restored_bao_url,
