@@ -137,20 +137,24 @@ require_selfhost_tests() {
 }
 deadline_serial_test=worker_deadline_matches_frozen_published_process
 mixed_roster_serial_test=worker_mixed_roster_reference_matches_published_process
-# The mixed-roster published-process replay enforces a 10-second child SIGINT
-# bound. Run it without the other Canvas owners during full qualification.
+body_timeout_serial_test=worker_body_timeout_reference_matches_published_process
+lease_expiry_serial_test=worker_lease_expiry_reference_matches_published_process
+# These published-process replays have tight child timeout/lease bounds.
+# Run each without the other Canvas owners during full qualification.
 historical_serial_tests=()
 historical_serial_skips=()
 if [[ "$mode" == full || "$mode" == worker-full ||
   "${MARTY_CANVAS_FULL_QUALIFICATION:-0}" == 1 ]]; then
-  historical_serial_tests=("$mixed_roster_serial_test")
+  historical_serial_tests=("$mixed_roster_serial_test" "$body_timeout_serial_test" "$lease_expiry_serial_test")
   for historical_serial_test in "${historical_serial_tests[@]}"; do
     historical_serial_skips+=(--skip "$historical_serial_test")
   done
 fi
 run_historical_serial_tests() {
   if (( ${#historical_serial_tests[@]} == 0 )); then return; fi
-  timed canvas_serial mixed_roster_reference python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1
+  for historical_serial_test in "${historical_serial_tests[@]}"; do
+    timed canvas_serial "$historical_serial_test" python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- "$worker_executable" "$historical_serial_test" --exact --nocapture --test-threads=1
+  done
 }
 # Opt-in diagnostic owner. No current CI selector invokes these modes; the
 # default and existing full/preflight paths below retain their original order.
@@ -664,14 +668,21 @@ drain_target_relays() {
   if [[ -n "$selfhost_relay_pid" ]]; then wait "$selfhost_relay_pid" || true; fi
 }
 report_target_logs() {
+  # Put failed owners first so CI log truncation cannot hide their assertions.
+  if (( $2 != 0 )); then
+    printf 'Canvas worker target exit: %s\n' "$2"
+    sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
+  fi
   printf 'Canvas composition target exit: %s\n' "$1"
   # Phase records were relayed live. Keep the complete diagnostic text in the
   # final replay without presenting those same lines as fresh timing events.
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$composition_log"
   printf 'Flow target exit: %s\n' "$4"
   sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$flow_log"
-  printf 'Canvas worker target exit: %s\n' "$2"
-  sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
+  if (( $2 == 0 )); then
+    printf 'Canvas worker target exit: %s\n' "$2"
+    sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$worker_log"
+  fi
   if (( selfhost_delegated == 0 )); then
     printf 'Selfhost target exit: %s\n' "$3"
     sed 's/^MARTY_CI_PHASE_V1 /[raw-log] MARTY_CI_PHASE_V1 /' "$selfhost_log"

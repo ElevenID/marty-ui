@@ -224,9 +224,12 @@ def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() 
     assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
     assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
     assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
-    assert 'historical_serial_tests=("$mixed_roster_serial_test")' in script
     assert (
-        'timed canvas_serial mixed_roster_reference ' + worker_recorder + '"$worker_executable" "$mixed_roster_serial_test" --exact --nocapture --test-threads=1'
+        'historical_serial_tests=("$mixed_roster_serial_test" "$body_timeout_serial_test" "$lease_expiry_serial_test")'
+        in script
+    )
+    assert (
+        'timed canvas_serial "$historical_serial_test" ' + worker_recorder + '"$worker_executable" "$historical_serial_test" --exact --nocapture --test-threads=1'
         in script
     )
     assert (
