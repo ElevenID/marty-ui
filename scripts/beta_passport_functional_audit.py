@@ -414,10 +414,7 @@ class ObservedPassportRequests:
                            {"x-api-key": api_key})
 
     def negative_post(self, body: bytes, signature: str | None):
-        if __package__:
-            from .probe_passport_beta_negative_callbacks import denial_projection
-        else:
-            from probe_passport_beta_negative_callbacks import denial_projection
+        from scripts.probe_passport_beta_negative_callbacks import denial_projection
         require(isinstance(body, bytes) and len(body) <= 8192,
                 "Passport callback input exceeds bounds")
         # Preserve exactly the bytes signed by the production KMS helper.

@@ -2,14 +2,30 @@
 from copy import deepcopy
 import json
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import beta_passport_functional_audit as audit
+
+
+def test_negative_callback_import_in_recorder_top_level_loader():
+    source = Path(audit.__file__)
+    specification = importlib.util.spec_from_file_location('passport_recorder_client', source)
+    loaded = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(loaded)
+    assert loaded.__package__ == ''
+    observed = []
+    port = SimpleNamespace(_fetch=lambda *args: (observed.append(args) or (422, {
+        'detail': [{'type': 'missing', 'loc': ['header', 'x-personalization-signature']}]})))
+    status, projection = loaded.ObservedPassportRequests.negative_post(port, b'{}', None)
+    assert status == 422 and projection['missing_signature_header'] is True
+    assert observed[0][2] == '/v1/passport/webhooks/personalization'
 
 
 @pytest.fixture
