@@ -15,7 +15,7 @@
     "contracts/canvas-worker-startup-scenarios.json": "7459f28b9e878ed8a228375af54fc958e82b597ef4b152f0efd129089133d8f6",
     "contracts/fixtures/canvas_worker_test_trust.py": "b336dde49675e5e96f6d96e32016ed82e1a9f886df8617eb6456b7ac691314eb",
     "scripts/canvas_worker_https_fixture.py": "940b5203e7d5e914060993f868c69c3d63760df181a80414133b2e08bb93e6b8",
-    "scripts/canvas_worker_mixed_roster_https_fixture.py": "8ea2ef19439e0d24cf9c1c790fcf4ebb942684982cca669619e3e2aaee7e2010",
+    "scripts/canvas_worker_mixed_roster_https_fixture.py": "1c2a3f06b9e60d49583bac56df933d0fe09836604eb32884de23f5143da087d6",
     "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
     "scripts/run_canvas_worker_mixed_roster_oracle.py": "8ed7956eb99ce5941ea0d236b4148c3af76533161f57bf83742a281c8ceeec2b",
     "scripts/run_canvas_worker_provider_recovery_oracle.py": "6e33b40fae7846180c73f2360241bacf3cf140d3758331ad51884b5b122cb296",

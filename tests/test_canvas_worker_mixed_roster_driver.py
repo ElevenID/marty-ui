@@ -43,6 +43,24 @@ def test_run_routes_only_the_exact_frozen_case(native, corpus, monkeypatch):
     assert calls == [("synthetic-worker", matrix, matrix["cases"][0], reference)]
 
 
+def test_native_transport_tracks_stock_canvas_assignment_reads(native, corpus):
+    matrix, reference = corpus
+    stages = matrix["cases"][0]["stages"]
+    original = deepcopy(reference["observations"][0])
+    positive = native.stock_canvas_observation(original, stages[0])
+    assert positive["requests"] != original["requests"]
+    assert len(positive["requests"]) == len(original["requests"]) + 3
+    assert all("include%5B%5D=assignment" not in request["path"]
+               for request in positive["requests"])
+    assert sum(request["path"] == "/api/v1/courses/42/assignments/9"
+               for request in positive["requests"]) == 3
+    assert original == reference["observations"][0]
+    outage = native.stock_canvas_observation(reference["observations"][4], stages[4])
+    assert len(outage["requests"]) == len(reference["observations"][4]["requests"])
+    assert not any(request["path"] == "/api/v1/courses/42/assignments/9"
+                   for request in outage["requests"])
+
+
 @pytest.mark.parametrize(
     "mutation",
     [
@@ -147,8 +165,9 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
     private_payload = "synthetic-private-token-signer-payload-must-not-be-printed"
 
     class Fixture:
-        def __init__(self, actual_matrix):
+        def __init__(self, actual_matrix, *, submission_contract):
             assert actual_matrix == matrix
+            assert submission_contract == "stock_assignment"
             self.failures = []
             self.stage_index = -1
             self.closed = False
@@ -356,6 +375,7 @@ def test_parent_orders_markers_compares_before_advancing_and_cleans_owned_resour
         return value
 
     monkeypatch.setattr(native, "MixedRosterHttpsFixture", Fixture)
+    monkeypatch.setattr(native, "stock_canvas_observation", lambda observation, _: observation)
     monkeypatch.setattr(native.subprocess, "Popen", launch)
     monkeypatch.setattr(native, "wait_marker", wait)
     monkeypatch.setattr(native, "assert_transport", compare)
@@ -459,8 +479,9 @@ def test_real_chatty_child_fails_promptly_with_bounded_tails_and_cleanup(
     )
 
     @contextmanager
-    def fixture(actual_matrix):
+    def fixture(actual_matrix, *, submission_contract):
         assert actual_matrix == matrix
+        assert submission_contract == "stock_assignment"
         with tempfile.TemporaryDirectory(
             dir=tmp_path, prefix="owned-output-regression-"
         ) as directory:
