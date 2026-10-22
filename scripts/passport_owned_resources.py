@@ -170,7 +170,7 @@ class OwnedPassportResources:
         code, key = self.call("flow", "POST", self.scoped("/v1/api-keys"), body)
         require(code == 200 and key.get("organization_id") == self.organization
                 and key.get("name") == body["name"] and key.get("scopes") == body["scopes"]
-                and key.get("scope_type") == "organization" and key.get("enabled") is True
+                and key.get("scope_type") == "ORGANIZATION" and key.get("enabled") is True
                 and isinstance(key.get("id"), str) and isinstance(key.get("key"), str)
                 and len(key["key"]) >= 32, "Scoped passport API key was not newly created")
         self.value["api_key_id"] = key["id"]

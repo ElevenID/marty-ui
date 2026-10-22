@@ -25,7 +25,7 @@ def owned(tmp_path, monkeypatch):
         route = urlsplit(path).path
         if route.endswith("/api-keys"):
             return 200, {**body, "id": "new-key", "organization_id": "00000000-0000-0000-0000-000000000001",
-                         "scope_type": "organization", "enabled": True, "key": "k" * 40}
+                         "scope_type": "ORGANIZATION", "enabled": True, "key": "k" * 40}
         if route.endswith("/api-keys/new-key"):
             return 200, {"success": True}
         if "issuer-identities" in route:
