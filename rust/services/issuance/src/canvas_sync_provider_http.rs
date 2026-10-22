@@ -725,9 +725,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             .filter(|value| !value.is_empty())
             .ok_or(CanvasProviderReadError::Unavailable)?;
         let record = self.rest_record(resources, requirement, user).await?;
-        let effective_at = ["updated_at", "graded_at", "completed_at"]
-            .iter()
-            .find_map(|key| timestamp(record.get(*key)));
+        let effective_at = rest_effective_at(&text(requirement.get("fact_type")), &record);
         Ok(CanvasAuthoritativeObservation {
             assertion: rest_assertion(&text(requirement.get("fact_type")), &record),
             source_payload: normalized_rest_payload(&record),
@@ -822,7 +820,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                             assertion: rest_assertion("canvas.course_completion", &record),
                             source_payload: normalized_rest_payload(&record),
                             verification_method: "CANVAS_OAUTH_API_READ",
-                            effective_at: timestamp(record.get("updated_at")),
+                            effective_at: rest_effective_at("canvas.course_completion", &record),
                         },
                     );
                 }
@@ -880,6 +878,20 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
         }
         Ok(snapshot)
     }
+}
+
+fn rest_effective_at(fact_type: &str, record: &Value) -> Option<DateTime<Utc>> {
+    // Canvas progress.completed_at records the first completion event, not the
+    // revision of the mutable course-progress snapshot. After a downgrade and
+    // recovery it can predate the downgrade, which would leave the deny fact
+    // current despite a fresh completed=true read. Use observation time for
+    // course progress (the processor fills it when effective_at is absent).
+    if fact_type == "canvas.course_completion" {
+        return None;
+    }
+    ["updated_at", "graded_at", "completed_at"]
+        .iter()
+        .find_map(|key| timestamp(record.get(*key)))
 }
 
 impl HttpCanvasAuthoritativeProvider {
