@@ -795,7 +795,18 @@ def test_oidf_tls_edge_uses_live_upstream_dns_and_shared_service_image() -> None
     assert "TcpStream::connect(upstream)" in source
     assert "--bin marty-oidf-keyless-edge" in build
     assert "/usr/local/bin/marty-oidf-keyless-edge" in image
-    assert "oidf-tls-proxy: *service-image" in released
+    document = yaml.compose(released)
+    edge = _mapping_value(_mapping_value(document, "services"), "oidf-tls-proxy")
+    shared = _mapping_value(document, "x-service-image")
+    assert _mapping_value(edge, "<<") is shared
+    assert _mapping_value(shared, "image").value == (
+        "${MARTY_SERVICES_IMAGE:?set MARTY_SERVICES_IMAGE to an immutable digest}"
+    )
+    assert _mapping_value(shared, "pull_policy").value == "always"
+    # Older Compose loses !reset inherited through an alias. The edge must
+    # retain the shared image and explicitly reset its source build locally.
+    assert _mapping_value(edge, "build").tag == "!reset"
+    assert _mapping_value(edge, "build").value == "null"
 
 
 def test_oidf_tls_edge_preserves_the_complete_public_authority() -> None:
