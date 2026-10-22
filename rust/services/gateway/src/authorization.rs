@@ -793,7 +793,7 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
         ),
         "presentation-policies" => (
             "presentation-policies",
-            "/v1/presentation-policies/{id}",
+            "/internal/v1/resource-owners/presentation-policies/{id}",
             &["evaluate"],
         ),
         "deployment-profiles" => ("deployment-profiles", "/v1/deployment-profiles/{id}", &[]),
@@ -1031,6 +1031,46 @@ mod tests {
         for case in contract.skip_cases {
             assert_eq!(skips_tenant_authorization(&case.path), case.skipped);
         }
+    }
+
+    #[test]
+    fn presentation_policy_owner_lookup_uses_internal_projection_and_preserves_scopes() {
+        let lookup = resolve_resource_lookup(
+            "/v1/presentation-policies/11111111-1111-1111-1111-111111111111",
+        )
+        .unwrap();
+        assert_eq!(lookup.service, "presentation-policies");
+        assert_eq!(
+            lookup.path,
+            "/internal/v1/resource-owners/presentation-policies/11111111-1111-1111-1111-111111111111"
+        );
+        assert!(resolve_resource_lookup("/v1/presentation-policies/evaluate").is_none());
+        assert!(api_key_allowed(
+            "presentation-policy:view",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "presentation-policy:edit",
+            &["trust:read".into()]
+        ));
+        assert!(!api_key_allowed(
+            "presentation-policy:view",
+            &["templates:read".into()]
+        ));
+        assert!(authorize_api_key(
+            "presentation-policy:view",
+            "org-1",
+            Some("org-1"),
+            &["trust:read".into()]
+        )
+        .is_ok());
+        assert!(authorize_api_key(
+            "presentation-policy:view",
+            "org-2",
+            Some("org-1"),
+            &["trust:read".into()]
+        )
+        .is_err());
     }
 
     #[test]

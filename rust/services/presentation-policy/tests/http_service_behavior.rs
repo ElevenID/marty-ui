@@ -514,3 +514,205 @@ async fn missing_service_identity_and_native_verifier_fail_closed() {
         "PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE"
     );
 }
+fn scoped_policy_request(
+    method: &str,
+    uri: &str,
+    payload: Value,
+    org: Uuid,
+    scopes: &str,
+) -> Request<Body> {
+    let mut value = request(method, uri, payload, true);
+    value.headers_mut().insert(
+        "x-api-key-id",
+        "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+    );
+    value
+        .headers_mut()
+        .insert("x-organization-id", org.to_string().parse().unwrap());
+    value
+        .headers_mut()
+        .insert("x-api-key-scopes", scopes.parse().unwrap());
+    value
+}
+
+async fn owned_policy(app: &axum::Router, org: Uuid) -> String {
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/presentation-policies",
+            create_body(org),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body(response).await["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn scoped_api_policy_reader_obeys_exact_organization_and_existing_grants() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/v1/presentation-policies/{id}");
+    for (actor_org, scopes, expected) in [
+        (org, "trust:read", StatusCode::OK),
+        (org, "templates:read", StatusCode::FORBIDDEN),
+        (Uuid::new_v4(), "trust:read", StatusCode::FORBIDDEN),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(scoped_policy_request(
+                "GET",
+                &path,
+                json!({}),
+                actor_org,
+                scopes,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let response = app
+        .clone()
+        .oneshot(scoped_policy_request(
+            "GET",
+            &format!("/v1/presentation-policies?organization_id={org}"),
+            json!({}),
+            org,
+            "trust:read",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await.as_array().unwrap().len(), 1);
+    // Human identity continues through the membership authorization implementation.
+    assert_eq!(
+        app.oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn scoped_api_policy_reader_cannot_gain_any_policy_mutation() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    for (method, path, payload) in [
+        ("POST", "/v1/presentation-policies".into(), create_body(org)),
+        (
+            "PATCH",
+            format!("/v1/presentation-policies/{id}"),
+            json!({"name":"changed"}),
+        ),
+        (
+            "DELETE",
+            format!("/v1/presentation-policies/{id}"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/activate"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/suspend"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/new-version"),
+            json!({}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(scoped_policy_request(
+                method,
+                &path,
+                payload,
+                org,
+                "trust:read",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+    }
+    let response = app
+        .oneshot(request(
+            "GET",
+            &format!("/v1/presentation-policies/{id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body(response).await["name"], "Member login");
+}
+
+#[tokio::test]
+async fn scoped_api_policy_headers_require_service_authentication_and_complete_identity() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/v1/presentation-policies/{id}");
+    for missing in ["x-service-token", "x-organization-id", "x-api-key-id"] {
+        let mut request = scoped_policy_request("GET", &path, json!({}), org, "trust:read");
+        request.headers_mut().remove(missing);
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for invalid in ["", "not-a-key-uuid"] {
+        let mut request = scoped_policy_request("GET", &path, json!({}), org, "trust:read");
+        request
+            .headers_mut()
+            .insert("x-api-key-id", invalid.parse().unwrap());
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
+
+#[tokio::test]
+async fn scoped_api_policy_owner_is_authenticated_minimal_projection() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/internal/v1/resource-owners/presentation-policies/{id}");
+    let mut value = request("GET", &path, json!({}), true);
+    value.headers_mut().remove("x-user-id");
+    let response = app.clone().oneshot(value).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await, json!({"id":id,"organization_id":org}));
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", &path, json!({}), false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.oneshot(request(
+            "GET",
+            &format!(
+                "/internal/v1/resource-owners/presentation-policies/{}",
+                Uuid::new_v4()
+            ),
+            json!({}),
+            true
+        ))
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}
