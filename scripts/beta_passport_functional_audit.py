@@ -489,15 +489,27 @@ def retain_private_failure(capture, error: Exception) -> None:
         # cookies, API keys or document material. Keep the private diagnostic
         # useful without copying those values into any recorder artifact.
         source_root = Path(__file__).resolve().parent.parent
+        recorder_client = Path(os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT", "")).resolve()
         source_trace = []
         for frame in traceback.extract_tb(error.__traceback__)[-20:]:
             try:
                 relative = Path(frame.filename).resolve().relative_to(source_root)
             except ValueError:
-                continue
+                if Path(frame.filename).resolve() != recorder_client:
+                    continue
+                relative = Path("recorder-client/external_python_evidence.py")
             source_trace.append({"module": str(relative).replace("\\", "/"),
                                  "function": frame.name, "line": frame.lineno})
         record["sourceTrace"] = source_trace
+        capture_failure = getattr(capture, "failed", None)
+        if capture_failure is not None:
+            record["captureFailureType"] = type(capture_failure).__name__
+            record["captureFailureTrace"] = []
+            for frame in traceback.extract_tb(capture_failure.__traceback__)[-8:]:
+                if Path(frame.filename).resolve() == recorder_client:
+                    record["captureFailureTrace"].append({
+                        "module": "recorder-client/external_python_evidence.py",
+                        "function": frame.name, "line": frame.lineno})
         output = fixture.with_name("passport-failure-" + uuid.uuid4().hex + ".json")
         descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "w", encoding="utf8") as stream:
