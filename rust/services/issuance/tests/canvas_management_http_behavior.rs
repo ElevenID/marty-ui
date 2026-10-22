@@ -318,6 +318,7 @@ fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
                 "issuer_did": "did:web:issuer.example.edu:orgs:org-1",
                 "issuer_algorithm": "ES256",
                 "vct": "https://credentials.example.edu/open-badge",
+                "claims": [],
                 "wallet_configs": [{"wallet_id":"wallet-1"}],
                 "selective_disclosure_fields": ["achievement"],
                 "zk_predicate_claims": [],
