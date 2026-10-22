@@ -444,6 +444,28 @@ def test_explicit_owner_pairs_files_and_models(local, authcrypt):
     )
 
 
+def test_native_ca_mount_requires_unnormalized_no_create_declaration():
+    declared = model()
+    normalized = deepcopy(declared)
+    mount = next(item for item in normalized["services"]["issuance-native"]["volumes"]
+                 if item.get("target") == native.CA_TARGET)
+    mount["bind"].pop("create_host_path")
+    native.validate_model(normalized, project=PROJECT, authcrypt=False,
+                          local_build=False, source_model=declared)
+
+    unsafe = deepcopy(declared)
+    source_mount = next(item for item in unsafe["services"]["issuance-native"]["volumes"]
+                        if item.get("target") == native.CA_TARGET)
+    source_mount["bind"]["create_host_path"] = True
+    with pytest.raises(ValueError, match="may create a host path"):
+        native.validate_model(normalized, project=PROJECT, authcrypt=False,
+                              local_build=False, source_model=unsafe)
+    mount["bind"]["create_host_path"] = True
+    with pytest.raises(ValueError, match="may create a host path"):
+        native.validate_model(normalized, project=PROJECT, authcrypt=False,
+                              local_build=False, source_model=declared)
+
+
 @pytest.mark.parametrize("owner", ["", "rust", "native-legacy", None])
 def test_unknown_owner_never_aliases_legacy(owner):
     with pytest.raises(ValueError):

@@ -138,7 +138,8 @@ def validate_capabilities(document: dict[str, Any]) -> None:
 
 
 def validate_model(
-    model: dict[str, Any], *, project: str, authcrypt: bool, local_build: bool
+    model: dict[str, Any], *, project: str, authcrypt: bool, local_build: bool,
+    source_model: dict[str, Any] | None = None,
 ) -> None:
     """Validate actual Compose output, never a service name treated as proof."""
     try:
@@ -311,11 +312,30 @@ def validate_model(
                 "Conformance CA mount must be read-only",
             )
             mounts.append(item)
-        require(
-            mounts[0]["source"] == mounts[1]["source"]
-            and mounts[1]["bind"]["create_host_path"] is False,
-            "Native CA mount is not paired",
-        )
+        native_mount = mounts[1]
+        require(mounts[0]["source"] == native_mount["source"],
+                "Native CA mount is not paired")
+        rendered_create = native_mount.get("bind", {}).get("create_host_path")
+        if source_model is None:
+            # Synthetic model callers must carry the explicit safety flag.
+            require(rendered_create is False, "Native CA mount may create a host path")
+        else:
+            # Some Compose versions omit explicit false from normalized JSON.
+            # Check the unnormalized output from the same exact Compose command
+            # while rejecting a normalized true or a changed mount identity.
+            declared = [
+                item for item in source_model["services"]["issuance-native"]["volumes"]
+                if item.get("target") == CA_TARGET
+            ]
+            require(
+                rendered_create is not True
+                and len(declared) == 1
+                and declared[0].get("type") == "bind"
+                and declared[0].get("source") == native_mount["source"]
+                and declared[0].get("read_only") is True
+                and declared[0].get("bind", {}).get("create_host_path") is False,
+                "Native CA mount may create a host path",
+            )
         POLICY["validate_model"](
             model,
             authcrypt_enabled=authcrypt,

@@ -109,20 +109,23 @@ def rendered_config(
     include_didcomm_authcrypt: bool = False,
     use_ghcr: bool = True,
     issuance_owner: str = "native",
+    normalize: bool = True,
 ) -> dict[str, Any]:
+    config_command = [
+        *compose_command(
+            project,
+            include_haip=include_haip,
+            include_didcomm_authcrypt=include_didcomm_authcrypt,
+            use_ghcr=use_ghcr,
+            issuance_owner=issuance_owner,
+        ),
+        "config",
+    ]
+    if not normalize:
+        config_command.append("--no-normalize")
+    config_command.extend(("--format", "json"))
     completed = subprocess.run(
-        [
-            *compose_command(
-                project,
-                include_haip=include_haip,
-                include_didcomm_authcrypt=include_didcomm_authcrypt,
-                use_ghcr=use_ghcr,
-                issuance_owner=issuance_owner,
-            ),
-            "config",
-            "--format",
-            "json",
-        ],
+        config_command,
         cwd=ROOT,
         capture_output=True,
         text=True,
@@ -533,11 +536,20 @@ def main() -> int:
     native = None
     if args.issuance_owner == "native":
         native = runpy.run_path(str(ROOT / "scripts/conformance_native.py"))
+        source_config = rendered_config(
+            project,
+            include_haip=args.haip,
+            include_didcomm_authcrypt=args.didcomm_authcrypt,
+            use_ghcr=not args.local_build,
+            issuance_owner=args.issuance_owner,
+            normalize=False,
+        )
         native["validate_model"](
             config,
             project=project,
             authcrypt=args.didcomm_authcrypt,
             local_build=args.local_build,
+            source_model=source_config,
         )
     if args.command == "config":
         print(json.dumps(config, indent=2, sort_keys=True))
