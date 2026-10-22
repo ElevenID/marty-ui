@@ -30,7 +30,7 @@ def test_only_explicit_official_dispatch_can_prepare_selfhost_lock() -> None:
     assert jobs["publish-manifest"]["needs"] == [
         "resolve-transaction", "validate-stack", "build-ui",
         "build-services", "build-openbao-didcomm", "build-keycloak",
-        "qualify-release", "build-operator-catalog",
+        "qualify-release", "build-operator-catalog", "prepare-official-candidate",
     ]
 
 

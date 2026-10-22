@@ -23,7 +23,7 @@ RELEASE_ELIGIBLE_STATE = "eligible"
 REQUIRED_IMAGE_ROLES = ("ui", "services", "migrations", "openbao_didcomm", "keycloak")
 REQUIRED_GATE_ROLES = (
     "public_stack", "verifier_differential", "native_schema", "didcomm_plugin",
-    "keycloak_kms",
+    "keycloak_kms", "official_interoperability",
 )
 IMAGE_URIS = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
