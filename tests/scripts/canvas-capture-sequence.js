@@ -245,7 +245,10 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.currentOperation = 'wallet-verification';
   const verification = await wallet.verify(adminPage, walletPage, `Canvas ${applicationId}`, {
     organizationId, presentationPolicyId: templates.policy.id, issuerDid: issued.issuer_did,
-    onPhase: phase => { report.currentOperation = `wallet-verification-${phase}`; },
+    onPhase: (phase, detail) => {
+      report.currentOperation = `wallet-verification-${phase}`;
+      if (detail) report.verificationProgress = detail;
+    },
   });
   report.verificationAttempt = { sessionOk: verification?.session?.ok === true,
     sessionStatus: verification?.session?.status || null,

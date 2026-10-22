@@ -903,17 +903,25 @@ async function verify(page, walletPage, label, {
 
   onPhase('wallet-presentation');
   const wallet = await present(walletPage, session.requestUri);
-  onPhase('verifier-result');
+  onPhase('verifier-result', { instanceId: session.instanceId,
+    walletOk: wallet.ok === true, walletStatus: wallet.status });
   const rawResult = await waitFor(() => page.evaluate(async (instanceId) => {
     const response = await fetch(`/v1/flows/instances/${encodeURIComponent(instanceId)}/result`, {
       credentials: 'include',
     });
     const body = await response.json().catch(() => null);
-    if (!response.ok) return null;
+    if (!response.ok) return { httpStatus: response.status, status: null, terminal: false };
     const terminal = ['COMPLETED', 'PASSED', 'VERIFIED', 'FAILED', 'EXPIRED', 'CANCELLED']
       .includes(String(body?.status || '').toUpperCase());
-    return terminal ? { httpStatus: response.status, body } : null;
-  }, session.instanceId));
+    return { httpStatus: response.status, status: String(body?.status || ''),
+      terminal, body: terminal ? body : null };
+  }, session.instanceId).then(observed => {
+    onPhase('verifier-result-poll', { instanceId: session.instanceId,
+      httpStatus: observed.httpStatus,
+      flowStatus: ['PENDING','PROCESSING','COMPLETED','PASSED','VERIFIED','FAILED','EXPIRED','CANCELLED']
+        .includes(observed.status.toUpperCase()) ? observed.status.toUpperCase() : 'OTHER' });
+    return observed.terminal ? observed : null;
+  }));
   const result = rawResult
     ? verificationResultEvidence(rawResult.body, rawResult.httpStatus)
     : null;
