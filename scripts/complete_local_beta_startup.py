@@ -87,8 +87,14 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
                     deployment_release_marker=source['release_version'], stack_version=stack,
                     mip_version='0.5.0', component_revisions=components, image_digests=images)
     simulator = None
+    operator_revision = None
     prior_ids = {row['service']: row['container_id'] for row in prior}
     if passport_simulator:
+        operator_root = Path(__file__).resolve().parents[1]
+        require(not subprocess.check_output(['git', '-C', str(operator_root), 'status', '--porcelain']),
+                'Simulator completion requires a clean reviewable operator checkpoint')
+        operator_revision = subprocess.check_output(
+            ['git', '-C', str(operator_root), 'rev-parse', 'HEAD'], text=True).strip()
         from complete_beta_passport_simulator import prepare
         simulator = prepare(root, artifacts, runtime_root, source, images, prior, observe, failure_proof)
         candidates = {role: simulator['current'][role] for role in roles}
@@ -130,6 +136,8 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
                   sourceManifestSha256=sha(artifacts / 'source-manifest.json'),
                   candidateContainerCount=len(candidates), applied=False, productionDemoQualified=False)
     if simulator:
+        result.update(operatorSourceRevision=operator_revision, operatorScriptSha256=sha(Path(__file__)),
+                      simulatorOperatorSha256=sha(Path(__file__).with_name('complete_beta_passport_simulator.py')))
         result['passportSimulatorCompletion'] = dict(
             overlay=str(simulator['overlay']), overlaySha256=sha(simulator['overlay']),
             composeInputHashes=simulator['compose_inputs'], migrationLogHashes=simulator['migration_logs'],
@@ -209,6 +217,7 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
             file=simulator['overlay'].name, sha256=sha(simulator['overlay']),
             operator_script_sha256=sha(Path(__file__)),
             simulator_operator_sha256=sha(Path(__file__).with_name('complete_beta_passport_simulator.py')),
+            operator_source_revision=operator_revision,
             reason='Preserve scoped callback token file through shared services entrypoint',
             migration_replayed=False, kms_bootstrap_replayed=False,
             original_rollout_exit_code=1, callback_network_id=simulator['network_id'])
