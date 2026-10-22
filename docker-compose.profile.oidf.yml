@@ -33,7 +33,7 @@ services:
     ports:
       - "${OIDF_TLS_HOST_PORT:-8443}:${OIDF_INTERNAL_TLS_PORT:-443}"
     volumes:
-      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to a directory containing tls.crt and root-ca.pem}/tls.crt:/run/marty-oidf-tls/tls.crt:ro
+      - ${OIDF_EDGE_TLS_CERT_FILE:-${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to a directory containing tls.crt and root-ca.pem}/tls.crt}:/run/marty-oidf-tls/tls.crt:ro
       - ${OIDF_TLS_KMS_CA_CERT_FILE:?set OIDF_TLS_KMS_CA_CERT_FILE to the public OpenBao CA}:/run/marty-oidf-tls/openbao-ca.pem:ro
       - ${OIDF_TLS_KMS_TOKEN_FILE:?set OIDF_TLS_KMS_TOKEN_FILE to a scoped token file}:/run/secrets/oidf-edge-tls-kms-token:ro
     environment:
