@@ -279,7 +279,8 @@ class ObservedPassportRequests:
         resource = re.fullmatch(
             r"/v1/(?:application-templates|credential-templates|delivery-destinations|flows/definitions)"
             r"(?:/[A-Za-z0-9._:-]{1,255}(?:/(?:activate|validate|deprecate))?)?", endpoint.path)
-        key = re.fullmatch(r"/v1/organizations/[A-Za-z0-9_-]{1,128}/api-keys(?:/[A-Za-z0-9_-]{1,128})?", endpoint.path)
+        key = (re.fullmatch(r"/v1/api-keys(?:/[A-Za-z0-9_-]{1,128})?", endpoint.path)
+               and re.fullmatch(r"organization_id=[0-9a-f-]{36}", endpoint.query))
         identity = endpoint.path in ("/v1/signing-keys/issuer-identities", "/v1/signing-keys/issuer-identities/resolve")
         require((role == "flow" and (resource or key)) or
                 (role in ("csca", "dsc") and identity) or
@@ -335,7 +336,7 @@ class ObservedPassportRequests:
             try:
                 require(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key_id) and old_key == self.api_key,
                         "Cannot tear down foreign passport key")
-                route = "/v1/organizations/" + quote(organization, safe="") + "/api-keys/" + quote(key_id, safe="")
+                route = "/v1/api-keys/" + quote(key_id, safe="") + "?organization_id=" + quote(organization, safe="")
                 code, body = response("flow", "DELETE", route)
                 require(code == 200 and body.get("success") is True, "Owned passport key revocation failed")
                 code, _ = response("api", "GET", probe_path, {"x-api-key": old_key})

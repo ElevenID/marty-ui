@@ -210,6 +210,11 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             ports.resource_request("flow", "POST", "/v1/application-templates", {"name": "Fresh"},
                                    {"idempotency-key": "passport-demo-" + "a" * 32})
             assert observed[-1]["headers"]["idempotency-key"] == "passport-demo-" + "a" * 32
+            scoped_key = "/v1/api-keys?organization_id=00000000-0000-0000-0000-000000000001"
+            ports.resource_request("flow", "POST", scoped_key, {"name": "Owned"})
+            assert observed[-1]["url"].endswith(scoped_key)
+            with pytest.raises(audit.PassportPrerequisiteError, match="resource route"):
+                ports.resource_request("flow", "POST", "/v1/api-keys", {"name": "Unscoped"})
             before_headers = len(observed)
             with pytest.raises(audit.PassportPrerequisiteError, match="header"):
                 ports.resource_request("flow", "POST", "/v1/credential-templates", {},
@@ -309,7 +314,8 @@ def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_r
             elif url.endswith("/production-status"):
                 code, body = (200 if key_revived else 401), b'{}'
             else:
-                assert options["method"] == "DELETE" and url.endswith("/api-keys/owned-key")
+                assert options["method"] == "DELETE" and url.endswith(
+                    "/v1/api-keys/owned-key?organization_id=org-a")
                 code, body = 200, b'{"success":true}'
             return SimpleNamespace(status=code, body=lambda: body)
     ports = object.__new__(audit.ObservedPassportRequests)
