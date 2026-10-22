@@ -131,7 +131,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     async triggerLearnerSync() {
       state.jobs++;
       const job = { ...scope, id: `job-${state.jobs}`, status: 'succeeded', created_at: new Date(10000).toISOString(),
-        result: { policy_allowed: state.grade === 95, requirements_checked: 1 } };
+        result: { policy_allowed: state.grade === 95 && !(fail === 'recovery-transient-course' && state.jobs === 3),
+          requirements_checked: 1 } };
       if (fail === 'denial-sync' && state.grade === 40) throw Error('Worker failed');
       if (fail === 'stale-job' && state.jobs === 2) job.created_at = new Date(0).toISOString();
       return { body: { sync: { job_id: job.id } }, job };
@@ -179,6 +180,15 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.deepEqual(h.state.mutations, [40, 95]);
   assert.equal(h.report.correctionReview, undefined);
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
+});
+
+test('recovery requires a new permitting job after transient course recalculation', async () => {
+  const h = harness({ scenario: 'canvas-learning-achievement', fail: 'recovery-transient-course' });
+  await h.run();
+  assert.equal(h.report.recoveryRetries.length, 1);
+  assert.equal(h.report.recoveryRetries[0].policyAllowed, false);
+  assert.equal(h.report.preIssuanceCorrection.recovered.policyAllowed, true);
+  assert.equal(h.report.preIssuanceCorrection.recovered.jobId, 'job-4');
 });
 
 for (const fail of ['foreign-claim-application', 'foreign-claim-organization', 'foreign-claim-transaction', 'claim-http-failed']) {

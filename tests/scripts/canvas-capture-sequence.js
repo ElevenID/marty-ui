@@ -118,20 +118,29 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   assert.equal(pending.claim.available, false);
   report.unsignedPendingObserved = true;
 
-  async function sync(phase, permitted) {
+  async function sync(phase, permitted, { allowPolicyRetry = false } = {}) {
     const started = now();
     report.currentOperation = `${phase}-sync-request`;
     const observed = await operations.triggerLearnerSync(page, marty);
     report.currentOperation = `${phase}-job-binding`;
     const job = requireJobBinding(observed, scope, seen, started);
-    assert.equal(job.result?.policy_allowed, permitted);
+    assert.equal(typeof job.result?.policy_allowed, 'boolean', 'Canvas job omitted its policy decision');
     assert.equal(Number(job.result?.requirements_checked), pinnedBinding.evidence_requirements.length);
     const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts?current_only=true`);
     const heads = operations.validateAuthoritativeEvidenceHeads(facts, pinnedBinding.evidence_requirements);
     report.currentOperation = `${phase}-policy-ui`;
-    await page.getByTestId(permitted ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
+    await page.getByTestId(job.result.policy_allowed ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
       .waitFor({ state: 'visible' });
-    const event = { phase, applicationId, jobId: job.id, policyAllowed: permitted,
+    if (job.result.policy_allowed !== permitted) {
+      if (allowPolicyRetry) {
+        report.recoveryRetries ||= [];
+        report.recoveryRetries.push({ phase, jobId: job.id, policyAllowed: false,
+          requirementsChecked: Number(job.result.requirements_checked) });
+        return null;
+      }
+      assert.equal(job.result.policy_allowed, permitted, 'Fresh Canvas job had the wrong policy decision');
+    }
+    const event = { phase, applicationId, jobId: job.id, policyAllowed: job.result.policy_allowed,
       headRevisions: heads.map(f => ({ id: f.id, requirementId: f.requirement_id,
         sourceRevision: f.source_revision, payloadHash: f.payload_hash })) };
     report.operations.push(event);
@@ -173,8 +182,12 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       // Always restore the exact synthetic grade, including when denial/readback fails.
       await grade(95);
     }
-    await operations.waitForCanvasCourseCompletion(adminCanvas, fixtures);
-    const recovered = await sync(`${prefix}-recovery`, true);
+    let recovered = null;
+    for (let attempt = 0; attempt < 4 && !recovered; attempt++) {
+      await operations.waitForCanvasCourseCompletion(adminCanvas, fixtures);
+      recovered = await sync(`${prefix}-recovery`, true, { allowPolicyRetry: true });
+    }
+    assert.ok(recovered, 'Fresh Canvas recovery jobs did not restore current policy permit');
     assert.notEqual(headFingerprint(recovered), headFingerprint(denied), 'Recovery reused denied evidence');
     return { denied, recovered };
   }
