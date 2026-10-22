@@ -259,8 +259,13 @@ class ObservedPassportRequests:
         payload = {name: value for name, value in body.items() if name != "organization_id"}
         return self._fetch(role, "POST", route, json.dumps(payload, separators=(",", ":")))
 
-    def resource_request(self, role, method, path, body=None):
+    def resource_request(self, role, method, path, body=None, headers=None):
         endpoint = urlsplit(path)
+        require(not headers or (role == "flow" and method == "POST"
+                and endpoint.path == "/v1/application-templates"
+                and set(headers) == {"idempotency-key"}
+                and re.fullmatch(r"passport-demo-[a-f0-9]{32}", headers["idempotency-key"])),
+                "Unexpected owned passport resource header")
         resource = re.fullmatch(
             r"/v1/(?:application-templates|credential-templates|delivery-destinations|flows/definitions)"
             r"(?:/[A-Za-z0-9._:-]{1,255}(?:/(?:activate|validate|deprecate))?)?", endpoint.path)
@@ -273,7 +278,7 @@ class ObservedPassportRequests:
                 "Unexpected owned passport resource route")
         return self._fetch(role, method, path,
                            None if body is None else json.dumps(body, separators=(",", ":")),
-                           {"x-api-key": self.api_key} if role == "api" else None)
+                           {"x-api-key": self.api_key} if role == "api" else headers)
 
     def retire_sessions(self):
         require(len({session_id(value) for value in self.sessions.values()}) == 3,
@@ -457,8 +462,8 @@ def run_bound_capture(capture) -> dict[str, Any]:
             "Public beta markers differ from the protected passport product")
     fixture = bound_json(scenario["privateFixture"], private=True)
     require(os.environ.get("RECORD_VIDEO") == "0", "Fresh passport adapter currently requires a recording-free functional run")
-    require(set(fixture) == {"schema", "plan", "resourceBlueprints", "custody", "privateStatePath", "privateHandoffPath"}
-            and fixture.get("schema") == "marty.passport-fresh-private/v2"
+    require(set(fixture) == {"schema", "plan", "resourcePlan", "custody", "privateStatePath", "privateHandoffPath"}
+            and fixture.get("schema") == "marty.passport-fresh-private/v3"
             and isinstance(fixture.get("custody"), dict)
             and set(fixture["custody"]) == {"cscaSession", "dscSession", "flowSession",
                                            "serviceToken", "operatorToken"},
@@ -513,7 +518,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                     private_state_path=state, private_handoff_path=handoff, verify_runtime=recheck,
                     on_owned_job=owned.owned_job,
                     prepare_selected_flow=lambda verified: owned.create_inputs(
-                        verified, fixture["resourceBlueprints"])["selected_flow"],
+                        verified, fixture["resourcePlan"])["selected_flow"],
                     chain_probe=partial(chain.exercise, request=ports.chain_request),
                     flow_probe=partial(flow.exercise, request=ports.flow_request,
                                        passport_request=ports.passport_request),

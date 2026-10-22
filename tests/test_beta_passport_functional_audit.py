@@ -207,6 +207,14 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             status, projection = ports.negative_post(body, None)
             assert status == 422 and projection["missing_signature_header"] is True
             assert observed[-1]["body"].encode() == body
+            ports.resource_request("flow", "POST", "/v1/application-templates", {"name": "Fresh"},
+                                   {"idempotency-key": "passport-demo-" + "a" * 32})
+            assert observed[-1]["headers"]["idempotency-key"] == "passport-demo-" + "a" * 32
+            before_headers = len(observed)
+            with pytest.raises(audit.PassportPrerequisiteError, match="header"):
+                ports.resource_request("flow", "POST", "/v1/credential-templates", {},
+                                       {"idempotency-key": "passport-demo-" + "a" * 32})
+            assert len(observed) == before_headers
             ports.resource_request("flow", "PATCH", "/v1/flows/definitions/owned",
                                    {"organization_id": "org-a", "name": "Owned"})
             assert observed[-1]["method"] == "PATCH" and observed[-1]["headers"]["cookie"] == "sessionId=flow-test"

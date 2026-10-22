@@ -15,8 +15,12 @@ from uuid import uuid4
 
 if __package__:
     from . import probe_passport_beta_native_batch as batch
+    from .passport_supported_flow_references import provision_beta_physical_passport_references
+    from .passport_supported_flow_start import create_physical_passport_definition
 else:
     import probe_passport_beta_native_batch as batch
+    from passport_supported_flow_references import provision_beta_physical_passport_references
+    from passport_supported_flow_start import create_physical_passport_definition
 
 
 class PassportOwnershipError(ValueError):
@@ -58,14 +62,15 @@ class OwnedPassportResources:
     def save(self, *, initial=False):
         batch._write_private_state(self.path, self.value, initial=initial)
 
-    def call(self, role, method, path, body=None):
+    def call(self, role, method, path, body=None, headers=None):
         # Commit intent before dispatch: ambiguous failures remain recoverable.
         item = {"role": role, "method": method, "path": path,
                 "request_sha256": hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest(),
                 "response_received": False}
         self.value["operations"].append(item)
         self.save()
-        status, response = self.request(role, method, path, body)
+        status, response = (self.request(role, method, path, body, headers) if headers
+                            else self.request(role, method, path, body))
         require(type(status) is int and 100 <= status <= 599 and isinstance(response, dict),
                 "Owned passport response is malformed")
         item.update(response_received=True, http_status=status)
@@ -107,52 +112,48 @@ class OwnedPassportResources:
         self.save()
         return result
 
-    def create_inputs(self, plan, blueprints):
-        require(set(blueprints) == set(COLLECTIONS), "Fresh passport resource blueprints are incomplete")
-        require(plan["application"]["organization_id"] == self.organization,
-                "Fresh passport plan belongs to another organization")
+    def create_inputs(self, plan, reference_plan):
+        require(isinstance(reference_plan, dict) and set(reference_plan) == {
+                    "name_prefix", "compliance_profile_id"}
+                and isinstance(reference_plan["name_prefix"], str)
+                and bool(reference_plan["name_prefix"].strip()),
+                "Fresh passport reference plan cannot adopt IDs or custom resource payloads")
+        require(plan["application"]["organization_id"] == self.organization
+                and not self.value["resources"], "Fresh passport reference setup cannot be replayed")
+        prefix = reference_plan["name_prefix"][:80] + " " + self.value["run_id"]
+        collections = {path: field for field, path in COLLECTIONS.items()}
+
+        def request(method, path, body=None, headers=None):
+            creating = method == "POST" and path in collections
+            if creating:
+                require(isinstance(body, dict) and "id" not in body
+                        and body.get("organization_id") == self.organization
+                        and self.value["run_id"] in body.get("name", ""),
+                        "Canonical passport create lost genuine ownership")
+            status, response = self.call("flow", method, path, body, headers)
+            if creating:
+                field = collections[path]
+                require(status == (201 if field == "delivery_destination_profile_id" else 200)
+                        and isinstance(response.get("id"), str) and bool(response["id"])
+                        and response.get("organization_id") == self.organization
+                        and response.get("name") == body["name"]
+                        and (field == "delivery_destination_profile_id" or response.get("status") == "DRAFT"),
+                        "Canonical passport resource was not freshly created")
+                self.value["resources"][field] = {"id": response["id"], "name": body["name"],
+                    "organization_id": self.organization, "creation_returned": True}
+                self.save()
+            return status, response
+
+        # These existing producers own the credential-first dependency order,
+        # application Idempotency-Key, physical payloads and strict readbacks.
+        references = provision_beta_physical_passport_references(
+            request, self.organization, prefix, plan["application"]["issuer_did"],
+            "passport-demo-" + self.value["run_id"], reference_plan["compliance_profile_id"])
+        definition = create_physical_passport_definition(
+            lambda method, path, body: request(method, path, body),
+            self.organization, prefix + " flow", references)
         result = copy.deepcopy(plan)
-        # All IDs come from these actual successful create responses, never the fixture.
-        references = {}
-        for field, collection in COLLECTIONS.items():
-            payload = copy.deepcopy(blueprints[field])
-            require(isinstance(payload, dict) and "id" not in payload
-                    and payload.get("organization_id") in (None, self.organization)
-                    and isinstance(payload.get("name"), str), "Cannot adopt an existing passport resource")
-            payload["organization_id"] = self.organization
-            payload["name"] = (payload["name"][:80] + " " + self.value["run_id"])
-            if field == "credential_template_id":
-                payload["application_template_id"] = references["application_template_id"]
-                payload["issuer_did"] = result["application"]["issuer_did"]
-            if field == "flow_definition_id":
-                require(str(payload.get("flow_type")).lower() == "physical_document_issuance",
-                        "Owned passport Flow must use the production physical document type")
-                payload.update(references)
-            status, created = self.call("flow", "POST", collection, payload)
-            require(status in (200, 201) and isinstance(created, dict)
-                    and isinstance(created.get("id"), str) and bool(created["id"])
-                    and created.get("organization_id") == self.organization
-                    and created.get("name") == payload["name"], "Fresh passport resource was not created exactly")
-            identifier = created["id"]
-            self.value["resources"][field] = {"id": identifier, "name": payload["name"],
-                "organization_id": self.organization, "creation_returned": True}
-            self.save()
-            resource_path = collection + "/" + quote(identifier, safe="")
-            if field != "delivery_destination_profile_id":
-                status, active = self.call("flow", "POST", resource_path + "/activate")
-                require(status == 200 and active.get("id") == identifier
-                        and str(active.get("status")).upper() == "ACTIVE", "Owned passport activation failed")
-            status, actual = self.call("flow", "GET", resource_path)
-            require(status == 200 and actual.get("id") == identifier
-                    and actual.get("organization_id") == self.organization
-                    and actual.get("name") == payload["name"], "Owned passport resource readback changed identity")
-            if field != "flow_definition_id":
-                references[field] = identifier
-            else:
-                require(all(actual.get(key) == value for key, value in references.items()),
-                        "Owned Flow did not retain its exact owned references")
-                result["selected_flow"]["flow_definition_id"] = identifier
-        result["selected_flow"]["references"] = references
+        result["selected_flow"].update(flow_definition_id=definition, references=references)
         self.value["plan"] = result
         self.save()
         return result
