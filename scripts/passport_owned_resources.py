@@ -94,8 +94,13 @@ class OwnedPassportResources:
     def fresh_plan(self, plan):
         result = copy.deepcopy(plan)
         issuer = result["application"]["issuer_did"]
-        require(issuer.startswith("did:web:beta.elevenidllc.com:"), "Owned passport issuer must be local")
-        issuer = issuer + ":demo:" + self.value["run_id"]
+        parts = issuer.split(":")
+        require(len(parts) == 5 and parts[:4] == ["did", "web", "beta.elevenidllc.com", "orgs"]
+                and bool(parts[4]) and len(parts[4]) + len("-demo-") + len(self.value["run_id"]) <= 128,
+                "Owned passport issuer must fit the local did:web organization slug")
+        # The production did:web parser accepts exactly five segments. Keep the
+        # fresh marker inside the organization slug rather than adding DID paths.
+        issuer = issuer + "-demo-" + self.value["run_id"]
         result["application"]["issuer_did"] = issuer
         certificate = result["certificate_plan"]
         certificate["csca"]["issuer_did"] = issuer

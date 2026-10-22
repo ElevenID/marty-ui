@@ -82,6 +82,8 @@ def owned(tmp_path, monkeypatch):
     original["certificate_plan"]["organization_id"] = journal.organization
     original["application"]["issuer_did"] = "did:web:beta.elevenidllc.com:orgs:00000000-0000-0000-0000-000000000001"
     fresh = journal.fresh_plan(original)
+    assert len(fresh["application"]["issuer_did"].split(":")) == 5
+    assert fresh["application"]["issuer_did"].endswith("-demo-" + journal.value["run_id"])
     journal.create_issuers(fresh)
     fresh = journal.create_inputs(fresh, {"name_prefix": "Source control",
         "compliance_profile_id": "10000000-0000-0000-0000-000000000005"})
@@ -97,6 +99,14 @@ def owned(tmp_path, monkeypatch):
     kwargs = {"selected": selected, "certificate_id": fresh["certificate_plan"]["csca"]["certificate_id"],
               "check_key_denied": lambda: status["key_denied"], "retire_sessions": lambda: status["sessions_denied"]}
     return journal, calls, records, kwargs, status
+
+
+def test_fresh_issuer_rejects_an_extra_did_path(owned):
+    journal, _, _, _, _ = owned
+    plan_value = copy.deepcopy(journal.value["plan"])
+    plan_value["application"]["issuer_did"] += ":another"
+    with pytest.raises(PassportOwnershipError, match="did:web organization slug"):
+        journal.fresh_plan(plan_value)
 
 
 def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
