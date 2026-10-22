@@ -33,9 +33,10 @@ disposable PostgreSQL approval contract including mapped row-lock execution.
 This source is not deployed or qualified as D07/D08. Next, update the existing
 template through its production API, deploy a provenance-bound local source
 runtime, and run fresh wallet receipt, verification, negative/recovery and cleanup
-operations. AGS-only results still lack an authoritative activity label and may
-lack an effective timestamp; do not invent those fields to satisfy this mapping.
-They need supported provider enrichment before an AGS-only badge can qualify.
+operations. AGS activity labels are read from the selected standard line item
+when configured claim rules request that field. Missing result event timestamps
+already use the fact processor's real observation time; no provider event time is
+invented. This source support still needs fresh deployed AGS qualification.
 The admin claim editor now exposes requirement ID, fact type, public JSON pointer
 and optional date format for evidence rules. Clearing optional selectors removes
 their keys, preserving the shared Rust contract. Five focused editor tests pass,
@@ -83,3 +84,23 @@ because it identifies the first completion event. Both single and bulk reads use
 that helper. The focused recovery control covers valid/missing/invalid revisions,
 and the real HTTP contract retains all four original timestamp expectations.
 Frozen oracle files and their hashes remain unchanged.
+
+The AGS enrichment uses the standard [read-only line-item service](https://www.imsglobal.org/spec/lti-ags/v2p0/)
+and Canvas's [LineItem label](https://developerdocs.instructure.com/services/canvas/resources/line_items).
+The provider reuses shared claim selectors, token grants, origin/TLS trust and
+bounded response handling. It reads metadata only for a valid matching mapping,
+binds nonempty results to the selected learner and line item, and rejects foreign
+line-item IDs or unusable labels. The label enters both assertion and observation
+hash input. Unmapped legacy observations retain their original field set. AGS
+result URLs preserve line-item routing queries. The real repository resource read
+now includes the owner-defined rules so enrichment works outside test fixtures.
+Focused verification is source/transport/database evidence, never a live Canvas
+result or official OID4VC conformance claim.
+
+AGS source verification passed three shared claim-mapping controls, three scoped
+AGS controls with actual HTTP grant/metadata requests, and the real PostgreSQL
+management/resource contract in both JSON and JSONB configurations. The owned
+scratch database was removed by exact inspected container identity after the
+contract passed. Library Clippy and formatting passed. Production tool
+registration already advertises lineitem.readonly together with result.readonly
+when AGS capability is selected. Fresh stock Canvas execution remains required.

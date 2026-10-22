@@ -126,19 +126,41 @@ pub fn valid_evidence_config(config: &Map<String, Value>) -> bool {
         })
 }
 
+/// Whether a valid template rule requests one public field of this evidence.
+/// Providers use the same selectors as projection when optional authoritative
+/// metadata needs a separate read; unrelated rules cannot broaden that read.
+pub fn evidence_pointer_requested(rules: &[Value], evidence: &Value, pointer: &str) -> bool {
+    rules.iter().any(|rule| {
+        rule.get("claim_name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.is_empty())
+            && rule.get("source").and_then(Value::as_str) == Some("EVIDENCE_EXTRACTION")
+            && rule
+                .get("source_config")
+                .and_then(Value::as_object)
+                .is_some_and(|config| {
+                    valid_evidence_config(config)
+                        && config.get("json_pointer").and_then(Value::as_str) == Some(pointer)
+                        && matches_evidence_selector(config, evidence)
+                })
+    })
+}
+
+fn matches_evidence_selector(config: &Map<String, Value>, evidence: &Value) -> bool {
+    ["requirement_id", "fact_type"].iter().all(|key| {
+        config
+            .get(*key)
+            .is_none_or(|expected| evidence.get(*key) == Some(expected))
+    })
+}
+
 fn extract_evidence(config: &Map<String, Value>, evidence: &[Value]) -> Option<Value> {
     if !valid_evidence_config(config) {
         return None;
     }
     let matches = evidence
         .iter()
-        .filter(|fact| {
-            ["requirement_id", "fact_type"].iter().all(|key| {
-                config
-                    .get(*key)
-                    .is_none_or(|expected| fact.get(*key) == Some(expected))
-            })
-        })
+        .filter(|fact| matches_evidence_selector(config, fact))
         .collect::<Vec<_>>();
     if matches.len() != 1 {
         return None;
@@ -157,6 +179,44 @@ fn extract_evidence(config: &Map<String, Value>, evidence: &[Value]) -> Option<V
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn metadata_read_uses_the_same_valid_scoped_evidence_selector() {
+        let requirement = json!({"requirement_id":"score","fact_type":"canvas.ags_result"});
+        let pointer = "/assertion/activity_name";
+        let rule = json!({"claim_name":"activity","source":"EVIDENCE_EXTRACTION",
+            "source_config":{"requirement_id":"score","fact_type":"canvas.ags_result","json_pointer":pointer}});
+        assert!(evidence_pointer_requested(
+            std::slice::from_ref(&rule),
+            &requirement,
+            pointer
+        ));
+        for changed in [
+            json!({"requirement_id":"other","fact_type":"canvas.ags_result"}),
+            json!({"requirement_id":"score","fact_type":"canvas.quiz_score"}),
+        ] {
+            assert!(!evidence_pointer_requested(
+                std::slice::from_ref(&rule),
+                &changed,
+                pointer
+            ));
+        }
+        for (field, value) in [
+            ("format", json!("invalid")),
+            ("private_selector", json!(true)),
+        ] {
+            let mut changed = rule.clone();
+            changed["source_config"][field] = value;
+            assert!(!evidence_pointer_requested(
+                &[changed],
+                &requirement,
+                pointer
+            ));
+        }
+        let mut form = rule;
+        form["source"] = json!("FORM_FIELD");
+        assert!(!evidence_pointer_requested(&[form], &requirement, pointer));
+    }
 
     #[test]
     fn configured_evidence_replaces_forged_form_and_rejects_ambiguous_heads() {

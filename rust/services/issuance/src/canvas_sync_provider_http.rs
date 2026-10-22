@@ -40,6 +40,9 @@ use crate::{
     canvas_sync_worker::CanvasSyncTarget,
 };
 
+#[path = "canvas_sync_provider_ags.rs"]
+mod ags;
+
 const AGS_RESULT_READ_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly";
 const NRPS_MEMBERSHIP_READ_SCOPE: &str =
     "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly";
@@ -170,6 +173,7 @@ impl CollectionProtocol {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum LtiCollectionKind {
     AgsResult,
+    AgsLineItem,
     NrpsMembership,
 }
 
@@ -177,6 +181,7 @@ impl LtiCollectionKind {
     const fn scope(self) -> &'static str {
         match self {
             Self::AgsResult => AGS_RESULT_READ_SCOPE,
+            Self::AgsLineItem => ags::LINE_ITEM_READ_SCOPE,
             Self::NrpsMembership => NRPS_MEMBERSHIP_READ_SCOPE,
         }
     }
@@ -184,6 +189,7 @@ impl LtiCollectionKind {
     const fn accept(self) -> &'static str {
         match self {
             Self::AgsResult => AGS_RESULT_ACCEPT,
+            Self::AgsLineItem => ags::LINE_ITEM_ACCEPT,
             Self::NrpsMembership => NRPS_MEMBERSHIP_ACCEPT,
         }
     }
@@ -695,7 +701,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             let results = self
                 .lti_collection(
                     resources,
-                    &format!("{}/results", line_item.trim_end_matches('/')),
+                    &ags::results_url(&line_item)?,
                     LtiCollectionKind::AgsResult,
                     Some(subject),
                     100,
@@ -704,7 +710,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 .await?;
             let record = results.first().cloned().unwrap_or_else(|| json!({}));
             validate_ags_record(&record)?;
-            let source_payload = selected_payload(
+            let mut source_payload = selected_payload(
                 &record,
                 &[
                     "id",
@@ -714,8 +720,15 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     "timestamp",
                 ],
             );
+            let mut assertion = ags_assertion(&record);
+            if ags::activity_name_requested(resources, requirement) {
+                ags::validate_result_binding(&results, &line_item, subject)?;
+                let name = self.read_ags_activity_name(resources, &line_item).await?;
+                assertion.insert("activity_name".into(), Value::String(name.clone()));
+                source_payload.insert("activity_name".into(), Value::String(name));
+            }
             return Ok(CanvasAuthoritativeObservation {
-                assertion: ags_assertion(&record),
+                assertion,
                 effective_at: timestamp(record.get("timestamp")),
                 source_payload,
                 verification_method: "LTI_AGS_RESULT_READ",

@@ -161,7 +161,8 @@ impl CanvasSyncProcessorRepository for PostgresCanvasSyncProcessorRepository {
             sqlx::query_scalar::<_, Value>(
                 "SELECT jsonb_build_object(
                     'id', id, 'organization_id', organization_id,
-                    'approval_policy_set_id', approval_policy_set_id, 'status', status)
+                    'approval_policy_set_id', approval_policy_set_id, 'status', status,
+                    'claim_collection_rules', claim_collection_rules)
                  FROM issuance_service.application_templates
                  WHERE id = $1 AND organization_id = $2",
             )
