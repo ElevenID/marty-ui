@@ -703,9 +703,7 @@ pub(crate) fn resolved_issuer_matches(
     let profile = resolved
         .and_then(|value| value.get("issuer_profile"))
         .and_then(Value::as_object);
-    let service = resolved
-        .and_then(|value| value.get("service"))
-        .and_then(Value::as_object);
+    let service = crate::credential_issuer::signing_service_context(&issuer.raw_context);
     let Some((expected, resolved, profile, service)) =
         expected.zip(resolved).zip(profile).zip(service).map(
             |(((expected, resolved), profile), service)| (expected, resolved, profile, service),

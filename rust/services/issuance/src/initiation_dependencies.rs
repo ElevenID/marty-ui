@@ -586,6 +586,13 @@ fn template_from_grpc(
             "credential template identity mismatch".into(),
         ));
     }
+    // Historical template reads remain available. New initiation, including
+    // queued Flow events, must not turn a retired template into fresh authority.
+    if !template.status.eq_ignore_ascii_case("ACTIVE") {
+        return Err(InitiationDependencyError::Invalid(
+            "credential template must be active for issuance initiation".into(),
+        ));
+    }
     let wallet_configs = if template.wallet_configs_json.trim().is_empty() {
         Vec::new()
     } else {
@@ -680,6 +687,41 @@ fn positive_or(value: i64, fallback: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initiation_template_requires_active_status_and_exact_identity() {
+        let template = |status: &str| TemplateResponse {
+            id: "template-1".into(),
+            organization_id: "org-1".into(),
+            status: status.into(),
+            credential_type: "EmployeeCredential".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            issuer_algorithm: "ES256".into(),
+            ..Default::default()
+        };
+        for status in ["ACTIVE", "active"] {
+            assert_eq!(
+                template_from_grpc("template-1", template(status))
+                    .unwrap()
+                    .credential_type,
+                "EmployeeCredential"
+            );
+        }
+        for status in ["DEPRECATED", "DRAFT", "", "unknown"] {
+            assert_eq!(
+                template_from_grpc("template-1", template(status)),
+                Err(InitiationDependencyError::Invalid(
+                    "credential template must be active for issuance initiation".into()
+                ))
+            );
+        }
+        assert_eq!(
+            template_from_grpc("another-template", template("ACTIVE")),
+            Err(InitiationDependencyError::Invalid(
+                "credential template identity mismatch".into()
+            ))
+        );
+    }
     use crate::config::normalize_grpc_target;
     use axum::{http::HeaderMap, response::Json, routing::get, Router};
     use serde_json::json;

@@ -277,6 +277,53 @@ describe('SigningKeysPage', () => {
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument()
   })
 
+  const configureExplicitRouting = () => {
+    const config = {
+      services: [
+        { id: 'first', name: 'First signer', service_type: 'openbao-transit', managed: true, read_only: true },
+        { id: 'second', name: 'Second signer', service_type: 'openbao-transit', managed: false, read_only: false },
+      ],
+      default_service_id: 'first',
+      key_reference_purposes: { first: { one: ['vc_jwt_issuer'] }, second: { two: ['oid4vp_request_signing'] } },
+      type_defaults: { vc_jwt_issuer: 'first', oid4vp_request_signing: 'second' },
+      format_defaults: { JWT: 'first', SD_JWT_VC: 'second' },
+    }
+    mockGetKeyManagementConfig.mockResolvedValue(config)
+    return config
+  }
+
+  it('preserves explicit routing maps when Make default is clicked', async () => {
+    const config = configureExplicitRouting()
+    const { user } = renderWithRouter(<SigningKeysPage />, {
+      initialEntries: ['/console/org/deploy/key-management'],
+    })
+    await user.click(await screen.findByRole('button', { name: 'Make default' }))
+    await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledWith(expect.objectContaining({
+      organization_id: 'org-123', default_service_id: 'second',
+      key_reference_purposes: config.key_reference_purposes,
+      type_defaults: config.type_defaults, format_defaults: config.format_defaults,
+    })))
+  })
+
+  it('prunes only removed-service bindings when Remove is clicked', async () => {
+    configureExplicitRouting()
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true)
+    try {
+      const { user } = renderWithRouter(<SigningKeysPage />, {
+        initialEntries: ['/console/org/deploy/key-management'],
+      })
+      await user.click(await screen.findByRole('button', { name: 'Remove' }))
+      await waitFor(() => expect(mockUpdateKeyManagementConfig).toHaveBeenCalledWith(expect.objectContaining({
+        organization_id: 'org-123', default_service_id: 'first',
+        services: [expect.objectContaining({ id: 'first' })],
+        key_reference_purposes: { first: { one: ['vc_jwt_issuer'] } },
+        type_defaults: { vc_jwt_issuer: 'first' }, format_defaults: { JWT: 'first' },
+      })))
+    } finally {
+      confirm.mockRestore()
+    }
+  })
+
   it('reports rotation completion after rotating a service key', async () => {
     vi.spyOn(window, 'confirm').mockImplementation(() => true)
     configureRotatableService()

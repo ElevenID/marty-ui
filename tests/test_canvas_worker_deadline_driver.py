@@ -223,7 +223,7 @@ def test_invalid_wait_budget_never_polls_child_or_predicate(native, timeout):
 def test_transcript_comparison_is_exact_and_never_echoes_values(native, corpus, field):
     _, reference = corpus
     observation = reference["observations"][0]
-    fixture = SimpleNamespace(requests=deepcopy(observation["requests"]), failures=[])
+    fixture = SimpleNamespace(requests=native.native_requests(observation["requests"]), failures=[])
     if field is None:
         native.assert_requests(fixture, observation)
         return
@@ -297,7 +297,8 @@ def test_ordered_three_read_protocol_and_cleanup(
 
     class Fixture:
         def __init__(self, paths, actual_responses):
-            assert paths == matrix["request_paths"] and actual_responses == responses
+            assert paths == [native.native_path(path) for path in matrix["request_paths"]]
+            assert actual_responses == {native.native_path(path): response for path, response in responses.items()}
             self.requests, self.failures = [], []
             self.received_at = [None] * 3
             self.request_received = [Event() for _ in range(3)]
@@ -306,7 +307,7 @@ def test_ordered_three_read_protocol_and_cleanup(
             self.closing = self.closed = False
 
         def receive(self, index):
-            self.requests.append(deepcopy(observation["requests"][index]))
+            self.requests.append(native.native_requests(observation["requests"])[index])
             if failure == "wrong-request" and index == 0:
                 self.requests[0]["authorization"] = "private-sentinel"
             self.received_at[index] = clock.now

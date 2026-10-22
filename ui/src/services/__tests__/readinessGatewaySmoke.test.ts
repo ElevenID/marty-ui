@@ -85,6 +85,15 @@ describe('readiness gateway smoke', () => {
     expect(environment).toBe('staging')
   })
 
+  it('accepts an explicitly unset organization environment without inventing a configured value', async () => {
+    server.use(
+      http.get('*/v1/organizations/:orgId/environment', ({ params }) =>
+        HttpResponse.json({ organization_id: params.orgId, environment: null }))
+    )
+
+    await expect(getOrganizationEnvironment('org_fresh')).resolves.toBeNull()
+  })
+
   it('updates organization environment through the gateway v1 route', async () => {
     const requestedPaths: string[] = []
 

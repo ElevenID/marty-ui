@@ -11,7 +11,7 @@ use thiserror::Error;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canvas_lti_launch::CanvasLtiClock,
-    credential::CredentialTransaction,
+    credential::{credential_configuration_id_for_format, CredentialTransaction},
     initiation::{hash_idempotency_key, hash_idempotency_request},
     initiation_response::python_quote,
     internal_application_approval::InternalApplicationTransactionPreparer,
@@ -167,10 +167,14 @@ impl InternalApplicationOfferProjector {
             .filter(|value| !value.is_empty())
             .unwrap_or("default");
         let issuer_url = format!("{}/org/{organization_id}", self.issuer_base_url);
+        let configuration_id = credential_configuration_id_for_format(
+            credential_type,
+            &transaction.credential_payload_format,
+        );
         let offer_url = encoded_offer_uri(
             "openid-credential-offer://",
             &issuer_url,
-            credential_type,
+            &configuration_id,
             &transaction.pre_authorized_code,
         )?;
         let mut credential_offer_uris = BTreeMap::new();
@@ -189,13 +193,13 @@ impl InternalApplicationOfferProjector {
                 .get("deep_link_scheme")
                 .and_then(Value::as_str)
                 .unwrap_or("openid-credential-offer://");
-            let configuration_id = if configuration.get("format_variant").and_then(Value::as_str)
-                == Some("mso_mdoc")
-            {
-                format!("{credential_type}#mdoc")
-            } else {
-                credential_type.to_owned()
-            };
+            let configuration_id = credential_configuration_id_for_format(
+                credential_type,
+                configuration
+                    .get("format_variant")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
             credential_offer_uris.insert(
                 wallet_id.to_owned(),
                 encoded_offer_uri(
@@ -1026,6 +1030,64 @@ mod tests {
                 .map(|value| value.as_str().unwrap().to_owned())
                 .collect::<BTreeSet<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn application_offers_advertise_format_specific_credential_configuration_ids() {
+        let now = Utc.with_ymd_and_hms(2026, 9, 20, 12, 0, 0).unwrap();
+        let projector = InternalApplicationOfferProjector::new(
+            "https://issuer.example",
+            Arc::new(Catalog(Vec::new())),
+            Arc::new(Clock(now)),
+        )
+        .unwrap();
+        for (format, expected) in [
+            ("w3c_vcdm_v2_sd_jwt", "OpenBadgeCredential#sd-jwt"),
+            ("vc+sd-jwt", "OpenBadgeCredential#sd-jwt"),
+            ("jwt_vc_json", "OpenBadgeCredential"),
+            ("ldp_vc", "OpenBadgeCredential#ldp-vc"),
+            ("mso_mdoc", "OpenBadgeCredential#mdoc"),
+            ("MDOC", "OpenBadgeCredential#mdoc"),
+        ] {
+            let mut transaction = transaction(now);
+            transaction.credential_type = Some("OpenBadgeCredential".into());
+            transaction.credential_payload_format = format.into();
+            transaction.wallet_configs = vec![json!({
+                "wallet_id": "wallet-1",
+                "format_variant": format,
+                "deep_link_scheme": "example-wallet://open?source=elevenid"
+            })];
+            let response = projector
+                .project("org-123", Some("credential-template-1"), &transaction)
+                .await
+                .unwrap();
+            for uri in [
+                &response.offer_url,
+                &response.credential_offer_uris["wallet-1"],
+            ] {
+                let uri = url::Url::parse(uri).unwrap();
+                let encoded = uri
+                    .query_pairs()
+                    .find(|(key, _)| key == "credential_offer")
+                    .unwrap()
+                    .1;
+                let offer: Value = serde_json::from_str(&encoded).unwrap();
+                assert_eq!(
+                    offer["credential_configuration_ids"],
+                    json!([expected]),
+                    "{format}"
+                );
+                assert_eq!(
+                    offer["credential_issuer"],
+                    "https://issuer.example/org/org-123"
+                );
+                assert_eq!(
+                    offer["grants"]["urn:ietf:params:oauth:grant-type:pre-authorized_code"]
+                        ["pre-authorized_code"],
+                    transaction.pre_authorized_code
+                );
+            }
+        }
     }
 
     #[tokio::test]

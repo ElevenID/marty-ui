@@ -25,6 +25,44 @@ pub trait PolicyAuthorization: Send + Sync {
     ) -> Result<(), String>;
 }
 
+// Both human and trusted gateway API-key actors use the same domain actions.
+pub(crate) fn action_permission(action: &str) -> Option<&'static str> {
+    match action {
+        "view" | "evaluate" => Some("presentation-policy:view"),
+        "create" => Some("presentation-policy:create"),
+        "edit" | "activate" | "suspend" | "version" => Some("presentation-policy:edit"),
+        "delete" => Some("presentation-policy:delete"),
+        _ => None,
+    }
+}
+
+struct GatewayApiKeyAuthorization {
+    key_id: Uuid,
+    organization_id: Uuid,
+    scopes: Vec<String>,
+}
+
+#[async_trait]
+impl PolicyAuthorization for GatewayApiKeyAuthorization {
+    async fn require(
+        &self,
+        principal_id: &str,
+        organization_id: Uuid,
+        action: &'static str,
+    ) -> Result<(), String> {
+        let allowed = principal_id == self.key_id.to_string()
+            && organization_id == self.organization_id
+            && action_permission(action).is_some_and(|permission| {
+                marty_api_key_policy::api_key_allowed(permission, &self.scopes)
+            });
+        if allowed {
+            Ok(())
+        } else {
+            Err("presentation-policy permission required".into())
+        }
+    }
+}
+
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum PolicyApplicationError {
     #[error("PRESENTATION_POLICY.NOT_FOUND")]
@@ -54,6 +92,24 @@ impl PolicyApplication {
         Self {
             repository,
             authorization,
+        }
+    }
+
+    // Only the authenticated HTTP gateway transport may construct this actor.
+    // The immutable repository/domain lifecycle remains shared with human calls.
+    pub(crate) fn for_gateway_api_key(
+        &self,
+        key_id: Uuid,
+        organization_id: Uuid,
+        scopes: Vec<String>,
+    ) -> Self {
+        Self {
+            repository: self.repository.clone(),
+            authorization: Arc::new(GatewayApiKeyAuthorization {
+                key_id,
+                organization_id,
+                scopes,
+            }),
         }
     }
 

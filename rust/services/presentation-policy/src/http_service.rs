@@ -71,6 +71,10 @@ pub struct PresentationPolicyHttpState {
 pub fn presentation_policy_router(state: PresentationPolicyHttpState) -> Router {
     Router::new()
         .route(
+            "/internal/v1/resource-owners/presentation-policies/{policy_id}",
+            get(policy_owner),
+        )
+        .route(
             "/v1/presentation-policies",
             get(list_policies).post(create_policy),
         )
@@ -269,10 +273,9 @@ async fn create_policy(
     headers: HeaderMap,
     Json(input): Json<CreatePolicyRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let policy = build_policy(input, Utc::now())?;
-    let policy = state
-        .application
+    let policy = application
         .create(&principal, policy)
         .await
         .map_err(application_error)?;
@@ -284,14 +287,13 @@ async fn list_policies(
     headers: HeaderMap,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let organization_id = parse_uuid(&query.organization_id, "organization_id")?;
     let limit = query.limit.unwrap_or(100);
     if limit > 500 {
         return Err(unprocessable("limit must be less than or equal to 500"));
     }
-    let policies = state
-        .application
+    let policies = application
         .list(&principal, organization_id)
         .await
         .map_err(application_error)?;
@@ -310,9 +312,8 @@ async fn get_policy(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .get(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -325,15 +326,13 @@ async fn update_policy(
     Path(policy_id): Path<String>,
     Json(input): Json<UpdatePolicyRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let mut policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let mut policy = application
         .get_for_update(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
     apply_update(&mut policy, input, Utc::now())?;
-    let policy = state
-        .application
+    let policy = application
         .update(&principal, policy)
         .await
         .map_err(application_error)?;
@@ -362,12 +361,12 @@ async fn lifecycle(
     policy_id: &str,
     activate: bool,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(state, headers)?;
+    let (application, principal) = trusted_application(state, headers)?;
     let id = parse_uuid(policy_id, "policy_id")?;
     let result = if activate {
-        state.application.activate(&principal, id, Utc::now()).await
+        application.activate(&principal, id, Utc::now()).await
     } else {
-        state.application.suspend(&principal, id, Utc::now()).await
+        application.suspend(&principal, id, Utc::now()).await
     };
     Ok(Json(policy_response(&result.map_err(application_error)?)))
 }
@@ -377,9 +376,8 @@ async fn new_version(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .new_version(
             &principal,
             parse_uuid(&policy_id, "policy_id")?,
@@ -396,9 +394,8 @@ async fn delete_policy(
     headers: HeaderMap,
     Path(policy_id): Path<String>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    application
         .delete(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -411,9 +408,8 @@ async fn evaluate_saved(
     Path(policy_id): Path<String>,
     Json(request): Json<EvaluatePresentationRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
-    let policy = state
-        .application
+    let (application, principal) = trusted_application(&state, &headers)?;
+    let policy = application
         .get_for_evaluation(&principal, parse_uuid(&policy_id, "policy_id")?)
         .await
         .map_err(application_error)?;
@@ -425,10 +421,9 @@ async fn evaluate_inline(
     headers: HeaderMap,
     Json(input): Json<InlineEvaluationRequest>,
 ) -> Result<Json<Value>, PresentationPolicyHttpError> {
-    let principal = trusted_principal(&state, &headers)?;
+    let (application, principal) = trusted_application(&state, &headers)?;
     let organization_id = parse_uuid(&input.organization_id, "organization_id")?;
-    state
-        .application
+    application
         .authorize_inline_evaluation(&principal, organization_id)
         .await
         .map_err(application_error)?;
@@ -1170,17 +1165,66 @@ fn default_display(purpose: Option<&str>) -> DisplayMetadata {
     }
 }
 
-fn trusted_principal(
+async fn policy_owner(
+    State(state): State<PresentationPolicyHttpState>,
+    headers: HeaderMap,
+    Path(policy_id): Path<String>,
+) -> Result<Json<Value>, PresentationPolicyHttpError> {
+    authenticate_service(&state, &headers)?;
+    let policy = state
+        .application
+        .get_for_internal_service(parse_uuid(&policy_id, "policy_id")?)
+        .await
+        .map_err(application_error)?;
+    Ok(Json(
+        json!({"id": policy.id, "organization_id": policy.organization_id}),
+    ))
+}
+
+fn authenticate_service(
     state: &PresentationPolicyHttpState,
     headers: &HeaderMap,
-) -> Result<String, PresentationPolicyHttpError> {
+) -> Result<(), PresentationPolicyHttpError> {
     state
         .service_authenticator
         .authenticate(header(headers, "x-service-token"))
-        .map_err(|_| unauthorized("PRESENTATION_POLICY.SERVICE_AUTHENTICATION_REQUIRED"))?;
-    header(headers, "x-user-id")
+        .map_err(|_| unauthorized("PRESENTATION_POLICY.SERVICE_AUTHENTICATION_REQUIRED"))
+}
+
+fn trusted_application(
+    state: &PresentationPolicyHttpState,
+    headers: &HeaderMap,
+) -> Result<(PolicyApplication, String), PresentationPolicyHttpError> {
+    authenticate_service(state, headers)?;
+    if headers.contains_key("x-api-key-id") {
+        let key_id = header(headers, "x-api-key-id")
+            .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let key_id = Uuid::parse_str(key_id)
+            .map_err(|_| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let organization_id = header(headers, "x-organization-id")
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+        let scopes = header(headers, "x-api-key-scopes")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect();
+        return Ok((
+            state
+                .application
+                .for_gateway_api_key(key_id, organization_id, scopes),
+            key_id.to_string(),
+        ));
+    }
+    if headers.contains_key("x-api-key-scopes") {
+        return Err(unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"));
+    }
+    let principal = header(headers, "x-user-id")
         .map(str::to_owned)
-        .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))
+        .ok_or_else(|| unauthorized("PRESENTATION_POLICY.AUTHENTICATION_REQUIRED"))?;
+    Ok((state.application.as_ref().clone(), principal))
 }
 
 fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {

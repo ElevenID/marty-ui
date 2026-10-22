@@ -33,6 +33,7 @@ pub mod canvas_legacy_ingest;
 pub mod canvas_legacy_ingest_postgres;
 pub mod canvas_lifecycle_delivery;
 pub mod canvas_lti_bootstrap;
+pub mod canvas_lti_claim;
 pub mod canvas_lti_deep_linking;
 pub mod canvas_lti_deep_linking_postgres;
 pub mod canvas_lti_evidence;

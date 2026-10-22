@@ -94,6 +94,18 @@ const LIST_EVIDENCE_FACTS: &str = "SELECT
     WHERE application_id = $1
     ORDER BY created_at";
 
+// The head table is authoritative; older observations may intentionally be
+// retained without a supersession edge and must not become current by inference.
+const LIST_CURRENT_EVIDENCE_FACTS: &str = "SELECT fact.*
+    FROM issuance_service.evidence_facts AS fact
+    JOIN issuance_service.evidence_fact_heads AS head
+      ON head.organization_id = fact.organization_id
+     AND head.application_id = fact.application_id
+     AND head.logical_key = fact.logical_key
+     AND head.fact_id = fact.id
+    WHERE fact.application_id = $1
+    ORDER BY fact.created_at, fact.id";
+
 const LIST_ISSUANCE_EVENTS: &str = "SELECT
         id, transaction_id, application_id, event_type, metadata, created_at
     FROM issuance_service.issuance_events
@@ -466,6 +478,20 @@ impl InternalApplicationRepository for PostgresInternalApplicationRepository {
         application_id: &str,
     ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
         sqlx::query(LIST_EVIDENCE_FACTS)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(repository_error)?
+            .into_iter()
+            .map(evidence_fact_row)
+            .collect()
+    }
+
+    async fn list_current_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        sqlx::query(LIST_CURRENT_EVIDENCE_FACTS)
             .bind(application_id)
             .fetch_all(&self.pool)
             .await

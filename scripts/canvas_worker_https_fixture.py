@@ -3,6 +3,7 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from email.utils import formatdate
 import json
+import re
 from pathlib import Path
 import ssl
 import tempfile
@@ -10,6 +11,39 @@ from threading import Event, Lock, Thread
 import time
 
 from test_canvas_lti_https import create_loopback_certificate
+
+
+def assert_stock_submission_requests(actual, frozen):
+    """Apply the reviewed stock-Canvas request delta to expectations only.
+
+    The historical publisher requested an unsupported submission include.
+    Native stock reads omit it and fetch the assignment separately when its
+    denominator is absent. Frozen responses here already contain that metadata;
+    no extra read, response, business outcome or historical corpus is changed.
+    """
+    expected = []
+    for request in frozen:
+        row = dict(request)
+        if row.get("method") == "GET" and re.fullmatch(
+            r"/api/v1/courses/[0-9]+/assignments/[0-9]+/submissions/[0-9]+"
+            r"\?include%5B%5D=assignment",
+            row.get("path", ""),
+        ):
+            row["path"] = row["path"].split("?", 1)[0]
+        expected.append(row)
+    # Diagnose field names only: never expose authorization values or payloads.
+    differences = [
+        {"index": index, "fields": sorted(
+            key for key in set(observed) | set(wanted)
+            if observed.get(key) != wanted.get(key) or (key in observed) != (key in wanted)
+        )}
+        for index, (observed, wanted) in enumerate(zip(actual, expected))
+        if observed != wanted
+    ][:8]
+    assert actual == expected, (
+        "Actual stock worker HTTPS requests differ: "
+        f"counts={len(actual)}/{len(expected)}, fields={differences}"
+    )
 
 
 def response_headers(response, now=None):

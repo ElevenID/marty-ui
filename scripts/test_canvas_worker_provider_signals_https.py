@@ -7,7 +7,10 @@ import subprocess
 import sys
 import time
 
-from canvas_worker_https_fixture import WorkerHttpsFixture
+from canvas_worker_https_fixture import (
+    WorkerHttpsFixture,
+    assert_stock_submission_requests,
+)
 
 
 def wait_for(child, predicate, description, timeout=30):
@@ -174,7 +177,9 @@ def run(executable, scenario="signals"):
                     f"Native {signal_name} failed: {stdout} {stderr}"
                 )
                 assert https.release.is_set() == release_response
-                assert https.requests == reference[signal_name]["requests"]
+                assert_stock_submission_requests(
+                    https.requests, reference[signal_name]["requests"]
+                )
                 print(
                     f"Native worker active-provider {signal_name} passed ({len(https.requests)} actual HTTPS requests)"
                 )

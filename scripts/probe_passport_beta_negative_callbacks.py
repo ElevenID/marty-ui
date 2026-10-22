@@ -72,6 +72,19 @@ def _direct_opener():
     return build_opener(ProxyHandler({}), NoRedirect)
 
 
+def denial_projection(denial: Any) -> dict[str, bool]:
+    """Share the exact public denial contract across actual HTTP transports."""
+    detail = denial.get("detail") if isinstance(denial, dict) else None
+    return {
+        "missing_signature_header": (
+            isinstance(detail, list) and len(detail) == 1
+            and isinstance(detail[0], dict)
+            and detail[0].get("type") == "missing"
+            and detail[0].get("loc") == ["header", "x-personalization-signature"]),
+        "webhook_job_not_found": detail == "Physical document job not found",
+    }
+
+
 def _request_job_direct(
     method: str, path: str, body: dict[str, Any] | None, api_key: str,
 ) -> tuple[int, dict[str, Any]]:
@@ -195,15 +208,7 @@ def _post_callback(body: bytes, signature: str | None) -> tuple[int, dict[str, b
             denial = json.loads(raw)
         except (OSError, ValueError) as error:
             raise NegativeCallbackError("Beta callback denial is invalid") from error
-        detail = denial.get("detail") if isinstance(denial, dict) else None
-        return exc.code, {
-            "missing_signature_header": (
-                isinstance(detail, list) and len(detail) == 1
-                and isinstance(detail[0], dict)
-                and detail[0].get("type") == "missing"
-                and detail[0].get("loc") == ["header", "x-personalization-signature"]),
-            "webhook_job_not_found": detail == "Physical document job not found",
-        }
+        return exc.code, denial_projection(denial)
     except (OSError, URLError) as exc:
         raise NegativeCallbackError("Beta callback denial request failed") from exc
 

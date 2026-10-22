@@ -352,6 +352,19 @@ describe('ClaimCredentialDialog', () => {
     expect(mockGenerateIssuanceOffer).toHaveBeenCalledTimes(1);
   });
 
+  it('uses the Canvas adapter for both offer creation and read-only completion polling', async () => {
+    const generate = vi.fn().mockResolvedValue(offer);
+    const read = vi.fn().mockResolvedValue({ id: 'app-1', organization_id: 'org-1', claim_state: 'CLAIMED' });
+    render(<ClaimCredentialDialog {...props} generateOffer={generate} readApplication={read} />);
+    await screen.findByTestId('claim-invite-display');
+    act(() => window.dispatchEvent(new Event('focus')));
+    await screen.findByText('Your credential has been claimed. You can close this dialog.');
+    expect(generate).toHaveBeenCalledExactlyOnceWith('app-1');
+    expect(read).toHaveBeenCalledExactlyOnceWith('app-1');
+    expect(mockGenerateIssuanceOffer).not.toHaveBeenCalled();
+    expect(mockGetApplication).not.toHaveBeenCalled();
+  });
+
   it('describes mailto as an email draft without claiming the message was sent', async () => {
     const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null);
     try {

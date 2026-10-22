@@ -180,12 +180,15 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   // Hide bearer QR pixels before the dialog exists; real product controls still run.
   await page.addStyleTag({ content: '[data-testid="credential-offer-qr"] { visibility:hidden !important }' });
   const responsePromise = page.waitForResponse(response => new URL(response.url()).origin === martyOrigin
-    && new URL(response.url()).pathname === `/v1/me/applications/${applicationId}/claim`
+    && new URL(response.url()).pathname === '/v1/integrations/canvas/lti/experience-sessions/current/claim'
     && response.request().method() === 'POST');
   report.pendingOperations.push('wallet-claim');
   await page.getByTestId('canvas-claim-action').click();
   const response = await responsePromise;
   const claim = await operations.responseJson(response, 'canvas_claim_failed', 'Canvas claim', [200]);
+  same(claim.id, applicationId, 'Claim application');
+  same(claim.organization_id, organizationId, 'Claim organization');
+  same(claim.transaction_id, transactionId, 'Claim approval transaction');
   await page.getByTestId('credential-claim-dialog').waitFor({ state: 'visible' });
   const receipt = await wallet.receiveCredential(walletPage,
     claim.credential_offer_uri || claim.offer_url, templates.credential.vct);

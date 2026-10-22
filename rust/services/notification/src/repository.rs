@@ -47,6 +47,16 @@ pub trait NotificationRepository: Send + Sync {
     ) -> Result<Vec<Subscription>, RepositoryError>;
     async fn delete_subscription(&self, id: &str) -> Result<bool, RepositoryError>;
     async fn save_webhook(&self, webhook: WebhookEndpoint) -> Result<(), RepositoryError>;
+    /// Record delivery statistics only on an existing, organization-owned endpoint.
+    /// Completion of an in-flight request must never restore deleted configuration.
+    async fn record_webhook_attempt(
+        &self,
+        id: &str,
+        organization_id: &str,
+        success: bool,
+        completed: DateTime<Utc>,
+        failure_threshold: i32,
+    ) -> Result<bool, RepositoryError>;
     async fn get_webhook(&self, id: &str) -> Result<Option<WebhookEndpoint>, RepositoryError>;
     async fn list_webhooks(
         &self,
@@ -246,6 +256,37 @@ impl NotificationRepository for InMemoryNotificationRepository {
         Ok(())
     }
 
+    async fn record_webhook_attempt(
+        &self,
+        id: &str,
+        organization_id: &str,
+        success: bool,
+        completed: DateTime<Utc>,
+        failure_threshold: i32,
+    ) -> Result<bool, RepositoryError> {
+        let mut state = self.state.write().await;
+        let Some(value) = state
+            .webhooks
+            .get_mut(id)
+            .filter(|value| value.organization_id == organization_id)
+        else {
+            return Ok(false);
+        };
+        if success {
+            value.failure_count = 0;
+            value.last_triggered_at = Some(completed);
+            value.circuit_breaker_open_until = None;
+        } else {
+            value.failure_count += 1;
+            value.last_failure_at = Some(completed);
+            if value.failure_count >= failure_threshold {
+                value.circuit_breaker_open_until = Some(completed + chrono::Duration::hours(1));
+            }
+        }
+        value.updated_at = value.updated_at.max(completed);
+        Ok(true)
+    }
+
     async fn get_webhook(&self, id: &str) -> Result<Option<WebhookEndpoint>, RepositoryError> {
         Ok(self.state.read().await.webhooks.get(id).cloned())
     }
@@ -422,4 +463,107 @@ pub(crate) fn reject_private_record<T: Serialize>(record: &T) -> Result<(), Repo
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod delivery_completion_tests {
+    use super::*;
+
+    fn endpoint() -> WebhookEndpoint {
+        let now = Utc::now();
+        WebhookEndpoint {
+            id: "endpoint".into(),
+            organization_id: "org".into(),
+            name: "callback".into(),
+            url: "https://example.com/old".into(),
+            secret: String::new(),
+            secret_envelope: Some("vault:old".into()),
+            secret_hint: Some("old1".into()),
+            description: None,
+            event_types: vec!["application.approved".into()],
+            enabled: true,
+            failure_count: 0,
+            last_failure_at: None,
+            last_triggered_at: None,
+            circuit_breaker_open_until: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_completion_cannot_resurrect_deleted_endpoint() {
+        let repo = InMemoryNotificationRepository::default();
+        let before = endpoint();
+        repo.save_webhook(before.clone()).await.unwrap();
+        // The worker already holds `before` when public deletion completes.
+        assert!(repo.delete_webhook(&before.id).await.unwrap());
+        for success in [true, false] {
+            assert!(!repo
+                .record_webhook_attempt(&before.id, "org", success, Utc::now(), 2)
+                .await
+                .unwrap());
+            assert!(repo.get_webhook(&before.id).await.unwrap().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn delivery_completion_preserves_concurrent_disable_and_rotation() {
+        let repo = InMemoryNotificationRepository::default();
+        let before = endpoint();
+        repo.save_webhook(before.clone()).await.unwrap();
+        let mut changed = before.clone();
+        changed.enabled = false;
+        changed.url = "https://example.com/new".into();
+        changed.secret_envelope = Some("vault:rotated".into());
+        changed.secret_hint = Some("new1".into());
+        changed.event_types = vec!["application.rejected".into()];
+        changed.updated_at = Utc::now() + chrono::Duration::seconds(1);
+        repo.save_webhook(changed.clone()).await.unwrap();
+        assert!(repo
+            .record_webhook_attempt(&before.id, "org", false, Utc::now(), 2)
+            .await
+            .unwrap());
+        let stored = repo.get_webhook(&before.id).await.unwrap().unwrap();
+        assert!(!stored.enabled);
+        assert_eq!(stored.url, changed.url);
+        assert_eq!(stored.secret_envelope, changed.secret_envelope);
+        assert_eq!(stored.secret_hint, changed.secret_hint);
+        assert_eq!(stored.event_types, changed.event_types);
+        assert_eq!(stored.updated_at, changed.updated_at);
+        assert_eq!(stored.failure_count, 1);
+    }
+
+    #[tokio::test]
+    async fn delivery_completion_keeps_normal_statistics_and_organization_scope() {
+        let repo = InMemoryNotificationRepository::default();
+        let value = endpoint();
+        repo.save_webhook(value.clone()).await.unwrap();
+        let now = Utc::now();
+        assert!(!repo
+            .record_webhook_attempt(&value.id, "foreign", false, now, 2)
+            .await
+            .unwrap());
+        for _ in 0..2 {
+            assert!(repo
+                .record_webhook_attempt(&value.id, "org", false, now, 2)
+                .await
+                .unwrap());
+        }
+        let stored = repo.get_webhook(&value.id).await.unwrap().unwrap();
+        assert_eq!(stored.failure_count, 2);
+        assert_eq!(stored.last_failure_at, Some(now));
+        assert_eq!(
+            stored.circuit_breaker_open_until,
+            Some(now + chrono::Duration::hours(1))
+        );
+        assert!(repo
+            .record_webhook_attempt(&value.id, "org", true, now, 2)
+            .await
+            .unwrap());
+        let stored = repo.get_webhook(&value.id).await.unwrap().unwrap();
+        assert_eq!(stored.failure_count, 0);
+        assert_eq!(stored.last_triggered_at, Some(now));
+        assert!(stored.circuit_breaker_open_until.is_none());
+    }
 }

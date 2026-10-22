@@ -2,7 +2,8 @@
 param([Parameter(Mandatory = $true)][string]$ArtifactDir,
       [Parameter(Mandatory = $true)][string]$SourceRepoRoot,
       [Parameter(Mandatory = $true)][string]$RuntimeConfigRoot,
-      [Parameter(Mandatory = $true)][string]$OutputPath, [switch]$Apply)
+      [Parameter(Mandatory = $true)][string]$OutputPath, [switch]$Apply, [switch]$PassportSimulatorCompletion,
+      [string]$FailedRolloutProof)
 
 # Forward completion only: migrations must already have succeeded. Never restore
 # databases or rerun the deployment entrypoint against an outstanding mutation.
@@ -24,6 +25,8 @@ try {
         '--artifact-dir', $ArtifactDir, '--source-repo-root', $SourceRepoRoot,
         '--runtime-config-root', $RuntimeConfigRoot, '--output', $OutputPath)
     if ($Apply) { $arguments += '--apply' }
+    if ($PassportSimulatorCompletion) { $arguments += '--passport-simulator-completion' }
+    if ($FailedRolloutProof) { $arguments += @('--failed-rollout-proof', $FailedRolloutProof) }
     & python @arguments
     if ($LASTEXITCODE -ne 0) { throw 'Forward startup failed; retain pending marker and inspect beta' }
     if ($Apply) { Complete-BetaMutation }

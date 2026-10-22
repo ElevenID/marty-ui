@@ -868,59 +868,66 @@ test('HTTP success with a pending readback cannot clear transaction cancellation
   assert.deepEqual(owned.uncertainMutations, [{ operation: 'transaction_cancellation' }]);
 });
 
-test('selectOrganization persists org mode before navigating and waits for UI restoration', async () => {
+function selectionPage({ current = 'org/2', duplicateLabel = false } = {}) {
+  const eligible = [
+    { id: 'org/1', display_name: 'Release Audit', membership: { has_org_console_access: true } },
+    { id: 'org/2', display_name: duplicateLabel ? 'Release Audit' : 'Other Org', membership: { has_org_console_access: true } },
+  ];
   const page = fakePage([
-    {
-      ok: true,
-      status: 200,
-      body: [{
-        id: 'org/1',
-        display_name: 'Release Audit',
-        membership: { has_org_console_access: true },
-      }],
-    },
-    {
-      ok: true,
-      status: 200,
-      body: { last_view_mode: 'org_admin', last_active_org_id: 'org/1' },
-    },
+    { ok: true, status: 200, body: eligible },
+    { ok: true, status: 200, body: {} },
+    { ok: true, status: 200, body: { last_view_mode: 'org_admin', last_active_org_id: 'org/1' } },
   ]);
-  page.gotoCalls = [];
-  page.waitCalls = [];
-  page.goto = async (...args) => page.gotoCalls.push(args);
-  page.waitForFunction = async (...args) => page.waitCalls.push(args);
+  const evaluate = page.evaluate;
+  page.evaluate = async (callback, request) => request ? evaluate(callback, request) : current;
+  page.actions = [];
+  page.goto = async (url) => page.actions.push(['goto', url]);
+  page.waitForFunction = async (_callback, expected) => page.actions.push(['wait', expected]);
+  page.getByPlaceholder = (name, options) => ({ placeholder: name, ...options });
+  page.getByText = (name, options) => ({ text: name, ...options });
+  page.getByRole = (role, options) => {
+    if (role === 'button') return { waitFor: async () => {}, count: async () => 1, click: async () => page.actions.push(['button', options]) };
+    assert.equal(role, 'menu');
+    return { filter: (search) => {
+      assert.deepEqual(search, { has: { placeholder: 'Search organizations', exact: true } });
+      return { waitFor: async () => {}, getByRole: (choiceRole) => {
+        assert.equal(choiceRole, 'menuitem');
+        return { filter: (choice) => {
+          assert.deepEqual(choice, { has: { text: 'Release Audit', exact: true } });
+          return { count: async () => 1, click: async () => page.actions.push(['select', 'org/1']) };
+        } };
+      } };
+    } };
+  };
+  page.waitForResponse = async (predicate) => {
+    const response = { url: () => 'https://beta.example.test/v1/me/preferences',
+      request: () => ({ method: () => 'PUT', postDataJSON: () => ({ last_active_org_id: 'org/1' }) }), status: () => 200 };
+    assert.equal(predicate(response), true);
+    return response;
+  };
+  return page;
+}
 
-  const selection = await selectOrganization(page, {
-    organizationId: 'org/1',
-    consoleOrigin: 'https://beta.example.test',
-  });
-
-  assert.deepEqual(selection, {
-    ok: true,
-    membershipsStatus: 200,
-    targetName: 'Release Audit',
-    activeOrgId: 'org/1',
-  });
-  assert.deepEqual(page.requests, [
-    { requestPath: '/v1/organizations/mine', requestOptions: {} },
-    {
-      requestPath: '/v1/me/preferences',
-      requestOptions: {
-        method: 'PUT',
-        body: JSON.stringify({
-          last_view_mode: 'org_admin',
-          last_active_org_id: 'org/1',
-        }),
-      },
-    },
+test('selectOrganization uses real header semantics when preferences cannot override an existing selection', async () => {
+  const page = selectionPage();
+  assert.equal((await selectOrganization(page, { organizationId: 'org/1', consoleOrigin: 'https://beta.example.test' })).ok, true);
+  assert.deepEqual(page.actions, [
+    ['goto', 'https://beta.example.test/console/org'], ['wait', undefined],
+    ['button', { name: 'Other Org', exact: true }], ['select', 'org/1'], ['wait', 'org/1'],
   ]);
-  assert.deepEqual(page.gotoCalls, [[
-    'https://beta.example.test/console/org',
-    { waitUntil: 'domcontentloaded', timeout: 60_000 },
-  ]]);
-  assert.equal(page.waitCalls.length, 1);
-  assert.equal(page.waitCalls[0][1], 'org/1');
-  assert.deepEqual(page.waitCalls[0][2], { timeout: 60_000 });
+  assert.deepEqual(page.requests.map((row) => row.requestPath), ['/v1/organizations/mine', '/v1/me/preferences', '/v1/me/preferences']);
+});
+
+test('selectOrganization verifies already selected target without clicking another organization', async () => {
+  const page = selectionPage({ current: 'org/1' });
+  assert.equal((await selectOrganization(page, { organizationId: 'org/1', consoleOrigin: 'https://beta.example.test' })).ok, true);
+  assert.equal(page.actions.some(([kind]) => kind === 'button' || kind === 'select'), false);
+});
+
+test('selectOrganization rejects ambiguous actual organization labels before a UI selection', async () => {
+  const page = selectionPage({ duplicateLabel: true });
+  await assert.rejects(selectOrganization(page, { organizationId: 'org/1', consoleOrigin: 'https://beta.example.test' }), /ambiguous display label/);
+  assert.equal(page.actions.some(([kind]) => kind === 'button' || kind === 'select'), false);
 });
 
 test('selectOrganization fails closed without an eligible organization membership', async () => {

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -30,6 +31,10 @@ from playwright.sync_api import expect, sync_playwright
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_cleanup_spec = importlib.util.spec_from_file_location("demo_cleanup_evidence", ROOT / "scripts/demo_cleanup_evidence.py")
+_cleanup_module = importlib.util.module_from_spec(_cleanup_spec)
+_cleanup_spec.loader.exec_module(_cleanup_module)
+owned_api_key_cleanup_proven = _cleanup_module.owned_api_key_cleanup_proven
 ENV_FILE = ROOT / ".env.tunnel.beta.local"
 ARTIFACT_ROOT = ROOT / "tests" / "artifacts"
 RECORDING_VIEWPORT = {"width": 1920, "height": 1080}
@@ -44,6 +49,15 @@ SIGNING_CAPABILITY_SCHEMA = "marty.signing-capability/v1"
 SIGNING_PURPOSES = ("vc_jwt_issuer", "oid4vp_request_signing")
 KNOWN_SECRETS: set[str] = set()
 
+# Shared with production-component checks; no guessed DOM fixture defines these controls.
+D10_UI_CONTROLS = json.loads((ROOT / "scripts/d10_ui_controls.json").read_text(encoding="utf8"))
+
+
+def d10_control_name(key: str) -> str | re.Pattern[str]:
+    definition = D10_UI_CONTROLS[key]
+    return re.compile(definition["regex"], re.I) if "regex" in definition else definition["name"]
+
+
 
 SECRET_PATTERNS = [
     re.compile(r"mk_live_[A-Za-z0-9_-]*"),
@@ -57,6 +71,36 @@ SECRET_PATTERNS = [
     re.compile(r"(\"fullKey\"\s*:\s*\")([^\"\\]+)(\")"),
     re.compile(r"(\"full_key\"\s*:\s*\")([^\"\\]+)(\")"),
 ]
+
+
+def start_recorder_capture(required: bool):
+    client_file = os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT")
+    if not client_file:
+        if required:
+            raise ValueError("D10 recording and functional qualification require recorder-owned live Python capture")
+        return None
+    path = Path(client_file)
+    if (not path.is_absolute() or path.is_symlink() or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT_SHA256")):
+        raise ValueError("Recorder-owned Python client source binding is invalid")
+    spec = importlib.util.spec_from_file_location("recorder_python_live_evidence", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.PythonCapture()
+
+
+def bound_recorder_inputs(capture, signing_inputs, record_video, recording_pause_ms):
+    scenario = capture.inputs["scenario"]
+    expected_signing = {"endpoint": signing_inputs["endpoint"], "mount": signing_inputs["mount"],
+                        "namespace": signing_inputs["namespace"], "keyReference": signing_inputs["key_reference"],
+                        "caCertFile": signing_inputs.get("ca_cert_file", ""),
+                        "validatorSha256": signing_inputs["validator_sha256"]}
+    if (capture.inputs["origin"] != "https://beta.elevenidllc.com"
+            or scenario.get("signing") != expected_signing or scenario.get("recordVideo") is not record_video
+            or scenario.get("recordingPauseMs") != recording_pause_ms
+            or not re.fullmatch(r"[0-9]{14}-[a-f0-9]{8}", str(scenario.get("runId") or ""))):
+        raise ValueError("Actual D10 action inputs differ from recorder-acknowledged inputs")
+    return scenario
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -141,6 +185,10 @@ def load_signing_inputs(environment: dict[str, str] | None = None) -> dict[str, 
         raise ValueError("DEMO_D10_KMS_TOKEN_FILE must be a bounded readable token file") from None
     if not 16 <= len(token) <= 4096 or any(char.isspace() or ord(char) < 32 for char in token):
         raise ValueError("DEMO_D10_KMS_TOKEN_FILE does not contain a usable transit token")
+    ca_cert_file = str(environment.get("DEMO_D10_KMS_CA_CERT_FILE") or "").strip()
+    if ca_cert_file and (not ca_cert_file.startswith("/") or len(ca_cert_file) > 4096
+                         or any(ord(char) < 32 for char in ca_cert_file)):
+        raise ValueError("DEMO_D10_KMS_CA_CERT_FILE must be an absolute file path mounted on the beta signing server")
     KNOWN_SECRETS.add(token)
     validator = Path(environment["DEMO_SIGNING_CAPABILITY_BIN"]).resolve()
     try:
@@ -154,7 +202,7 @@ def load_signing_inputs(environment: dict[str, str] | None = None) -> dict[str, 
             raise ValueError("wrong validator")
     except (OSError, ValueError, subprocess.SubprocessError):
         raise ValueError("Build and select the native validate-signing-capability binary before running D10") from None
-    return {"endpoint": endpoint, "mount": mount, "namespace": namespace,
+    return {"endpoint": endpoint, "mount": mount, "namespace": namespace, "ca_cert_file": ca_cert_file,
             "key_reference": key_reference, "token": token, "validator": str(validator),
             "validator_sha256": validator_sha256}
 
@@ -528,6 +576,12 @@ def evaluate_release_checks(report: dict[str, Any]) -> dict[str, Any]:
             "page_error",
             "The browser reported page errors.",
             count=len(report.get("page_errors") or []),
+        )
+
+    if not owned_api_key_cleanup_proven(report):
+        add_blocker(
+            "owned_api_key_cleanup_unverified",
+            "Every run-created API key requires a successful revocation bound to its exact key and organization.",
         )
 
     transient_loading = [
@@ -1249,15 +1303,15 @@ def active_organization_id(page: Page) -> str:
     return str(organization_id or '').strip()
 
 
-def require_created_organization(page: Page, slug: str | None, before: dict[str, Any], after: dict[str, Any]) -> str:
-    """Do not install a real provider credential in a previous active organization."""
+def require_created_organization(page: Page, name: str | None, before: dict[str, Any], after: dict[str, Any]) -> str:
+    """Bind the public organization name and fresh active ID before installing credentials."""
     old_probe = before.get("/v1/organizations/mine") or {}
     new_probe = after.get("/v1/organizations/mine") or {}
     old, new = old_probe.get("body"), new_probe.get("body")
-    if not slug or old_probe.get("status") != 200 or new_probe.get("status") != 200 or not isinstance(old, list) or not isinstance(new, list):
+    if not name or old_probe.get("status") != 200 or new_probe.get("status") != 200 or not isinstance(old, list) or not isinstance(new, list):
         raise ValueError("D10 could not bind the newly created organization before signer setup")
     active = active_organization_id(page)
-    matching = [item for item in new if isinstance(item, dict) and item.get("id") == active and item.get("slug") == slug]
+    matching = [item for item in new if isinstance(item, dict) and item.get("id") == active and item.get("name") == name]
     if (not active or len(matching) != 1
             or any(isinstance(item, dict) and item.get("id") == active for item in old)):
         raise ValueError("D10 signer setup requires the exact fresh organization created by this run")
@@ -1619,40 +1673,45 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
         raise ValueError("D10 requires a fresh active organization before service registration")
     audit.goto("/console/org/deploy/key-management/services/new")
     audit.snapshot("kms-service-wizard-opened", "Opened Register Key Management Service.")
-    if not audit.click_role("button", re.compile(r"^OpenBao Transit", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["kmsProvider"]["role"], d10_control_name("kmsProvider"), timeout=3000):
         raise ValueError("The declared OpenBao Transit provider control is unavailable")
     audit.snapshot("kms-provider-selected", "Selected the declared OpenBao Transit provider.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The OpenBao connection step is unavailable")
-    fields = [(r"^service name", f"Audit Transit Service {run_id}"),
-              (r"^service url", inputs["endpoint"]), (r"^transit mount", inputs["mount"]),
-              (r"^transit token", inputs["token"])]
+    fields = [("kmsServiceName", f"Audit Transit Service {run_id}"),
+              ("kmsUrl", inputs["endpoint"]), ("kmsMount", inputs["mount"]),
+              ("kmsToken", inputs["token"])]
     if inputs["namespace"]:
-        fields.append((r"^namespace", inputs["namespace"]))
-    if page.get_by_label(re.compile(r"^transit token", re.I)).first.get_attribute("type") != "password":
+        fields.append(("kmsNamespace", inputs["namespace"]))
+    if inputs.get("ca_cert_file"):
+        fields.append(("kmsCaFile", inputs["ca_cert_file"]))
+    if page.get_by_label(d10_control_name("kmsToken")).first.get_attribute("type") != "password":
         raise ValueError("The deployed transit token field must mask its value before capture")
     for label, value in fields:
-        if not audit.fill_label(re.compile(label, re.I), value):
+        if not audit.fill_label(d10_control_name(label), value):
             raise ValueError("A required OpenBao connection control is unavailable")
     # Password input masking protects the video. Playwright tracing has not yet
     # started: neither fill arguments nor request bodies containing this token
     # may be captured. Known token values are also excluded from audit logs.
     audit.snapshot("kms-connection-filled", "Entered the declared OpenBao connection; the token is hidden and this setup interval is excluded from the trace.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The declared OpenBao connection did not pass form validation")
-    if not audit.fill_label(re.compile(r"^transit key name$", re.I), inputs["key_reference"]):
-        raise ValueError("The real transit key selector is unavailable")
-    for purpose in [r"^VC JWT / SD-JWT issuer", r"^OID4VP request signing"]:
-        page.get_by_role("checkbox", name=re.compile(purpose, re.I)).check(timeout=3000)
-    page.get_by_role("checkbox", name="Use as the default signing service", exact=True).check(timeout=3000)
+    key_field = page.get_by_label(d10_control_name("kmsKey"))
+    if key_field.count() != 1:
+        raise ValueError("The real transit key selector is unavailable or ambiguous")
+    key_field.fill(inputs["key_reference"], timeout=5000)
+    for purpose in ["kmsIssuerPurpose", "kmsVerifierPurpose"]:
+        page.get_by_role(D10_UI_CONTROLS[purpose]["role"], name=d10_control_name(purpose)).check(timeout=3000)
+    default = D10_UI_CONTROLS["kmsDefault"]
+    page.get_by_role(default["role"], name=d10_control_name("kmsDefault"), exact=default["exact"]).check(timeout=3000)
     audit.snapshot("kms-key-access-filled", "Selected the existing ES256 key for credential issuance and OID4VP request signing.")
-    if not audit.click_role("button", re.compile(r"^next$", re.I), timeout=3000):
+    if not audit.click_role(D10_UI_CONTROLS["next"]["role"], d10_control_name("next"), timeout=3000):
         raise ValueError("The declared OpenBao key access did not pass form validation")
     audit.snapshot("kms-review", "Reviewed the real OpenBao registration before submission.")
     endpoint = f"/v1/signing-keys/config?organization_id={quote(organization_id, safe='')}"
     with page.expect_response(lambda response: response.request.method == "PATCH"
                               and response.url == audit.base_url + endpoint, timeout=30000) as observed:
-        if not audit.click_role("button", re.compile(r"^register service$", re.I), timeout=5000):
+        if not audit.click_role(D10_UI_CONTROLS["kmsRegister"]["role"], d10_control_name("kmsRegister"), timeout=5000):
             raise ValueError("The real service registration control is unavailable")
     if not observed.value.ok:
         raise ValueError("The public signing service registration did not succeed")
@@ -1669,6 +1728,7 @@ def create_key_service_if_possible(audit: Audit, run_id: str, inputs: dict[str, 
             or str(service.get("endpoint") or "").rstrip("/") != inputs["endpoint"]
             or service.get("mount") != inputs["mount"]
             or str(service.get("namespace") or "") != inputs["namespace"]
+            or str(service.get("ca_cert_file") or "") != inputs.get("ca_cert_file", "")
             or service.get("key_reference") != inputs["key_reference"]
             or not set(SIGNING_PURPOSES).issubset(service.get("key_purposes") or [])
             or "ES256" not in (service.get("algorithms") or [])):
@@ -1685,19 +1745,7 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
     audit.goto("/console/org/deploy/issuer-identity/new")
     audit.snapshot("issuer-identity-wizard-opened", "Opened issuer identity wizard.")
 
-    if text_visible(page, "No key management service", 1000) or text_visible(page, "No signing service registered", 1000):
-        audit.snapshot("issuer-identity-blocked", "Issuer identity creation is blocked because no signing service is registered.")
-        return
-
-    if text_visible(page, "No signing keys discovered", 1000):
-        audit.snapshot("issuer-identity-recommendation", "Issuer identity wizard warned that the signing service has no keys yet.")
-        if not audit.click_role("button", re.compile(r"use managed key creation|continue and create key", re.I), timeout=4000):
-            audit.click_role("button", re.compile(r"continue anyway", re.I), timeout=3000)
-        if not text_visible(page, "Choose a DID method", 1000) and text_visible(page, "No signing keys discovered", 1000):
-            audit.snapshot("issuer-identity-continue-unavailable", "Continue Anyway was unavailable after the signing-key recommendation.")
-            return
-
-    issuer_did_input = page.get_by_label(re.compile(r"^Issuer DID", re.I)).first
+    issuer_did_input = page.get_by_label(d10_control_name("issuerDid")).first
     issuer_did = issuer_did_input.input_value(timeout=3000).strip()
     if not issuer_did.startswith("did:"):
         audit.snapshot("issuer-identity-invalid-did", "Issuer identity wizard did not provide a valid DID.")
@@ -1708,8 +1756,8 @@ def create_issuer_identity(audit: Audit, run_id: str) -> None:
         {"issuer_did": issuer_did},
     )
     if not audit.click_role(
-        "button",
-        re.compile(r"^create managed identity$", re.I),
+        D10_UI_CONTROLS["issuerSubmit"]["role"],
+        d10_control_name("issuerSubmit"),
         timeout=5000,
     ):
         audit.snapshot("issuer-identity-submit-blocked", "Create managed identity was unavailable.")
@@ -2549,7 +2597,7 @@ def main() -> int:
     # traces retain execution events without capturing screenshots or DOMs.
     record_trace = args.record_video or functional_rerun
 
-    env = load_env_file(ENV_FILE)
+    env = {} if os.environ.get("DEMO_PYTHON_CAPTURE_NONCE") else load_env_file(ENV_FILE)
     base_url = (
         args.base_url
         or os.environ.get("BETA_ORIGIN")
@@ -2557,8 +2605,11 @@ def main() -> int:
         or env.get("BASE_URL")
         or "https://beta.elevenidllc.com"
     )
-    if "beta.elevenidllc.com" not in base_url:
-        base_url = "https://beta.elevenidllc.com"
+    if (base_url != "https://beta.elevenidllc.com" or os.environ.get("BETA_LOCAL_PROXY") == "1"
+            or os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED") not in {None, "1"}
+            or os.environ.get("MARTY_UI_CANDIDATE_DIST")):
+        print("D10 requires the exact beta HTTPS origin and verified deployed UI with normal TLS", file=sys.stderr)
+        return 2
 
     email = os.environ.get("TEST_VENDOR_EMAIL") or os.environ.get("TEST_ADMIN_EMAIL")
     password = os.environ.get("TEST_VENDOR_PASSWORD") or os.environ.get("TEST_ADMIN_PASSWORD")
@@ -2573,7 +2624,13 @@ def main() -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    run_id = datetime.now().strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(4)
+    try:
+        capture = start_recorder_capture(required=record_trace)
+        acknowledged = bound_recorder_inputs(capture, signing_inputs, record_video, args.recording_pause_ms) if capture else None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    run_id = acknowledged["runId"] if acknowledged else datetime.now().strftime("%Y%m%d%H%M%S") + "-" + secrets.token_hex(4)
     artifact_dir = resolve_artifact_dir(run_id)
     artifact_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2582,7 +2639,7 @@ def main() -> int:
         context_options: dict[str, Any] = {
             "base_url": base_url,
             "viewport": RECORDING_VIEWPORT,
-            "ignore_https_errors": True,
+            "ignore_https_errors": False,
         }
         if record_video:
             context_options.update({
@@ -2596,6 +2653,8 @@ def main() -> int:
         # screenshots. Start only after login and KMS credential submission.
         trace_started = False
         page = context.new_page()
+        if capture:
+            capture.bind_page(page)
         page_video = page.video if record_video else None
         audit = Audit(
             page,
@@ -2693,7 +2752,9 @@ def main() -> int:
             f"verifier:{environment['BETA_AUDIT_VERIFIER_DID']}"
         )
 
-    return 0 if report["release_checks"]["status"] == "pass" else 1
+    if capture and report["releaseReady"]:
+        capture.complete()
+    return 0 if report["releaseReady"] else 1
 
 
 if __name__ == "__main__":

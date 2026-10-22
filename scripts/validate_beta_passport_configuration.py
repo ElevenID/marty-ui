@@ -789,7 +789,12 @@ def validate_physical_model(model, files, provider_registry=None):
 
 
 def validate_model(model, *, passport_enabled, files, physical_provider=False,
-                   provider_registry=None):
+                   provider_registry=None, prepared_services_image=None):
+    if prepared_services_image is not None and (
+        not passport_enabled or physical_provider
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(prepared_services_image))
+    ):
+        raise PassportConfigurationError("Prepared local passport image requires explicit native simulator selection and an immutable image ID")
     if physical_provider:
         physical_require(passport_enabled,
                          "Beta physical provider requires native passport selection")
@@ -995,6 +1000,7 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             and callback_signer_env.get("BAO_ADDR") == "https://openbao:8200"
             and callback_signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
             and callback_signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and str(callback_signer_env.get("PRESERVE_BAO_TOKEN_FILE")) == "1"
             and not any(callback_signer_env.get(name) for name in (
                 "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
             and has_readonly_volume(callback_signer, "openbao_public_ca", "/bao/public-ca")
@@ -1013,10 +1019,10 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
                 raise PassportConfigurationError(
                     "Beta callback token is mounted outside its owner"
                 )
-        if not re.fullmatch(
-            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}",
-            str(bureau.get("image", "")),
-        ):
+        image = str(bureau.get("image", ""))
+        image_valid = image == prepared_services_image if prepared_services_image is not None else bool(re.fullmatch(
+            r"ghcr\.io/elevenid/marty-ui-oss/services@sha256:[0-9a-f]{64}", image))
+        if not image_valid:
             raise PassportConfigurationError(
                 "Beta passport bureau image must be immutable"
             )
@@ -1104,6 +1110,7 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
 
 def validate_compose(
     *, project, env_files, files, passport_enabled, physical_provider=False,
+    prepared_services_image=None,
     runner=subprocess.run, keycloak_validator=validate_keycloak_kms,
 ):
     command = ["docker", "compose", "--project-name", project]
@@ -1127,7 +1134,8 @@ def validate_compose(
         keycloak_validator(model, check_files=True)
         validate_model(
             model, passport_enabled=passport_enabled, files=files,
-            physical_provider=physical_provider
+            physical_provider=physical_provider,
+            prepared_services_image=prepared_services_image,
         )
     except KeycloakKmsError as error:
         raise PassportConfigurationError(str(error)) from None
@@ -1144,6 +1152,7 @@ def main():
     parser.add_argument("--file", action="append", required=True)
     parser.add_argument("--passport-enabled", action="store_true")
     parser.add_argument("--physical-provider", action="store_true")
+    parser.add_argument("--prepared-services-image", help="Exact caller-verified local services image ID; never a tag or an official release")
     args = parser.parse_args()
     try:
         validate_compose(
@@ -1152,6 +1161,7 @@ def main():
             files=args.file,
             passport_enabled=args.passport_enabled,
             physical_provider=args.physical_provider,
+            prepared_services_image=args.prepared_services_image,
         )
     except PassportConfigurationError as error:
         print(str(error), file=sys.stderr)

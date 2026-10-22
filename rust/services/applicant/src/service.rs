@@ -582,15 +582,8 @@ impl ApplicantService {
     ) -> Result<Application, ServiceError> {
         identity.validate()?;
         let template = self
-            .templates
-            .get(issuer_organization_id, application_template_id)
+            .active_template(issuer_organization_id, application_template_id)
             .await?;
-        if template.organization_id != issuer_organization_id {
-            return Err(ServiceError::TemplateTenant);
-        }
-        if !template.status.eq_ignore_ascii_case("ACTIVE") {
-            return Err(ServiceError::InactiveTemplate);
-        }
         if template.credential_template_id.trim().is_empty() {
             return Err(ServiceError::MissingCredentialTemplate);
         }
@@ -1220,6 +1213,62 @@ impl ApplicantService {
         Ok(application)
     }
 
+    async fn active_template(
+        &self,
+        organization_id: &str,
+        template_id: &str,
+    ) -> Result<ApplicationTemplate, ServiceError> {
+        let template = self.templates.get(organization_id, template_id).await?;
+        if template.organization_id != organization_id {
+            return Err(ServiceError::TemplateTenant);
+        }
+        if !template.status.eq_ignore_ascii_case("ACTIVE") {
+            return Err(ServiceError::InactiveTemplate);
+        }
+        Ok(template)
+    }
+
+    /// Reusing an existing offer is issuance authority too: retired templates
+    /// must be rejected before either returning that offer or reserving a retry.
+    pub async fn claim(
+        &self,
+        application_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let application = self
+            .store
+            .read()
+            .await
+            .application(application_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicationNotFound)?;
+        self.active_template(
+            &application.organization_id,
+            &application.application_template_id,
+        )
+        .await?;
+        let has_offer = application
+            .system_data
+            .get("credential_offer_uri")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+            || application
+                .system_data
+                .get("credential_offer_uris")
+                .and_then(Value::as_object)
+                .is_some_and(|value| !value.is_empty());
+        let valid_expiry = application
+            .system_data
+            .get("offer_expires_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_some_and(|expiry| expiry > now);
+        if application.claim_state == ClaimState::OfferReady && has_offer && valid_expiry {
+            return Ok(application);
+        }
+        self.issue(application_id, now).await
+    }
+
     pub async fn issue(
         &self,
         application_id: &str,
@@ -1238,8 +1287,7 @@ impl ApplicantService {
             (application, applicant)
         };
         let template = self
-            .templates
-            .get(
+            .active_template(
                 &application_snapshot.organization_id,
                 &application_snapshot.application_template_id,
             )

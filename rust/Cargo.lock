@@ -4561,6 +4561,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hex",
+ "marty-api-key-policy",
  "marty-crypto",
  "marty-issuer-key-resolution",
  "marty-key-material-policy",

@@ -48,7 +48,7 @@ DOCUMENT = {"country_code": "USA", "document_type": "TD3",
 
 
 def model(private_state_path: Path, *, proof_status: str = "verified", wrong_receipt: bool = False,
-          ambiguous_first: bool = False, conflict_first: bool = False):
+          ambiguous_first: bool = False, conflict_first: bool = False, on_owned_job=None):
     calls = []
     companion_flow = "passport-native-batch-" + str(COMPANION_FLOW_UUID)
 
@@ -135,6 +135,7 @@ def model(private_state_path: Path, *, proof_status: str = "verified", wrong_rec
             simulator_get=simulator, new_uuid=lambda: next(uuids),
             new_key=lambda count: b"K" * count,
             sleep=lambda seconds: calls.append(("sleep", seconds)),
+            on_owned_job=on_owned_job,
         )
 
     return calls, run
@@ -173,6 +174,28 @@ def test_native_selected_pair_uses_stable_key_and_verifies_both_receipts(tmp_pat
         assert private_state_path.stat().st_mode & 0o077 == 0
     assert all(secret not in json.dumps(result) for secret in (
         KEY, TOKEN, "selected-job", "companion-job", SELECTED_BUREAU, COMPANION_BUREAU))
+
+
+def test_owned_companion_and_batch_tuples_reach_durable_port_before_state_clear(tmp_path):
+    state = tmp_path / "private/pending.json"
+    events = []
+    _, run = model(state, on_owned_job=lambda event, value: events.append((event, value)))
+    run()
+    assert [event for event, _ in events] == ["companion_created", "batch_bound", "companion_terminal"]
+    assert {row["id"] for row in events[1][1]["jobs"]} == {"selected-job", "companion-job"}
+    assert events[2][1]["status"] == "ACTIVE" and events[2][1]["completed_at"]
+    assert state.exists()
+
+
+def test_failed_owned_journal_stops_companion_before_further_mutation(tmp_path):
+    state = tmp_path / "private/pending.json"
+    def stop(*_):
+        raise ValueError("Owned journal write failed")
+    calls, run = model(state, on_owned_job=stop)
+    with pytest.raises(ValueError, match="journal write failed"):
+        run()
+    assert len(calls) == 1 and calls[0][1:3] == ("POST", "/v1/passport/applications")
+    assert json.loads(state.read_text())["companion_application_id"] == "companion-app"
 
 
 def test_unavailable_wire_proof_halts_before_receipt_or_flow_resume(tmp_path: Path) -> None:

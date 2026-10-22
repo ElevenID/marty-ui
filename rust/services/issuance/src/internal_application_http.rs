@@ -179,19 +179,46 @@ async fn get_application(
     )
 }
 
+#[derive(Default, Deserialize)]
+struct EvidenceFactQuery {
+    #[serde(default)]
+    current_only: bool,
+}
+
 async fn list_evidence_facts(
     State(service): State<InternalApplicationService>,
     Path(application_id): Path<String>,
+    query: Result<Query<EvidenceFactQuery>, axum::extract::rejection::QueryRejection>,
     headers: HeaderMap,
 ) -> Response {
-    match service
-        .list_evidence_facts(
-            header(&headers, API_KEY_HEADER),
-            header(&headers, ORGANIZATION_HEADER),
-            &application_id,
-        )
-        .await
-    {
+    let query = match query {
+        Ok(Query(query)) => query,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(json!({"detail": "Invalid evidence fact query"})),
+            )
+                .into_response()
+        }
+    };
+    let facts = if query.current_only {
+        service
+            .list_current_evidence_facts(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+            )
+            .await
+    } else {
+        service
+            .list_evidence_facts(
+                header(&headers, API_KEY_HEADER),
+                header(&headers, ORGANIZATION_HEADER),
+                &application_id,
+            )
+            .await
+    };
+    match facts {
         Ok(facts) => (
             StatusCode::OK,
             Json(
@@ -474,7 +501,7 @@ fn result_application(
     }
 }
 
-fn service_error(error: InternalApplicationServiceError) -> Response {
+pub(crate) fn service_error(error: InternalApplicationServiceError) -> Response {
     let error = match error {
         InternalApplicationServiceError::Domain(error) => {
             let status = match &error {

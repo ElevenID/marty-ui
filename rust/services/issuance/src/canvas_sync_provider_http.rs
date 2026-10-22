@@ -416,23 +416,53 @@ impl HttpCanvasAuthoritativeProvider {
             }
             _ => return Err(CanvasProviderReadError::InvalidConfiguration),
         };
-        if matches!(
-            fact_type.as_str(),
-            "canvas.assignment_score" | "canvas.quiz_score"
-        ) {
-            url.query_pairs_mut().append_pair("include[]", "assignment");
-        } else if fact_type == "canvas.module_completion" {
+        if fact_type == "canvas.module_completion" {
             url.query_pairs_mut()
                 .append_pair("student_id", canvas_user_id);
         }
-        let response = client.get(url, &token).await?;
+        let mut payload = self.read_rest_json(&client, url, &token, resources).await?;
+        validate_rest_record(&fact_type, &payload)?;
+        if matches!(
+            fact_type.as_str(),
+            "canvas.assignment_score" | "canvas.quiz_score"
+        ) && payload
+            .get("assignment")
+            .and_then(|value| value.get("points_possible"))
+            .is_none_or(Value::is_null)
+        {
+            // Stock single-submission reads do not include assignment metadata.
+            // Read the exact assignment's denominator; never assume a 100-point scale.
+            let activity_id = text(scope.get("activity_id"));
+            let assignment_url = api_url(
+                &base,
+                &format!(
+                    "courses/{course}/assignments/{}",
+                    encoded(activity_id.clone())?
+                ),
+            )?;
+            let assignment = self
+                .read_rest_json(&client, assignment_url, &token, resources)
+                .await?;
+            bind_submission_assignment(&mut payload, &activity_id, assignment)?;
+        }
+        Ok(payload)
+    }
+
+    async fn read_rest_json(
+        &self,
+        client: &RestReadClient,
+        url: Url,
+        token: &str,
+        resources: &CanvasSyncResources,
+    ) -> Result<Value, CanvasProviderReadError> {
+        let response = client.get(url, token).await?;
         if response.response().status().as_u16() == 401
             && response.response().headers().contains_key(WWW_AUTHENTICATE)
         {
             self.oauth
                 .mark_rejected_access_token(
                     &resources.platform.id,
-                    &token,
+                    token,
                     Some(&self.oauth_api_key),
                     Some(&resources.platform.organization_id),
                 )
@@ -440,9 +470,7 @@ impl HttpCanvasAuthoritativeProvider {
                 .map_err(map_oauth_error)?;
             return Err(CanvasProviderReadError::ReauthorizationRequired);
         }
-        let payload = read_json_response(response, COLLECTION_PAGE_BYTES).await?;
-        validate_rest_record(&text(requirement.get("fact_type")), &payload)?;
-        Ok(payload)
+        read_json_response(response, COLLECTION_PAGE_BYTES).await
     }
 
     async fn lti_access_token(
@@ -1040,6 +1068,26 @@ fn validate_rest_record(fact_type: &str, record: &Value) -> Result<(), CanvasPro
         .ok_or(CanvasProviderReadError::Unavailable)
 }
 
+fn bind_submission_assignment(
+    submission: &mut Value,
+    activity_id: &str,
+    assignment: Value,
+) -> Result<(), CanvasProviderReadError> {
+    if assignment.get("id").and_then(value_identifier).as_deref() != Some(activity_id)
+        || submission
+            .get("assignment_id")
+            .and_then(value_identifier)
+            .is_some_and(|id| id != activity_id)
+    {
+        return Err(CanvasProviderReadError::Unavailable);
+    }
+    submission
+        .as_object_mut()
+        .ok_or(CanvasProviderReadError::Unavailable)?
+        .insert("assignment".to_owned(), assignment);
+    Ok(())
+}
+
 fn validated_course_completion_by_user(
     rows: Vec<Value>,
 ) -> Result<std::collections::BTreeMap<String, Value>, CanvasProviderReadError> {
@@ -1047,12 +1095,20 @@ fn validated_course_completion_by_user(
     for row in rows {
         row.as_object()
             .ok_or(CanvasProviderReadError::Unavailable)?;
+        // Stock bulk_user_progress returns UserDisplay.id plus nested progress.
+        // Retain the already supported flat legacy shape for existing providers.
         let user = row
-            .get("user_id")
+            .get("id")
+            .or_else(|| row.get("user_id"))
             .or_else(|| row.get("userId"))
             .and_then(value_identifier);
+        let progress = match row.get("progress") {
+            Some(value) if value.is_object() => value.clone(),
+            Some(_) => return Err(CanvasProviderReadError::Unavailable),
+            None => row.clone(),
+        };
         if let Some(user) = user {
-            by_user.insert(user, row);
+            by_user.insert(user, progress);
         }
     }
     Ok(by_user)

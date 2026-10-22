@@ -25,6 +25,11 @@ pub fn api_key_allowed(required_permission: &str, scopes: &[String]) -> bool {
     if required_permission == "notification:send" {
         return scopes.contains("notifications:send");
     }
+    // Applicant mutation and evidence-review routes already require this action.
+    // Preserve the read-only boundary while honoring the published writer scope.
+    if required_permission == "application:review" {
+        return scopes.contains("applications:write");
+    }
     if required_permission == "application:approve" {
         return scopes.contains("applications:approve") || scopes.contains("applications:write");
     }
@@ -94,5 +99,38 @@ fn mapped_api_key_scope(resource: &str, action: &str, scopes: &BTreeSet<&str>) -
         scopes.contains(write_scope)
     } else {
         false
+    }
+}
+
+#[cfg(test)]
+mod application_review_tests {
+    use super::api_key_allowed;
+
+    #[test]
+    fn application_writer_can_review_with_existing_documented_scope() {
+        assert!(api_key_allowed(
+            "application:review",
+            &["applications:write".into()]
+        ));
+    }
+
+    #[test]
+    fn application_reader_and_approver_do_not_gain_review_writes() {
+        for scope in [
+            "applications:read",
+            "applications:approve",
+            "integrations:write",
+        ] {
+            assert!(!api_key_allowed("application:review", &[scope.into()]));
+        }
+        assert!(!api_key_allowed("application:review", &[]));
+    }
+
+    #[test]
+    fn application_review_grant_does_not_allow_key_or_api_key_administration() {
+        let scopes = ["applications:write".into()];
+        assert!(!api_key_allowed("signing-key:write", &scopes));
+        assert!(!api_key_allowed("api-key:edit", &scopes));
+        assert!(!api_key_allowed("credential-template:edit", &scopes));
     }
 }

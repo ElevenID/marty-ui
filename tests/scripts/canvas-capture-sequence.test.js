@@ -31,7 +31,8 @@ test('receipt readback rejects wrong transaction, template, organization, duplic
 });
 
 function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {}) {
-  const state = { grade: 95, issued: false, approved: false, reserved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [] };
+  const state = { grade: 95, issued: false, approved: false, reserved: false, revision: 0, jobs: 0, mutations: [], checkpoints: [],
+    claimObserved: false, claimClicked: false, walletReceipts: 0 };
   const report = { behaviorAssertions: {} };
   const record = { ...scope, id: 'credential', flow_execution_id: 'tx', status: 'ACTIVE', issuer_did: 'did:web:issuer.test' };
   const review = { id: 'review', application_id: APP, credential_id: 'credential', status: 'open' };
@@ -81,10 +82,33 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
   const page = {
     async evaluate() { return { claim: { unsigned: !state.issued,
       status: state.approved ? 'ready_to_claim' : 'pending_claim', available: state.approved } }; },
-    getByTestId() { return { waitFor: async () => {}, click: async () => {},
+    getByTestId(id) { return { waitFor: async () => {}, click: async () => {
+      if (id === 'canvas-claim-action') {
+        assert.equal(state.claimObserved, true, 'Claim observer must precede the product click');
+        state.claimClicked = true;
+      }
+    },
       getByRole() { return { first() { return { click: async () => {} }; } }; } }; },
     async addStyleTag() {},
-    async waitForResponse() { return { status: () => 200, json: async () => ({ credential_offer_uri: 'offer-in-memory-only' }) }; },
+    async waitForResponse(predicate) {
+      const origin = 'https://beta.elevenidllc.com';
+      const endpoint = '/v1/integrations/canvas/lti/experience-sessions/current/claim';
+      const response = (url, method = 'POST') => ({ url: () => url,
+        request: () => ({ method: () => method }),
+        status: () => fail === 'claim-http-failed' ? 404 : 200,
+        json: async () => ({ id: fail === 'foreign-claim-application' ? 'foreign' : APP,
+          organization_id: fail === 'foreign-claim-organization' ? 'foreign' : 'org',
+          transaction_id: fail === 'foreign-claim-transaction' ? 'foreign' : 'tx',
+          offer_url: 'offer-in-memory-only' }) });
+      assert.equal(predicate(response('https://foreign.test' + endpoint)), false);
+      assert.equal(predicate(response(origin + `/v1/me/applications/${APP}/claim`)), false);
+      assert.equal(predicate(response(origin + endpoint + '/foreign')), false);
+      assert.equal(predicate(response(origin + endpoint, 'GET')), false);
+      const owned = response(origin + endpoint);
+      assert.equal(predicate(owned), true);
+      state.claimObserved = true;
+      return owned;
+    },
   };
   const setup = { organizationId: 'org', binding: { id: 'binding' }, platformId: 'platform',
     martyOrigin: 'https://beta.elevenidllc.com', fixtures: { course: { id: 1 }, assignment: { id: 2 }, learner: { id: 3 } },
@@ -113,9 +137,19 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     async waitFor(fn) { const value = await fn(); assert.ok(value, 'Expected terminal result'); return value; },
   };
   const wallet = {
-    async receiveCredential() { state.issued = true; return { ok: true, receipt: { id: 'wallet-record', vct: setup.templates.credential.vct } }; },
+    async receiveCredential(_page, offer, vct) {
+      assert.equal(state.claimClicked, true);
+      assert.equal(offer, 'offer-in-memory-only');
+      assert.equal(vct, setup.templates.credential.vct);
+      state.walletReceipts++;
+      state.issued = true;
+      return { ok: true, receipt: { id: 'wallet-record', vct: setup.templates.credential.vct } };
+    },
     async verify() { return { session: { ok: true }, wallet: { ok: true }, result: {
-      httpStatus: 200, decision: fail === 'verification-denied' ? 'deny' : 'allow' } }; },
+      httpStatus: 200, status: fail === 'verification-missing-status' ? undefined
+        : fail === 'verification-pending' ? 'PENDING' : 'COMPLETED',
+      evaluation: fail === 'verification-missing-evaluation' ? undefined : fail === 'verification-denied' ? 'failed' : 'passed',
+      decision: fail === 'verification-denied' ? 'deny' : 'allow' } }; },
   };
   return { state, report, run: () => runCanvasCapture({ setup, page, adminPage: page, walletPage: page, scenario,
     operations, wallet, now: () => 10000, report,
@@ -145,6 +179,17 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
 });
 
+for (const fail of ['foreign-claim-application', 'foreign-claim-organization', 'foreign-claim-transaction', 'claim-http-failed']) {
+  test(`${fail} cannot deliver a foreign or failed offer to the wallet`, async () => {
+    const h = harness({ fail });
+    await assert.rejects(h.run(), /Claim.*application|Claim.*organization|Claim.*transaction|Canvas claim HTTP 404/);
+    assert.equal(h.state.walletReceipts, 0);
+    assert.equal(h.state.issued, false);
+    assert.deepEqual(h.report.behaviorAssertions, {});
+    assert.equal(h.report.pendingOperations.includes('wallet-claim'), true);
+  });
+}
+
 for (const fail of ['denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable',
   'denied-approval-wrong-reason', 'ingest-side-effect']) {
   test(`${fail} cannot qualify and leaves uncertain mutation ownership for reconciliation`, async () => {
@@ -169,12 +214,13 @@ for (const fail of ['post-denial-stale-evidence', 'post-recovery-stale-evidence'
   });
 }
 
-for (const fail of ['foreign-bootstrap', 'denial-sync', 'stale-job', 'foreign-approval', 'verification-denied']) {
+for (const fail of ['foreign-bootstrap', 'denial-sync', 'stale-job', 'foreign-approval', 'verification-denied',
+  'verification-pending', 'verification-missing-status', 'verification-missing-evaluation']) {
   test(`${fail} leaves assertions incomplete and restores the exact synthetic grade`, async () => {
     const h = harness({ fail }); await assert.rejects(h.run());
     assert.equal(h.state.grade, 95);
     assert.deepEqual(h.report.behaviorAssertions, {});
-    if (fail !== 'verification-denied') assert.equal(h.state.issued, false);
+    if (!fail.startsWith('verification-')) assert.equal(h.state.issued, false);
   });
 }
 
@@ -192,11 +238,17 @@ test('stock assignment launch retains the real popup and binds only its own cont
       assert.equal(predicate(response(origin)), true);
       return response(origin);
     },
-    getByTestId: id => ({ waitFor: async () => calls.push(id), click: async () => calls.push(id) }),
+    getByTestId: id => ({ waitFor: async () => calls.push(id), click: async () => calls.push(id),
+      getByText: () => ({ isVisible: async () => { calls.push('verified-resource-ui'); return true; } }),
+      getByRole: () => ({ first: () => ({ isVisible: async () => false }) }) }),
   };
   const locator = { first() { return this; }, or() { return this; },
+    isVisible: async () => true,
     waitFor: async () => {}, click: async () => calls.push('assignment-or-launch-click') };
   const canvas = { goto: async url => calls.push(url), getByRole: () => locator,
+    on: (event, listener) => { assert.equal(event, 'response'); assert.equal(typeof listener, 'function'); calls.push('observe-documents'); },
+    off: (event, listener) => { assert.equal(event, 'response'); assert.equal(typeof listener, 'function'); calls.push('release-documents'); },
+    frames: () => [], mainFrame: () => null,
     waitForURL: async predicate => assert.equal(predicate(new URL('https://canvas-test.elevenidllc.com/courses/1/assignments/2')), true),
     context: () => ({ waitForEvent: async event => { assert.equal(event, 'page'); calls.push('observe-popup'); return popup; } }) };
   const result = await stock.launchLearnerResource(canvas, { origin: 'https://canvas-test.elevenidllc.com' },
@@ -204,7 +256,10 @@ test('stock assignment launch retains the real popup and binds only its own cont
   assert.equal(result.page, popup);
   assert.equal(result.bootstrap.application_id, APP);
   assert.ok(calls.indexOf('observe-bootstrap') < calls.indexOf('canvas-lti-continue'));
-  assert.equal(calls[0], 'https://canvas-test.elevenidllc.com/courses/1/assignments');
+  assert.equal(calls[0], 'observe-documents');
+  assert.equal(calls[1], 'https://canvas-test.elevenidllc.com/courses/1/assignments');
+  assert.equal(calls.includes('verified-resource-ui'), true);
+  assert.equal(calls.includes('release-documents'), true);
   assert.equal(calls.includes('canvas-evidence-sync-panel'), true);
 });
 

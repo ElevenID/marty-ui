@@ -337,15 +337,10 @@ def test_smoke_contains_no_capture_or_environment_mutation():
     corpus = json.loads(
         (ROOT / "contracts/canvas-worker-body-timeout-oracle.json").read_bytes()
     )
-    import hashlib
-
-    for name, digest in corpus[0]["worker_body_timeout"][
-        "capture_source_sha256"
-    ].items():
-        directory = "contracts" if name.endswith(".json") else "scripts"
-        assert (
-            hashlib.sha256(
-                (ROOT / directory / name).read_text(encoding="utf-8").encode()
-            ).hexdigest()
-            == digest
-        )
+    from scripts.canvas_native_rest_contract import bind_current_capture_inputs
+    pins = corpus[0]["worker_body_timeout"]["capture_source_sha256"]
+    bindings = bind_current_capture_inputs(ROOT, pins)
+    for name, digest in pins.items():
+        binding = bindings[name]
+        assert binding["captured_sha256"] == digest
+        assert binding["reviewed_harness_delta"] is (name == "canvas_worker_https_fixture.py")

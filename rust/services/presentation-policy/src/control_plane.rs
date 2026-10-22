@@ -176,7 +176,7 @@ impl NativePresentationControlPlane {
                     Code::NotFound | Code::InvalidArgument | Code::Unknown
                 ) =>
             {
-                return Err("membership required".into())
+                return Err("membership required".into());
             }
             Err(_) => return Err("organization membership service unavailable".into()),
         };
@@ -207,13 +207,8 @@ impl PolicyAuthorization for NativePresentationControlPlane {
         action: &'static str,
     ) -> Result<(), String> {
         let member = self.membership(principal_id, organization_id).await?;
-        let permission = match action {
-            "view" | "evaluate" => "presentation-policy:view",
-            "create" => "presentation-policy:create",
-            "edit" | "activate" | "suspend" | "version" => "presentation-policy:edit",
-            "delete" => "presentation-policy:delete",
-            _ => return Err("unsupported presentation-policy action".into()),
-        };
+        let permission = crate::application::action_permission(action)
+            .ok_or_else(|| "unsupported presentation-policy action".to_owned())?;
         if member.is_owner
             || member.has_org_console_access
             || member.permissions.iter().any(|value| value == permission)

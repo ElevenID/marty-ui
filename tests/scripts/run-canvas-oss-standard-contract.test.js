@@ -626,3 +626,13 @@ test('resource conflict summaries preserve the production MIP error description'
   assert.deepEqual(canvasLaunchErrorSummary({ error: 'service_error', error_description: 'Canvas launch resource does not match the selected binding', message_id: 'opaque-private-message-id', details: [{ message: 'scope mismatch' }] }),
     ['scope mismatch', 'service_error', 'Canvas launch resource does not match the selected binding']);
 });
+
+test('course recovery waits for current nonempty counts despite retained completed_at', async () => {
+  const { waitForCanvasCourseCompletion } = require('./run-canvas-oss-standard-contract');
+  const stale = { requirement_count: 2, requirement_completed_count: 1, completed_at: '2026-10-21T18:26:08Z' };
+  const recovered = { requirement_count: 2, requirement_completed_count: 2, completed_at: stale.completed_at };
+  const paths = [];
+  const canvas = { get: async path => { paths.push(path); return paths.length === 1 ? stale : recovered; } };
+  assert.equal(await waitForCanvasCourseCompletion(canvas, { course: { id: 'course-1' }, learner: { id: 'learner-1' } }), recovered);
+  assert.deepEqual(paths, ['/api/v1/courses/course-1/users/learner-1/progress', '/api/v1/courses/course-1/users/learner-1/progress']);
+});

@@ -27,6 +27,73 @@ def client_for(fixture):
     )
 
 
+def submission_request(path=None):
+    return {
+        "method": "GET",
+        "path": path or "/api/v1/courses/42/assignments/9/submissions/7",
+        "authorization": "Bearer synthetic-request-canary",
+        "accept": "application/json",
+    }
+
+
+def test_stock_submission_expected_delta_preserves_frozen_corpus(fixture_module):
+    frozen = submission_request()
+    frozen["path"] += "?include%5B%5D=assignment"
+    before = dict(frozen)
+    fixture_module.assert_stock_submission_requests([submission_request()], [frozen])
+    assert frozen == before
+    # The obsolete native request is not accepted just because it is historical.
+    with pytest.raises(AssertionError):
+        fixture_module.assert_stock_submission_requests([frozen], [frozen])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("method", "DELETE"),
+    ("path", "/api/v1/courses/42/assignments/9/submissions/8"),
+    ("path", "/api/v1/courses/42/assignments/9/submissions/7?other=1"),
+    ("authorization", "Bearer changed-secret-canary"),
+    ("accept", "text/plain"),
+    ("extra", "unexpected"),
+])
+def test_stock_submission_delta_rejects_other_drift(fixture_module, field, value):
+    frozen = submission_request()
+    frozen["path"] += "?include%5B%5D=assignment"
+    actual = submission_request()
+    actual[field] = value
+    with pytest.raises(AssertionError) as failure:
+        fixture_module.assert_stock_submission_requests([actual], [frozen])
+    assert field in str(failure.value)
+    assert "secret-canary" not in str(failure.value)
+    assert "request-canary" not in str(failure.value)
+
+
+@pytest.mark.parametrize("path", [
+    "/api/v1/courses/42/modules/9?student_id=7",
+    "/api/v1/courses/42/assignments/9?include%5B%5D=assignment",
+    "/api/v1/courses/42/assignments/9/submissions/7?include%5B%5D=assignment&extra=1",
+    "/api/v1/courses/42/assignments/9/submissions/7?include[]=assignment",
+])
+def test_stock_submission_delta_does_not_normalize_other_paths(fixture_module, path):
+    row = submission_request(path)
+    fixture_module.assert_stock_submission_requests([row], [row])
+    with pytest.raises(AssertionError):
+        fixture_module.assert_stock_submission_requests(
+            [submission_request(path.split("?", 1)[0])], [row]
+        )
+
+
+def test_stock_submission_delta_preserves_count_order_and_denominator_read(fixture_module):
+    submission = submission_request()
+    assignment = submission_request("/api/v1/courses/42/assignments/9")
+    for actual in [[], [submission, assignment], [assignment, submission]]:
+        with pytest.raises(AssertionError):
+            fixture_module.assert_stock_submission_requests(actual, [submission])
+    with pytest.raises(AssertionError):
+        fixture_module.assert_stock_submission_requests(
+            [assignment, submission], [submission, assignment]
+        )
+
+
 @pytest.mark.parametrize("offset", [-60, 60])
 def test_response_time_retry_after_date(fixture_module, offset):
     stage = {

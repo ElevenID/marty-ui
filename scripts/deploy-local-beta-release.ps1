@@ -121,6 +121,8 @@ $script:ApplicationServices = @(
     "gateway"
 )
 $script:SelectedApplicationServices = @($script:ApplicationServices)
+$script:PreparedPassportServicesImage = ""
+$script:BetaCallbackNetworkAttachment = $null
 if ($EnablePassportNative) {
     if ($EnablePassportPhysicalProvider) {
         $script:SelectedApplicationServices += "passport-callback-signer-supported"
@@ -413,7 +415,10 @@ function Assert-BetaCallbackSignerNetwork {
         $beforeRaw = & docker network inspect $name
         if ($LASTEXITCODE -ne 0) { throw "Isolated beta callback network is unavailable" }
         $before = @(($beforeRaw -join "`n") | ConvertFrom-Json)
-        if ($before.Count -ne 1 -or $before[0].Internal -ne $true) {
+        if ($before.Count -ne 1 -or $before[0].Internal -ne $true -or
+            $before[0].Name -cne $name -or
+            $before[0].Labels.'com.docker.compose.project' -cne $script:BetaProject -or
+            $before[0].Labels.'com.docker.compose.network' -cne 'passport-callback-signing') {
             throw "Isolated beta callback network is unavailable"
         }
         $beforeMembers = @($before[0].Containers.PSObject.Properties.Name)
@@ -422,6 +427,10 @@ function Assert-BetaCallbackSignerNetwork {
         }
         if ($ids["openbao"] -notin $beforeMembers) {
             Invoke-Checked -FilePath docker -Arguments @("network", "connect", "--alias", "openbao", $name, $ids["openbao"])
+            $script:BetaCallbackNetworkAttachment = @{
+                network_id = [string]$before[0].Id
+                container_id = $ids["openbao"]
+            }
         }
     }
     $networkRaw = & docker network inspect $name
@@ -441,6 +450,23 @@ function Assert-BetaCallbackSignerNetwork {
     if (-not $openbaoEndpoint -or "openbao" -notin @($openbaoEndpoint.Value.Aliases)) {
         throw "OpenBao must have the openbao alias on the isolated beta callback network"
     }
+}
+
+function Restore-BetaCallbackNetworkAttachment {
+    # Undo only the edge this invocation added; never detach a baseline member.
+    if (-not $script:BetaCallbackNetworkAttachment) { return }
+    $edge = $script:BetaCallbackNetworkAttachment
+    $raw = & docker network inspect 'elevenid-beta-passport-callback-signing'
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot inspect added callback network edge for recovery' }
+    $network = @(($raw -join "`n") | ConvertFrom-Json)
+    if ($network.Count -ne 1 -or $network[0].Id -cne $edge.network_id -or
+        $network[0].Labels.'com.docker.compose.project' -cne $script:BetaProject) {
+        throw 'Callback network identity changed; preserve it for explicit recovery'
+    }
+    if ($edge.container_id -in @($network[0].Containers.PSObject.Properties.Name)) {
+        Invoke-Checked -FilePath docker -Arguments @('network', 'disconnect', $edge.network_id, $edge.container_id)
+    }
+    $script:BetaCallbackNetworkAttachment = $null
 }
 
 function Get-FileSha256([string]$Path) {
@@ -590,6 +616,7 @@ function Initialize-DurableRuntimeConfig([string]$SourceRevision) {
         "docker/init-databases.sh",
         "config/keycloak",
         "scripts/setup-keycloak.sh",
+        "docker/openbao-selfhost.hcl",
         "docker/openbao-init.sh",
         "docker/openbao-selfhost-init.sh",
         "docker/openbao-haip-workload-policy.hcl",
@@ -1166,7 +1193,13 @@ if ($migrationAdminFiles.Count -eq 0) { throw 'MARTY_ORG_ADMIN_EMAIL must be con
 $migrationAdminEmail = (Get-DotEnvValue -Path $migrationAdminFiles[-1] -Name 'MARTY_ORG_ADMIN_EMAIL').Trim().Trim('"').Trim("'")
 if ($migrationAdminEmail -cnotmatch '^[A-Za-z0-9._+%\-]+@[A-Za-z0-9.\-]+$') { throw 'Invalid migration admin email' }
 if ($UsePreparedLocalImages) {
-    $null = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    $preparedServicesForValidation = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        $script:PreparedPassportServicesImage = $preparedServicesForValidation
+        # Freeze the already source/role/architecture-verified immutable image
+        # before the simulator profile and application image plan are validated.
+        $env:MARTY_SERVICES_IMAGE = $script:PreparedPassportServicesImage
+    }
     $null = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
     $null = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
 }
@@ -1174,7 +1207,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 
 Write-Step "Beta release plan"
 Write-Host "Release: $releaseVersion"
@@ -1271,6 +1305,9 @@ if ($OfficialStackRelease) {
 }
 if ($UsePreparedLocalImages) {
     $preparedServices = Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"
+    if ($script:PreparedPassportServicesImage -and $preparedServices -cne $script:PreparedPassportServicesImage) {
+        throw "Prepared local passport services image changed after validation"
+    }
     $migrationImage = Get-PreparedLocalBetaImage "elevenid-local/db-migrate:$releaseVersion" "migrations"
     $uiImage = Get-PreparedLocalBetaImage "elevenid-local/ui:$releaseVersion" "UI"
     $prepared = @{}
@@ -1323,7 +1360,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 Assert-BetaKeycloakDatabaseRemoteProviders
 if ($EnablePassportNative) {
     $existingPassportServices = @{}
@@ -1709,7 +1747,8 @@ Assert-BetaDidcommConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:Env
     -ComposeFiles $script:ComposeFiles -AuthcryptEnabled ([bool]$EnableDidcommAuthcrypt)
 Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot -EnvFiles $script:EnvFiles `
     -ComposeFiles $script:ComposeFiles -PassportEnabled ([bool]$EnablePassportNative) `
-    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider)
+    -PhysicalProvider ([bool]$EnablePassportPhysicalProvider) `
+    -PreparedServicesImage $script:PreparedPassportServicesImage
 $canvasLtiIssuerDid = $null
 $maintenanceServices = $script:SelectedApplicationServices + $script:InfrastructureWriterServices + @("ui-prod")
 $maintenanceContainers = @($preDeployContainers | Where-Object { $_.running -and $_.service -in $maintenanceServices } | ForEach-Object { $_.container_id })
@@ -1807,16 +1846,25 @@ try {
 
     Write-Step "Recreate application containers from coordinated images"
     $remainingServices = @($script:SelectedApplicationServices)
-    if ($EnablePassportNative) {
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) {
+        # Reuse only the scoped callback path. The selfhost entrypoint refuses
+        # initialized Raft and must never be replayed on preserved beta state.
+        Assert-BetaOpenBaoRaftCustody
+        Invoke-ComposeLogged `
+            -Arguments @('run', '--rm', '--no-deps', '--entrypoint', '/bin/sh',
+                '--env', 'BAO_PASSPORT_CALLBACK_OPERATOR_TOKEN_FILE=/bao/data/root.token',
+                'openbao-init', '/scripts/openbao-init.sh', '--passport-callback-only') `
+            -LogPath (Join-Path $logsDir 'passport-callback-provision-live.log') `
+            -FailureMessage 'Scoped passport callback provisioning failed'
         $callbackServices = @("passport-callback-signer", "passport-beta-bureau")
         Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $callbackServices)
-        Wait-ForServiceHealth $callbackServices
         Assert-BetaCallbackSignerNetwork -AttachOpenBao
+        Wait-ForServiceHealth $callbackServices
         $remainingServices = @($remainingServices | Where-Object { $_ -notin $callbackServices })
     }
     Invoke-Compose -Arguments (@("up", "--detach", "--no-build", "--no-deps", "--force-recreate") + $remainingServices)
     Wait-ForServiceHealth $script:SelectedApplicationServices
-    if ($EnablePassportNative) { Assert-BetaCallbackSignerNetwork }
+    if ($EnablePassportNative -and -not $EnablePassportPhysicalProvider) { Assert-BetaCallbackSignerNetwork }
 
     Write-Step "Recreate public UI from immutable image"
     $env:MARTY_UI_RELEASE_IMAGE = $uiImage
@@ -1827,6 +1875,8 @@ try {
     Wait-ForServiceHealth @("ui-prod") -Ui
 }
 catch {
+    try { Restore-BetaCallbackNetworkAttachment }
+    catch { Write-Warning "Callback network recovery requires explicit inspection: $($_.Exception.Message)" }
     if ($maintenanceStarted -and -not $liveMutationStarted) {
         Start-ContainersBestEffort $maintenanceContainers
         try {

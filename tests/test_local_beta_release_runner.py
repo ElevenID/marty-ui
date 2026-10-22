@@ -156,6 +156,15 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
             line.lstrip().startswith("- ./") for line in compose.splitlines()
         )
 
+    staged = set(re.findall(r'"([A-Za-z0-9_./-]+)"',
+                           deploy.split("$runtimeSources = @(", 1)[1].split("\n    )", 1)[0]))
+    for compose_path in beta_compose_paths:
+        for required in re.findall(r'\$\{MARTY_RUNTIME_CONFIG_ROOT:-\.\}/([A-Za-z0-9_./-]+)', text(compose_path)):
+            assert (ROOT / required).exists(), f"Missing source runtime input: {required}"
+            assert any(required == source or required.startswith(source + "/")
+                       or ((ROOT / required).is_dir() and source.startswith(required + "/"))
+                       for source in staged), f"Runtime input omitted from durable staging: {required}"
+
     assert "function Initialize-DurableRuntimeConfig" in deploy
     assert "rev-parse --path-format=absolute --git-common-dir" in deploy
     assert '"tests\\artifacts\\runtime-config"' in deploy

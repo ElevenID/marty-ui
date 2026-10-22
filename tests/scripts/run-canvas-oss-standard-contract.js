@@ -70,6 +70,7 @@ const CANVAS_OAUTH_SCOPES = [
   'url:GET|/api/v1/courses/:course_id/assignments',
   'url:GET|/api/v1/courses/:course_id/modules',
   'url:GET|/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id',
+  'url:GET|/api/v1/courses/:course_id/assignments/:id',
   'url:GET|/api/v1/courses/:course_id/users/:user_id/progress',
   'url:GET|/api/v1/courses/:course_id/modules/:id',
   'url:GET|/api/v1/courses/:course_id/users',
@@ -490,7 +491,9 @@ function freshCanvasLearnerEmail(base, runSuffix) {
 async function createPersonalAccessToken(page, origin, purpose, onOwned = () => {}) {
   // Canvas resets the session at login; select the stock session locale after authentication.
   // Accessible dialog/button names below are deliberately the English contract.
-  await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS });
+  // Stock profile scripts bind the visible token button after DOMContentLoaded.
+  // Wait for those scripts before the single UI click; never retry token creation.
+  await page.goto(`${origin}/profile/settings?session_locale=en`, { waitUntil: 'load', timeout: DEFAULT_TIMEOUT_MS });
   const add = page.locator('.add_access_token_link').first();
   await add.waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
   await add.click();
@@ -1246,6 +1249,18 @@ async function waitForLatestRosterJob(marty, organizationId, bindingId, afterIso
   }, JOB_TIMEOUT_MS, 1_500, 'canvas_roster_job_timeout');
 }
 
+async function waitForCanvasCourseCompletion(canvas, fixtures) {
+  return waitFor(async () => {
+    const progress = await canvas.get(`/api/v1/courses/${fixtures.course.id}/users/${fixtures.learner.id}/progress`);
+    const required = Number(progress?.requirement_count);
+    const completed = Number(progress?.requirement_completed_count);
+    // Canvas may retain completed_at while asynchronously recalculating module
+    // progress after a grade correction. Require current nonempty counts.
+    return Number.isFinite(required) && required > 0 && Number.isFinite(completed)
+      && completed >= required ? progress : null;
+  }, DEFAULT_TIMEOUT_MS, 1_000, 'course_completion_not_observed');
+}
+
 async function showVideoStep(page, title, detail) {
   await page.evaluate(({ titleText, detailText }) => {
     let overlay = document.getElementById('canvas-oss-contract-step');
@@ -1853,13 +1868,7 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
     pass('module_completion', 'Canvas module lookup with student_id reported the required module completed.');
 
     markActive('course_completion');
-    await waitFor(async () => {
-      const progress = await adminCanvas.get(`/api/v1/courses/${fixtures.course.id}/users/${fixtures.learner.id}/progress`);
-      const complete = progress?.completed_at
-        || (Number(progress?.requirement_count) > 0
-          && Number(progress?.requirement_completed_count) === Number(progress?.requirement_count));
-      return complete ? progress : null;
-    }, DEFAULT_TIMEOUT_MS, 1_000, 'course_completion_not_observed');
+    await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     pass('course_completion', 'Canvas CourseProgress reported all non-empty module requirements completed.');
 
   return Object.assign(state, { canvasOrigin, martyOrigin, organizationId, marty, martyApiKey,
@@ -1957,7 +1966,7 @@ async function main() {
     const initialSync = await triggerLearnerSync(recordedPage, marty);
     requireCondition(Number(initialSync.job?.result?.requirements_checked) === 5 && initialSync.job?.result?.policy_allowed === true, 'authoritative_sync_incomplete', 'Marty did not verify every typed Canvas requirement.');
     const evidenceFacts = safeList(await marty.get(
-      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(firstBootstrap.application_id)}/evidence-facts`,
+      `/v1/organizations/${encodeURIComponent(organizationId)}/applicants/${encodeURIComponent(firstBootstrap.application_id)}/evidence-facts?current_only=true`,
     ));
     const currentHeads = validateAuthoritativeEvidenceHeads(
       evidenceFacts,
@@ -1980,10 +1989,12 @@ async function main() {
     await adminCanvas.putForm(`/api/v1/courses/${fixtures.course.id}/assignments/${fixtures.assignment.id}/submissions/${fixtures.learner.id}`, {
       'submission[posted_grade]': 95,
     }, [200]);
+    await waitForCanvasCourseCompletion(adminCanvas, fixtures);
     const recoveredSync = await triggerLearnerSync(recordedPage, marty);
     requireCondition(recoveredSync.job?.result?.policy_allowed === true, 'pre_issuance_recovery_not_applied', 'The corrected pre-issuance score did not restore the current permit decision.');
     pass('pre_issuance_grade_correction', 'A 95 to 40 to 95 score revision denied then restored policy before issuance; current evidence heads won.');
 
+    markActive('kms_open_badge_claim_and_verify');
     const approvalPath = `/v1/integrations/canvas/applications/${encodeURIComponent(firstBootstrap.application_id)}/approve`;
     const approvalBody = {
       review_notes: 'Approved by the Canvas OSS portability contract after authoritative policy permit.',
@@ -2004,14 +2015,17 @@ async function main() {
       .filter((record) => String(record.application_id) === String(firstBootstrap.application_id));
     requireCondition(preClaimCredentials.length === 0, 'background_claim_signed_early', 'A credential existed before the learner wallet claim.');
 
-    markActive('kms_open_badge_claim_and_verify');
     const claimResponsePromise = recordedPage.waitForResponse((response) => (
       response.request().method() === 'POST'
-        && new URL(response.url()).pathname === `/v1/me/applications/${firstBootstrap.application_id}/claim`
+        && new URL(response.url()).pathname === '/v1/integrations/canvas/lti/experience-sessions/current/claim'
     ), { timeout: DEFAULT_TIMEOUT_MS });
     await recordedPage.getByTestId('canvas-claim-action').click();
     const claimResponse = await claimResponsePromise;
     const claim = await responseJson(claimResponse, 'canvas_claim_offer_failed', 'Canvas learner claim offer failed', [200]);
+    requireCondition(claim.id === firstBootstrap.application_id
+      && claim.organization_id === organizationId
+      && claim.transaction_id === reservedTransactionIds[0],
+    'canvas_claim_binding_mismatch', 'Learner claim did not reuse the exact approved application transaction.');
     await recordedPage.getByTestId('credential-claim-dialog').waitFor({ state: 'visible', timeout: DEFAULT_TIMEOUT_MS });
     await showVideoStep(recordedPage, 'Wallet claim starts signing', 'The learner initiated a standards-based wallet claim; the credential offer is intentionally not displayed in this artifact.');
     const wallet = await receiveAndVerifyCredential(claim?.credential_offer_uri || claim?.offer_url, templates.credential, martyOrigin);
@@ -2137,6 +2151,7 @@ async function main() {
 }
 
 module.exports = {
+  waitForCanvasCourseCompletion,
   canvasLaunchErrorSummary,
   canvasOwnedToolIndex,
   assertCanvasOauthCompletion,

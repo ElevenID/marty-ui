@@ -289,6 +289,7 @@ def exercise(
     new_key: Callable[[int], bytes] = secrets.token_bytes,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    on_owned_job: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     org = application.get("organization_id")
     issuer = application.get("issuer_did")
@@ -342,6 +343,11 @@ def exercise(
                           companion_source_job_id=companion_job,
                           state="preparing_signed_material")
     _write_private_state(private_state_path, private_record, initial=False)
+    if on_owned_job:
+        on_owned_job("companion_created", {"organization_id": org,
+            "id": companion_job, "application_id": companion_app,
+            "flow_execution_id": companion_flow_id, "issuer_did": issuer,
+            "flow_instance_created": False})
     base = "/v1/passport/applications/" + quote(companion_app, safe="")
     for suffix, expected in (("generate-data-groups", "DATA_GENERATED"),
                              ("generate-sod", "SOD_SIGNED")):
@@ -424,6 +430,13 @@ def exercise(
             _require(current_mapping == mapping and proof == commitments,
                      "Native batch retry changed first-dispatch proof or bindings")
         mapping, commitments = current_mapping, proof
+    if on_owned_job:
+        on_owned_job("batch_bound", {"organization_id": org, "batch_id": batch_id,
+            "owned_flow_instance_ids": [selected_flow_instance_id],
+            "standalone_companion_execution_id": companion_flow_id,
+            "jobs": [{field: job[field] for field in (
+                "id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")}
+                for job in observed.values()]})
     receipts = {}
     for source, sod in ((selected_source_job_id, selected_sod_sha256),
                         (companion_job, companion_sod)):
@@ -492,6 +505,11 @@ def exercise(
              and active.get("bureau_job_id") == companion_bureau
              and active.get("status") == "ACTIVE" and bool(active.get("completed_at")),
              "Companion activation did not persist")
+    if on_owned_job:
+        on_owned_job("companion_terminal", {"organization_id": org,
+            "id": companion_job, "application_id": companion_app,
+            "flow_execution_id": companion_flow_id, "bureau_job_id": companion_bureau,
+            "status": active["status"], "completed_at": active["completed_at"]})
     return mapping[selected_source_job_id], {
         "verified": True,
         "evidence": {

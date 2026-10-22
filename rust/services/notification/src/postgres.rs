@@ -386,6 +386,21 @@ impl NotificationRepository for PgNotificationRepository {
             .bind(item.id).bind(item.organization_id).bind(item.name).bind(item.url).bind(envelope).bind(hint).bind(item.description).bind(json!(item.event_types)).bind(item.enabled).bind(item.failure_count).bind(item.last_failure_at).bind(item.last_triggered_at).bind(item.circuit_breaker_open_until).bind(item.created_at).bind(item.updated_at).execute(&self.pool).await.map_err(database)?;
         Ok(())
     }
+    async fn record_webhook_attempt(
+        &self,
+        id: &str,
+        organization_id: &str,
+        success: bool,
+        completed: DateTime<Utc>,
+        failure_threshold: i32,
+    ) -> Result<bool, RepositoryError> {
+        // UPDATE, never UPSERT: an in-flight completion cannot recreate an endpoint
+        // or overwrite a concurrent disable, secret rotation, URL or event change.
+        Ok(sqlx::query("UPDATE notification_service.webhook_endpoints SET failure_count=CASE WHEN $3 THEN 0 ELSE failure_count+1 END,last_triggered_at=CASE WHEN $3 THEN $4 ELSE last_triggered_at END,last_failure_at=CASE WHEN $3 THEN last_failure_at ELSE $4 END,circuit_breaker_open_until=CASE WHEN $3 THEN NULL WHEN failure_count+1 >= $5 THEN $4 + INTERVAL '1 hour' ELSE circuit_breaker_open_until END,updated_at=GREATEST(updated_at,$4) WHERE id=$1 AND organization_id=$2")
+            .bind(id).bind(organization_id).bind(success).bind(completed).bind(failure_threshold)
+            .execute(&self.pool).await.map_err(database)?.rows_affected() == 1)
+    }
+
     async fn get_webhook(&self, id: &str) -> Result<Option<WebhookEndpoint>, RepositoryError> {
         sqlx::query("SELECT * FROM notification_service.webhook_endpoints WHERE id=$1")
             .bind(id)

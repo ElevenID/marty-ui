@@ -18,6 +18,14 @@ def _load_audit_module():
     return module
 
 
+def _cleanup_fixture():
+    return {
+        "created_api_keys": [{"id": "owned-key", "organization_id": "org-fixture"}],
+        "cleanup_actions": [{"type": "revoke_api_key", "id": "owned-key",
+                             "organization_id": "org-fixture", "status": "204", "ok": "true"}],
+    }
+
+
 def _required_steps():
     # Report-contract fixtures only; actual ES256 response bytes are exercised
     # by the native signing-capability suite and Python/CLI adapter test.
@@ -133,6 +141,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.steps = _required_steps()
+            self.created_api_keys = _cleanup_fixture()["created_api_keys"]
 
         def attach_events(self):
             pass
@@ -143,11 +152,13 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
 
         def cleanup_created_api_keys(self):
             events.append("cleanup")
+            self.cleanup_actions = _cleanup_fixture()["cleanup_actions"]
 
     monkeypatch.setattr(audit, "Audit", FixtureAudit)
     monkeypatch.setattr(audit, "sync_playwright", Playwright)
     monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
     monkeypatch.setattr(audit, "load_signing_inputs", lambda: {})
+    monkeypatch.setattr(audit, "start_recorder_capture", lambda **_kwargs: None)
     monkeypatch.setattr(audit, "require_created_organization", lambda *_args: "org-fixture")
     monkeypatch.setattr(audit, "fetch_json_from_page", lambda *_args: {})
     for name in [
@@ -190,6 +201,7 @@ def test_main_honors_recorder_video_mode_and_keeps_required_trace(
     assert audit.main() == 0
     report = json.loads((artifact_dir / "report.json").read_text())
     assert report["releaseReady"] is True
+    assert contexts[0]["ignore_https_errors"] is False
     assert all(report["behaviorAssertions"].values())
     assert events.index("create_key_service_if_possible") < events.index("trace-started") < events.index("create_issuer_identity")
     assert events.index("verify_issuer_signing_capabilities") < events.index("verify_resource_inventory")
@@ -252,6 +264,7 @@ def test_release_checks_block_audit_log_501() -> None:
 
     report = {
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 501,
@@ -337,6 +350,7 @@ def test_release_checks_accept_typed_plan_entitlement_response() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [
             {
                 "status": 403,
@@ -371,6 +385,7 @@ def test_release_checks_accept_only_exact_cross_org_admin_denials() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": denied,
         "failed_requests": [],
         "page_errors": [],
@@ -466,6 +481,7 @@ def test_release_checks_block_unexplained_failed_request() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -492,6 +508,7 @@ def test_release_checks_accept_navigation_cancelled_org_reads() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [cancelled],
         "page_errors": [],
@@ -506,6 +523,7 @@ def test_release_checks_block_cancelled_document_navigation() -> None:
 
     checks = audit.evaluate_release_checks({
         "steps": _required_steps(),
+        **_cleanup_fixture(),
         "bad_responses": [],
         "failed_requests": [
             {
@@ -788,3 +806,68 @@ def test_beta_audit_waits_for_the_exact_verifier_identity_tuple(monkeypatch) -> 
 
     assert identity == verifier_identity
     assert observed_probe == probe
+
+
+@pytest.mark.parametrize("change", ["missing", "failed", "foreign-org", "foreign-key", "contradictory", "unowned", "unknown-status", "pending"])
+def test_run_owned_key_cleanup_cannot_be_missing_failed_or_substituted(change):
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    action = report["cleanup_actions"][0]
+    if change == "missing":
+        report.pop("cleanup_actions")
+    elif change == "failed":
+        action.update(status="500", ok="false")
+    elif change == "foreign-org":
+        action["organization_id"] = "another-organization"
+    elif change == "foreign-key":
+        action["id"] = "another-key"
+    elif change == "contradictory":
+        report["cleanup_actions"].append({**action, "ok": "false", "status": "500"})
+    elif change == "unowned":
+        report["created_api_keys"] = []
+    elif change == "unknown-status":
+        action["status"] = "404"
+    elif change == "pending":
+        action["status"] = "202"
+    checks = audit.evaluate_release_checks(report)
+    assert checks["status"] == "blocked"
+    assert "owned_api_key_cleanup_unverified" in {item["code"] for item in checks["blockers"]}
+
+
+def test_exact_owned_key_cleanup_succeeds_but_partial_cleanup_does_not():
+    audit = _load_audit_module()
+    report = {"steps": _required_steps(), **_cleanup_fixture()}
+    assert audit.owned_api_key_cleanup_proven(report)
+    assert audit.evaluate_release_checks(report)["status"] == "pass"
+    report["created_api_keys"].append({"id": "second-owned-key", "organization_id": "org-fixture"})
+    assert not audit.owned_api_key_cleanup_proven(report)
+
+
+@pytest.mark.parametrize("origin", ["https://beta.elevenidllc.com.attacker.invalid", "https://attacker.invalid/?beta.elevenidllc.com", "http://beta.elevenidllc.com", "https://beta.elevenidllc.com/path"])
+def test_d10_rejects_lookalike_or_noncanonical_origin_before_signer_or_browser(monkeypatch, origin):
+    audit = _load_audit_module()
+    monkeypatch.setattr(audit, "load_env_file", lambda _path: {})
+    monkeypatch.setattr(audit.sys, "argv", ["beta_org_console_audit.py", "--base-url", origin])
+    monkeypatch.setattr(audit, "load_signing_inputs", lambda: pytest.fail("signer cannot be inspected for an unapproved origin"))
+    monkeypatch.setattr(audit, "sync_playwright", lambda: pytest.fail("browser cannot start for an unapproved origin"))
+    assert audit.main() == 2
+
+
+def test_d10_recording_refuses_missing_recorder_child_client():
+    audit = _load_audit_module()
+    with pytest.raises(ValueError, match="recorder-owned live Python capture"):
+        audit.start_recorder_capture(required=True)
+
+
+def test_d10_uses_only_exact_acknowledged_inputs_for_feature_actions():
+    audit = _load_audit_module()
+    signing = {"endpoint": "https://kms.internal.company", "mount": "transit", "namespace": "",
+               "key_reference": "existing-key", "ca_cert_file": "/run/secrets/customer-ca", "validator_sha256": "a" * 64}
+    scenario = {"runId": "20261021200000-1234abcd", "recordVideo": False, "recordingPauseMs": 1300,
+                "signing": {"endpoint": signing["endpoint"], "mount": "transit", "namespace": "", "keyReference": "existing-key",
+                            "caCertFile": "/run/secrets/customer-ca", "validatorSha256": "a" * 64}}
+    capture = SimpleNamespace(inputs={"origin": "https://beta.elevenidllc.com", "scenario": scenario})
+    assert audit.bound_recorder_inputs(capture, signing, False, 1300) is scenario
+    scenario["signing"]["keyReference"] = "substituted-key"
+    with pytest.raises(ValueError, match="differ from recorder-acknowledged"):
+        audit.bound_recorder_inputs(capture, signing, False, 1300)
