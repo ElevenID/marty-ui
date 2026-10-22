@@ -45,7 +45,7 @@ test('Canvas token retirement uses its existing password session and decoded CSR
     async cookies(origin) { assert.equal(origin, 'https://canvas-test.elevenidllc.com'); return [{ name: '_csrf_token', value: 'synthetic%2Bcsrf%3D' }]; },
     request: { async fetch(url, options) {
       calls.push({ url, options });
-      return { status: () => 200, text: async () => '{}', headers: () => ({}) };
+      return { status: () => 200, json: async () => ({}), text: async () => '{}', headers: () => ({}) };
     } },
   });
   const result = await client.request('DELETE', '/api/v1/users/1/tokens/2', { includeStatus: true });
