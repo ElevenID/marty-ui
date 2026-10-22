@@ -494,11 +494,15 @@ def test_release_profile_removes_builds_and_pins_infrastructure() -> None:
         "postgres",
         "redis",
         "mailpit",
-        "openbao",
         "envoy",
     ):
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
         assert "@sha256:" in section
+
+    for service in ("openbao", "openbao-init"):
+        section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
+        assert "${MARTY_OPENBAO_DIDCOMM_IMAGE:?" in section
+        assert "quay.io/openbao/openbao@" not in section
 
     for service in ("keycloak", "keycloak-configurator"):
         section = infrastructure.split(f"  {service}:\n", 1)[1].split("\n  ", 1)[0]
