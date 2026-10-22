@@ -159,49 +159,22 @@ async function main() {
     // Do not put response bodies, bearer offers or credentials in reports.
     report.failures.push({ stage: 'execution', type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
   } finally {
+    let cleanupComplete = true;
     async function cleanup(operation, fn) {
       try { await fn(); return true; } catch (error) {
         complete = false;
+        cleanupComplete = false;
         report.failures.push({ stage: 'cleanup', operation, type: error.name });
         return false;
       }
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    let retired = true;
-    if (state.marty && applicationId) retired = await cleanup('owned-issuance-retirement', async () => {
-      const records = await state.marty.get(`/v1/issued-credentials?organization_id=${encodeURIComponent(state.organizationId || process.env.CANVAS_OSS_ORGANIZATION_ID)}`);
-      const owned = records.filter(r => r.application_id === applicationId);
-      assert.ok(owned.length <= 1);
-      for (const record of owned) {
-        assert.equal(record.organization_id, state.organizationId);
-        assert.equal(record.credential_template_id, state.templates.credential.id);
-        assert.equal(record.flow_execution_id, report.transactionId);
-        const id = record.credential_id || record.id;
-        await state.marty.post(`/v1/issued-credentials/${encodeURIComponent(id)}/revoke`, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
-        const current = await state.marty.get(`/v1/issued-credentials/${encodeURIComponent(id)}`);
-        assert.equal(String(current.status).toUpperCase(), 'REVOKED');
-      }
-      // Retain application history. An unused reserved offer needs explicit
-      // transaction revocation; never treat withdrawal as retirement.
-      if (!owned.length && report.transactionId) {
-        const transactionPath = `/v1/issuance/${encodeURIComponent(report.transactionId)}`;
-        const scoped = `${transactionPath}?organization_id=${encodeURIComponent(state.organizationId)}`;
-        const exact = transaction => {
-          assert.equal(transaction.id, report.transactionId);
-          assert.equal(transaction.application_id, applicationId);
-          assert.equal(transaction.organization_id, state.organizationId);
-          assert.equal(transaction.credential_template_id, state.templates.credential.id);
-          assert.ok(!transaction.issued_at, 'Transaction already issued');
-        };
-        exact(await state.marty.get(scoped));
-        await state.marty.post(`${transactionPath}/revoke`, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
-        const retired = await state.marty.get(scoped);
-        exact(retired);
-        assert.equal(String(retired.status).toLowerCase(), 'revoked');
-      }
-      requireCaptureMutationReconciliation(report);
-    });
+    const retired = await cleanup('owned-issuance-retirement', () => stock.retireCanvasApplication({
+      marty: state.marty, applicationId, organizationId: state.organizationId,
+      credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+      reconcile: () => requireCaptureMutationReconciliation(report),
+    }));
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
@@ -209,13 +182,18 @@ async function main() {
       assert.equal(result.status, 'disconnected');
       assert.equal(result.scopes.length, 0);
     });
-    if (disconnected && state.marty && state.platformId) await cleanup('platform', () =>
+    let referencesRemoved = disconnected;
+    if (disconnected && state.marty && state.platformId) referencesRemoved = await cleanup('platform', () =>
       state.marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`, [204]));
-    if (disconnected && state.marty && state.integrationSecretId) await cleanup('oauth-secret', () =>
+    if (referencesRemoved && state.marty && state.integrationSecretId) referencesRemoved = await cleanup('oauth-secret', () =>
       state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`, [204]));
+    if (referencesRemoved) await cleanup('owned-canvas-fixtures', async () => {
+      report.canvasFixtureCleanup = await stock.retireCanvasSetupFixtures(state, retired, disconnected);
+    });
     for (const context of contexts) await cleanup('recording-context', () => context.close());
     for (const [file, video] of videos) await cleanup('recording-finalization', () => finalizeVideo(video, dir, file));
     if (browser) await cleanup('browser', () => browser.close());
+    report.cleanup = { complete: cleanupComplete };
     report.completedAt = new Date().toISOString();
     report.status = complete ? 'PASS' : 'FAIL';
     report.releaseReady = complete;

@@ -30,6 +30,7 @@ const {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
+  CanvasSessionClient,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
@@ -37,6 +38,32 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('Canvas token retirement uses its existing password session and decoded CSRF cookie', async () => {
+  const calls = [];
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies(origin) { assert.equal(origin, 'https://canvas-test.elevenidllc.com'); return [{ name: '_csrf_token', value: 'synthetic%2Bcsrf%3D' }]; },
+    request: { async fetch(url, options) {
+      calls.push({ url, options });
+      return { status: () => 200, text: async () => '{}', headers: () => ({}) };
+    } },
+  });
+  const result = await client.request('DELETE', '/api/v1/users/1/tokens/2', { includeStatus: true });
+  assert.equal(result.status, 200);
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'synthetic+csrf=');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(calls[0].options.maxRedirects, 0);
+});
+
+test('Canvas session mutations without CSRF or outside the API origin never reach transport', async () => {
+  let calls = 0;
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies() { return []; }, request: { async fetch() { calls++; } },
+  });
+  await assert.rejects(client.request('DELETE', '/api/v1/users/1/tokens/2'));
+  await assert.rejects(client.request('GET', 'https://foreign.example/api/v1/users/1'));
+  assert.equal(calls, 0);
+});
 
 test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
   const error = new Error('secret-token request https://issuer.example?code=private-value');
