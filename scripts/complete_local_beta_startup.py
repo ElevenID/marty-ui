@@ -3,10 +3,13 @@
 Run only through the PowerShell entrypoint, which holds the host mutation mutex
 and verifies the retained state volumes and passport boundary. Source and image
 bindings come from retained artifacts, never from the running API's claims.
+The explicit read-only evidence refresh mode may run directly; it observes the
+same containers without invoking startup and writes only fresh evidence files.
 """
 from __future__ import annotations
 
 import argparse
+import copy
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -47,12 +50,31 @@ def observe(role, image=None):
     return current
 
 
+# Same public release markers emitted by the coordinated deployment writer.
+MARKER_ENVIRONMENT_NAMES = frozenset({
+    'MARTY_RELEASE_VERSION', 'MARTY_UI_SHA', 'ELEVENID_STACK_VERSION',
+    'ELEVENID_COMPONENT_REVISIONS_JSON', 'ELEVENID_IMAGE_DIGESTS_JSON',
+})
+
+
+def marker_environment(current):
+    result = {}
+    for entry in current.get('Config', {}).get('Env', []):
+        require(isinstance(entry, str) and '=' in entry, 'Malformed runtime environment observation')
+        name, value = entry.split('=', 1)
+        if name in MARKER_ENVIRONMENT_NAMES:
+            require(name not in result, 'Duplicate runtime marker: ' + name)
+            result[name] = value
+    return result
+
+
 def record(role, current):
     return dict(service=role, container_id=current['Id'], container=current['Name'].lstrip('/'),
                 configured_image=current['Config']['Image'], image_id=current['Image'],
                 status=current['State']['Status'], running=current['State']['Running'],
                 started_at=current['State']['StartedAt'], health=current['State'].get('Health', {}).get('Status'),
-                compose_project=current['Config']['Labels']['com.docker.compose.project'], compose_service=role)
+                compose_project=current['Config']['Labels']['com.docker.compose.project'], compose_service=role,
+                runtime_marker_environment=marker_environment(current))
 
 
 def verify_marker(actual, expected):
@@ -229,6 +251,74 @@ def complete(root, artifacts, runtime_root, apply, passport_simulator=False, fai
     return result
 
 
+def refresh_runtime_evidence(root, artifacts, completed_proof_file, completed_proof_sha256):
+    """Read the unchanged live containers and return a fresh evidence projection.
+
+    Never calls startup, migrations, Compose, KMS, public APIs or feature routes.
+    The caller writes only fresh output files, reviews the diff, and separately
+    adopts/rebinds it; the original manifest and completed proof stay untouched.
+    """
+    require(artifacts.is_relative_to(root / 'tests/artifacts'), 'Artifacts must belong to frozen source checkout')
+    require(sha(completed_proof_file) == completed_proof_sha256, 'Reviewed completed forward proof changed')
+    proof = load(completed_proof_file)
+    require(proof.get('scope') == 'LOCAL_BETA_FORWARD_STARTUP'
+            and all(proof.get(key) is True for key in ('applied', 'betaDeployed', 'apiAndUiBindingsVerified'))
+            and proof.get('nativeIssuanceProbes') == 'PASS', 'Successful completed forward startup proof required')
+    original_path = artifacts / 'local-deployment-manifest.json'
+    original_sha = sha(original_path)
+    require(Path(proof.get('deploymentManifest', '')).resolve() == original_path.resolve()
+            and proof.get('deploymentManifestSha256') == original_sha, 'Completed deployment manifest binding changed')
+    source = load(artifacts / 'source-manifest.json')
+    components = {item['component']: item['revision'] for item in source['component_revisions']}
+    require(proof['sourceManifestSha256'] == sha(artifacts / 'source-manifest.json')
+            and proof['sourceId'] == source['marty_ui_sha']
+            and proof['sourceRevision'] == components['marty-ui']
+            and proof['release'] == source['release_version'], 'Completed source binding changed')
+    subprocess.run(['python', str(root / 'scripts/create_local_release_manifest.py'), '--workspace',
+                    str(root.parent), '--verify-manifest', str(artifacts / 'source-manifest.json')], check=True)
+    original = load(original_path)
+    require(original.get('marty_ui_sha') == source['marty_ui_sha']
+            and original.get('release_version') == source['release_version']
+            and original.get('component_revisions') == components, 'Original deployment identity differs')
+    images = load(artifacts / 'image-digests.json')
+    rows = original.get('images')
+    require(isinstance(rows, list) and len(rows) == len(images)
+            and {row.get('service') for row in rows} == set(images), 'Exact selected runtime inventory required')
+    from check_canvas_oss_portability import REQUIRED_BETA_RUNTIME_IMAGES
+    expected = dict(MARTY_UI_SHA=source['marty_ui_sha'], MARTY_RELEASE_VERSION=source['release_version'],
+                    ELEVENID_STACK_VERSION=(root / 'VERSION').read_text(encoding='utf8').strip(),
+                    ELEVENID_COMPONENT_REVISIONS_JSON=components, ELEVENID_IMAGE_DIGESTS_JSON=images)
+    refreshed = copy.deepcopy(original)
+    for old, row in zip(rows, refreshed['images'], strict=True):
+        role = old['service']
+        observed = record(role, observe(role, images[role]))
+        require(all(observed.get(key) == value for key, value in old.items()
+                    if key != 'runtime_marker_environment'), 'Existing runtime identity or state changed: ' + role)
+        require(observed['running'] is True and observed['status'] == 'running'
+                and observed['health'] in (None, 'healthy'), 'Current runtime is not healthy: ' + role)
+        markers = observed['runtime_marker_environment']
+        for key, value in markers.items():
+            if key.endswith('_JSON'):
+                value = json.loads(value)
+            require(value == expected[key], 'Observed release marker differs from frozen source: ' + role + ':' + key)
+        if role in REQUIRED_BETA_RUNTIME_IMAGES:
+            require({'MARTY_UI_SHA', 'MARTY_RELEASE_VERSION'} <= set(markers), 'Required Canvas runtime markers missing: ' + role)
+        require('runtime_marker_environment' not in old or old['runtime_marker_environment'] == markers,
+                'Existing marker evidence differs from actual observation: ' + role)
+        row['runtime_marker_environment'] = markers
+    require(sha(original_path) == original_sha and sha(completed_proof_file) == completed_proof_sha256,
+            'Evidence inputs changed during observation')
+    result = dict(scope='LOCAL_BETA_RUNTIME_MARKER_EVIDENCE_REFRESH',
+        sourceRevision=components['marty-ui'], sourceId=source['marty_ui_sha'], release=source['release_version'],
+        originalManifest=str(original_path), originalManifestSha256=original_sha,
+        completedForwardProof=str(completed_proof_file), completedForwardProofSha256=completed_proof_sha256,
+        selectedRuntimeCount=len(rows), sameContainerIdentitiesAndState=True,
+        onlyManifestChange='images[*].runtime_marker_environment', betaMutationPerformed=False,
+        startupReplayed=False, sourceManifestVerified=True, productionDemoQualified=False,
+        operatorScriptSha256=sha(Path(__file__)))
+    return refreshed, result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--artifact-dir', type=Path, required=True)
@@ -238,8 +328,25 @@ def main():
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--passport-simulator-completion', action='store_true')
     parser.add_argument('--failed-rollout-proof', type=Path)
+    parser.add_argument('--refresh-runtime-evidence', action='store_true')
+    parser.add_argument('--completed-forward-proof', type=Path)
+    parser.add_argument('--completed-forward-proof-sha256')
+    parser.add_argument('--manifest-output', type=Path)
     args = parser.parse_args()
     require(not args.output.exists(), 'Use a new completion receipt path')
+    if args.refresh_runtime_evidence:
+        require(not args.apply and args.completed_forward_proof and args.completed_forward_proof_sha256
+                and args.manifest_output and not args.manifest_output.exists()
+                and args.manifest_output.resolve() != args.output.resolve(), 'Read-only refresh requires fresh outputs and reviewed completed proof')
+        manifest, result = refresh_runtime_evidence(args.source_repo_root.resolve(), args.artifact_dir.resolve(),
+            args.completed_forward_proof.resolve(), args.completed_forward_proof_sha256)
+        with args.manifest_output.open('x', encoding='utf8') as output:
+            output.write(json.dumps(manifest, indent=2) + '\n')
+        result.update(refreshedManifest=str(args.manifest_output.resolve()), refreshedManifestSha256=sha(args.manifest_output))
+        with args.output.open('x', encoding='utf8') as output:
+            output.write(json.dumps(result, indent=2) + '\n')
+        print(json.dumps(result))
+        return
     result = complete(args.source_repo_root.resolve(), args.artifact_dir.resolve(),
                       args.runtime_config_root.resolve(), args.apply, args.passport_simulator_completion,
                       args.failed_rollout_proof.resolve() if args.failed_rollout_proof else None)

@@ -14,7 +14,7 @@ from tests.test_passport_fresh_operations import plan
 @pytest.fixture
 def owned(tmp_path, monkeypatch):
     (tmp_path / "work").mkdir()
-    (tmp_path / "private").mkdir()
+    (tmp_path / "private").mkdir(mode=0o700)
     monkeypatch.chdir(tmp_path / "work")
     records, calls, identities = {}, [], {}
     key = {"kty": "EC", "crv": "P-256", "x": "source-control-x", "y": "source-control-y"}
