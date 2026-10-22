@@ -177,14 +177,14 @@ pub struct CanvasAwardCandidateApprovalService {
     issuer_resolver: Arc<dyn IssuerContextResolver>,
     seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
     clock: Arc<dyn CanvasLtiClock>,
-    readiness_max_age: Duration,
+    guard_config: CanvasGuardConfig,
 }
 
 impl std::fmt::Debug for CanvasAwardCandidateApprovalService {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("CanvasAwardCandidateApprovalService")
-            .field("readiness_max_age", &self.readiness_max_age)
+            .field("guard_config", &self.guard_config)
             .finish_non_exhaustive()
     }
 }
@@ -196,14 +196,14 @@ impl CanvasAwardCandidateApprovalService {
         issuer_resolver: Arc<dyn IssuerContextResolver>,
         seeds: Arc<dyn CanvasAwardApprovalSeedGenerator>,
         clock: Arc<dyn CanvasLtiClock>,
-        readiness_max_age: Duration,
+        guard_config: CanvasGuardConfig,
     ) -> Self {
         Self {
             repository,
             issuer_resolver,
             seeds,
             clock,
-            readiness_max_age,
+            guard_config,
         }
     }
 
@@ -231,7 +231,7 @@ impl CanvasAwardCandidateApprovalService {
             &snapshot,
             &self.seeds.generate(),
             self.clock.now(),
-            self.readiness_max_age,
+            &self.guard_config,
         ) else {
             return Err(CanvasAwardCandidateApprovalError::ReadinessDrift);
         };
@@ -490,7 +490,7 @@ pub fn plan_canvas_award_approval(
     snapshot: &CanvasAwardApprovalSnapshot,
     seed: &CanvasAwardApprovalSeed,
     now: chrono::DateTime<chrono::Utc>,
-    readiness_max_age: Duration,
+    guard_config: &CanvasGuardConfig,
 ) -> Option<CredentialTransaction> {
     let current = &snapshot.application;
     let template = &snapshot.application_template;
@@ -510,7 +510,7 @@ pub fn plan_canvas_award_approval(
         || text(template.get("credential_template_id"))
             != text(binding.get("credential_template_id"))
         || (plan.canvas_user_id.is_some() && !snapshot.identity_still_linked)
-        || !canvas_auto_approval_ready(binding, now, readiness_max_age)
+        || !canvas_auto_approval_ready(binding, now, guard_config.readiness_max_age)
     {
         return None;
     }
@@ -522,7 +522,7 @@ pub fn plan_canvas_award_approval(
         seed,
         now,
         now,
-        readiness_max_age,
+        guard_config.evidence_max_age,
         "pending",
     )
 }

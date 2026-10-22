@@ -52,6 +52,15 @@ fn database_url() -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+fn approval_guard_config() -> CanvasGuardConfig {
+    CanvasGuardConfig {
+        enabled: true,
+        pilot_organizations: BTreeSet::from(["org-1".into()]),
+        evidence_max_age: Duration::from_secs(900),
+        readiness_max_age: Duration::from_secs(900),
+    }
+}
+
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 29, 16, 0, 0)
         .single()
@@ -241,7 +250,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         &selection,
         &observations,
         now(),
-        Duration::from_secs(900),
+        approval_guard_config().readiness_max_age,
         || "fact-1".to_owned(),
     )
     .expect("fresh verified candidate plan");
@@ -353,7 +362,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         Arc::new(ApprovalIssuer),
         Arc::new(ApprovalSeeds),
         Arc::new(ApprovalClock),
-        Duration::from_secs(900),
+        approval_guard_config(),
     );
     approval
         .approve_if_ready(&context, &application, &plan, true)
@@ -1031,7 +1040,7 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
             pre_authorized_code: "pre-authorized-code-race".to_owned(),
         },
         now(),
-        Duration::from_secs(900),
+        &approval_guard_config(),
     )
     .unwrap();
     approval_transaction.issuer_profile_id = Some("issuer-profile-1".to_owned());

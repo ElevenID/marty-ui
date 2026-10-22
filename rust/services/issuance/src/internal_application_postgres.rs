@@ -733,7 +733,7 @@ impl InternalApplicationReconciliationRepository for PostgresInternalApplication
         .await
         .map_err(|_| EvidenceReconciliationRepositoryError::Unavailable)?
         .filter(|template| template.organization_id == application.organization_id);
-        let facts = InternalApplicationRepository::list_evidence_facts_for_application(
+        let facts = InternalApplicationRepository::list_current_evidence_facts_for_application(
             self,
             &application.id,
         )

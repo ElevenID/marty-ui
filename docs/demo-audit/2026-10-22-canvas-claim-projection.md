@@ -43,3 +43,14 @@ including both typed-value and date-format saves through the production API
 client boundary. The current seeders use the same production template API. No imported
 report, synthetic source control or successful compilation establishes a live
 demo result or official OID4VC conformance.
+
+Review corrections bind reconciliation to the repository's existing current-head
+reader, preserving immutable history separately. A real PostgreSQL contract now
+retains two revisions for one logical fact, proves only the explicit current head
+enters the reconciliation snapshot, and commits recovery against that snapshot.
+Automatic approval receives the same guard configuration as manual approval and
+signing, using evidence age for mapped facts and readiness age for the binding.
+The two opposite age configurations are covered by one focused behavior check.
+Seven approval behavior checks, two actual disposable PostgreSQL contracts,
+targeted Clippy (library and main binary), and formatting pass. These checks
+address the reviewed source risks; they do not qualify a demo recording.

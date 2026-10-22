@@ -1123,12 +1123,45 @@ async fn internal_application_repository_round_trips_filters_and_compares_exact_
     reconciliation_updated
         .integration_context
         .insert("policy".to_owned(), json!({"allowed": true}));
+    let mut current_fact = None;
+    for (id, score) in [
+        ("fact-reconciliation-old", 80),
+        ("fact-reconciliation-current", 92),
+    ] {
+        let mut fact = evidence_fact_fixture(id, &reconciliation_application, reconciliation_time);
+        fact.provider = "canvas".into();
+        fact.fact_type = "canvas.assignment_score".into();
+        fact.requirement_id = Some("grade".into());
+        fact.logical_key = "reconciliation-grade".into();
+        fact.assertion = Map::from_iter([("score_percent".into(), json!(score))]);
+        // Keep both immutable observations, without a supersession edge;
+        // only the explicit head may enter projection and reservation.
+        repository
+            .commit_conflict_evidence(
+                &reconciliation_application.id,
+                &reconciliation_application.organization_id,
+                &fact,
+                &[],
+            )
+            .await
+            .unwrap();
+        current_fact = Some(fact);
+    }
+    assert_eq!(
+        repository
+            .list_evidence_facts_for_application(&reconciliation_application.id)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     let reconciliation_runtime = InternalApplicationReconciliationRepository::snapshot(
         &repository,
         &reconciliation_application,
     )
     .await
     .expect("reconciliation runtime snapshot");
+    assert_eq!(reconciliation_runtime.facts, vec![current_fact.unwrap()]);
     let reconciliation_snapshot = reconciliation_approval_snapshot(&reconciliation_runtime);
     let reconciliation_events = ["evidence_policy_permitted", "approval_issuance_succeeded"]
         .into_iter()
