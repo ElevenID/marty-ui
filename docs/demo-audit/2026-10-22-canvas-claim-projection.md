@@ -36,7 +36,10 @@ runtime, and run fresh wallet receipt, verification, negative/recovery and clean
 operations. AGS-only results still lack an authoritative activity label and may
 lack an effective timestamp; do not invent those fields to satisfy this mapping.
 They need supported provider enrichment before an AGS-only badge can qualify.
-The admin claim editor also needs evidence-selector controls beyond its existing
-source picker; the current seeders use the production template API. No imported
+The admin claim editor now exposes requirement ID, fact type, public JSON pointer
+and optional date format for evidence rules. Clearing optional selectors removes
+their keys, preserving the shared Rust contract. Five focused editor tests pass,
+including both typed-value and date-format saves through the production API
+client boundary. The current seeders use the same production template API. No imported
 report, synthetic source control or successful compilation establishes a live
 demo result or official OID4VC conformance.

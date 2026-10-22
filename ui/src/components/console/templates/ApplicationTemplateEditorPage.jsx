@@ -169,6 +169,13 @@ export default function ApplicationTemplateEditorPage() {
     )),
   }));
 
+  const updateEvidenceSource = (index, key, value) => {
+    const sourceConfig = { ...data.claim_collection_rules[index].source_config };
+    if (value) sourceConfig[key] = value;
+    else delete sourceConfig[key];
+    updateClaimRule(index, { source_config: sourceConfig });
+  };
+
   const save = async () => {
     const invalidEvidence = data.evidence_requirements.some((item) => (
       !item.evidence_id || !item.description || !item.evidence_type
@@ -360,6 +367,23 @@ export default function ApplicationTemplateEditorPage() {
                         )}
                         <IconButton aria-label={`Delete ${rule.claim_name || 'claim rule'}`} onClick={() => setData((current) => ({ ...current, claim_collection_rules: current.claim_collection_rules.filter((_, ruleIndex) => ruleIndex !== index) }))}><DeleteIcon /></IconButton>
                       </Stack>
+                      {rule.source === 'EVIDENCE_EXTRACTION' && (
+                        <Stack spacing={1} sx={{ mt: 1.5 }}>
+                          <Typography variant="body2">Use a verified evidence fact. Specify a requirement ID, a fact type, or both; exactly one fact must match.</Typography>
+                          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                            <TextField label="Evidence requirement ID" value={rule.source_config?.requirement_id || ''} onChange={(event) => updateEvidenceSource(index, 'requirement_id', event.target.value)} sx={{ flex: 1 }} />
+                            <TextField label="Evidence fact type" placeholder="canvas.quiz_score" value={rule.source_config?.fact_type || ''} onChange={(event) => updateEvidenceSource(index, 'fact_type', event.target.value)} sx={{ flex: 1 }} />
+                            <FormControl sx={{ minWidth: 180 }}>
+                              <InputLabel id={`application-claim-evidence-format-${index}-label`}>Evidence format</InputLabel>
+                              <Select id={`application-claim-evidence-format-${index}`} labelId={`application-claim-evidence-format-${index}-label`} label="Evidence format" value={rule.source_config?.format || ''} onChange={(event) => updateEvidenceSource(index, 'format', event.target.value)}>
+                                <MenuItem value="">Original value</MenuItem>
+                                <MenuItem value="date">Date (YYYY-MM-DD)</MenuItem>
+                              </Select>
+                            </FormControl>
+                          </Stack>
+                          <TextField required label="Evidence value path" placeholder="/assertion/score" helperText="JSON pointer under /assertion, /scope, /effective_at or /observed_at. Missing or ambiguous evidence leaves the claim unavailable." value={rule.source_config?.json_pointer || ''} onChange={(event) => updateEvidenceSource(index, 'json_pointer', event.target.value)} />
+                        </Stack>
+                      )}
                     </Paper>
                   ))}
                 </Stack>
