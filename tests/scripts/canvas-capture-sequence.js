@@ -65,6 +65,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
   const { marty, adminCanvas, learnerCanvas, fixtures, externalAssignment,
     organizationId, binding, platformId, pinnedBinding, templates, martyOrigin } = setup;
+  report.currentOperation = 'learner-resource-launch';
   const launch = await operations.launchLearnerResource(page, learnerCanvas, fixtures, externalAssignment, martyOrigin);
   page = launch.page;
   const applicationId = String(launch.bootstrap?.application_id || '');
@@ -95,7 +96,9 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
       'Credential signed before wallet claim');
     return state;
   };
+  report.currentOperation = 'pending-claim-ui';
   await page.getByTestId('canvas-pending-claim').waitFor({ state: 'visible' });
+  report.currentOperation = 'pending-claim-unsigned';
   const pending = await unsigned();
   assert.equal(pending.claim.status, 'pending_claim');
   assert.equal(pending.claim.available, false);
@@ -103,12 +106,15 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
 
   async function sync(phase, permitted) {
     const started = now();
+    report.currentOperation = `${phase}-sync-request`;
     const observed = await operations.triggerLearnerSync(page, marty);
+    report.currentOperation = `${phase}-job-binding`;
     const job = requireJobBinding(observed, scope, seen, started);
     assert.equal(job.result?.policy_allowed, permitted);
     assert.equal(Number(job.result?.requirements_checked), pinnedBinding.evidence_requirements.length);
     const facts = await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`);
     const heads = operations.validateAuthoritativeEvidenceHeads(facts, pinnedBinding.evidence_requirements);
+    report.currentOperation = `${phase}-policy-ui`;
     await page.getByTestId(permitted ? 'canvas-evidence-policy-permitted' : 'canvas-evidence-policy-not-permitted')
       .waitFor({ state: 'visible' });
     const event = { phase, applicationId, jobId: job.id, policyAllowed: permitted,
