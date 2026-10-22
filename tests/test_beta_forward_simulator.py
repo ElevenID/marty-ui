@@ -18,6 +18,15 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+@pytest.mark.parametrize('encoding', ['utf-8-sig', 'utf-16'])
+def test_retained_powershell_log_decoding_preserves_original_bytes(tmp_path, encoding):
+    path = tmp_path / 'retained.log'
+    original = 'Success! Uploaded policy: passport-callback-hmac-service\n'.encode(encoding)
+    path.write_bytes(original)
+    assert 'Success! Uploaded policy: passport-callback-hmac-service' in MODULE.retained_log(path)
+    assert path.read_bytes() == original
+
+
 def test_overlay_is_exact_single_environment_change():
     before = {'services': {'passport-callback-signer': {'image': 'immutable', 'environment': {'BAO_TOKEN_FILE': '/scoped'}}}}
     after = copy.deepcopy(before)

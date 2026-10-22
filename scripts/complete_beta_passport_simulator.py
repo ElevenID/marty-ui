@@ -38,6 +38,12 @@ def environment(container):
     return dict(item.split('=', 1) for item in container['Config']['Env'])
 
 
+def retained_log(path):
+    """Windows PowerShell Tee-Object writes UTF-16; preserve/hash original bytes."""
+    raw = path.read_bytes()
+    return raw.decode('utf-16' if raw.startswith((b'\xff\xfe', b'\xfe\xff')) else 'utf-8-sig')
+
+
 def validate_overlay(before, after):
     expected = copy.deepcopy(before)
     env = expected['services']['passport-callback-signer']['environment']
@@ -101,6 +107,11 @@ def prepare(root, artifacts, runtime_root, source, images, prior, observe, failu
             'Original failed rollout receipt changed')
     current = {role: observe(role) for role in set(images) | {'keycloak'}}
     validate_phase(current, prior, images)
+    failed = {row['service']: row for row in failure['observedContainers']}
+    require(all(current[role]['Id'] == failed[role]['id']
+                and current[role]['Image'] == failed[role]['image']
+                for role in set(images) | {'keycloak'}),
+            'Interrupted container identities differ from reviewed failure proof')
     signer = current['passport-callback-signer']
     before_env = environment(signer)
     require(before_env.get('BAO_TOKEN_FILE') == '/bao/passport-callback/token'
@@ -172,7 +183,7 @@ def prepare(root, artifacts, runtime_root, source, images, prior, observe, failu
         require(path.is_file() and path.stat().st_size > 0, 'Missing completed migration/configuration log')
         proofs[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     require('Success! Uploaded policy: passport-callback-hmac-service' in
-            (artifacts / 'logs/passport-callback-provision-live.log').read_text(),
+            retained_log(artifacts / 'logs/passport-callback-provision-live.log'),
             'Scoped callback provisioning was not completed')
     bao = observe('openbao')
     require(bao['State']['Running'] and bao['Config']['Cmd'] == ['server', '-config=/bao/config/openbao.hcl']
