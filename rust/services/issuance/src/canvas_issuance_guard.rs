@@ -634,8 +634,6 @@ pub(crate) fn required_credential_claims_present(
         claims.get(name).is_some_and(|value| match value {
             Value::Null => false,
             Value::String(value) => !value.trim().is_empty(),
-            Value::Array(value) => !value.is_empty(),
-            Value::Object(value) => !value.is_empty(),
             _ => true,
         })
     })
@@ -1240,6 +1238,25 @@ mod tests {
                 .clone(),
             &Map::from_iter([("achievement_id".to_owned(), json!("  "))])
         ));
+    }
+
+    #[test]
+    fn required_claims_preserve_supplied_empty_containers_and_false_values() {
+        let template = json!({"claims":[{"name":"value","required":true}]});
+        let template = template.as_object().expect("template");
+        for value in [json!([]), json!({}), json!(false), json!(0)] {
+            assert!(required_credential_claims_present(
+                template,
+                &Map::from_iter([("value".to_owned(), value)])
+            ));
+        }
+        for value in [Value::Null, json!(""), json!("  ")] {
+            assert!(!required_credential_claims_present(
+                template,
+                &Map::from_iter([("value".to_owned(), value)])
+            ));
+        }
+        assert!(!required_credential_claims_present(template, &Map::new()));
     }
 
     #[test]
