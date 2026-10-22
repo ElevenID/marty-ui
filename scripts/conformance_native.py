@@ -313,8 +313,11 @@ def validate_model(
             mounts.append(item)
         require(
             mounts[0]["source"] == mounts[1]["source"]
-            and mounts[1]["bind"]["create_host_path"] is False,
-            "Native CA mount is not paired",
+            # Compose 2.38.2 serializes a false CreateHostPath as bind: {}
+            # (including with --no-normalize). Omitted bools are false in its
+            # typed model; an explicit true must still fail this guard.
+            and POLICY["bind_does_not_create_host_path"](mounts[1]),
+            "Native CA mount is not paired or may create a host path",
         )
         POLICY["validate_model"](
             model,

@@ -150,6 +150,7 @@ rust/crates/flow-acceptance/tests/support/flow_public_startup_peers.rs
 rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs
 # The self-host acceptance executable and fixture support are also test-only.
 rust/crates/selfhost-acceptance/tests/selfhost_public_image_contract.rs
+rust/crates/selfhost-acceptance/tests/native_kms_schema_contract.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_packaged_runtime.rs
 rust/crates/selfhost-acceptance/tests/support/selfhost_runtime_sidecar.rs
 # Cross-service acceptance targets are compiled from the checkout in CI, not

@@ -13,6 +13,23 @@ AUTHCRYPT = "docker-compose.profile.issuance-native-authcrypt.yml"
 CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 
 
+@pytest.mark.parametrize(
+    "options, expected",
+    [({}, True), ({"create_host_path": False}, True),
+     ({"create_host_path": True}, False), ({"create_host_path": None}, False),
+     ({"create_host_path": "false"}, False), ({"create_host_path": 0}, False),
+     (None, False)],
+)
+def test_bind_no_create_uses_typed_compose_false_default(options, expected):
+    policy = runpy.run_path(
+        str(ROOT / "scripts/validate_beta_didcomm_configuration.py")
+    )
+    mount = {"type": "bind", "bind": options}
+    assert policy["bind_does_not_create_host_path"](mount) is expected
+    mount["type"] = "volume"
+    assert policy["bind_does_not_create_host_path"](mount) is False
+
+
 def _native_source(beta):
     overlay = beta["services"]["issuance-native"]
     assert set(overlay) == {"extends", "environment", "secrets"}

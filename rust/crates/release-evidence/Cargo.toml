@@ -53,3 +53,7 @@ path = "src/signing_capability_cli.rs"
 [[bin]]
 name = "validate-age-proof-demo"
 path = "src/age_proof_cli.rs"
+
+[[bin]]
+name = "validate-official-suite"
+path = "src/official_cli.rs"

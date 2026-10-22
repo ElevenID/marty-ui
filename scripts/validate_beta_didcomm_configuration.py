@@ -29,6 +29,16 @@ def environment_mapping(value):
     raise DidcommConfigurationError("Invalid DIDComm environment model")
 
 
+def bind_does_not_create_host_path(mount):
+    """Interpret Compose's typed bind model, including 2.38's omitted false."""
+    options = mount.get("bind")
+    return (
+        mount.get("type") == "bind"
+        and isinstance(options, dict)
+        and options.get("create_host_path", False) is False
+    )
+
+
 def assert_native_kms_policy(model):
     try:
         services = model["services"]
@@ -78,7 +88,7 @@ def assert_native_kms_policy(model):
         if (
             policy_mount["type"] != "bind"
             or policy_mount["read_only"] is not True
-            or policy_mount["bind"]["create_host_path"] is not False
+            or not bind_does_not_create_host_path(policy_mount)
             or not isinstance(policy_source, str)
             or not policy_source.endswith("/didcomm-encryption-policy.json")
         ):
@@ -148,7 +158,7 @@ def assert_native_kms_policy(model):
                 and mount.get("target") == "/bao/config/didcomm-plugin.hcl"
                 and mount.get("type") == "bind"
                 and mount.get("read_only") is True
-                and mount.get("bind", {}).get("create_host_path") is False
+                and bind_does_not_create_host_path(mount)
                 and str(mount.get("source", ""))
                 .replace("\\", "/")
                 .endswith("/docker/openbao-didcomm-dev.hcl")
@@ -220,7 +230,7 @@ def assert_base_https_native_kms(model):
             not isinstance(policy_mount, dict)
             or policy_mount.get("type") != "bind"
             or policy_mount.get("read_only") is not True
-            or policy_mount.get("bind", {}).get("create_host_path") is not False
+            or not bind_does_not_create_host_path(policy_mount)
             or not str(policy_mount.get("source", ""))
             .replace("\\", "/")
             .endswith("/didcomm-encryption-policy.json")

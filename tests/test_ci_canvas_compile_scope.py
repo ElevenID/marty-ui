@@ -316,7 +316,18 @@ def test_canvas_execution_has_one_mandatory_owner_without_lost_targets() -> None
         package = ROOT / "rust/crates" / directory
         manifest = tomllib.loads((package / "Cargo.toml").read_text(encoding="utf-8"))
         assert manifest["package"]["autotests"] is False
-        assert {entry["name"] for entry in manifest["test"]} == {target}
+        expected_targets = {target}
+        if directory == "selfhost-acceptance":
+            # Source-built custody has a separate contracts-lane owner; it must
+            # not enter the narrow published-image execution/selection path.
+            expected_targets.add("native_kms_schema_contract")
+            custody = next(step for step in workflow["jobs"]["test-rust-services"]["steps"]
+                           if step.get("name") ==
+                           "Prove native migration and profile KMS custody on fresh databases")
+            assert custody["if"] == "matrix.lane == 'contracts'"
+            assert not custody.get("continue-on-error", False)
+            assert "native_owners_preserve_kms_only_custody --ignored --exact --nocapture" in custody["run"]
+        assert {entry["name"] for entry in manifest["test"]} == expected_targets
         assert not any(key in manifest for key in ("bin", "example", "bench"))
         assert not (package / "src/bin").exists()
         assert not (package / "src/main.rs").exists()
@@ -378,7 +389,7 @@ def test_selfhost_diagnostic_is_additive_and_uses_the_full_image_contract() -> N
     assert "pull_published_postgres" in selfhost_branch
     assert 'timed image_pull published_probe docker pull "${images[1]}"' in selfhost_branch
     assert "--nocapture --test-threads=4" in selfhost_branch
-    assert "12 passed; 0 failed; 0 ignored" in selfhost_branch
+    assert "17 passed; 0 failed; 0 ignored" in selfhost_branch
     assert runner.count("selfhost_public_image_loader_isolated: test") == 2
 
 

@@ -129,9 +129,14 @@ require_selfhost_tests() {
   'selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch: test' \
   'selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts: test' \
   'selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed: test' \
-  'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test')
+  'selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts: test' \
+  'selfhost_runtime_sidecar::recovery_tests::log_boundary_distinguishes_missing_markers_from_secret_exposure: test' \
+  'selfhost_runtime_sidecar::recovery_tests::log_boundary_retries_only_delayed_markers_with_decreasing_read_budget: test' \
+  'selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry: test' \
+  'selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_empty_secret_and_zero_budget_before_reading: test' \
+  'selfhost_runtime_sidecar::recovery_tests::log_boundary_does_not_accept_late_success_or_read_again_after_expiry: test')
   [[ "$(printf '%s\n' "$actual" | grep ': test$' | LC_ALL=C sort)" == "$(printf '%s\n' "$expected" | LC_ALL=C sort)" ]] || {
-    echo 'Selfhost executable changed its exact twelve-case owner inventory' >&2
+    echo 'Selfhost executable changed its exact seventeen-case owner inventory' >&2
     return 1
   }
 }
@@ -258,7 +263,7 @@ if [[ "$mode" == selfhost-only ]]; then
   timed canvas_target selfhost python3 "$(dirname "${BASH_SOURCE[0]}")/rust_db_obligations.py" \
     --name selfhost_acceptance --owner selfhost -- \
     "$selfhost_executable" --nocapture --test-threads=4 2>&1 | tee "$selfhost_log"
-  grep -Eq '^test result: ok\. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
+  grep -Eq '^test result: ok\. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out;' "$selfhost_log"
   exit 0
 fi
 composition_executable=$(find_executable canvas_published_schema_contract)

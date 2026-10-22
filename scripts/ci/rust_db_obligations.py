@@ -1626,8 +1626,8 @@ def run_contract(name: str, command: list[str], owner: str = "contracts") -> int
             if os.environ.get("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST") != "1":
                 raise ValueError("missing_published_schema_gate")
             # The shell runner owns the exact names. This bounds its selected
-            # cardinality without maintaining a second 12-name roster here.
-            if len(expected) != 12 or ignored:
+            # cardinality without maintaining a second 17-name roster here.
+            if len(expected) != 17 or ignored:
                 raise ValueError("selfhost_selection_drift")
         evidence["selected"] = sorted(expected)
         evidence["selected_ignored"] = sorted(ignored)
