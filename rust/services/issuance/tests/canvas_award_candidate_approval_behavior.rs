@@ -109,6 +109,7 @@ fn binding() -> Map<String, Value> {
             "issuer_algorithm": "ES256",
             "vct": "https://credentials.example/open-badge",
             "wallet_configs": [{"wallet_id":"wallet-1"}, "ignored"],
+            "claims": [{"name":"achievement", "required":true}],
             "selective_disclosure_fields": ["achievement"],
             "zk_predicate_claims": ["score"],
             "validity_rules": {
