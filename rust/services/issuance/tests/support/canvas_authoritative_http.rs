@@ -230,10 +230,14 @@ async fn actual_rest_provider_reads_all_four_fact_types_with_typed_paths() {
         if kind.ends_with("_score") {
             assert_eq!(observation.assertion["score_percent"], 90.0);
         }
-        assert_eq!(
-            observation.effective_at.unwrap().to_rfc3339(),
-            "2026-09-01T00:00:00+00:00"
-        );
+        if kind == "course_completion" {
+            assert_eq!(observation.effective_at, None);
+        } else {
+            assert_eq!(
+                observation.effective_at.unwrap().to_rfc3339(),
+                "2026-09-01T00:00:00+00:00"
+            );
+        }
         assert!(!serde_json::to_string(&observation.source_payload)
             .unwrap()
             .contains("SYNTHETIC_NO_RETENTION"));

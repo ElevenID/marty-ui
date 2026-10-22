@@ -25,6 +25,27 @@ SIGNATURE = "vault:v1:" + "A" * 43 + "="
 BUREAU_JOB = "76a7baef-368a-4722-95a4-df70ea1dfefa"
 
 
+def test_internal_callback_uses_bureau_network_and_keeps_signed_bytes_off_argv(monkeypatch):
+    calls = []
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout=(json.dumps({'detail': [
+            {'type': 'missing', 'loc': ['header', 'x-personalization-signature']}]}).encode()
+            + b'\n422'))
+    monkeypatch.setattr(negative.subprocess, 'run', run)
+    body = b'{ "organization_id" : "selected" }'
+    status, projection = negative.post_internal_callback('a' * 64, body, None)
+    assert status == 422 and projection['missing_signature_header'] is True
+    command, kwargs = calls[0]
+    assert command[:4] == ['docker', 'exec', '-i', 'a' * 64]
+    assert kwargs['input'] == b'\n' + body
+    assert body not in ' '.join(command).encode()
+    signed = negative.post_internal_callback('a' * 64, body, SIGNATURE)
+    assert signed == (422, projection)
+    assert calls[1][1]['input'] == SIGNATURE.encode() + b'\n' + body
+    assert SIGNATURE not in ' '.join(calls[1][0])
+
+
 def handoff() -> dict[str, str]:
     return {"schema": "marty.passport-beta-demo-private/v1",
             "source_commit": "a" * 40, "stack_manifest_sha256": "b" * 64,

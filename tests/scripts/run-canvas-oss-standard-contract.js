@@ -515,6 +515,17 @@ function freshCanvasLearnerEmail(base, runSuffix) {
   return `${match[1].split('+')[0].slice(0, 40)}+${nonce}@${match[2]}`;
 }
 
+async function selectCanvasTokenExpirationTime(page, time, value) {
+  await time.fill(value);
+  // Filling the existing default (notably midnight) emits no change and leaves
+  // the stock InstUI combobox closed. Explicitly open it before selecting.
+  if (await time.getAttribute('aria-expanded') !== 'true') await time.press('ArrowDown');
+  // Select the exact option rather than accepting a stale highlighted value.
+  await page.getByRole('option', { name: value, exact: true }).click();
+  requireCondition(await time.inputValue() === value,
+    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
+}
+
 async function createPersonalAccessToken(page, origin, purpose, onOwned = () => {}) {
   // Canvas resets the session at login; select the stock session locale after authentication.
   // Accessible dialog/button names below are deliberately the English contract.
@@ -535,12 +546,7 @@ async function createPersonalAccessToken(page, origin, purpose, onOwned = () => 
   // DateTimeInput asynchronously initializes an empty time when its date is
   // committed. Let that stock UI update finish before choosing a time.
   await page.waitForTimeout(400);
-  await time.fill(expiration.time);
-  // InstUI commits a combobox choice asynchronously. Tab can accept its stale
-  // highlighted option (midnight) before filtering the newly typed time.
-  await page.getByRole('option', { name: expiration.time, exact: true }).click();
-  requireCondition(await time.inputValue() === expiration.time,
-    'canvas_personal_token_time_uncommitted', 'Canvas must commit the exact bounded expiration time before submission.');
+  await selectCanvasTokenExpirationTime(page, time, expiration.time);
   const valid = await dialog.locator('input[required]').evaluateAll(inputs =>
     inputs.every(input => input.checkValidity() && input.getAttribute('aria-invalid') !== 'true'));
   requireCondition(valid, 'canvas_personal_token_form_invalid', 'Canvas token purpose and bounded expiration must be valid before submission.');
@@ -2290,12 +2296,16 @@ module.exports = {
   publishCanvasCourse,
   contractFailureLocation,
   canvasTokenExpiration,
+  selectCanvasTokenExpirationTime,
   freshCanvasLearnerEmail,
   martyRequestSummary,
   selectProductionBadgeTemplates,
   selectCanvasOauthScopes,
   observePipelinePrerequisites,
   prepareCanvasCaptureFixtures,
+  validateAndActivateBinding,
+  waitForLatestRosterJob,
+  waitForCandidate,
   launchLearnerResource,
   triggerLearnerSync,
   reloadLearnerExperience,

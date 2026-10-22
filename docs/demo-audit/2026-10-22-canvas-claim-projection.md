@@ -54,3 +54,22 @@ The two opposite age configurations are covered by one focused behavior check.
 Seven approval behavior checks, two actual disposable PostgreSQL contracts,
 targeted Clippy (library and main binary), and formatting pass. These checks
 address the reviewed source risks; they do not qualify a demo recording.
+
+The remaining PR1464 followups are consolidated from its published incremental
+range d098a5e3..4fdcfd3c. Mutable Canvas course progress uses fresh observation
+ordering so an old completion date cannot prevent recovery. Flow retains verified
+SOD fields only across the same immutable passport job and rejects contradictory
+signed material. The adapters retain owned resource cleanup, native callback
+denials, actual launch/job correlation and bounded verifier failure diagnostics.
+The earlier adapter workaround that omitted denied management approval is not
+adopted: a fresh HTTP409 and zero reservation, claim and credential are required.
+
+CI39861914435 exposed a concrete assertion-shape regression: missing REST activity
+names added a null field to facts. The shared Rust name selector now adds the
+field only for a nonblank authoritative name, consistently in the assertion and
+hash input. The unchanged published successful-fact contract is checked directly;
+no frozen outcome is rewritten to accept the regression. Focused consolidation
+verification passed six Rust controls (including an actual local REST provider),
+77 Python controls and 70 Node adapter controls. Existing live R34 results remain
+historical and source-bound; this consolidation is not a fresh demo or official
+conformance result.

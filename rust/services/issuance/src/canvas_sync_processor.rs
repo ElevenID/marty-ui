@@ -1085,16 +1085,8 @@ pub(crate) fn rest_assertion(fact_type: &str, record: &Value) -> Map<String, Val
                 )
         }
     };
-    Map::from_iter([
+    let mut assertion = Map::from_iter([
         ("completed".to_owned(), Value::Bool(completed)),
-        (
-            "activity_name".to_owned(),
-            assignment
-                .and_then(|value| value.get("name"))
-                .filter(|value| value.as_str().is_some_and(|name| !name.trim().is_empty()))
-                .cloned()
-                .unwrap_or(Value::Null),
-        ),
         ("score".to_owned(), score.map_or(Value::Null, Value::from)),
         (
             "score_maximum".to_owned(),
@@ -1126,7 +1118,19 @@ pub(crate) fn rest_assertion(fact_type: &str, record: &Value) -> Map<String, Val
                 .cloned()
                 .unwrap_or(Value::Null),
         ),
-    ])
+    ]);
+    if let Some(name) = rest_activity_name(&record) {
+        assertion.insert("activity_name".into(), Value::String(name.to_owned()));
+    }
+    assertion
+}
+
+fn rest_activity_name(record: &Map<String, Value>) -> Option<&str> {
+    record
+        .get("assignment")?
+        .get("name")?
+        .as_str()
+        .filter(|name| !name.trim().is_empty())
 }
 
 pub(crate) fn ags_assertion(record: &Value) -> Map<String, Value> {
@@ -1169,11 +1173,8 @@ pub(crate) fn normalized_rest_payload(record: &Value) -> Map<String, Value> {
     let record = record.as_object().cloned().unwrap_or_default();
     let assignment = record.get("assignment").and_then(Value::as_object);
     let mut output = Map::new();
-    if let Some(name) = assignment
-        .and_then(|value| value.get("name"))
-        .filter(|value| value.as_str().is_some_and(|name| !name.trim().is_empty()))
-    {
-        output.insert("activity_name".into(), name.clone());
+    if let Some(name) = rest_activity_name(&record) {
+        output.insert("activity_name".into(), Value::String(name.to_owned()));
     }
     for key in [
         "id",

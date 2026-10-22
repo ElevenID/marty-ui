@@ -2,14 +2,30 @@
 from copy import deepcopy
 import json
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import beta_passport_functional_audit as audit
+
+
+def test_negative_callback_transport_in_recorder_top_level_loader():
+    source = Path(audit.__file__)
+    specification = importlib.util.spec_from_file_location('passport_recorder_client', source)
+    loaded = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(loaded)
+    assert loaded.__package__ == ''
+    observed = []
+    port = SimpleNamespace(callback_container_id='a' * 64,
+        callback_post=lambda *args: (observed.append(args) or (422, {'missing_signature_header': True})))
+    status, projection = loaded.ObservedPassportRequests.negative_post(port, b'{}', None)
+    assert status == 422 and projection['missing_signature_header'] is True
+    assert observed == [('a' * 64, b'{}', None)]
 
 
 @pytest.fixture
@@ -187,7 +203,9 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
 
             ports = audit.ObservedPassportRequests(
                 capture, RoutedBrowser(), csca_session="sessionId=csca-test", dsc_session="sessionId=dsc-test",
-                flow_session="sessionId=flow-test", api_key="test-api-key-" * 4)
+                flow_session="sessionId=flow-test", api_key="test-api-key-" * 4,
+                callback_container_id='a' * 64,
+                callback_post=lambda container, body, signature: (422, {'missing_signature_header': True}))
             assert len(capture.pages) == 4
             ports.chain_request("/v1/signing-keys/issuer-identities/csca-self-signed-certificate",
                                 {"organization_id": "org-a", "country": "US"}, "sessionId=csca-test")
@@ -206,10 +224,14 @@ def test_actual_browser_transport_isolates_authorities_and_preserves_signed_body
             body = b'{ "organization_id" : "org-a", "status": "SHIPPED" }'
             status, projection = ports.negative_post(body, None)
             assert status == 422 and projection["missing_signature_header"] is True
-            assert observed[-1]["body"].encode() == body
             ports.resource_request("flow", "POST", "/v1/application-templates", {"name": "Fresh"},
                                    {"idempotency-key": "passport-demo-" + "a" * 32})
             assert observed[-1]["headers"]["idempotency-key"] == "passport-demo-" + "a" * 32
+            scoped_key = "/v1/api-keys?organization_id=00000000-0000-0000-0000-000000000001"
+            ports.resource_request("flow", "POST", scoped_key, {"name": "Owned"})
+            assert observed[-1]["url"].endswith(scoped_key)
+            with pytest.raises(audit.PassportPrerequisiteError, match="resource route"):
+                ports.resource_request("flow", "POST", "/v1/api-keys", {"name": "Unscoped"})
             before_headers = len(observed)
             with pytest.raises(audit.PassportPrerequisiteError, match="header"):
                 ports.resource_request("flow", "POST", "/v1/credential-templates", {},
@@ -290,7 +312,8 @@ def test_duplicate_cookie_values_fail_before_any_browser_context():
             pytest.fail("Duplicate authority must be rejected before browser creation")
     with pytest.raises(audit.PassportPrerequisiteError, match="Separate governed"):
         audit.ObservedPassportRequests(None, NoBrowser(), csca_session="sessionId=same",
-            dsc_session="sessionId=same ", flow_session="sessionId=other", api_key="k" * 40)
+            dsc_session="sessionId=same ", flow_session="sessionId=other", api_key="k" * 40,
+            callback_container_id='a' * 64)
 
 
 @pytest.mark.parametrize("key_revived", [False, True])
@@ -309,7 +332,8 @@ def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_r
             elif url.endswith("/production-status"):
                 code, body = (200 if key_revived else 401), b'{}'
             else:
-                assert options["method"] == "DELETE" and url.endswith("/api-keys/owned-key")
+                assert options["method"] == "DELETE" and url.endswith(
+                    "/v1/api-keys/owned-key?organization_id=org-a")
                 code, body = 200, b'{"success":true}'
             return SimpleNamespace(status=code, body=lambda: body)
     ports = object.__new__(audit.ObservedPassportRequests)
@@ -324,3 +348,131 @@ def test_bounded_failure_teardown_closes_sessions_even_after_trace_failure(key_r
     assert result["sessionsRetired"] == 3 and result["complete"] is (not key_revived)
     assert result["keyDenied"] is (not key_revived)
     assert len(observed) == 8
+
+
+@pytest.mark.parametrize("owned_marker", [True, False])
+def test_setup_failure_retires_only_exact_owned_issuer_before_sessions(owned_marker):
+    from types import SimpleNamespace
+    observed = []
+    run_id = "a" * 32
+    identity = {"issuer_did": "did:web:beta.elevenidllc.com:orgs:owned-demo-" +
+                (run_id if owned_marker else "b" * 32), "key_purpose": "csca",
+                "credential_format": "ICAO_EMRTD", "algorithm": "ES256"}
+    class Api:
+        def fetch(self, url, **options):
+            observed.append((url, options["method"]))
+            if "/issuer-identities/resolve?" in url:
+                return SimpleNamespace(status=404, body=lambda: b'{}')
+            if "/issuer-identities?" in url:
+                assert options["method"] == "DELETE" and json.loads(options["data"]) == identity
+                return SimpleNamespace(status=200, body=lambda: json.dumps({"deleted": identity}).encode())
+            if url.endswith("/auth/me"):
+                return SimpleNamespace(status=200, body=lambda: b'{"authenticated":false}')
+            assert url.endswith("/auth/logout")
+            return SimpleNamespace(status=302, body=lambda: b'')
+    ports = object.__new__(audit.ObservedPassportRequests)
+    ports.api_key = ""
+    ports.sessions = {role: "sessionId=" + role for role in ("csca", "dsc", "flow")}
+    ports.pages = {role: SimpleNamespace(context=SimpleNamespace(request=Api(), add_cookies=lambda _: None))
+                   for role in ("api", "csca", "dsc", "flow")}
+    result = ports.failure_teardown(organization="00000000-0000-0000-0000-000000000001",
+        key_id=None, old_key="", probe_path="/v1/passport/applications/uncreated/production-status",
+        owned_issuers=[{"role": "csca", "tuple": identity, "creation_returned": True}],
+        owned_run_id=run_id)
+    assert result["qualificationEligible"] is False and result["sessionsRetired"] == 3
+    assert result["issuerIdentitiesRetired"] == int(owned_marker)
+    assert result["complete"] is owned_marker
+    assert sum("/issuer-identities?" in url for url, _ in observed) == int(owned_marker)
+
+
+@pytest.mark.parametrize("proxy", [None, "", "0", "1", "true", "false", "http://localhost:8443"])
+def test_direct_beta_transport_uses_explicit_disabled_proxy_flag(monkeypatch, proxy):
+    monkeypatch.setenv("BETA_ORIGIN", audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "1")
+    if proxy is None:
+        monkeypatch.delenv("BETA_LOCAL_PROXY", raising=False)
+    else:
+        monkeypatch.setenv("BETA_LOCAL_PROXY", proxy)
+    if proxy in (None, "", "0"):
+        audit.require_direct_beta_transport()
+    else:
+        with pytest.raises(audit.PassportPrerequisiteError, match="exact beta origin and normal TLS"):
+            audit.require_direct_beta_transport()
+
+
+@pytest.mark.parametrize("changed", ["origin", "tls"])
+def test_disabled_proxy_does_not_bypass_exact_origin_or_tls(monkeypatch, changed):
+    monkeypatch.setenv("BETA_LOCAL_PROXY", "0")
+    monkeypatch.setenv("BETA_ORIGIN", "https://other.invalid" if changed == "origin" else audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "0" if changed == "tls" else "1")
+    with pytest.raises(audit.PassportPrerequisiteError, match="exact beta origin and normal TLS"):
+        audit.require_direct_beta_transport()
+
+
+def test_bound_capture_accepts_runner_proxy_zero_before_any_input_read(monkeypatch):
+    class Capture:
+        inputs = {"origin": audit.ORIGIN, "scenario": {"importedReport": "prior-result.json"}}
+    monkeypatch.setenv("BETA_LOCAL_PROXY", "0")
+    monkeypatch.setenv("BETA_ORIGIN", audit.ORIGIN)
+    monkeypatch.setenv("NODE_TLS_REJECT_UNAUTHORIZED", "1")
+    monkeypatch.setattr(audit, "bound_json", lambda *_args, **_kw: pytest.fail("No input may be read"))
+    monkeypatch.setattr(audit, "docker_json", lambda *_args: pytest.fail("No runtime call may occur"))
+    with pytest.raises(audit.PassportPrerequisiteError, match="acknowledged operation inputs"):
+        audit.run_bound_capture(Capture())
+
+
+@pytest.mark.parametrize("changed", [None, "repository", "manifest"])
+def test_product_repository_binds_parent_coordinated_workspace(tmp_path, changed):
+    repository = tmp_path / "workspace" / "marty-ui"
+    artifacts = repository / "tests/artifacts/current"
+    artifacts.mkdir(parents=True)
+    (repository / ".git").write_text("gitdir: retained-fixed-source")
+    manifest = artifacts / "source-manifest.json"
+    manifest.write_text("{}")
+    if changed == "repository":
+        repository = repository.parent
+    elif changed == "manifest":
+        manifest = tmp_path / "foreign.json"
+    if changed:
+        with pytest.raises(audit.PassportPrerequisiteError, match="fixed product repository"):
+            audit.coordinated_product_workspace(repository, manifest)
+    else:
+        assert audit.coordinated_product_workspace(repository, manifest) == repository.parent
+
+
+def test_private_stage_diagnostic_never_retains_exception_or_custody(tmp_path, monkeypatch):
+    private = tmp_path / ".codex/private/owned-run"
+    private.mkdir(parents=True, mode=0o700)
+    fixture = private / "fixture.json"
+    fixture.write_text('{"token":"DO-NOT-RETAIN-CUSTODY"}')
+    monkeypatch.setattr(audit.Path, "home", lambda: tmp_path)
+    class Capture:
+        inputs = {"scenario": {"privateFixture": {"path": str(fixture)}}}
+        _passport_failure_stage = "COORDINATED_SOURCE"
+    try:
+        raise RuntimeError("DO-NOT-RETAIN-EXCEPTION")
+    except RuntimeError as error:
+        audit.retain_private_failure(Capture(), error)
+    outputs = list(private.glob("passport-failure-*.json"))
+    assert len(outputs) == 1
+    raw = outputs[0].read_text()
+    result = json.loads(raw)
+    assert {key: value for key, value in result.items() if key != "sourceTrace"} == {
+        "schema": "marty.passport-private-failure/v1",
+        "stage": "COORDINATED_SOURCE", "errorType": "RuntimeError", "qualificationEligible": False}
+    assert len(result["sourceTrace"]) == 1
+    assert result["sourceTrace"][0]["module"] == "tests/test_beta_passport_functional_audit.py"
+    assert result["sourceTrace"][0]["function"] == "test_private_stage_diagnostic_never_retains_exception_or_custody"
+    assert isinstance(result["sourceTrace"][0]["line"], int)
+    assert "DO-NOT-RETAIN" not in raw
+
+
+def test_private_stage_diagnostic_refuses_foreign_fixture(tmp_path, monkeypatch):
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text("{}")
+    monkeypatch.setattr(audit.Path, "home", lambda: tmp_path)
+    class Capture:
+        inputs = {"scenario": {"privateFixture": {"path": str(fixture)}}}
+        _passport_failure_stage = "COORDINATED_SOURCE"
+    audit.retain_private_failure(Capture(), RuntimeError("unlogged"))
+    assert list(tmp_path.glob("passport-failure-*.json")) == []
