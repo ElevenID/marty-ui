@@ -109,3 +109,66 @@ def test_request_unseal_error_diagnostics_are_opt_in_and_never_return_body(monke
     assert probe.request("https://127.0.0.1", "POST", "sys/unseal", unseal_error_diagnostics=True) == (
         400, {"error_classes": ["INVALID_UNSEAL_KEY"]},
     )
+
+
+def test_snapshot_process_replacement_tracks_cleanup_and_new_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    import probe_selfhost_openbao_raft_bootstrap as raft
+
+    events = []
+    started = ["owned-original", "owned-other"]
+    monkeypatch.setattr(raft, "docker", lambda *args: events.append(args))
+
+    def start(name, volume, ca):
+        assert started == ["owned-other", "owned-restored"]
+        assert (name, volume, ca) == ("owned-restored", "owned-state", Path("ca.crt"))
+        return "https://127.0.0.1:22002"
+
+    monkeypatch.setattr(raft, "start_node", start)
+    assert raft.replace_node("owned-original", "owned-restored", "owned-state",
+                             Path("ca.crt"), started) == "https://127.0.0.1:22002"
+    assert events == [("stop", "owned-original"), ("rm", "owned-original")]
+
+
+def test_failed_snapshot_replacement_remains_owned_for_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    import probe_selfhost_openbao_raft_bootstrap as raft
+
+    started = ["owned-original"]
+    monkeypatch.setattr(raft, "docker", lambda *args: None)
+
+    def fail(*_args):
+        raise RuntimeError("replacement did not start")
+
+    monkeypatch.setattr(raft, "start_node", fail)
+    with pytest.raises(RuntimeError, match="replacement did not start"):
+        raft.replace_node("owned-original", "owned-restored", "owned-state",
+                          Path("ca.crt"), started)
+    assert started == ["owned-restored"]
+
+
+@pytest.mark.parametrize("raw, expected", [
+    (b'{"errors":["failed to revoke token PRIVATE: context deadline exceeded"]}',
+     ["REVOCATION_FAILED", "DEADLINE_EXCEEDED"]),
+    (b'{"errors":["PRIVATE unrecognized detail"]}', ["UNCLASSIFIED_ERROR"]),
+    (b'{"errors":"PRIVATE"}', ["UNCLASSIFIED_ERROR"]),
+])
+def test_revocation_diagnostics_are_fixed_classes_only(raw, expected):
+    assert probe.classify_revocation_error(raw) == expected
+    assert "PRIVATE" not in str(probe.classify_revocation_error(raw))
+
+
+def test_revocation_response_diagnostics_are_opt_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    import io
+    import urllib.error
+
+    def reject(*_args, **_kwargs):
+        raise urllib.error.HTTPError(
+            "https://127.0.0.1/v1/auth/token/revoke-self", 500, "error", {},
+            io.BytesIO(b'{"errors":["failed to revoke PRIVATE"]}'),
+        )
+
+    monkeypatch.setattr(probe.urllib.request, "urlopen", reject)
+    assert probe.request("https://127.0.0.1", "POST", "auth/token/revoke-self") == (500, {})
+    assert probe.request("https://127.0.0.1", "POST", "auth/token/revoke-self",
+                         revocation_error_diagnostics=True) == (
+        500, {"error_classes": ["REVOCATION_FAILED"]},
+    )
