@@ -123,6 +123,7 @@ fn binding() -> Map<String, Value> {
 
 fn snapshot() -> CanvasAwardApprovalSnapshot {
     CanvasAwardApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: object(json!({
             "id": "application-1",
             "organization_id": "org-1",
@@ -205,6 +206,7 @@ fn approval_debug_output_redacts_snapshots_and_capabilities() {
     let binding_secret = "private-binding";
     let capability_secret = "private-pre-authorized-code";
     let private_snapshot = CanvasAwardApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: object(json!({"secret": application_secret})),
         application_template: object(json!({"secret": template_secret})),
         binding: object(json!({"secret": binding_secret})),

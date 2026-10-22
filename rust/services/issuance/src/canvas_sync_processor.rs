@@ -1087,6 +1087,14 @@ pub(crate) fn rest_assertion(fact_type: &str, record: &Value) -> Map<String, Val
     };
     Map::from_iter([
         ("completed".to_owned(), Value::Bool(completed)),
+        (
+            "activity_name".to_owned(),
+            assignment
+                .and_then(|value| value.get("name"))
+                .filter(|value| value.as_str().is_some_and(|name| !name.trim().is_empty()))
+                .cloned()
+                .unwrap_or(Value::Null),
+        ),
         ("score".to_owned(), score.map_or(Value::Null, Value::from)),
         (
             "score_maximum".to_owned(),
@@ -1161,6 +1169,12 @@ pub(crate) fn normalized_rest_payload(record: &Value) -> Map<String, Value> {
     let record = record.as_object().cloned().unwrap_or_default();
     let assignment = record.get("assignment").and_then(Value::as_object);
     let mut output = Map::new();
+    if let Some(name) = assignment
+        .and_then(|value| value.get("name"))
+        .filter(|value| value.as_str().is_some_and(|name| !name.trim().is_empty()))
+    {
+        output.insert("activity_name".into(), name.clone());
+    }
     for key in [
         "id",
         "assignment_id",

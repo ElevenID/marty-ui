@@ -1,5 +1,7 @@
 //! Native API inputs only. No database, Canvas authority or signing custody.
-use crate::{badge_application_fields, badge_credential_definition, BADGE_VCT};
+use crate::{
+    badge_application_fields, badge_claim_collection_rules, badge_credential_definition, BADGE_VCT,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -55,7 +57,7 @@ pub fn native_badge_templates(input: &NativeBadgeTemplateInput) -> Result<Value,
             "required": true, "claim_mapping": name
         })).collect::<Vec<_>>(),
         "evidence_requirements": [],
-        "claim_collection_rules": [],
+        "claim_collection_rules": badge_claim_collection_rules(BADGE_VCT, "canvas.quiz_score"),
         "required_checks": [],
         "approval_strategy": "MANUAL",
         "application_validity_days": 30,
@@ -108,6 +110,23 @@ mod tests {
             .all(|field| field["field_id"] == field["claim_mapping"]));
         assert_eq!(fields[0]["field_type"], "EMAIL");
         assert_eq!(output["application"]["evidence_requirements"], json!([]));
+        let mappings = output["application"]["claim_collection_rules"]
+            .as_array()
+            .unwrap();
+        assert_eq!(mappings.len(), 18);
+        for claim in credential["claims"].as_array().unwrap() {
+            assert_eq!(
+                mappings
+                    .iter()
+                    .filter(|rule| rule["claim_name"] == claim["name"])
+                    .count(),
+                1
+            );
+        }
+        assert!(mappings
+            .iter()
+            .filter(|rule| rule["source"] == "EVIDENCE_EXTRACTION")
+            .all(|rule| rule["source_config"]["fact_type"] == "canvas.quiz_score"));
         input.compliance_profile_id = "unbound".into();
         assert!(native_badge_templates(&input).is_err());
     }

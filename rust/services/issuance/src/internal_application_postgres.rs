@@ -1258,11 +1258,22 @@ impl InternalApplicationOfferRepository for PostgresInternalApplicationRepositor
                     let refresh_canvas_context = canvas_bound_application(&current);
                     let mut refreshed_context = prepared.clone();
                     if refresh_canvas_context {
-                        refreshed_context.claims = existing.claims.clone();
-                        if let Some(vct) = prepared.claims.get("_vct") {
-                            refreshed_context
-                                .claims
-                                .insert("_vct".to_owned(), vct.clone());
+                        let mapped = sqlx::query_scalar::<_, bool>(
+                            "SELECT COALESCE(jsonb_array_length(claim_collection_rules::jsonb), 0) > 0
+                             FROM issuance_service.application_templates
+                             WHERE id = $1 AND organization_id = $2 FOR SHARE",
+                        )
+                        .bind(&current.application_template_id)
+                        .bind(&current.organization_id)
+                        .fetch_optional(&mut *database).await.map_err(offer_repository_error)?
+                        .ok_or(InternalApplicationOfferError::Unavailable)?;
+                        if !mapped {
+                            refreshed_context.claims = existing.claims.clone();
+                            if let Some(vct) = prepared.claims.get("_vct") {
+                                refreshed_context
+                                    .claims
+                                    .insert("_vct".to_owned(), vct.clone());
+                            }
                         }
                     }
                     let refreshed = refresh_pending_application_offer(

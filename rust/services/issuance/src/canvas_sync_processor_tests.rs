@@ -3,6 +3,20 @@ use std::sync::Mutex;
 use super::*;
 
 #[test]
+fn canvas_claim_activity_name_is_authoritative_and_part_of_the_observation_hash_input() {
+    let mut record = json!({"score":95,"assignment":{"id":9,"name":"Canvas learning check","points_possible":100}});
+    assert_eq!(
+        rest_assertion("canvas.quiz_score", &record)["activity_name"],
+        "Canvas learning check"
+    );
+    let before = normalized_rest_payload(&record);
+    record["assignment"]["name"] = json!("Renamed learning check");
+    assert_ne!(normalized_rest_payload(&record), before);
+    record["assignment"]["name"] = json!({"invalid":"object"});
+    assert!(rest_assertion("canvas.quiz_score", &record)["activity_name"].is_null());
+}
+
+#[test]
 fn roster_bounds_use_lossless_integer_grammar_and_clamp_before_conversion() {
     assert_eq!(
         CanvasRosterBounds::from_values(None, None).unwrap(),

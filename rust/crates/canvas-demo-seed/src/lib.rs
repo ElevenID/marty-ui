@@ -280,6 +280,56 @@ fn badge_claims() -> Value {
     )
 }
 
+fn badge_claim_collection_rules(badge_vct: &str, fact_type: &str) -> Value {
+    let mut rules = Vec::new();
+    for name in ["email", "given_name", "family_name"] {
+        rules.push(
+            json!({"claim_name":name,"source":"FORM_FIELD","source_config":{"field_id":name}}),
+        );
+    }
+    for (name, field) in [
+        ("organization_id", "application.organization_id"),
+        ("certificate_id", "application.id"),
+        ("course_name", "canvas.course_name"),
+    ] {
+        rules.push(
+            json!({"claim_name":name,"source":"SYSTEM","source_config":{"system_field":field}}),
+        );
+    }
+    let image = format!("{badge_vct}/image.svg");
+    let criteria = format!("{badge_vct}/criteria");
+    for (name, value) in [
+        ("achievement_id", json!(badge_vct)),
+        ("achievement_name", json!(BADGE_NAME)),
+        ("achievement_description", json!(BADGE_DESCRIPTION)),
+        ("achievement_criteria", json!(criteria)),
+        ("badge_image_url", json!(image)),
+        ("institution_name", json!("ElevenID")),
+        (
+            "achievement",
+            json!({"id":badge_vct,"type":["Achievement"],"name":BADGE_NAME,
+            "description":BADGE_DESCRIPTION,"criteria":{"id":criteria},"image":{"id":image,"type":"Image"}}),
+        ),
+    ] {
+        rules.push(json!({"claim_name":name,"source":"SYSTEM","source_config":{"system_field":"constant","value":value}}));
+    }
+    for (name, pointer) in [
+        ("quiz_name", "/assertion/activity_name"),
+        ("score_percent", "/assertion/score_percent"),
+        ("completion_date", "/effective_at"),
+        ("result", "/assertion"),
+        ("learning_context", "/scope"),
+    ] {
+        let mut config = json!({"fact_type":fact_type,"json_pointer":pointer});
+        if name == "completion_date" {
+            config["format"] = json!("date");
+        }
+        rules
+            .push(json!({"claim_name":name,"source":"EVIDENCE_EXTRACTION","source_config":config}));
+    }
+    Value::Array(rules)
+}
+
 pub fn credential_template_payload(
     cfg: &GatewaySeedConfig,
     issuer: &IssuerProfileContext,
@@ -364,7 +414,7 @@ pub fn application_template_payload(
         "credential_template_id": cfg.credential_template_id,
         "form_fields": fields.into_iter().map(|(name, label, kind)| json!({"name": name, "label": label, "type": kind, "required": true})).collect::<Vec<_>>(),
         "evidence_requirements": [open_badge_evidence_requirement(cfg, scope)],
-        "claim_collection_rules": [],
+        "claim_collection_rules": badge_claim_collection_rules(badge_vct, &cfg.program_binding_evidence_type),
         "required_checks": [],
         "approval_strategy": "policy",
         "approval_policy_set_id": null,

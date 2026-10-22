@@ -1423,7 +1423,7 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             organization_id text NOT NULL,
             credential_template_id text,
             approval_policy_set_id text,
-            status text NOT NULL)",
+            status text NOT NULL, name TEXT, description TEXT, claim_collection_rules JSON NOT NULL DEFAULT '[]'::json, form_fields JSON NOT NULL DEFAULT '[]'::json, application_validity_days INTEGER NOT NULL DEFAULT 30)",
     )
     .execute(pool)
     .await

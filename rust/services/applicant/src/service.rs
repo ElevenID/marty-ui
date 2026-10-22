@@ -1607,96 +1607,22 @@ fn build_claims(
             claims.insert(field.field_id.clone(), value.clone());
         }
     }
-    let system_values: Map<String, Value> = [
-        (
-            "applicant.user_id",
-            applicant.user_id.clone().map(Value::String),
-        ),
-        (
-            "applicant.email",
-            Some(Value::String(applicant.email.clone())),
-        ),
-        (
-            "applicant.given_name",
-            applicant.given_name.clone().map(Value::String),
-        ),
-        (
-            "applicant.family_name",
-            applicant.family_name.clone().map(Value::String),
-        ),
-        (
-            "application.id",
-            Some(Value::String(application.id.clone())),
-        ),
-        (
-            "application.reference_number",
-            application.reference_number.clone().map(Value::String),
-        ),
-        (
-            "application.organization_id",
-            Some(Value::String(application.organization_id.clone())),
-        ),
-        (
-            "current.date",
-            Some(Value::String(now.date_naive().to_string())),
-        ),
-        ("current.datetime", Some(Value::String(now.to_rfc3339()))),
-        (
-            "validity.expiry_date",
-            Some(Value::String(
-                (now + chrono::Duration::days(template.application_validity_days))
-                    .date_naive()
-                    .to_string(),
-            )),
-        ),
-        ("template.name", template.name.clone().map(Value::String)),
-        (
-            "template.description",
-            template.description.clone().map(Value::String),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| value.map(|value| (key.into(), value)))
-    .collect();
-
-    for rule in &template.claim_collection_rules {
-        let claim_name = rule
-            .get("claim_name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let source = rule
-            .get("source")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let config = rule.get("source_config").and_then(Value::as_object);
-        if claim_name.is_empty() {
-            continue;
-        }
-        if source == "FORM_FIELD" {
-            if let Some(field_id) = config
-                .and_then(|value| value.get("field_id"))
-                .and_then(Value::as_str)
-            {
-                if let Some(value) = application.form_data.get(field_id) {
-                    claims.insert(claim_name.into(), value.clone());
-                }
-            }
-        } else if source == "SYSTEM" {
-            if let Some(system_field) = config
-                .and_then(|value| value.get("system_field"))
-                .and_then(Value::as_str)
-            {
-                let value = if system_field == "constant" {
-                    config.and_then(|value| value.get("value")).cloned()
-                } else {
-                    system_values.get(system_field).cloned()
-                };
-                if let Some(value) = value {
-                    claims.insert(claim_name.into(), value);
-                }
-            }
-        }
-    }
+    let system = marty_claim_collection::system_values(
+        &serde_json::json!({"user_id":applicant.user_id,"email":applicant.email,
+            "given_name":applicant.given_name,"family_name":applicant.family_name}),
+        &serde_json::json!({"id":application.id,"reference_number":application.reference_number,
+            "organization_id":application.organization_id}),
+        &serde_json::json!({"name":template.name,"description":template.description}),
+        now,
+        template.application_validity_days,
+    );
+    marty_claim_collection::apply_rules(
+        &mut claims,
+        &application.form_data,
+        &template.claim_collection_rules,
+        &system,
+        &[],
+    );
     claims
 }
 

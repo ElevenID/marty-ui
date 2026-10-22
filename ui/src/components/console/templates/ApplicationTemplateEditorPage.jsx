@@ -32,7 +32,7 @@ const SYSTEM_CLAIM_SOURCES = [
   'applicant.user_id', 'applicant.email', 'applicant.given_name', 'applicant.family_name',
   'application.id', 'application.reference_number', 'application.organization_id',
   'current.date', 'current.datetime', 'validity.expiry_date',
-  'template.name', 'template.description', 'constant',
+  'template.name', 'template.description', 'canvas.course_name', 'constant',
 ];
 
 function normalizeFieldType(value) {
