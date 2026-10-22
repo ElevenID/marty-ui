@@ -91,6 +91,7 @@ def model(tmp_path, enabled=True):
             "BAO_ADDR": "https://openbao:8200",
             "BAO_CACERT": "/bao/public-ca/ca.crt",
             "BAO_TOKEN_FILE": "/bao/passport-callback/token",
+            "PRESERVE_BAO_TOKEN_FILE": "1",
         },
         "networks": {"passport-callback-signing": None},
         "volumes": [
@@ -1102,3 +1103,15 @@ def test_actual_interpolated_beta_compose_passes_selector(tmp_path):
         passport_enabled=True,
         runner=run,
     )
+
+
+@pytest.mark.parametrize("value", [None, "0"])
+def test_callback_signer_requires_token_file_preservation(tmp_path, value):
+    candidate = model(tmp_path)
+    env = candidate["services"]["passport-callback-signer"]["environment"]
+    if value is None:
+        env.pop("PRESERVE_BAO_TOKEN_FILE")
+    else:
+        env["PRESERVE_BAO_TOKEN_FILE"] = value
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)

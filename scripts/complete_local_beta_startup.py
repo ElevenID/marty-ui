@@ -60,7 +60,7 @@ def verify_marker(actual, expected):
             'Runtime marker differs from frozen source/image bindings')
 
 
-def complete(root, artifacts, runtime_root, apply):
+def complete(root, artifacts, runtime_root, apply, passport_simulator=False, failure_proof=None):
     require(artifacts.is_relative_to(root / 'tests/artifacts'), 'Artifacts must belong to frozen source checkout')
     source = load(artifacts / 'source-manifest.json')
     subprocess.run(['python', str(root / 'scripts/create_local_release_manifest.py'), '--workspace',
@@ -76,7 +76,7 @@ def complete(root, artifacts, runtime_root, apply):
     images = load(artifacts / 'image-digests.json')
     prior = load(artifacts / 'pre-deploy-containers.json')
     roles = set(images) - {'ui-prod'}
-    require(roles == {row['service'] for row in prior if row['service'] not in {'keycloak', 'ui-prod'}},
+    require(passport_simulator or roles == {row['service'] for row in prior if row['service'] not in {'keycloak', 'ui-prod'}},
             'Candidate role set differs from retained deployment selection')
     require(not docker('ps', '--filter', 'label=com.docker.compose.project=elevenid-beta',
                        '--filter', 'label=com.docker.compose.oneoff=True', '--format', '{{.ID}}').strip(),
@@ -86,19 +86,27 @@ def complete(root, artifacts, runtime_root, apply):
     expected = dict(release_version=source['release_version'], marty_ui_sha=source['marty_ui_sha'],
                     deployment_release_marker=source['release_version'], stack_version=stack,
                     mip_version='0.5.0', component_revisions=components, image_digests=images)
-    candidates = {role: observe(role, images[role]) for role in sorted(roles)}
+    simulator = None
     prior_ids = {row['service']: row['container_id'] for row in prior}
-    require(all(not current['Id'].startswith(prior_ids[role]) for role, current in candidates.items()),
-            'All application roles must already have been recreated by the migration-gated runner')
-    gateway_env = dict(item.split('=', 1) for item in candidates['gateway']['Config']['Env'])
-    require(gateway_env['MARTY_RELEASE_VERSION'] == source['release_version'] and
-            gateway_env['MARTY_UI_SHA'] == source['marty_ui_sha'] and
-            json.loads(gateway_env['ELEVENID_COMPONENT_REVISIONS_JSON']) == components and
-            json.loads(gateway_env['ELEVENID_IMAGE_DIGESTS_JSON']) == images,
-            'Prepared gateway configuration differs from frozen artifacts')
-    for role, current in candidates.items():
-        require(current['State']['Status'] in {'created', 'running', 'restarting'},
-                'Candidate is not a prepared startup container: ' + role)
+    if passport_simulator:
+        from complete_beta_passport_simulator import prepare
+        simulator = prepare(root, artifacts, runtime_root, source, images, prior, observe, failure_proof)
+        candidates = {role: simulator['current'][role] for role in roles}
+        gateway_env = simulator['gateway_env']
+    else:
+        candidates = {role: observe(role, images[role]) for role in sorted(roles)}
+        prior_ids = {row['service']: row['container_id'] for row in prior}
+        require(all(not current['Id'].startswith(prior_ids[role]) for role, current in candidates.items()),
+                'All application roles must already have been recreated by the migration-gated runner')
+        gateway_env = dict(item.split('=', 1) for item in candidates['gateway']['Config']['Env'])
+        require(gateway_env['MARTY_RELEASE_VERSION'] == source['release_version'] and
+                gateway_env['MARTY_UI_SHA'] == source['marty_ui_sha'] and
+                json.loads(gateway_env['ELEVENID_COMPONENT_REVISIONS_JSON']) == components and
+                json.loads(gateway_env['ELEVENID_IMAGE_DIGESTS_JSON']) == images,
+                'Prepared gateway configuration differs from frozen artifacts')
+        for role, current in candidates.items():
+            require(current['State']['Status'] in {'created', 'running', 'restarting'},
+                    'Candidate is not a prepared startup container: ' + role)
     keycloak = observe('keycloak')
     require(not keycloak['Id'].startswith(prior_ids['keycloak']), 'Keycloak recreation phase was not reached')
     require(keycloak['State'].get('Health', {}).get('Status') == 'healthy', 'Keycloak is not healthy')
@@ -115,15 +123,25 @@ def complete(root, artifacts, runtime_root, apply):
         path = (runtime_root / item['path']).resolve()
         require(path.is_relative_to(runtime_root) and sha(path) == item['sha256'],
                 'Durable runtime configuration bytes changed')
-    alias_repair = prepare_alias_repair(root, artifacts, runtime_root, candidates['issuance'],
-                                      gateway_env, candidates['issuance-native'])
+    alias_repair = None if simulator else prepare_alias_repair(
+        root, artifacts, runtime_root, candidates['issuance'], gateway_env, candidates['issuance-native'])
     result = dict(scope='LOCAL_BETA_FORWARD_STARTUP', sourceRevision=components['marty-ui'],
                   sourceId=source['marty_ui_sha'], release=source['release_version'],
                   sourceManifestSha256=sha(artifacts / 'source-manifest.json'),
                   candidateContainerCount=len(candidates), applied=False, productionDemoQualified=False)
+    if simulator:
+        result['passportSimulatorCompletion'] = dict(
+            overlay=str(simulator['overlay']), overlaySha256=sha(simulator['overlay']),
+            composeInputHashes=simulator['compose_inputs'], migrationLogHashes=simulator['migration_logs'],
+            failedRolloutProof=simulator['failure_proof'], failedRolloutProofSha256=simulator['failure_proof_sha256'],
+            priorContainerIds={role: c['Id'] for role, c in simulator['current'].items()},
+            callbackNetworkId=simulator['network_id'])
     result['issuanceAliasKmsRepairRequired'] = alias_repair is not None
     if not apply:
         return result
+    if simulator:
+        from complete_beta_passport_simulator import apply as apply_simulator
+        candidates = apply_simulator(simulator, images, observe, record)
     # Recheck each frozen container ID before starting only the unstarted roles.
     for role, current in candidates.items():
         require(observe(role, images[role])['Id'] == current['Id'], 'Candidate replaced during completion')
@@ -166,7 +184,7 @@ def complete(root, artifacts, runtime_root, apply):
     records = [record(role, observe(role, images[role])) for role in sorted(images)]
     manifest = dict(schema_version=1, release_version=source['release_version'], stack_version=stack,
                     mip_version='0.5.0', source_kind=source['source_kind'], marty_ui_sha=source['marty_ui_sha'],
-                    beta_origin='https://beta.elevenidllc.com', passport_provider_mode='off',
+                    beta_origin='https://beta.elevenidllc.com', passport_provider_mode='simulator' if simulator else 'off',
                     compose_project='elevenid-beta', ui_compose_project='elevenid-beta-ui',
                     network='elevenid-beta-network', promotion_eligible=False, release_ready=False,
                     backup_manifest='backup-manifest.json', source_manifest='source-manifest.json',
@@ -176,14 +194,28 @@ def complete(root, artifacts, runtime_root, apply):
                     deployed_demo_manifest='deployed-demo-manifest.json',
                     deployed_demo_manifest_sha256=sha(artifacts / 'deployed-demo-manifest.json'),
                     services_marker=markers['local'], issuance_native_marker=native, ui_marker=ui_marker,
-                    images=records, canvas_portable_configuration=dict(enabled=False, canvas_origin=None,
-                        pilot_organization_id=None, lti_issuer_did=None, signing_resolution=None,
+                    images=records, canvas_portable_configuration=dict(enabled=bool(simulator),
+                        canvas_origin='https://canvas-test.elevenidllc.com' if simulator else None,
+                        pilot_organization_id='00000000-0000-0000-0000-000000000001' if simulator else None,
+                        lti_issuer_did='did:web:beta.elevenidllc.com:orgs:marty' if simulator else None,
+                        signing_resolution='organization-scoped-issuer-did' if simulator else None,
                         legacy_event_ingest_enabled=False), deployed_at=datetime.now(timezone.utc).isoformat())
     if alias_repair:
         manifest['forward_configuration_repair'] = dict(file=alias_repair[2].name,
             sha256=sha(alias_repair[2]), operator_script_sha256=sha(Path(__file__)),
             reason='HTTP alias missing native integration-secret KMS URL and trusted CA')
+    if simulator:
+        manifest['forward_configuration_repair'] = dict(
+            file=simulator['overlay'].name, sha256=sha(simulator['overlay']),
+            operator_script_sha256=sha(Path(__file__)),
+            simulator_operator_sha256=sha(Path(__file__).with_name('complete_beta_passport_simulator.py')),
+            reason='Preserve scoped callback token file through shared services entrypoint',
+            migration_replayed=False, kms_bootstrap_replayed=False,
+            original_rollout_exit_code=1, callback_network_id=simulator['network_id'])
     (artifacts / 'local-deployment-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf8')
+    result.update(deploymentManifest=str(artifacts / 'local-deployment-manifest.json'),
+                  deploymentManifestSha256=sha(artifacts / 'local-deployment-manifest.json'),
+                  selectedRuntime=records)
     result.update(applied=True, apiAndUiBindingsVerified=True, nativeIssuanceProbes='PASS', betaDeployed=True)
     return result
 
@@ -195,10 +227,13 @@ def main():
     parser.add_argument('--runtime-config-root', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--passport-simulator-completion', action='store_true')
+    parser.add_argument('--failed-rollout-proof', type=Path)
     args = parser.parse_args()
     require(not args.output.exists(), 'Use a new completion receipt path')
     result = complete(args.source_repo_root.resolve(), args.artifact_dir.resolve(),
-                      args.runtime_config_root.resolve(), args.apply)
+                      args.runtime_config_root.resolve(), args.apply, args.passport_simulator_completion,
+                      args.failed_rollout_proof.resolve() if args.failed_rollout_proof else None)
     args.output.write_text(json.dumps(result, indent=2) + '\n', encoding='utf8')
     print(json.dumps(result))
 

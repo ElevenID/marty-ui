@@ -1000,6 +1000,7 @@ def validate_model(model, *, passport_enabled, files, physical_provider=False,
             and callback_signer_env.get("BAO_ADDR") == "https://openbao:8200"
             and callback_signer_env.get("BAO_CACERT") == "/bao/public-ca/ca.crt"
             and callback_signer_env.get("BAO_TOKEN_FILE") == "/bao/passport-callback/token"
+            and str(callback_signer_env.get("PRESERVE_BAO_TOKEN_FILE")) == "1"
             and not any(callback_signer_env.get(name) for name in (
                 "BAO_TOKEN", "OPENBAO_SERVICE_TOKEN", "OPENBAO_SERVICE_TOKEN_FILE"))
             and has_readonly_volume(callback_signer, "openbao_public_ca", "/bao/public-ca")

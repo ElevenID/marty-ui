@@ -69,6 +69,7 @@ services:
       BAO_ADDR: https://openbao:8200
       BAO_CACERT: /bao/public-ca/ca.crt
       BAO_TOKEN_FILE: /bao/passport-callback/token
+      PRESERVE_BAO_TOKEN_FILE: "1"
     volumes:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_passport_callback:/bao/passport-callback:ro
