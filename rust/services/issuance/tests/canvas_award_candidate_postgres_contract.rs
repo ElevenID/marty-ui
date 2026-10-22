@@ -1190,7 +1190,7 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
                \"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",
                \"revocation_profile_id\":\"revocation-profile-1\",
                \"issuer_did\":\"did:web:issuer.example:orgs:org-1\",
-               \"issuer_algorithm\":\"ES256\",\"wallet_configs\":[],
+               \"issuer_algorithm\":\"ES256\",\"claims\":[],\"wallet_configs\":[],
                \"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],
                \"validity_rules\":{\"default_validity_days\":365,
                  \"renewable\":false,\"renewal_window_days\":30}}'::json,
@@ -1803,7 +1803,7 @@ async fn seed_candidate(pool: &sqlx::PgPool) {
             '{\"enable_canvas_evidence\":true}'::json, true, 3, 3,
             '[{\"code\":\"kms\",\"status\":\"ready\",\"blocking\":true}]'::json,
             '2026-08-29T15:59:00Z',
-            '{\"id\":\"credential-template-1\",\"organization_id\":\"org-1\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"revocation-profile-1\",\"issuer_did\":\"did:web:issuer.example:orgs:org-1\",\"issuer_algorithm\":\"ES256\",\"wallet_configs\":[],\"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],\"validity_rules\":{\"default_validity_days\":365,\"renewable\":false,\"renewal_window_days\":30}}'::json,
+            '{\"id\":\"credential-template-1\",\"organization_id\":\"org-1\",\"status\":\"active\",\"credential_type\":\"OpenBadgeCredential\",\"credential_payload_format\":\"w3c_vcdm_v2_sd_jwt\",\"revocation_profile_id\":\"revocation-profile-1\",\"issuer_did\":\"did:web:issuer.example:orgs:org-1\",\"issuer_algorithm\":\"ES256\",\"claims\":[],\"wallet_configs\":[],\"selective_disclosure_fields\":[],\"zk_predicate_claims\":[],\"validity_rules\":{\"default_validity_days\":365,\"renewable\":false,\"renewal_window_days\":30}}'::json,
             '2026-08-29T15:00:00Z', NULL)",
         "INSERT INTO issuance_service.applications
          VALUES ('application-1', 'org-1', 'application-template-1',
