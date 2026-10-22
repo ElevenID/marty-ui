@@ -13,7 +13,8 @@ use crate::{
     },
     canvas_issuance_guard::{
         credential_snapshot, evaluate_canvas_approval_snapshot, evaluate_canvas_offer_snapshot,
-        resolved_issuer_matches, CanvasGuardConfig, CanvasGuardSnapshot,
+        required_credential_claims_present, resolved_issuer_matches, CanvasGuardConfig,
+        CanvasGuardSnapshot,
     },
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::CanvasLtiExperienceSessionContext,
@@ -555,6 +556,9 @@ fn plan_canvas_management_transaction(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    if !required_credential_claims_present(credential, &claims) {
+        return None;
+    }
     if let Some(vct) = optional_text(credential.get("vct")) {
         claims.insert("_vct".to_owned(), Value::String(vct));
     }
@@ -1110,6 +1114,7 @@ mod legacy_planner_tests {
                     "revocation_profile_id":"revocation-profile-1",
                     "issuer_did":"did:web:issuer.example:org-1",
                     "issuer_algorithm":"ES256",
+                    "claims":[],
                     "wallet_configs":[{"wallet_id":"wallet-1"}],
                     "selective_disclosure_fields":["email"],
                     "zk_predicate_claims":["age"],
@@ -1149,6 +1154,28 @@ mod legacy_planner_tests {
             transaction.claims.get("_vct"),
             Some(&json!("https://credentials.example/employee"))
         );
+
+        let mut required_binding = binding.clone();
+        required_binding
+            .get_mut("credential_template_snapshot")
+            .expect("credential snapshot")["claims"] =
+            json!([{"name":"achievement_id","required":true}]);
+        assert!(
+            plan_canvas_offer_transaction(&application, &required_binding, &seed, Utc::now())
+                .is_none()
+        );
+        let mut complete_application = application.clone();
+        complete_application
+            .get_mut("form_data")
+            .expect("application data")["achievement_id"] =
+            json!("https://credentials.example/achievements/course-42");
+        assert!(plan_canvas_offer_transaction(
+            &complete_application,
+            &required_binding,
+            &seed,
+            Utc::now()
+        )
+        .is_some());
 
         let mut existing = transaction.clone();
         existing.id = "existing-transaction".to_owned();

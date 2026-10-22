@@ -610,6 +610,37 @@ pub(crate) fn credential_snapshot<'a>(
     Ok(snapshot)
 }
 
+pub(crate) fn required_credential_claims_present(
+    template: &Map<String, Value>,
+    claims: &Map<String, Value>,
+) -> bool {
+    let Some(definitions) = template.get("claims").and_then(Value::as_array) else {
+        return false;
+    };
+    definitions.iter().all(|definition| {
+        let Some(definition) = definition.as_object() else {
+            return false;
+        };
+        let Some(name) = definition
+            .get("name")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+        else {
+            return false;
+        };
+        if definition.get("required").and_then(Value::as_bool) != Some(true) {
+            return true;
+        }
+        claims.get(name).is_some_and(|value| match value {
+            Value::Null => false,
+            Value::String(value) => !value.trim().is_empty(),
+            Value::Array(value) => !value.is_empty(),
+            Value::Object(value) => !value.is_empty(),
+            _ => true,
+        })
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn binding_transaction_matches(
     transaction: &CredentialTransaction,
@@ -669,6 +700,7 @@ fn binding_transaction_matches(
         && transaction.selective_disclosure_claims
             == string_array(expected.get("selective_disclosure_fields"))
         && transaction.zk_predicate_claims == string_array(expected.get("zk_predicate_claims"))
+        && required_credential_claims_present(expected, &transaction.claims)
         && text(transaction.claims.get("_vct")) == text(expected.get("vct"))
         && transaction
             .issuer_profile_id
@@ -1129,7 +1161,8 @@ mod tests {
                     "credential_payload_format": "w3c_vcdm_v2_sd_jwt",
                     "revocation_profile_id": "status-profile-1",
                     "issuer_did": "did:web:issuer.example:orgs:org-1",
-                    "issuer_algorithm": "ES256"
+                    "issuer_algorithm": "ES256",
+                    "claims": []
                 },
                 "evidence_requirements": [{
                     "requirement_id": "assignment-score",
@@ -1175,6 +1208,38 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn required_template_claims_are_checked_again_at_issuance() {
+        let mut state = snapshot();
+        state.binding["credential_template_snapshot"]["claims"] =
+            json!([{"name":"achievement_id","required":true}]);
+        assert!(evaluate_canvas_guard_snapshot(
+            &transaction(),
+            &issuer(),
+            &state,
+            &config(),
+            now()
+        )
+        .is_err());
+
+        let mut complete = transaction();
+        complete.claims.insert(
+            "achievement_id".to_owned(),
+            json!("https://credentials.example/achievements/course-42"),
+        );
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(&complete, &issuer(), &state, &config(), now()),
+            Ok(())
+        );
+        assert!(!required_credential_claims_present(
+            &json!({"claims":[{"name":"achievement_id","required":true}]})
+                .as_object()
+                .expect("template")
+                .clone(),
+            &Map::from_iter([("achievement_id".to_owned(), json!("  "))])
+        ));
     }
 
     #[test]
