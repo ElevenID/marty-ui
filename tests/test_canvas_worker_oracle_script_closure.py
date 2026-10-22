@@ -219,7 +219,7 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
     """Inventory helper filenames interpolated into published-process mounts.
 
     The existing path-syntax inventory sees ``root.join(&path)`` and
-    ``root.join("scripts").join(name)``, but not the list values that supply
+    ``root.join("scripts").join(source)``, but not the list values that supply
     those variables. This guard covers only the bounded consumer-helper block.
     """
     start = "        let mut consumer_helpers: Vec<String> ="
@@ -233,17 +233,24 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
     assert body.count("consumer_helpers.push(") == 2
     assert body.count("consumer_helpers.extend(") == 1
     assert body.count("root.join(&path)") == 1
-    assert body.count('root.join("scripts").join(name)') == 1
+    assert body.count('root.join("scripts").join(source)') == 1
     assert body.count("root.join(path)") == 3
     basename_branch, worker_branch = body.split("} else if worker_https {", 1)
-    worker_branch, _ = worker_branch.split("} else {", 1)
+    worker_branch, _ = worker_branch.split(
+        "            } else {\n                Vec::new()", 1
+    )
     assert basename_branch.count('let path = format!("scripts/{name}");') == 1, (
         "Review consumer-helper basename source directory"
     )
     assert basename_branch.count("target=/verification/{path},readonly") == 1
     assert basename_branch.count("root.join(&path)") == 1
     assert worker_branch.count("target=/verification/scripts/{name},readonly") == 1
-    assert worker_branch.count('root.join("scripts").join(name)') == 1
+    assert worker_branch.count('root.join("scripts").join(source)') == 1
+    assert worker_branch.count('let source = if name == "canvas_worker_https_fixture.py"') == 1
+    assert worker_branch.count(
+        '&& matches!(script, "worker_body_timeout" | "worker_lease_expiry")'
+    ) == 1
+    assert worker_branch.count('"canvas_worker_https_fixture_published.py"') == 1
     groups = []
     for index, array in enumerate(arrays):
         names = re.findall(r'"([^"\n]+)"', array)
@@ -256,6 +263,19 @@ def harness_dynamic_helper_mounts(source: str) -> list[list[str]]:
             names = [f"scripts/{name}" for name in names]
         groups.append(names)
     groups.append(paths)
+    archived = "scripts/canvas_worker_https_fixture_published.py"
+    frozen_hashes = {
+        record[kind]["capture_source_sha256"]["canvas_worker_https_fixture.py"]
+        for corpus, kind in (
+            ("canvas-worker-body-timeout-oracle.json", "worker_body_timeout"),
+            ("canvas-worker-lease-expiry-oracle.json", "worker_lease_expiry"),
+        )
+        for record in json.loads((ROOT / "contracts" / corpus).read_text(encoding="utf-8"))
+    }
+    assert frozen_hashes == {normalized_sha256(ROOT / archived)}, (
+        "Published fixture must match both frozen capture provenance hashes"
+    )
+    groups.append([archived])
     for group in groups:
         assert all(path.startswith(("scripts/", "contracts/")) for path in group)
         assert all(
@@ -611,6 +631,7 @@ def test_historical_capture_input_graph_is_reviewed():
             "scripts/run_canvas_worker_provider_signals_oracle.py",
             "scripts/run_canvas_worker_provider_recovery_oracle.py",
         ],
+        ["scripts/canvas_worker_https_fixture_published.py"],
     ], "Published-process dynamic helper mounts changed; review their inputs"
     assert inventory["harness_extra_scenarios"] == harness_extra_scenario_mounts(
         harness_source
@@ -825,6 +846,9 @@ def test_dynamic_helper_mount_inventory_rejects_unreviewed_inputs():
         "target=/verification/other/{name},readonly",
         1,
     )
+    with pytest.raises(AssertionError):
+        harness_dynamic_helper_mounts(changed)
+    changed = source.replace('"worker_body_timeout" | "worker_lease_expiry"', '"worker_body_timeout"')
     with pytest.raises(AssertionError):
         harness_dynamic_helper_mounts(changed)
 
