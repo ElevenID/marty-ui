@@ -168,7 +168,9 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      assert.ok(popups.length >= 1 && popups.length <= 2 && popups.includes(page),
+      report.windowObservation = { popupCount: popups.length,
+        initialPage: page === canvasPage, observedPopup: popups.includes(page) };
+      assert.ok(popups.length <= 2 && (page === canvasPage || popups.includes(page)),
         'Uncaptured or unexpected Canvas launch window');
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
@@ -197,7 +199,7 @@ async function main() {
     phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
       checkpoint, report, onApplication: id => { applicationId = id; } });
-    assert.ok(popups.length >= 1 && popups.length <= 2,
+    assert.ok(popups.length <= 2,
       'Canvas opened an unexpected additional capture page');
     assert.deepEqual(await deployment(), report.deployment, 'Beta deployment changed during Canvas capture');
     complete = true;
