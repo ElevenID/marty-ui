@@ -143,9 +143,13 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
 
   const gradePath = `/api/v1/courses/${fixtures.course.id}/assignments/${fixtures.assignment.id}/submissions/${fixtures.learner.id}`;
   async function grade(value) {
+    report.currentOperation = 'grade-write';
     const changed = await adminCanvas.putForm(gradePath, { 'submission[posted_grade]': value }, [200]);
+    report.currentOperation = 'grade-user-binding';
     same(changed.user_id, fixtures.learner.id, 'Grade changed a different learner');
+    report.currentOperation = 'grade-assignment-binding';
     same(changed.assignment_id, fixtures.assignment.id, 'Grade changed a different assignment');
+    report.currentOperation = 'grade-score-binding';
     assert.equal(Number(changed.score), value);
   }
   async function correction(prefix) {
