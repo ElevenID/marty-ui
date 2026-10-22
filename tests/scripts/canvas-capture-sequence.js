@@ -237,14 +237,18 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.credentialId = credentialId;
   report.issuerDid = issued.issuer_did;
   report.pendingOperations = report.pendingOperations.filter(operation => operation !== 'wallet-claim');
+  report.currentOperation = 'claim-dialog-dismiss';
   await page.getByTestId('credential-claim-dialog').getByRole('button', { name: /close|done/i }).first().click();
+  report.currentOperation = 'claim-complete-ui';
   await operations.reloadLearnerExperience(page);
   await page.getByTestId('canvas-claim-complete').waitFor({ state: 'visible' });
+  report.currentOperation = 'wallet-verification';
   const verification = await wallet.verify(adminPage, walletPage, `Canvas ${applicationId}`, {
     organizationId, presentationPolicyId: templates.policy.id, issuerDid: issued.issuer_did,
   });
   requireVerificationDecision(verification, 'allow');
   report.verification = verification;
+  report.currentOperation = 'verifier-checkpoint';
   await checkpoint(walletPage, 'wallet-receipt-and-verification', { applicationId, credentialId, transactionId });
 
   if (scenario === 'external-evidence-to-credential') {
@@ -283,9 +287,10 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
     assert.equal(String(current.status).toUpperCase(), 'ACTIVE');
     await checkpoint(page, 'correction-review-resolved', report.correctionReview);
   }
+  report.currentOperation = 'retired-ingest-before-snapshot';
   const authoritativeSnapshot = async () => ({
     evidence: headFingerprint({ headRevisions: operations.validateAuthoritativeEvidenceHeads(
-      await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts`),
+      await marty.get(`/v1/organizations/${enc(organizationId)}/applicants/${enc(applicationId)}/evidence-facts?current_only=true`),
       pinnedBinding.evidence_requirements).map(f => ({ requirementId: f.requirement_id,
       sourceRevision: f.source_revision, payloadHash: f.payload_hash })) }),
     transactions: hash(await transactions()),
@@ -295,6 +300,7 @@ async function runCanvasCapture({ setup, page, adminPage, walletPage, scenario,
   report.untrustedIngest = { applicationId, httpStatus: null, before: beforeLegacy,
     after: null, authoritativeStateUnchanged: false };
   report.pendingOperations.push('legacy-evidence-ingest');
+  report.currentOperation = 'retired-ingest-rejection';
   const legacy = await marty.post('/v1/integrations/canvas/evidence-events', {
     canvas_event_id: `untrusted-capture-${applicationId}`, organization_id: organizationId,
     credential_template_id: templates.credential.id, application_id: applicationId,
