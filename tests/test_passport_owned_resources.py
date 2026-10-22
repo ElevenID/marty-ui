@@ -112,6 +112,8 @@ def test_fresh_issuer_rejects_an_extra_did_path(owned):
 def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
     journal, calls, records, kwargs, _ = owned
     assert journal.retire(**kwargs)["complete"] is True
+    assert ("flow", "POST", "/v1/api-keys?organization_id=" + journal.organization) in calls
+    assert ("flow", "DELETE", "/v1/api-keys/new-key?organization_id=" + journal.organization) in calls
     assert all(row["status"] == "DEPRECATED" for row in records.values())
     assert [row[:2] for row in calls if row[0] == "private"] == [
         ("private", "GET"), ("private", "POST"), ("private", "GET")]

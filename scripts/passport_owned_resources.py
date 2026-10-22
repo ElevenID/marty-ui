@@ -167,7 +167,7 @@ class OwnedPassportResources:
         body = {"name": "Passport demo " + self.value["run_id"], "is_test": True,
                 "scopes": ["credentials:issue"],
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
-        code, key = self.call("flow", "POST", "/v1/organizations/" + quote(self.organization, safe="") + "/api-keys", body)
+        code, key = self.call("flow", "POST", self.scoped("/v1/api-keys"), body)
         require(code == 200 and key.get("organization_id") == self.organization
                 and key.get("name") == body["name"] and key.get("scopes") == body["scopes"]
                 and key.get("scope_type") == "organization" and key.get("enabled") is True
@@ -309,8 +309,7 @@ class OwnedPassportResources:
         # Key ownership is supplied only by the same run's actual create port.
         api_key_id = self.value.get("api_key_id")
         require(isinstance(api_key_id, str) and bool(api_key_id), "Cannot revoke unowned passport API authority")
-        code, response = self.call("flow", "DELETE", "/v1/organizations/" + quote(self.organization, safe="")
-                                   + "/api-keys/" + quote(api_key_id, safe=""))
+        code, response = self.call("flow", "DELETE", self.scoped("/v1/api-keys/" + quote(api_key_id, safe="")))
         require(code == 200 and response.get("success") is True, "Owned passport key revocation failed")
         require(check_key_denied() is True, "Retired passport key is still accepted")
         batch.clear_private_state(self.key_path)
