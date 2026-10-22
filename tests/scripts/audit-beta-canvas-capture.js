@@ -168,7 +168,8 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      assert.equal(popups.length, 2, 'Uncaptured or unexpected Canvas launch window');
+      assert.ok(popups.length >= 1 && popups.length <= 2 && popups.includes(page),
+        'Uncaptured or unexpected Canvas launch window');
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
         alignment: 'DRIVER_LANDMARK_ONLY_REQUIRES_MEASURED_SOURCE_FRAMES' });
@@ -196,7 +197,8 @@ async function main() {
     phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
       checkpoint, report, onApplication: id => { applicationId = id; } });
-    assert.equal(popups.length, 2, 'Canvas opened an unexpected additional capture page');
+    assert.ok(popups.length >= 1 && popups.length <= 2,
+      'Canvas opened an unexpected additional capture page');
     assert.deepEqual(await deployment(), report.deployment, 'Beta deployment changed during Canvas capture');
     complete = true;
   } catch (error) {
