@@ -29,6 +29,10 @@ IMAGES = {
     "keycloak": "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 GATES = {
+    "official_interoperability": {
+        "run_id": "106",
+        "evidence_sha256": "sha256:" + "6" * 64,
+    },
     "public_stack": {
         "run_id": "101",
         "evidence_sha256": "sha256:" + "4" * 64,
@@ -92,6 +96,13 @@ def test_fresh_native_schema_evidence_is_required_for_release(tmp_path: Path) ->
                       if role != "native_schema"}
     with pytest.raises(transaction.ReleaseTransactionError, match="native_schema"):
         transaction.qualify(digests_recorded(tmp_path), without_native)
+
+
+def test_official_suite_cannot_be_omitted_from_qualification(tmp_path: Path) -> None:
+    without_official = {role: value for role, value in GATES.items()
+                        if role != "official_interoperability"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="official_interoperability"):
+        transaction.qualify(digests_recorded(tmp_path), without_official)
 
 
 def test_exact_plugin_image_evidence_is_required_for_release(tmp_path: Path) -> None:
