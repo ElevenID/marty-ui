@@ -65,6 +65,27 @@ async function observed(client, method, path, form) {
   return result;
 }
 
+async function findCanvasInventoryRecord(client, origin, collection, match) {
+  let next = `${collection}?per_page=100`;
+  const seen = new Set();
+  while (next) {
+    assert.ok(!seen.has(next) && seen.size < 100, 'Canvas inventory pagination is incomplete');
+    seen.add(next);
+    const response = await observed(client, 'GET', next);
+    assert.equal(response.status, 200);
+    assert.ok(Array.isArray(response.body), 'Canvas inventory is not an array');
+    const found = response.body.find(match);
+    if (found) return found;
+    const link = /<([^>]+)>;\s*rel="next"/.exec(response.link || '');
+    if (!link) return null;
+    const url = new URL(link[1], origin);
+    assert.equal(url.origin, origin);
+    assert.equal(url.pathname, collection);
+    next = url.pathname + url.search;
+  }
+  return null;
+}
+
 async function retireOwnedCanvasFixtures({ owned, runSuffix, canvasOrigin, accountId, adminId,
   adminCanvas, learnerCanvas, adminTokenCanvas = adminCanvas, learnerTokenCanvas = learnerCanvas,
   retirementConfirmed, oauthDisconnected, developerKeys, planOnly = false }) {
@@ -104,11 +125,16 @@ async function retireOwnedCanvasFixtures({ owned, runSuffix, canvasOrigin, accou
       await developerKeys.identity({ id: String(ids.ltiDeveloperKey), name: `Marty LTI ${runSuffix}` }),
       ids.ltiDeveloperKey, accountId);
   });
-  await add('learner', adminCanvas, `/api/v1/users/${ids.learner}/profile`, user => {
-    same(user.primary_email, owned.learnerEmail, 'learner email');
-    if (user.login_id != null) same(user.login_id, owned.learnerEmail, 'learner login');
-    same(user.name, `Portable Learner ${runSuffix}`, 'learner name');
-  }, undefined, `/api/v1/accounts/${accountId}/users/${ids.learner}`);
+  const accountUser = () => findCanvasInventoryRecord(adminCanvas, canvasOrigin,
+    `/api/v1/accounts/${accountId}/users`, user => String(user.id) === String(ids.learner));
+  if (ids.learner) {
+    if (!(await accountUser())) report.resources.push({ kind: 'learner', id: String(ids.learner), state: 'ALREADY_ABSENT' });
+    else await add('learner', adminCanvas, `/api/v1/users/${ids.learner}/profile`, user => {
+      same(user.primary_email, owned.learnerEmail, 'learner email');
+      if (user.login_id != null) same(user.login_id, owned.learnerEmail, 'learner login');
+      same(user.name, `Portable Learner ${runSuffix}`, 'learner name');
+    }, undefined, `/api/v1/accounts/${accountId}/users/${ids.learner}`);
+  }
   for (const [kind, userId, client, purpose] of [
     ['learnerAccessToken', ids.learner, learnerTokenCanvas, `OSS contract learner ${runSuffix}`],
     ['adminAccessToken', adminId, adminTokenCanvas, `OSS contract admin ${runSuffix}`],
@@ -145,13 +171,10 @@ async function retireOwnedCanvasFixtures({ owned, runSuffix, canvasOrigin, accou
     const readback = kind === 'learnerAccessToken'
       ? await plan.client.request('GET', plan.path, { expected: [200, 401, 404], includeStatus: true })
       : kind === 'learner'
-        ? await observed(adminCanvas, 'GET', `/api/v1/accounts/${accountId}/users?search_term=${encodeURIComponent(owned.learnerEmail)}&per_page=100`)
+        ? await accountUser()
         : await observed(plan.client, 'GET', plan.path);
     if (kind === 'learner') {
-      assert.equal(readback.status, 200);
-      assert.ok(Array.isArray(readback.body), 'Canvas account users must be enumerated');
-      assert.ok(readback.body.every(user => String(user.id) !== String(ids.learner)),
-        'Canvas learner still belongs to the account');
+      assert.equal(readback, null, 'Canvas learner still belongs to the account');
     } else if (kind === 'learnerAccessToken') {
       assert.ok([401, 404].includes(readback.status)
         || (readback.status === 200 && readback.body?.workflow_state === 'deleted'),
@@ -225,4 +248,5 @@ async function retireCanvasApplication({ marty, organizationId, applicationId,
   }
 }
 
-module.exports = { requireOwnedLedger, requireCanvasExternalToolKey, retireOwnedCanvasFixtures, retireCanvasApplication };
+module.exports = { requireOwnedLedger, requireCanvasExternalToolKey, findCanvasInventoryRecord,
+  retireOwnedCanvasFixtures, retireCanvasApplication };

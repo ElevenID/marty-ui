@@ -4,7 +4,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const test = require('node:test');
-const { requireCanvasExternalToolKey, retireOwnedCanvasFixtures, retireCanvasApplication } = require('./canvas-owned-fixture-cleanup');
+const { requireCanvasExternalToolKey, findCanvasInventoryRecord, retireOwnedCanvasFixtures, retireCanvasApplication } = require('./canvas-owned-fixture-cleanup');
 
 function fixture() {
   const runSuffix = 'owned-canvas-run-0001';
@@ -101,6 +101,31 @@ test('stock local tool IDs join globally serialized client IDs only within their
     ...key, binding: { ...key.binding, account_id: '20000000000001' },
   }, key.id, '1'));
 });
+
+test('removed account membership does not require erasing its surviving global user profile', async () => {
+  const f = fixture();
+  f.resources.get('/api/v1/users/20/profile').primary_email = null;
+  const request = f.input.adminCanvas.request.bind(f.input.adminCanvas);
+  f.input.adminCanvas.request = async (method, path, options) => path.startsWith('/api/v1/accounts/1/users?')
+    ? { status: 200, body: [] } : request(method, path, options);
+  const result = await retireOwnedCanvasFixtures(f.input);
+  assert.equal(result.complete, true);
+  assert.equal(result.resources.find(row => row.kind === 'learner').state, 'ALREADY_ABSENT');
+  assert.ok(f.resources.has('/api/v1/users/20/profile'));
+  assert.equal(f.calls.filter(call => call.method === 'DELETE' && call.path === '/api/v1/accounts/1/users/20').length, 0);
+});
+
+for (const link of [
+  '<https://foreign.example/api/v1/accounts/1/users?page=2>; rel="next"',
+  '<https://canvas-test.elevenidllc.com/api/v1/accounts/2/users?page=2>; rel="next"',
+  '<https://canvas-test.elevenidllc.com/api/v1/accounts/1/users?per_page=100>; rel="next"',
+]) {
+  test(`an incomplete or foreign account inventory cannot prove absence: ${link}`, async () => {
+    const client = { async request() { return { status: 200, body: [], link }; } };
+    await assert.rejects(findCanvasInventoryRecord(client, 'https://canvas-test.elevenidllc.com',
+      '/api/v1/accounts/1/users', user => user.id === 20));
+  });
+}
 
 test('unknown approval outcome is retained without retiring a platform or credential', async () => {
   let calls = 0;

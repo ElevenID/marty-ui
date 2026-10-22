@@ -23,7 +23,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
-const { retireOwnedCanvasFixtures, retireCanvasApplication } = require('./canvas-owned-fixture-cleanup');
+const { retireOwnedCanvasFixtures, retireCanvasApplication, findCanvasInventoryRecord } = require('./canvas-owned-fixture-cleanup');
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_CANVAS_ORIGIN = 'https://canvas-test.elevenidllc.com';
@@ -1914,24 +1914,10 @@ async function prepareCanvasCaptureFixtures({ browser, ledger, markActive = () =
 }
 
 async function findCanvasDeveloperKey({ adminCanvas, canvasOrigin, accountId }, { id, name }) {
-    let next = `/api/v1/accounts/${accountId}/developer_keys?per_page=100`;
-    const seen = new Set();
-    while (next) {
-      assert.ok(!seen.has(next) && seen.size < 100, 'Canvas key inventory pagination is incomplete');
-      seen.add(next);
-      const response = await adminCanvas.request('GET', next, { includeStatus: true });
-      assert.equal(response.status, 200);
-      assert.ok(Array.isArray(response.body), 'Canvas key inventory is not an array');
-      const found = response.body.find(key => String(key.id) === id);
-      if (found) { assert.equal(found.name, name, 'Canvas key belongs to another run'); return found; }
-      const link = /<([^>]+)>;\s*rel="next"/.exec(response.link || '');
-      if (!link) return null;
-      const url = new URL(link[1], canvasOrigin);
-      assert.equal(url.origin, canvasOrigin);
-      assert.equal(url.pathname, `/api/v1/accounts/${accountId}/developer_keys`);
-      next = url.pathname + url.search;
-    }
-    return null;
+  const found = await findCanvasInventoryRecord(adminCanvas, canvasOrigin,
+    `/api/v1/accounts/${accountId}/developer_keys`, key => String(key.id) === id);
+  if (found) assert.equal(found.name, name, 'Canvas key belongs to another run');
+  return found;
 }
 
 async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDisconnected, { planOnly = false } = {}) {
@@ -2265,7 +2251,10 @@ async function main() {
         JSON.stringify(retired, null, 2) + '\n', { flag: 'wx' });
     } catch (error) {
       failure ||= new ContractFailure('owned_canvas_cleanup_incomplete', 'Run-owned Canvas resources require recovery; custody is retained.');
-      ledger.driverFailure = contractFailureLocation(error, 'owned_fixture_cleanup');
+      const cleanupFailure = contractFailureLocation(error, 'owned_fixture_cleanup');
+      ledger.driverFailure ||= cleanupFailure;
+      fs.writeFileSync(path.join(path.dirname(args.observations), 'owned-canvas-cleanup-failure.json'),
+        JSON.stringify(cleanupFailure, null, 2) + '\n', { flag: 'wx' });
     }
     ledger.write(args.observations);
     if (ledger.driverFailure) fs.writeFileSync(path.join(path.dirname(args.observations), 'driver-failure-location.json'),
