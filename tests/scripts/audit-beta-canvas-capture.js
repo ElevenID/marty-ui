@@ -12,6 +12,31 @@ const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
 
+function localOverlayBinding(env = process.env) {
+  const filename = env.DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT;
+  if (!filename) return null;
+  assert.equal(filename, '/capture-prerequisites/native-overlay.json');
+  assert.equal(env.RECORD_VIDEO, '0', 'Native overlay is restricted to functional reruns');
+  const bytes = fs.readFileSync(filename);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  assert.equal(digest, env.DEMO_LOCAL_NATIVE_OVERLAY_SHA256, 'Native overlay receipt changed');
+  const receipt = JSON.parse(bytes);
+  assert.equal(receipt.mode, 'EPHEMERAL_LOCAL_NATIVE_OVERLAY');
+  assert.equal(receipt.state, 'APPLIED_LOCAL_ONLY');
+  assert.equal(receipt.productionReleaseQualified, false);
+  assert.equal(receipt.imagesBuiltForCandidate, false);
+  assert.equal(receipt.imageSourceMarkerRemainsBaseline, true);
+  assert.match(receipt.sourceRevision, /^[a-f0-9]{40}$/);
+  assert.equal(receipt.rows?.length, 8);
+  for (const row of receipt.rows) {
+    assert.match(row.candidateSha256, /^[a-f0-9]{64}$/);
+    assert.equal(row.observedAfterSha256, row.candidateSha256);
+  }
+  return {nativeSourceRevision:receipt.sourceRevision, receiptSha256:digest,
+    baselineSourceIds:[...new Set(receipt.rows.map(row => row.imageSourceId))],
+    releaseQualified:false, betaImageMarkersRemainBaseline:true};
+}
+
 async function main() {
   const scenario = process.argv[2];
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
@@ -32,6 +57,7 @@ async function main() {
   const evidence = await require(helper).createLiveEvidenceClient();
   const dir = path.resolve(process.env.DEMO_ARTIFACT_DIR);
   const recording = process.env.RECORD_VIDEO === '1';
+  const overlay = localOverlayBinding();
   const report = { scenario, startedAt: new Date().toISOString(), status: 'FAIL',
     executionBoundary,
     releaseReady: false, captureClassification: 'FIRST_PARTY_BROWSER_RUST_WALLET',
@@ -59,6 +85,12 @@ async function main() {
   }
   try {
     report.deployment = await deployment();
+    if (overlay) {
+      assert.deepEqual(overlay.baselineSourceIds, [report.deployment.source],
+        'Local overlay and public beta marker refer to different baselines');
+      report.localOverlayBinding = {...overlay};
+      delete report.localOverlayBinding.baselineSourceIds;
+    }
     // This exact recorder checkout is already bound by the parent and helper
     // handshake. The imported report remains a prerequisite, never an assertion.
     const { loadCanvasPortabilityAttestation } = require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'));
@@ -218,7 +250,15 @@ async function main() {
     if (browser) await cleanup('browser', () => browser.close());
     report.completedAt = new Date().toISOString();
     report.status = complete ? 'PASS' : 'FAIL';
-    report.releaseReady = complete;
+    report.functionalReady = complete;
+    report.operations_verified = complete;
+    report.cleanup = {complete:complete && report.resourceRetirementConfirmed === true};
+    report.releaseReady = complete && !overlay;
+    if (overlay) {
+      report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
+      report.signedManifestVerified = false;
+      report.demo_qualified = false;
+    }
     save('report.json', report);
     try { if (complete) await evidence.complete(); } finally { evidence.close(); }
   }
@@ -229,4 +269,4 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main };
+module.exports = { main, localOverlayBinding };
