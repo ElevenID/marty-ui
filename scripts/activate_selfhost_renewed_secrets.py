@@ -14,7 +14,6 @@ import json
 import os
 from pathlib import Path
 import re
-import ssl
 import stat
 import subprocess
 import sys
@@ -25,6 +24,7 @@ if os.name == "posix":
 
 sys.dont_write_bytecode = True
 from selfhost_operator_inputs import private_file as private_file  # noqa: E402
+from selfhost_native_operator import operator_bytes  # noqa: E402
 from passport_remote_tls import SELFHOST_CERT_FILES  # noqa: E402
 from selfhost_openbao_client import (  # noqa: E402
     Bao, certificate_public_key_der, public_key_der, require_ca_rotation_authority,
@@ -255,28 +255,23 @@ def secret_mounts(project: str, secret_root: Path, services: set[str],
 
 
 def checked_certificate_lifetime(certificate: str, minimum_ttl: int) -> None:
-    result = subprocess.run(
-        ["openssl", "x509", "-dates", "-noout"],
-        input=certificate.encode("ascii"), capture_output=True,
-        timeout=10, check=False,
-    )
-    dates = dict(line.split("=", 1) for line in result.stdout.decode("ascii").splitlines()
-                 if "=" in line)
-    if result.returncode or set(dates) != {"notBefore", "notAfter"}:
-        raise ValueError("renewed certificate validity is invalid")
-    now = time.time()
-    if (ssl.cert_time_to_seconds(dates["notBefore"]) > now
-            or ssl.cert_time_to_seconds(dates["notAfter"]) < now + minimum_ttl):
+    try:
+        valid = json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                                         "certificate-lifetime", str(minimum_ttl),
+                                         input=certificate.encode("ascii")))
+    except RuntimeError as error:
+        raise ValueError("renewed certificate validity is invalid") from error
+    if valid is not True:
         raise ValueError("renewed certificate is outside the required validity overlap")
 
 
 def checked_certificate_chain(path: Path, issuer: str) -> None:
-    result = subprocess.run(
-        ["openssl", "verify", "-CAfile", "/dev/stdin", str(path)],
-        input=issuer.encode("ascii"), capture_output=True, timeout=10, check=False,
-    )
-    if result.returncode != 0:
-        raise ValueError("renewed certificate is not signed by its OpenBao issuer")
+    try:
+        operator_bytes(Path(__file__).resolve().parents[1], "operator", "certificate-chain",
+                       input=json.dumps({"certificate": path.read_text(encoding="ascii"),
+                                         "issuer": issuer}).encode("ascii"))
+    except (OSError, RuntimeError) as error:
+        raise ValueError("renewed certificate is not signed by its OpenBao issuer") from error
 
 
 def checked_certificates(bao: Bao, old: Path, new: Path, minimum_ttl: int,
