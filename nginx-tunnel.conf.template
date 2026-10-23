@@ -299,6 +299,11 @@ server {
     }
 
     # OpenAPI schema for API documentation (ReDoc on /docs page)
+    location = /openapi.yaml {
+        absolute_redirect off;
+        return 308 /openapi.json;
+    }
+
     location = /openapi.json {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/openapi.json;

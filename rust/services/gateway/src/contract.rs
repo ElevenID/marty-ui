@@ -405,6 +405,12 @@ impl GatewayContract {
             } else {
                 json!([])
             };
+            crate::openapi::describe_operation(
+                &mut operation,
+                route.method,
+                &route.path,
+                route.status_code,
+            );
             path_item.insert(method_name(route.method).to_ascii_lowercase(), operation);
         }
         json!({
@@ -415,7 +421,9 @@ impl GatewayContract {
                 "description": "Canonical public HTTP surface for the Marty Rust service platform."
             },
             "paths": paths,
+            "x-marty-protocol-revision": crate::openapi::protocol_revision(),
             "components": {
+                "schemas": crate::openapi::schemas(),
                 "securitySchemes": {
                     "bearerAuth": {"type": "http", "scheme": "bearer", "bearerFormat": "JWT"},
                     "apiKeyAuth": {"type": "apiKey", "in": "header", "name": "X-API-Key"},
@@ -1028,6 +1036,16 @@ mod tests {
         let contract = GatewayContract::load().expect("gateway contract");
         let document = contract.openapi_document("1.2.3");
         assert_eq!(document["openapi"], "3.1.0");
+        assert_eq!(
+            document["paths"]["/v1/organizations/{org_id}"]["patch"]["requestBody"]["content"]
+                ["application/json"]["schema"]["$ref"],
+            "#/components/schemas/schemas__organization_update_request"
+        );
+        assert_eq!(
+            document["paths"]["/v1/trust-profiles/{profile_id}"]["get"]
+                ["x-marty-response-schema-documented"],
+            true
+        );
         assert_eq!(document["info"]["title"], "Marty API Gateway");
         assert_eq!(document["info"]["version"], "1.2.3");
         let paths = document["paths"].as_object().expect("OpenAPI paths");
