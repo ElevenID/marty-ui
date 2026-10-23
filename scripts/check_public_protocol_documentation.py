@@ -31,9 +31,10 @@ def assert_documented_public_boundary(root: Path = REPO_ROOT) -> None:
             raise AssertionError(f"Public OpenAPI links must use /openapi.json: {path.relative_to(root)}")
     violations: dict[str, list[str]] = {}
     markdown_paths = sorted(root.glob("*.md"))
-    docs_root = root / "docs"
-    if docs_root.is_dir():
-        markdown_paths.extend(sorted(docs_root.rglob("*.md")))
+    for directory in ["docs", "examples"]:
+        docs_root = root / directory
+        if docs_root.is_dir():
+            markdown_paths.extend(sorted(docs_root.rglob("*.md")))
 
     for path in markdown_paths:
         source = (
