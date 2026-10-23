@@ -1935,7 +1935,9 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   const { adminPage, canvasOrigin, accountId } = state;
   const findKey = key => findCanvasDeveloperKey(state, key);
   const selectKey = async key => {
-    await adminPage.goto(`${canvasOrigin}/accounts/${accountId}/developer_keys`, {
+    // Recovery sessions have not created the token that normally selects English.
+    // Pin only this browser session before using English accessible action names.
+    await adminPage.goto(`${canvasOrigin}/accounts/${accountId}/developer_keys?session_locale=en`, {
       waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
     });
     const row = adminPage.getByRole('row').filter({ has: adminPage.getByText(key.name, { exact: true }) });
