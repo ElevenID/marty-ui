@@ -366,6 +366,7 @@ fn unsigned_url_query_is_bounded_and_records_the_same_dcql_request() {
         flow.clone(),
         &artifacts,
         "https://verifier.example",
+        &RequestObjectOptions::default(),
         8_192,
         now(),
     )
@@ -388,10 +389,56 @@ fn unsigned_url_query_is_bounded_and_records_the_same_dcql_request() {
         request.instance.context["mip_messages"]["presentation_request"]["payload"]["dcql_query"],
         artifacts.dcql_query
     );
-    assert!(
-        build_unsigned_url_query(flow, &artifacts, "https://verifier.example", 1_024, now())
-            .is_err()
-    );
+    assert!(build_unsigned_url_query(
+        flow,
+        &artifacts,
+        "https://verifier.example",
+        &RequestObjectOptions::default(),
+        1_024,
+        now()
+    )
+    .is_err());
+}
+
+#[test]
+fn unsigned_url_query_uses_configured_client_metadata() {
+    let artifacts = PresentationRequestArtifacts {
+        presentation_definition: json!({"id": "pd-1"}),
+        dcql_query: json!({"credentials": [{"id": "member", "format": "dc+sd-jwt"}]}),
+    };
+    for strict in [true, false] {
+        let mut flow = instance("verification");
+        flow.context["request_transport"] = json!("url_query");
+        let options = RequestObjectOptions {
+            strict_client_metadata: strict,
+            verifier_display_name: "Configured verifier".into(),
+            verifier_logo_uri: Some("https://verifier.example/brand.svg".into()),
+            ..Default::default()
+        };
+        let request = build_unsigned_url_query(
+            flow,
+            &artifacts,
+            "https://verifier.example",
+            &options,
+            8_192,
+            now(),
+        )
+        .unwrap();
+        let parsed = url::Url::parse(&request.authorization_request).unwrap();
+        let parameters = parsed
+            .query_pairs()
+            .into_owned()
+            .collect::<BTreeMap<_, _>>();
+        let metadata: Value = serde_json::from_str(&parameters["client_metadata"]).unwrap();
+        assert!(metadata["vp_formats_supported"]["dc+sd-jwt"].is_object());
+        if strict {
+            assert!(metadata.get("client_name").is_none());
+            assert!(metadata.get("logo_uri").is_none());
+        } else {
+            assert_eq!(metadata["client_name"], options.verifier_display_name);
+            assert_eq!(metadata["logo_uri"], options.verifier_logo_uri.unwrap());
+        }
+    }
 }
 
 #[tokio::test]
