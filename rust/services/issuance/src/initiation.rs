@@ -1239,7 +1239,10 @@ mod tests {
     #[test]
     fn unsigned_matching_vcdm_document_is_accepted_and_signed_or_foreign_is_rejected() {
         let document = serde_json::json!({
-            "@context": [VCDM_V2_CONTEXT],
+            "@context": [VCDM_V2_CONTEXT, {
+                "EmployeeCredential": "https://issuer.example/types/EmployeeCredential",
+                "employeeNumber": "https://issuer.example/employeeNumber"
+            }],
             "type": ["VerifiableCredential", "EmployeeCredential"],
             "issuer": {"id": "did:web:issuer.example"},
             "credentialSubject": [{"id": "did:example:subject", "employeeNumber": "E-1"}]
@@ -1248,6 +1251,14 @@ mod tests {
         request.claims = None;
         request.credential_document = Some(document.clone());
         assert_eq!(request.validate(), Ok(()));
+
+        let mut undefined_type = document.clone();
+        undefined_type["@context"] = json!([VCDM_V2_CONTEXT]);
+        request.credential_document = Some(undefined_type);
+        assert_eq!(
+            request.validate(),
+            Err(InitiationError::InvalidCredentialDocument)
+        );
 
         let mut signed = document.clone();
         signed
