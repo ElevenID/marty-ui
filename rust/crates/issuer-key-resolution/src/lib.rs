@@ -1,4 +1,5 @@
 pub mod custody;
+pub mod governed;
 pub mod policy;
 
 use std::collections::BTreeSet;
