@@ -459,7 +459,18 @@ def runtime_up_arguments(
         return arguments
     runner = runner or subprocess.run
     try:
+        image_ids: dict[str, str] = {}
         for service in sorted(KMS_BOOTSTRAP_SERVICES):
+            image = config["services"][service]["image"]
+            if image not in image_ids:
+                resolved = runner(
+                    ["docker", "image", "inspect", "--format", "{{.Id}}", image],
+                    capture_output=True, text=True, check=False, timeout=30,
+                )
+                image_id = resolved.stdout.strip()
+                if resolved.returncode or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+                    raise ValueError("KMS bootstrap configured image cannot be resolved")
+                image_ids[image] = image_id
             selected = runner(
                 ["docker", "ps", "--all", "--no-trunc", "--quiet", "--filter",
                  f"label=com.docker.compose.project={project}", "--filter",
@@ -485,7 +496,8 @@ def runtime_up_arguments(
             if (row["Id"] != ids[0]
                     or labels.get("com.docker.compose.project") != project
                     or labels.get("com.docker.compose.service") != service
-                    or row["Config"]["Image"] != config["services"][service]["image"]
+                    or row["Config"]["Image"] != image
+                    or row["Image"] != image_ids[image]
                     or state.get("OOMKilled") is not False):
                 raise ValueError("KMS bootstrap identity differs from the exact project")
             if service == "openbao":
