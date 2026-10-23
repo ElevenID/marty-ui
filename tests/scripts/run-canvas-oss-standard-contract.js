@@ -200,18 +200,20 @@ class ObservationLedger {
 }
 
 function parseArgs(argv) {
-  const result = { observations: '', video: '' };
+  const result = { observations: '', video: '', functionalRerun:false };
   for (let index = 2; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--observations') result.observations = argv[++index] || '';
     else if (arg === '--video') result.video = argv[++index] || '';
+    else if (arg === '--functional-rerun' && !result.functionalRerun) result.functionalRerun = true;
     else fail('invalid_argument', `Unsupported argument: ${arg}`);
   }
   requireCondition(result.observations, 'observations_path_missing', '--observations is required.');
-  requireCondition(result.video, 'video_path_missing', '--video is required.');
+  requireCondition(result.functionalRerun || result.video, 'video_path_missing', '--video is required for recorded runs.');
   return {
     observations: path.resolve(result.observations),
-    video: path.resolve(result.video),
+    video: result.video ? path.resolve(result.video) : null,
+    functionalRerun:result.functionalRerun,
   };
 }
 
@@ -1933,7 +1935,9 @@ async function retireCanvasSetupFixtures(state, retirementConfirmed, oauthDiscon
   const { adminPage, canvasOrigin, accountId } = state;
   const findKey = key => findCanvasDeveloperKey(state, key);
   const selectKey = async key => {
-    await adminPage.goto(`${canvasOrigin}/accounts/${accountId}/developer_keys`, {
+    // Recovery sessions have not created the token that normally selects English.
+    // Pin only this browser session before using English accessible action names.
+    await adminPage.goto(`${canvasOrigin}/accounts/${accountId}/developer_keys?session_locale=en`, {
       waitUntil: 'domcontentloaded', timeout: DEFAULT_TIMEOUT_MS,
     });
     const row = adminPage.getByRole('row').filter({ has: adminPage.getByText(key.name, { exact: true }) });
@@ -2027,7 +2031,7 @@ async function main() {
       fixtures, templates, binding, pinnedBinding, externalAssignment, activityResults } = setup;
     recordedContext = await browser.newContext({
       viewport: { width: 1440, height: 900 },
-      recordVideo: { dir: path.dirname(args.video), size: { width: 1440, height: 900 } },
+      ...(!args.functionalRerun ? {recordVideo:{dir:path.dirname(args.video),size:{width:1440,height:900}}} : {}),
     });
     await copyCookies(learnerContext, recordedContext);
     recordedPage = await recordedContext.newPage();
@@ -2203,7 +2207,8 @@ async function main() {
     pass('canvas_oauth_authorization', 'A stock scoped Canvas API key connected through capability-derived OAuth and its token was remotely revoked on disconnect.');
 
     await showVideoStep(recordedPage, 'Portable Canvas contract complete', 'Unmodified Canvas, standard LTI Advantage, documented REST APIs, durable evidence, and external KMS issuance all passed.');
-    await finishRecordedVideo(recordedContext, recordedPage, args.video);
+    if (args.functionalRerun) await recordedContext.close();
+    else await finishRecordedVideo(recordedContext, recordedPage, args.video);
     recordedContext = null;
     recordedPage = null;
     videoWritten = true;
@@ -2225,7 +2230,8 @@ async function main() {
 
     if (recordedContext) {
       try {
-        await finishRecordedVideo(recordedContext, recordedPage, args.video);
+        if (args.functionalRerun) await recordedContext.close();
+        else await finishRecordedVideo(recordedContext, recordedPage, args.video);
         videoWritten = true;
       } catch {
         videoWritten = false;
@@ -2268,7 +2274,7 @@ async function main() {
     if (learnerContext) await learnerContext.close().catch(() => {});
     if (adminContext) await adminContext.close().catch(() => {});
 
-    if (!videoWritten && browser) {
+    if (!args.functionalRerun && !videoWritten && browser) {
       await createFallbackVideo(browser, args.video, failure ? `${failure.code}: ${failure.message}` : 'Video finalization failed.').catch(() => {});
     }
     if (browser) await browser.close().catch(() => {});
@@ -2283,6 +2289,7 @@ async function main() {
 }
 
 module.exports = {
+  parseArgs,
   loginCanvas,
   retireCanvasApplication,
   retireCanvasSetupFixtures,

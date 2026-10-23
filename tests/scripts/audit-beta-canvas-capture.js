@@ -17,23 +17,17 @@ function localOverlayBinding(env = process.env) {
   if (!filename) return null;
   assert.equal(filename, '/capture-prerequisites/native-overlay.json');
   assert.equal(env.RECORD_VIDEO, '0', 'Native overlay is restricted to functional reruns');
-  const bytes = fs.readFileSync(filename);
-  const digest = createHash('sha256').update(bytes).digest('hex');
-  assert.equal(digest, env.DEMO_LOCAL_NATIVE_OVERLAY_SHA256, 'Native overlay receipt changed');
-  const receipt = JSON.parse(bytes);
-  assert.equal(receipt.mode, 'EPHEMERAL_LOCAL_NATIVE_OVERLAY');
-  assert.equal(receipt.state, 'APPLIED_LOCAL_ONLY');
-  assert.equal(receipt.productionReleaseQualified, false);
-  assert.equal(receipt.imagesBuiltForCandidate, false);
-  assert.equal(receipt.imageSourceMarkerRemainsBaseline, true);
-  assert.match(receipt.sourceRevision, /^[a-f0-9]{40}$/);
-  assert.equal(receipt.rows?.length, 8);
-  for (const row of receipt.rows) {
-    assert.match(row.candidateSha256, /^[a-f0-9]{64}$/);
-    assert.equal(row.observedAfterSha256, row.candidateSha256);
-  }
-  return {nativeSourceRevision:receipt.sourceRevision, receiptSha256:digest,
-    baselineSourceIds:[...new Set(receipt.rows.map(row => row.imageSourceId))],
+  // The parent binds the entire recorder source and authenticates this helper
+  // through the existing live IPC handshake before local provenance is used.
+  // Reuse its shared role/receipt validator instead of maintaining a second
+  // eight-service contract here.
+  const helper = env.DEMO_EXECUTION_EVIDENCE_HELPER;
+  assert.ok(helper, 'Native overlay requires the bound recorder helper');
+  const {loadNativeRuntimeBinding} = require(path.join(path.dirname(helper), 'canvasNativeRuntime.js'));
+  const binding = loadNativeRuntimeBinding(filename, env.DEMO_LOCAL_NATIVE_OVERLAY_SHA256,
+    {functionalRerun:true});
+  return {nativeSourceRevision:binding.nativeSourceRevision, receiptSha256:binding.sha256,
+    baselineSourceIds:[binding.imageSourceId],
     releaseQualified:false, betaImageMarkersRemainBaseline:true};
 }
 
