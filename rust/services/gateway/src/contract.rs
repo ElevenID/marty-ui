@@ -228,7 +228,7 @@ impl GatewayContract {
         })?;
         table.add(RouteConfig {
             name: "internal:issuance-native:oid4vci-client-management".into(),
-            pattern: "/__gateway/issuance-native/v1/issuance/oid4vci-clients".into(),
+            pattern: OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH.into(),
             match_type: RouteMatchType::Exact,
             upstream_service: issuance_native::NATIVE_SERVICE.into(),
             methods: BTreeSet::from([HttpMethod::Put]),
@@ -542,12 +542,15 @@ pub fn route_for(
     table.find(&GatewayRequest::new(method, path, 0))
 }
 
+const OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH: &str =
+    "/__gateway/issuance-native/v1/issuance/oid4vci-clients";
+
 /// Preserve the legacy gateway's service credential boundary for direct
 /// issuance management and wallet routes while leaving browser/webhook Canvas
 /// protocol entry points credential-free.
 #[must_use]
 pub fn requires_issuance_service_auth(path: &str) -> bool {
-    route_ownership(path).service == "issuance"
+    (route_ownership(path).service == "issuance" || path == OID4VCI_CLIENT_MANAGEMENT_PROXY_PATH)
         && path != "/v1/issuance/authorize"
         && path != "/v1/passport/webhooks/personalization"
         && !CANVAS_PUBLIC.iter().any(|pattern| pattern.is_match(path))
