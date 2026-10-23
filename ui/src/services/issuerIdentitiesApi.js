@@ -21,12 +21,85 @@ export async function createIssuerIdentity(body) {
 }
 
 export async function listPublicIssuerIdentities(params = {}) {
-  return get(withQuery(BASE_PATH, buildDefinedQueryString({
-    organization_id: organization(params, 'loading issuer identities'),
+  const organizationId = organization(params, 'loading issuer identities');
+  const result = await get(withQuery(BASE_PATH, buildDefinedQueryString({
+    organization_id: organizationId,
     key_purpose: params?.key_purpose,
     credential_format: params?.credential_format,
     algorithm: params?.algorithm,
   })));
+  const seen = new Set();
+  if (!Array.isArray(result?.identities) || !result.identities.every((identity) => {
+    const valid = typeof identity?.issuer_did === 'string' && identity.issuer_did.startsWith('did:')
+      && ['key_purpose', 'credential_format', 'algorithm', 'status'].every((field) => typeof identity[field] === 'string' && identity[field].trim())
+      && (identity.organization_id == null || identity.organization_id === organizationId);
+    const key = JSON.stringify(['issuer_did', 'key_purpose', 'credential_format', 'algorithm'].map((field) => identity?.[field]));
+    if (!valid || seen.has(key)) return false;
+    seen.add(key); return true;
+  })) throw new Error('Issuer inventory returned invalid or ambiguous identity data.');
+  return { identities: result.identities.map(({ issuer_did, key_purpose, credential_format, algorithm, status }) => ({
+    issuer_did, key_purpose, credential_format, algorithm, status,
+  })) };
+}
+
+const PRIVATE_INSPECTION_FIELDS = new Set(['rsa_d', 'd', 'p', 'q', 'dp', 'dq', 'qi', 'oth', 'k', 'privatekeyjwk', 'privatekeymultibase',
+  'privatekeybase58', 'private_key', 'key_reference', 'auth_reference', 'auth_token', 'access_token', 'api_key', 'secret', 'secret_key',
+  'seed', 'password', 'credentials', 'credential_reference', 'signing_service_id', 'signing_key_reference', 'issuer_profile_id',
+  'kms_provider', 'kms_arn', 'kms_region', 'provider_config', 'service_id', 'client_secret', 'key_binding']);
+function assertPublicInspection(value, depth = 0) {
+  if (depth > 48) throw new Error('Identity inspection returned an invalid public document.');
+  if (!value || typeof value !== 'object') return;
+  for (const [key, child] of Object.entries(value)) {
+    if (PRIVATE_INSPECTION_FIELDS.has(key.toLowerCase())) throw new Error('Identity inspection returned private custody data.');
+    assertPublicInspection(child, depth + 1);
+  }
+}
+
+/** Inspect a public tuple from the current organization inventory; no private selector is accepted. */
+export async function inspectIssuerIdentity(params = {}) {
+  const organizationId = organization(params, 'inspecting issuer identities');
+  const fields = ['issuer_did', 'key_purpose', 'credential_format', 'algorithm'];
+  if (!fields.every((field) => typeof params[field] === 'string' && params[field].trim())) {
+    throw new Error('Select a complete issuer identity from the organization inventory.');
+  }
+  const result = await get(withQuery(`${BASE_PATH}/inspection`, buildDefinedQueryString({
+    organization_id: organizationId, ...Object.fromEntries(fields.map((field) => [field, params[field]])),
+  })));
+  assertPublicInspection(result);
+  const methodsValid = (methods) => Array.isArray(methods) && methods.every((method) =>
+    ['id', 'type', 'controller'].every((field) => typeof method?.[field] === 'string' && method[field])
+    && typeof method.assertion_authorized === 'boolean' && Array.isArray(method.x5c)
+    && method.x5c.every((certificate) => typeof certificate === 'string'));
+  const documentValid = (document) => document && document.id === params.issuer_did;
+  const timestampValid = (value) => value == null || (typeof value === 'string'
+    && /^\d{4}-\d\d-\d\dT/.test(value) && Number.isFinite(Date.parse(value)));
+  if (result?.organization_id !== organizationId || result?.identity?.status !== 'active'
+    || !fields.every((field) => result?.identity?.[field] === params[field])
+    || !['available', 'not_published'].includes(result?.registry?.status) || !documentValid(result.registry.document)
+    || !['scoped_document', 'legacy_projection', 'empty_fallback'].includes(result.registry.source)
+    || !methodsValid(result.registry.verification_methods)
+    || !['matched', 'mismatch', 'unavailable'].includes(result?.managed_signer?.status)
+    || typeof result.managed_signer.assertion_authorized !== 'boolean'
+    || !['matched', 'stale', 'unverified', 'unavailable', 'invalid', 'unsupported'].includes(result?.public_resolution?.status)
+    || (result.public_resolution.document != null && !documentValid(result.public_resolution.document))
+    || !methodsValid(result.public_resolution.verification_methods)
+    || typeof result.public_resolution.assertion_authorized !== 'boolean'
+    || !['not_expired', 'expired', 'invalid', 'absent'].includes(result?.certificate?.status)
+    || !Array.isArray(result.certificate.x5c) || !result.certificate.x5c.every((certificate) => typeof certificate === 'string')
+    || typeof result.assertion_ready !== 'boolean'
+    || typeof result.inspected_at !== 'string' || typeof result.managed_signer.checked_at !== 'string'
+    || ![result.inspected_at, result.identity_created_at, result.identity_updated_at, result.registry.updated_at,
+      result.managed_signer.checked_at, result.public_resolution.checked_at, result.public_resolution.retrieved_at, result.certificate.expires_at].every(timestampValid)
+    || (result.public_resolution.status === 'matched' && (!result.public_resolution.document || typeof result.public_resolution.retrieved_at !== 'string'))
+    || (result.assertion_ready && !(result.registry.status === 'available' && result.managed_signer.status === 'matched' && result.public_resolution.status === 'matched'
+      && result.managed_signer.assertion_authorized && result.public_resolution.assertion_authorized))) {
+    throw new Error('Identity inspection returned invalid organization or observation data.');
+  }
+  if (result.canonical_document_url != null) {
+    const url = new URL(result.canonical_document_url);
+    if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Identity inspection returned an invalid publication URL.');
+  }
+  return result;
 }
 
 export async function getIssuerIdentityCapabilities(params = {}) {
@@ -89,4 +162,4 @@ export async function getTemplateIssuerOptions(params = {}) {
   };
 }
 
-export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities, getTemplateIssuerOptions };
+export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities, getTemplateIssuerOptions, inspectIssuerIdentity };

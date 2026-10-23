@@ -1,9 +1,39 @@
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
-import { createIssuerIdentity, getIssuerIdentityCapabilities, getTemplateIssuerOptions } from '../issuerIdentitiesApi';
+import { createIssuerIdentity, getIssuerIdentityCapabilities, getTemplateIssuerOptions, listPublicIssuerIdentities, inspectIssuerIdentity } from '../issuerIdentitiesApi';
+import inspection from '../../../../contracts/issuer-identity-inspection-example.json';
 
 describe('public issuer identity client', () => {
+  it('lists API-advertised formats without a browser catalog or private coordinates', async () => {
+    let identities = [{ ...inspection.identity, credential_format: 'FUTURE_NATIVE_FORMAT', signing_service_id: 'private-service' }];
+    server.use(http.get('*/v1/signing-keys/issuer-identities', ({ request }) => {
+      expect([...new URL(request.url).searchParams.keys()]).toEqual(['organization_id']);
+      return HttpResponse.json({ identities });
+    }));
+    expect(await listPublicIssuerIdentities({ organization_id: 'org-a' })).toEqual({ identities: [{ ...inspection.identity, credential_format: 'FUTURE_NATIVE_FORMAT' }] });
+    identities = [identities[0], identities[0]];
+    await expect(listPublicIssuerIdentities({ organization_id: 'org-a' })).rejects.toThrow(/ambiguous/);
+  });
+  it('inspects only the public tuple and rejects wrong-scope, private or contradictory observations', async () => {
+    let result = structuredClone(inspection) as Record<string, any>;
+    const tuple = { organization_id: 'org-a', ...inspection.identity };
+    server.use(http.get('*/v1/signing-keys/issuer-identities/inspection', ({ request }) => {
+      const query = new URL(request.url).searchParams;
+      expect([...query.keys()]).toEqual(['organization_id', 'issuer_did', 'key_purpose', 'credential_format', 'algorithm']);
+      return HttpResponse.json(result);
+    }));
+    expect(await inspectIssuerIdentity({ ...tuple, issuer_profile_id: 'private' })).toEqual(inspection);
+    for (const mutate of [
+      (value: Record<string, any>) => { value.organization_id = 'other'; },
+      (value: Record<string, any>) => { value.registry.document.verificationMethod[0].publicKeyJwk.d = 'private'; },
+      (value: Record<string, any>) => { value.public_resolution.status = 'unavailable'; },
+      (value: Record<string, any>) => { value.canonical_document_url = 'javascript:alert(1)'; },
+    ]) {
+      result = structuredClone(inspection); mutate(result);
+      await expect(inspectIssuerIdentity(tuple)).rejects.toThrow();
+    }
+  });
   it('requires an explicit organization before discovery or creation', async () => {
     await expect(getIssuerIdentityCapabilities()).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
     await expect(createIssuerIdentity({ issuer_did: 'did:example:issuer' })).rejects.toMatchObject({ code: 'ORG_REQUIRED' });

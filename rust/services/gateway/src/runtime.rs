@@ -8285,6 +8285,54 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn issuer_inspection_is_read_only_and_requires_tenant_view_authority() {
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (org, authenticated, allowed, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if allowed && org == "org-1" {
+                Arc::get_mut(&mut state).unwrap().memberships =
+                    Arc::new(ScriptedMembership("allowed"));
+            }
+            if !allowed {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(ActorIdentityProvider);
+            }
+            let mut request = Request::builder().uri(format!("/v1/signing-keys/issuer-identities/inspection?organization_id={org}&issuer_did=did%3Aweb%3Aissuer.example%3Aorgs%3Aacme&key_purpose=vc_jwt_issuer&credential_format=SD_JWT_VC&algorithm=ES256"));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "Denied inspection must not reach the signer"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(requests[0].1.method, HttpMethod::Get);
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        assert_eq!(
+            requests[0].1.query["issuer_did"],
+            vec!["did:web:issuer.example:orgs:acme"]
+        );
+        let openapi = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            openapi["paths"]["/v1/signing-keys/issuer-identities/inspection"]["get"]["responses"]
+                ["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_inspection"
+        );
+    }
+
     #[test]
     fn public_service_signing_receives_dedicated_key_only_after_gateway_authorization() {
         let state = runtime_state();

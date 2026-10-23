@@ -24,6 +24,14 @@ Choose a complete `key_purpose` / `credential_format` / `algorithm` tuple from t
 
 Before creating a credential template, call `POST /v1/credential-templates/issuer-options` with your `organization_id`, active `compliance_profile_id`, and optional `credential_payload_format` and `supported_formats`. This operation requires the same organization permission as template creation. It returns the derived format, issuance protocol, required VCT/doctype/lifecycle fields and compatible public issuer DIDs. Every declared format must resolve unambiguously to its intended signing purpose. Ambiguous DIDs appear only in `rejected_issuers`; no algorithm or private key/profile selector can resolve that ambiguity through this API. Unavailable discovery blocks selection. Template creation repeats these checks, so refresh options if the registry or compliance profile changes. Compatibility discovery does not establish provider health or DID publication.
 
+Inspect an exact public tuple returned by `GET /v1/signing-keys/issuer-identities?organization_id=ORG_ID` using `keys:read` (or `keys:write`):
+
+```powershell
+python examples/protocol-consumer/client.py --base-url https://your-api.example --organization-id ORG_ID inspect --issuer-did did:web:your-issuer.example:orgs:your-org --purpose vc_jwt_issuer --format SD_JWT_VC --algorithm ES256
+```
+
+The response separates organization registry material, current managed-signer matching and fresh public HTTPS resolution. Use its `canonical_document_url` to view publication. Stored documents may be a labeled legacy projection; their presence does not prove public reachability. `assertion_ready` requires matching stored/public keys and assertion authorization; it does not qualify credential issuance, certificate trust or interoperability. Failed public resolution preserves the stored document for inspection. Refresh after publication or key rotation. Certificate state describes expiry and public-key matching, without establishing chain trust. Only the configured publication authority is probed, with bounded timeouts and no internal resolution fallback or private selectors.
+
 Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
 
 ```powershell

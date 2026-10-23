@@ -1,4 +1,4 @@
-"""Executable public Marty VC-API examples; standard library only."""
+"""Executable public Marty DID inspection and VC-API examples; standard library only."""
 
 from __future__ import annotations
 
@@ -40,6 +40,13 @@ def main() -> int:
     )
     verify.add_argument("--policy-id", required=True)
     verify.add_argument("--credential", required=True, type=Path)
+    inspect = commands.add_parser(
+        "inspect", help="Inspect public DID publication and current signer matching"
+    )
+    inspect.add_argument("--issuer-did", required=True)
+    inspect.add_argument("--purpose", required=True)
+    inspect.add_argument("--format", required=True)
+    inspect.add_argument("--algorithm", required=True)
     args = parser.parse_args()
     parsed = urlsplit(args.base_url)
     if (
@@ -58,7 +65,7 @@ def main() -> int:
     path = "/openapi.json"
     if args.command != "schema":
         if not args.organization_id or not args.organization_id.strip():
-            parser.error("organization-id is required for issue and verify")
+            parser.error("organization-id is required for authenticated operations")
         key = os.environ.get("MARTY_API_KEY")
         bearer = os.environ.get("MARTY_BEARER_TOKEN")
         if bool(key) == bool(bearer):
@@ -66,12 +73,23 @@ def main() -> int:
         headers.update(
             {"X-API-Key": key} if key else {"Authorization": f"Bearer {bearer}"}
         )
-        try:
-            credential = json.loads(args.credential.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            parser.error("credential must be a readable JSON file")
+        if args.command != "inspect":
+            try:
+                credential = json.loads(args.credential.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                parser.error("credential must be a readable JSON file")
         query = {"organization_id": args.organization_id}
-        if args.command == "issue":
+        if args.command == "inspect":
+            if not args.issuer_did.startswith("did:"):
+                parser.error("inspection requires a public issuer DID")
+            query.update(
+                issuer_did=args.issuer_did,
+                key_purpose=args.purpose,
+                credential_format=args.format,
+                algorithm=args.algorithm,
+            )
+            path = "/v1/signing-keys/issuer-identities/inspection"
+        elif args.command == "issue":
             if not args.issuer_did.startswith("did:") or not isinstance(
                 credential, dict
             ):

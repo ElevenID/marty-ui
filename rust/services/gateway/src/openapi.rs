@@ -25,6 +25,10 @@ pub fn schemas() -> Value {
         "../../../../contracts/template-issuer-options-response.json"
     ))
     .expect("template issuer options response schema");
+    schemas["runtime__issuer_identity_inspection"] = serde_json::from_str(include_str!(
+        "../../../../contracts/issuer-identity-inspection-response.json"
+    ))
+    .expect("public identity inspection schema");
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -42,6 +46,30 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Get && path == "/v1/signing-keys/issuer-identities/inspection" {
+        operation["summary"] = json!("Inspect DID publication and managed signer matching");
+        operation["description"] = json!("Requires signing-key:view in the selected organization. Read-only current registry, managed signer and public HTTPS observations, including assertion authorization. Public resolution uses the deployment authority and no internal fallback. Assertion readiness does not qualify credential issuance, certificate trust or interoperability.");
+        operation["parameters"] = json!(["organization_id", "issuer_did", "key_purpose", "credential_format", "algorithm"].map(|name| query_parameter(name, "Exact public identity tuple in the authorized organization; no private custody selector.")));
+        for (code, description) in [
+            (400, "Missing, malformed or unsupported query fields."),
+            (401, "Authentication required."),
+            (
+                403,
+                "Organization membership and signing-key:view permission required.",
+            ),
+            (404, "No active identity matches this public tuple."),
+            (409, "Identity tuple is ambiguous."),
+            (422, "Invalid public identity tuple."),
+            (502, "Stored DID document is malformed."),
+            (503, "Identity registry or document storage is unavailable."),
+        ] {
+            operation["responses"][code.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__issuer_identity_inspection"}}});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if method == Post && path == "/v1/credential-templates/issuer-options" {
         operation["summary"] = json!("Discover compatible, unambiguous template issuer DIDs");
         operation["description"] = json!("Requires credential-template:create in the selected organization. Validates an active compliance profile and every declared credential format; no algorithm or private binding selector is accepted. Template creation repeats these checks.");

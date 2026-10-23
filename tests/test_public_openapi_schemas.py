@@ -136,3 +136,40 @@ def test_template_issuer_options_extensions_enforce_nested_public_boundaries():
         cursor[key] = invalid
         with pytest.raises(jsonschema.ValidationError):
             response.validate(mutated)
+
+
+def test_inspection_component_example_and_recursive_public_document_boundaries():
+    name = "runtime__issuer_identity_inspection"
+    component = json.loads(
+        (ROOT / "contracts/issuer-identity-inspection-response.json").read_text()
+    )
+    schema = {
+        "$ref": f"#/components/schemas/{name}",
+        "components": {"schemas": {name: component}},
+    }
+    validator = jsonschema.Draft202012Validator(
+        schema, format_checker=jsonschema.FormatChecker()
+    )
+    value = json.loads(
+        (ROOT / "contracts/issuer-identity-inspection-example.json").read_text()
+    )
+    validator.validate(value)
+    for path, field, invalid in [
+        ([], "issuer_profile_id", "private"),
+        (
+            ["registry", "document", "verificationMethod", 0, "publicKeyJwk"],
+            "d",
+            "private",
+        ),
+        (["public_resolution", "document"], "service_id", "private"),
+        (["managed_signer", "public_jwk"], "key_reference", "private"),
+        (["registry", "verification_methods", 0], "assertion_authorized", "true"),
+        (["public_resolution"], "checked_at", "not-a-timestamp"),
+    ]:
+        mutated = deepcopy(value)
+        target = mutated
+        for segment in path:
+            target = target[segment]
+        target[field] = invalid
+        with pytest.raises(jsonschema.ValidationError):
+            validator.validate(mutated)

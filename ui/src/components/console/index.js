@@ -37,6 +37,7 @@ export { default as DeployPage } from './deploy/DeployPage';
 export { default as DeploymentProfilesPage } from './deploy/DeploymentsPage';
 export { default as ApiKeysPage } from './deploy/ApiKeysPage';
 export { default as DidIdentitiesPage } from './deploy/DidIdentitiesPage';
+export { default as DidIdentityDetailPage } from './deploy/DidIdentityDetailPage';
 export { default as SigningKeysPage } from './deploy/SigningKeysPage';
 export { default as CanvasIntegrationsPage } from './deploy/CanvasIntegrationsPage';
 export { default as DeliveryDestinationsPage } from './connect/DeliveryDestinationsPage';

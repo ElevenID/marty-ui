@@ -41,6 +41,7 @@ import {
   DeploymentProfilesPage,
   ApiKeysPage,
   DidIdentitiesPage,
+  DidIdentityDetailPage,
   CanvasIntegrationsPage,
   DeliveryDestinationsPage,
   LanesDevicesPage,
@@ -180,6 +181,7 @@ function ConsoleRoutes() {
         <Route path="deploy/profiles/new" element={<DeploymentProfileWizard />} />
         <Route path="deploy/api-keys" element={<Navigate to="/console/org/api-keys" replace />} />
         <Route path="deploy/issuer-identity" element={<DidIdentitiesPage />} />
+        <Route path="deploy/issuer-identity/inspect" element={<DidIdentityDetailPage />} />
         <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
         <Route path="connect/delivery-destinations" element={<DeliveryDestinationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />

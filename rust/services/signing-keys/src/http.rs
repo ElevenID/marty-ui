@@ -1,4 +1,5 @@
 use crate::certificate_csr::{self, CsrSubject};
+mod identity_inspection;
 use crate::certificate_issuance::{self, VerifiedDscSubject};
 use crate::compat::{
     CompatibilityError, IssuerContextRequest, IssuerDidSignRequest, ProfileIdentityRequest,
@@ -336,6 +337,10 @@ pub fn router_with_all_keys_and_grants(
         .route(
             "/v1/signing-keys/issuer-identities/resolve",
             post(resolve_public_issuer_identity),
+        )
+        .route(
+            "/v1/signing-keys/issuer-identities/inspection",
+            get(identity_inspection::inspect),
         )
         .route(
             "/v1/signing-keys/issuer-identities/didcomm-key-agreement",
@@ -1670,16 +1675,38 @@ fn public_did_document(document: Value) -> Result<Value, PublicSigningError> {
                     "secret",
                     "secret_key",
                     "seed",
+                    "password",
+                    "credentials",
+                    "credential_reference",
+                    "signing_service_id",
+                    "signing_key_reference",
+                    "issuer_profile_id",
+                    "kms_provider",
+                    "kms_arn",
+                    "kms_region",
+                    "provider_config",
+                    "service_id",
+                    "client_secret",
+                    "key_binding",
                 ];
                 let mut public = serde_json::Map::new();
                 for (name, nested) in fields {
-                    if CUSTODY_FIELDS.contains(&name.as_str()) {
+                    if CUSTODY_FIELDS
+                        .iter()
+                        .any(|field| field.eq_ignore_ascii_case(name))
+                    {
                         continue;
                     }
                     public.insert(
                         name.clone(),
                         if name == "publicKeyJwk" {
-                            public_jwk_projection(nested)?
+                            let mut jwk = public_jwk_projection(nested)?;
+                            if let Some(fields) = jwk.as_object_mut() {
+                                for field in ["service_id", "name", "status"] {
+                                    fields.remove(field);
+                                }
+                            }
+                            jwk
                         } else {
                             scrub(nested)?
                         },
@@ -1933,7 +1960,18 @@ async fn list_public_issuer_identities(
             Ok(identities) => Json(json!({"identities": identities})).into_response(),
             Err(error) => error.into_response(),
         },
-        Err(error) => public_error(StatusCode::UNPROCESSABLE_ENTITY, &error.to_string()),
+        Err(profiles::ProfileError::Storage(_)) => public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer identity storage is unavailable.",
+        ),
+        Err(profiles::ProfileError::Corrupt(_)) => public_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Issuer identity storage is malformed.",
+        ),
+        Err(_) => public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Issuer identity filters are invalid.",
+        ),
     }
 }
 
@@ -8185,6 +8223,17 @@ async fn openapi() -> Json<serde_json::Value> {
                     "503": {"description":"Issuer capability discovery unavailable"}
                 }}
             },
+            "/v1/signing-keys/issuer-identities/inspection": {
+                "get": {"summary":"Inspect public DID publication and managed signer matching", "parameters": identity_inspection::parameters(), "responses": {
+                    "200":{"description":"Separate current registry, KMS and public HTTPS observations; unavailable checks never imply readiness", "content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__issuer_identity_inspection"}}}},
+                    "400":{"description":"Missing, malformed or unsupported query fields"},
+                    "404":{"description":"No active identity matches the authorized organization and public tuple"},
+                    "409":{"description":"Identity tuple is ambiguous"},
+                    "422":{"description":"Identity tuple is invalid"},
+                    "502":{"description":"Stored DID document is malformed"},
+                    "503":{"description":"Identity registry or document storage is unavailable"}
+                }}
+            },
             "/v1/signing-keys/issuer-identities/csca-certificate": {
                 "put": {"summary": "Enroll Public CSCA Certificate for Managed Issuer Identity", "responses": {"200": {"description": "Tenant-scoped public trust anchor enrolled without exposing key coordinates"}}}
             },
@@ -8263,7 +8312,8 @@ async fn openapi() -> Json<serde_json::Value> {
             "/v1/signing-keys/service-status": {"get": {"summary": "Signing Keys Service Extraction Status", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/purposes": {"get": {"summary": "List Available Key Purposes", "responses": {"200": {"description": "Successful Response"}}}},
             "/v1/signing-keys/config/service-capabilities": {"get": {"summary": "List Provider Capability Metadata", "responses": {"200": {"description": "Successful Response"}}}}
-        }
+        },
+        "components":{"schemas":{"runtime__issuer_identity_inspection": serde_json::from_str::<Value>(include_str!("../../../../contracts/issuer-identity-inspection-response.json")).expect("inspection schema")}}
     }))
 }
 
@@ -8666,7 +8716,7 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared.len(), 39, "review route additions explicitly");
+        assert_eq!(declared.len(), 41, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
         let unknown = app

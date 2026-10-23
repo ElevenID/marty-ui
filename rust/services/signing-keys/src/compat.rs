@@ -1196,6 +1196,16 @@ impl SigningCompatibilityService {
         organization_id: &str,
         issuer_did: &str,
     ) -> Result<Value, CompatibilityError> {
+        self.load_identity_document_with_source(organization_id, issuer_did)
+            .await
+            .map(|(document, _)| document)
+    }
+
+    pub(crate) async fn load_identity_document_with_source(
+        &self,
+        organization_id: &str,
+        issuer_did: &str,
+    ) -> Result<(Value, &'static str), CompatibilityError> {
         let scoped = self
             .documents
             .load_did(
@@ -1211,7 +1221,7 @@ impl SigningCompatibilityService {
             if scoped.document.get("id").and_then(Value::as_str) != Some(issuer_did) {
                 return Err(CompatibilityError::Unavailable);
             }
-            return Ok(scoped.document);
+            return Ok((scoped.document, "scoped_document"));
         }
         let legacy = self
             .documents
@@ -1225,9 +1235,12 @@ impl SigningCompatibilityService {
             .await
             .map_err(|_| CompatibilityError::Unavailable)?;
         Ok(if legacy.found {
-            retarget_document(&legacy.document, issuer_did)
+            (
+                retarget_document(&legacy.document, issuer_did),
+                "legacy_projection",
+            )
         } else {
-            empty_did_document(issuer_did)
+            (empty_did_document(issuer_did), "empty_fallback")
         })
     }
 }

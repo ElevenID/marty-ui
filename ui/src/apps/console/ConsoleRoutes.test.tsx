@@ -95,6 +95,7 @@ vi.mock('../../components/console', () => ({
   DeploymentProfilesPage: () => <div data-testid="deployment-profiles-page" />,
   ApiKeysPage: () => <div data-testid="api-keys-page" />,
   DidIdentitiesPage: () => <div data-testid="did-identities-page" />,
+  DidIdentityDetailPage: () => <div data-testid="did-identity-detail-page" />,
   CanvasIntegrationsPage: () => <div data-testid="canvas-integrations-page" />,
   DeliveryDestinationsPage: () => <div data-testid="delivery-destinations-page" />,
   LanesDevicesPage: () => <div data-testid="lanes-devices-page" />,

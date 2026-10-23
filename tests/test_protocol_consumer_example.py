@@ -24,7 +24,14 @@ def api():
             requests.append((self.path, dict(self.headers), None))
             self.send_response(200)
             self.end_headers()
-            self.wfile.write(b'{"openapi":"3.1.0"}')
+            if urlsplit(self.path).path.endswith("/issuer-identities/inspection"):
+                example = (
+                    SCRIPT.parents[2]
+                    / "contracts/issuer-identity-inspection-example.json"
+                )
+                self.wfile.write(example.read_bytes())
+            else:
+                self.wfile.write(b'{"openapi":"3.1.0"}')
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -62,6 +69,40 @@ def run(base, *args):
         env=env,
         capture_output=True,
         text=True,
+    )
+
+
+def test_example_inspects_an_exact_public_tuple_with_read_authority(api):
+    base, requests = api
+    result = run(
+        base,
+        "--organization-id",
+        "org-a",
+        "inspect",
+        "--issuer-did",
+        "did:web:issuer.example:orgs:acme",
+        "--purpose",
+        "vc_jwt_issuer",
+        "--format",
+        "SD_JWT_VC",
+        "--algorithm",
+        "ES256",
+    )
+    assert result.returncode == 0, result.stderr
+    path, headers, body = requests[-1]
+    assert urlsplit(path).path == "/v1/signing-keys/issuer-identities/inspection"
+    assert parse_qs(urlsplit(path).query) == {
+        "organization_id": ["org-a"],
+        "issuer_did": ["did:web:issuer.example:orgs:acme"],
+        "key_purpose": ["vc_jwt_issuer"],
+        "credential_format": ["SD_JWT_VC"],
+        "algorithm": ["ES256"],
+    }
+    assert headers["X-Api-Key"] == "example-test-credential"
+    assert body is None
+    assert (
+        json.loads(result.stdout)["canonical_document_url"]
+        == "https://issuer.example/orgs/acme/did.json"
     )
 
 
