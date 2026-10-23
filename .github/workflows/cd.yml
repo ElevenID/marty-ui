@@ -1996,10 +1996,10 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends musl-tools
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
           source scripts/ci/rust_contract_execution.sh
           run_timed deployment_catalog_release cargo test --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog
-          cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --release --target "$TARGET" --manifest-path rust/Cargo.toml \
             -p marty-deployment-catalog --bin marty-deploy
           asset="marty-deploy-linux-$ARCH"
           cp "rust/target/$TARGET/release/marty-deploy" "$asset"

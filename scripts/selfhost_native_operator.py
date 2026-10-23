@@ -57,7 +57,9 @@ def operator_command(root: Path, *args: str) -> list[str]:
 
 
 def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
-    timeout = 10 if os.environ.get("MARTY_DEPLOY_BIN") and args[1:2] != ("check-snapshot",) else 300
+    timeout = None if args[1:2] == ("export-snapshot",) else 300
+    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",)):
+        timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,
                             capture_output=True, check=False, timeout=timeout)
     if result.returncode:

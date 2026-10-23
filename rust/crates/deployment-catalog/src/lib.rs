@@ -1,4 +1,4 @@
-//! Read-only deployment metadata shared by operator commands and checks.
+//! Deployment metadata and native KMS operator commands.
 
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -663,3 +663,4 @@ mod tests {
 }
 
 pub mod operator;
+pub mod snapshot;

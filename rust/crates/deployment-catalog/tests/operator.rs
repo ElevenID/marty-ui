@@ -68,3 +68,29 @@ fn public_certificate_conversion_rejects_private_or_malformed_material() {
         assert!(public_spki(input, false).is_err());
     }
 }
+
+#[test]
+fn snapshot_endpoint_is_explicit_local_https_only() {
+    use marty_deployment_catalog::snapshot::origin;
+    for value in [
+        "https://127.0.0.1:8200",
+        "https://localhost:443/",
+        "https://[::1]:18200",
+    ] {
+        assert!(origin(value).is_ok(), "{value}");
+    }
+    for value in [
+        "http://127.0.0.1:8200",
+        "https://example.com:8200",
+        "https://localhost",
+        "https://127.0.0.2:8200",
+        "https://localhost:0",
+        "https://localhost:8200///",
+        "https://localhost:8200/path",
+        "https://user@localhost:8200",
+        "https://localhost:8200?x=1",
+        "https://localhost:8200#x",
+    ] {
+        assert!(origin(value).is_err(), "{value}");
+    }
+}

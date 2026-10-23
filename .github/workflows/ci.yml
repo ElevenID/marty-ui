@@ -2121,6 +2121,61 @@ jobs:
           export MARTY_RUST_CI_REDIS_IMAGE=redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
             down --volumes --remove-orphans
+  test-native-operator:
+    name: Native KMS Operator (${{ matrix.arch }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+            elf_machine: 'Advanced Micro Devices X86-64'
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+            elf_machine: AArch64
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      TARGET: ${{ matrix.target }}
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+      - name: Exercise the static native operator against real HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
+          MARTY_DEPLOY_SOURCE_SHA="$(git rev-parse HEAD)"
+          export MARTY_DEPLOY_SOURCE_SHA
+          export MARTY_DEPLOY_RELEASE_TAG=v0.0.0
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --target "$TARGET" \
+            --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
+          export MARTY_DEPLOY_BIN="$GITHUB_WORKSPACE/rust/target/$TARGET/debug/marty-deploy"
+          readelf -h "$MARTY_DEPLOY_BIN" | grep -F "$ELF_MACHINE"
+          ! readelf -l "$MARTY_DEPLOY_BIN" | grep -q INTERP
+          MARTY_DEPLOY_BIN_SHA256="$(sha256sum "$MARTY_DEPLOY_BIN" | cut -d ' ' -f 1)"
+          export MARTY_DEPLOY_BIN_SHA256
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest -q tests/test_export_selfhost_openbao.py
+
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes
@@ -3162,7 +3217,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -3190,6 +3245,7 @@ jobs:
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
       OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
+      NATIVE_OPERATOR_RESULT: ${{ needs.test-native-operator.result }}
       RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
       RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
       PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
@@ -3205,7 +3261,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 17 ]]
+          [[ "${#results[@]}" -eq 18 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3266,6 +3322,7 @@ jobs:
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
             require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"
+            require_selected test-native-operator "$NATIVE_OPERATOR_RESULT" "$RUST_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
             require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"

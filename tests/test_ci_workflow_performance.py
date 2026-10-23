@@ -1476,6 +1476,7 @@ def test_pull_request_classifier_is_conservative_and_merge_queue_is_complete() -
         "test-rust-feature-probe",
         "test-rust-services",
         "test-openbao-didcomm-plugin",
+        "test-native-operator",
         "rust-lint-policy",
         "test-rust-service-images",
         "public-protocol-contract",
@@ -1523,6 +1524,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         "python": {"test-services"},
         "rust": {
             "test-rust-services",
+            "test-native-operator",
             "rust-lint-policy",
             "rust-supply-chain",
         },
@@ -1632,7 +1634,7 @@ def test_ci_gate_accepts_only_planned_pr_skips_and_all_successful_merge_groups()
         environment.update({key: results[name] for name, key in result_env.items()})
         values = [results[name] for name in gate["needs"]]
         environment["CI_LANE_RESULTS"] = " ".join(values[:result_count])
-        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or 17)
+        assert len(environment["CI_LANE_RESULTS"].split()) == (result_count or len(gate["needs"]))
         script = gate["steps"][0]["run"].replace("${{ github.event_name }}", event)
         return subprocess.run(
             [bash, "-c", script],

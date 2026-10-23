@@ -21,6 +21,25 @@ impl OpenBaoHttp {
         ca_file: Option<&Path>,
         timeout: Duration,
     ) -> Result<Self, String> {
+        Self::build(origin, ca_file, timeout, false)
+    }
+
+    /// A long download may continue while data arrives; each read and the
+    /// connection remain bounded. All HTTPS, CA, redirect and proxy rules apply.
+    pub fn connect_with_read_timeout(
+        origin: &str,
+        ca_file: Option<&Path>,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::build(origin, ca_file, timeout, true)
+    }
+
+    fn build(
+        origin: &str,
+        ca_file: Option<&Path>,
+        timeout: Duration,
+        idle: bool,
+    ) -> Result<Self, String> {
         let url = Url::parse(origin).map_err(|_| "OpenBao origin is invalid")?;
         if url.scheme() != "https"
             || url.host_str().is_none()
@@ -37,8 +56,12 @@ impl OpenBaoHttp {
         let mut builder = Client::builder()
             .https_only(true)
             .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout);
+            .redirect(reqwest::redirect::Policy::none());
+        builder = if idle {
+            builder.connect_timeout(timeout).read_timeout(timeout)
+        } else {
+            builder.timeout(timeout)
+        };
         if let Some(path) = ca_file {
             let mut pem = Vec::new();
             File::open(path)
@@ -90,8 +113,18 @@ mod tests {
             "https://openbao:8200/",
         ] {
             assert!(OpenBaoHttp::connect(origin, None, Duration::from_secs(5)).is_err());
+            assert!(
+                OpenBaoHttp::connect_with_read_timeout(origin, None, Duration::from_secs(5))
+                    .is_err()
+            );
         }
         assert!(OpenBaoHttp::connect("https://openbao:8200", None, Duration::ZERO).is_err());
+        assert!(OpenBaoHttp::connect_with_read_timeout(
+            "https://openbao:8200",
+            None,
+            Duration::ZERO
+        )
+        .is_err());
         assert!(OpenBaoHttp::connect("https://openbao:8200", None, Duration::from_secs(5)).is_ok());
     }
 }
