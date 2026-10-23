@@ -263,14 +263,18 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
-            Some("public-spki" | "certificate-spki") if args.len() == 2 => {
+            Some("public-spki" | "certificate-spki" | "ed25519-spki") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()
                     .take(64 * 1024 + 1)
                     .read_to_end(&mut input)
                     .map_err(|_| REFUSAL.to_owned())?;
-                let der = operator::public_spki(&input, args[1] == "certificate-spki")
-                    .map_err(str::to_owned)?;
+                let der = if args[1] == "ed25519-spki" {
+                    operator::ed25519_spki(std::str::from_utf8(&input).map_err(|_| REFUSAL)?)
+                } else {
+                    operator::public_spki(&input, args[1] == "certificate-spki")
+                }
+                .map_err(str::to_owned)?;
                 std::io::stdout().write_all(&der).map_err(|_| REFUSAL)
             }
             Some("approle-policy" | "approle-login" | "approle-bootstrap" | "approle-mint") => {

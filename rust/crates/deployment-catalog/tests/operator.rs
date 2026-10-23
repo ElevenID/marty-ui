@@ -1,7 +1,30 @@
-use marty_deployment_catalog::operator::{check_snapshot, public_spki};
+use marty_deployment_catalog::operator::{check_snapshot, ed25519_spki, public_spki};
 use sha2::{Digest, Sha256};
 use std::io::{Cursor, Write};
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+#[test]
+fn openbao_ed25519_requires_canonical_public_bytes() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let encoded = "V4R5DrcNEOahL046jfk/QYO+hD44DCZ/LMzSHqcMIrM=";
+    let der = ed25519_spki(encoded).unwrap();
+    assert_eq!(
+        &der[..12],
+        &[0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00]
+    );
+    assert_eq!(&der[12..], STANDARD.decode(encoded).unwrap());
+    for invalid in [
+        "".to_owned(),
+        "not base64".to_owned(),
+        encoded.replace("M=", "N="),
+        encoded.trim_end_matches('=').to_owned(),
+        format!("{encoded}\n"),
+        STANDARD.encode([0u8; 31]),
+        STANDARD.encode([0u8; 33]),
+    ] {
+        assert!(ed25519_spki(&invalid).is_err());
+    }
+}
 
 fn archive(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));

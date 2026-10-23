@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import hashlib
 import os
+import base64
 
 import pytest
 
@@ -43,6 +44,11 @@ def test_native_spki_matches_openssl_for_supported_operator_keys(tmp_path: Path,
     expected = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "DER"],
                               input=public, capture_output=True, check=True).stdout
     assert operator_bytes(ROOT, "operator", "public-spki", input=public) == expected
+    if kind == "ED25519":
+        from scripts.selfhost_openbao_client import ed25519_public_pem
+        encoded = base64.b64encode(expected[-32:]).decode("ascii")
+        assert operator_bytes(ROOT, "operator", "ed25519-spki", input=encoded.encode()) == expected
+        assert ed25519_public_pem(encoded).encode() == public.replace(b"\r\n", b"\n")
 
 
 def test_native_certificate_spki_matches_openssl() -> None:

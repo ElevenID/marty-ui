@@ -61,7 +61,7 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Native requests remain individually bounded. Do not kill a mutating
     # transaction while it is revoking a leaf or rolling back remote authority.
     timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",)) else 300
-    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",)):
+    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",)):
         timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,
                             capture_output=True, check=False, timeout=timeout)

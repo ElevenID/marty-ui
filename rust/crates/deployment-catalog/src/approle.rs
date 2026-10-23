@@ -734,7 +734,6 @@ fn leaf_policy(role: Role) -> &'static str {
     }
 }
 fn signer_metadata(metadata: &Value) -> Result<()> {
-    use base64::Engine;
     if metadata["type"] != "ed25519"
         || metadata["exportable"] != false
         || metadata["allow_plaintext_backup"] != false
@@ -745,17 +744,7 @@ fn signer_metadata(metadata: &Value) -> Result<()> {
     let encoded = metadata["keys"]["1"]["public_key"]
         .as_str()
         .ok_or(REFUSAL)?;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|_| REFUSAL)?;
-    if raw.len() != 32 || base64::engine::general_purpose::STANDARD.encode(&raw) != encoded {
-        return Err(REFUSAL);
-    }
-    let mut der = vec![
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-    ];
-    der.extend(raw);
-    marty_crypto::jwk::public_key_der_to_jwk(&der).map_err(|_| REFUSAL)?;
+    crate::operator::ed25519_spki(encoded)?;
     Ok(())
 }
 /// Current-generation validation stays at its existing owner before entering this
