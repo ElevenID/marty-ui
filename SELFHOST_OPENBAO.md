@@ -1,5 +1,37 @@
 # Self-Host OpenBao Setup
 
+KMS operator public-key checks and root-retirement snapshot validation run in
+Rust through the existing `marty-deploy` executable. In an extracted bundle,
+install the operator from the **same release tag and source commit** as the bundle
+and source its verified environment before running Python operator entrypoints:
+
+```sh
+bash scripts/install-marty-deploy.sh "$RELEASE_TAG" "$SOURCE_SHA" "$HOME/.local/lib/marty-operator"
+. "$HOME/.local/lib/marty-operator/marty-deploy.lock"
+```
+
+The installer requires `gh`, `jq`, `cosign`, and `sha256sum`, verifies signatures
+and source provenance, and supports Linux amd64/arm64. A source checkout can use
+Cargo 1.95 instead. Python entrypoints retain their arguments. Rust conversion
+accepts supported public SPKI/certificate keys; it does not establish certificate
+trust or replace the existing issuer, key-version, or non-exportability checks.
+The Rust exporter logs in with the snapshot-only AppRole and streams the existing
+v2 archive into an owner-only file, then publishes it without overwriting another
+backup. It never reads root or unseal files. Downloads use a 300-second idle read
+timeout; steady progress can continue beyond five minutes. The independent Rust
+validator reads an archive without extraction. Actual restore qualification
+remains a separate requirement.
+
+The same Rust operator owns scoped AppRole bootstrap and login for audit,
+evidence, renewal, CA rotation, snapshot export, and snapshot rotation. Python
+entrypoints retain their arguments and generation checks. Audit/evidence leaf
+minting verifies scope, lineage, TTL, and its existing canaries; failed leaf
+verification attempts revocation. Failed bootstrap removes only authority owned
+by that transaction. Snapshot rotation retains the reader's shared auth mount.
+An explicit cleanup-incomplete diagnostic requires operator reconciliation before
+retrying. Credentials travel through captured standard input/output, never command
+arguments; do not run native login or mint commands with output attached to a terminal.
+
 This is the standalone external OpenBao setup for the workstation-local self-host production stack. It stays outside the main application compose project, keeps its state on durable host storage, and writes the scoped `openbao_service_token` into the shared self-host secret directory.
 
 ## Paths

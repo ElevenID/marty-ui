@@ -5,8 +5,12 @@ from __future__ import annotations
 import base64
 import json
 import ssl
-import subprocess
 from pathlib import Path
+
+if __package__:
+    from .selfhost_native_operator import operator_bytes
+else:
+    from selfhost_native_operator import operator_bytes
 from urllib.request import (
     HTTPRedirectHandler,
     HTTPSHandler,
@@ -43,12 +47,11 @@ def ed25519_public_pem(raw_base64: str) -> str:
         raise ValueError("OpenBao Ed25519 public key is invalid") from error
     if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != raw_base64:
         raise ValueError("OpenBao Ed25519 public key is invalid")
-    der = bytes.fromhex("302a300506032b6570032100") + raw
+    der = operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                         "ed25519-spki", input=raw_base64.encode("ascii"))
     pem = "-----BEGIN PUBLIC KEY-----\n"
     pem += base64.b64encode(der).decode("ascii") + "\n"
     pem += "-----END PUBLIC KEY-----\n"
-    if public_key_der(pem) != der:
-        raise ValueError("OpenBao Ed25519 public key is invalid")
     return pem
 
 
@@ -68,24 +71,15 @@ def custody_signer_public(metadata: dict) -> tuple[int, str]:
 
 
 def public_key_der(pem: str) -> bytes:
-    result = subprocess.run(
-        ["openssl", "pkey", "-pubin", "-outform", "DER"],
-        input=pem.encode("ascii"), capture_output=True, timeout=10, check=False,
-    )
-    if result.returncode or not result.stdout:
-        raise RuntimeError("disposable public key is invalid")
-    return result.stdout
+    return operator_bytes(Path(__file__).resolve().parents[1],
+                          "operator", "public-spki", input=pem.encode("ascii"))
 
 
 def certificate_public_key_der(certificate: str) -> bytes:
-    """Extract only the public SPKI from an X.509 certificate."""
-    result = subprocess.run(
-        ["openssl", "x509", "-pubkey", "-noout"],
-        input=certificate.encode("ascii"), capture_output=True, timeout=10, check=False,
-    )
-    if result.returncode or not result.stdout:
-        raise RuntimeError("OpenBao certificate public key is invalid")
-    return public_key_der(result.stdout.decode("ascii"))
+    """Extract public SPKI; issuer and trust checks remain separate."""
+    return operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                          "certificate-spki", input=certificate.encode("ascii"))
+
 
 
 class Bao:

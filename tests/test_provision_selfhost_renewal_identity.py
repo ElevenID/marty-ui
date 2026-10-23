@@ -9,6 +9,7 @@ import sys
 from urllib.error import HTTPError
 
 import pytest
+from tests.test_selfhost_native_approle import approle_server as approle_server
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -85,36 +86,19 @@ def test_renewal_authority_rejects_root_and_denials_must_be_real() -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private bootstrap contract")
-def test_failed_bootstrap_removes_partial_remote_authority(tmp_path: Path,
-                                                            monkeypatch: pytest.MonkeyPatch) -> None:
-    current, output = tmp_path / "current", tmp_path / "identity"
+def test_failed_bootstrap_removes_partial_remote_authority(approle_server, monkeypatch) -> None:
+    from tests.test_selfhost_native_approle import NAMES
+    state = approle_server
+    bao, output = state.prepare("renewal", bootstrap=True)
+    current = output.parent / "current"
     current.mkdir(mode=0o700)
-    output.mkdir(mode=0o700)
-    monkeypatch.setattr(identity, "existing_policy_names",
-                        lambda *_: [f"selfhost-test-policy-{index}" for index in range(21)])
-
-    class InterruptedBao:
-        def __init__(self) -> None:
-            self.deleted = []
-
-        def request(self, method, path, body=None):
-            if method == "GET" and path == "sys/auth":
-                return {"data": {}}
-            if method == "GET":
-                raise HTTPError(path, 404, "absent", None, None)
-            if method == "DELETE":
-                self.deleted.append(path)
-                return {}
-            if path == "auth/token/roles/selfhost-renew-leaf":
-                raise RuntimeError("controlled role creation failure")
-            return {}
-
-    bao = InterruptedBao()
-    with pytest.raises(RuntimeError, match="controlled role creation failure"):
+    monkeypatch.setattr(identity, "existing_policy_names", lambda *_: NAMES)
+    state.overrides["POST", "auth/token/roles/selfhost-renew-leaf"] = 500, {}
+    with pytest.raises(RuntimeError):
         identity.bootstrap(bao, current, output)
-    assert "auth/token/roles/selfhost-renew-leaf" in bao.deleted
-    assert "sys/auth/selfhost-renew" in bao.deleted
-    assert list(output.iterdir()) == []
+    assert "auth/token/roles/selfhost-renew-leaf" in state.deleted
+    assert "sys/auth/selfhost-renew" in state.deleted
+    assert not list(output.iterdir())
 
 
 @pytest.mark.skipif(os.name != "posix", reason="POSIX private identity contract")

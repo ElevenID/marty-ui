@@ -4,29 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
-import json
-import os
-import ssl
-import stat
 import sys
-import tempfile
-import urllib.error
-import urllib.request
-import uuid
-import zipfile
-from datetime import datetime, timezone
 from pathlib import Path
 
 sys.dont_write_bytecode = True
-from selfhost_operator_inputs import snapshot_origin  # noqa: E402
-from provision_selfhost_snapshot_identity import checked_login  # noqa: E402
-from selfhost_openbao_client import Bao  # noqa: E402
-
-
-class NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, request, fp, code, msg, headers, newurl):
-        raise RuntimeError("OpenBao snapshot request redirected unexpectedly")
+from selfhost_native_operator import operator_bytes  # noqa: E402
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -59,89 +41,15 @@ def build_parser(repo_root: Path) -> argparse.ArgumentParser:
     return parser
 
 
-def snapshot_url(value: str) -> str:
-    return snapshot_origin(value) + "/v1/sys/storage/raft/snapshot"
-
-
-def stream_snapshot(url: str, token: str, output: Path, ca_file: Path) -> str:
-    request = urllib.request.Request(url, headers={"X-Vault-Token": token})
-    tls_context = ssl.create_default_context(cafile=str(ca_file))
-    opener = urllib.request.build_opener(
-        urllib.request.ProxyHandler({}),
-        urllib.request.HTTPSHandler(context=tls_context),
-        NoRedirect(),
-    )
-    digest = hashlib.sha256()
-    size = 0
-    try:
-        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "wb") as sink, opener.open(request, timeout=300) as response:
-            if response.status != 200:
-                raise RuntimeError("OpenBao Raft snapshot request did not succeed")
-            while chunk := response.read(1024 * 1024):
-                sink.write(chunk)
-                digest.update(chunk)
-                size += len(chunk)
-    except (OSError, urllib.error.HTTPError) as error:
-        raise RuntimeError("OpenBao Raft snapshot request failed") from error
-    if size == 0:
-        raise RuntimeError("OpenBao returned an empty Raft snapshot")
-    return digest.hexdigest()
-
-
 def export(state_dir: Path, export_dir: Path, config_file: Path, bao_url: str,
            snapshot_identity_dir: Path) -> Path:
-    state_dir = state_dir.expanduser().resolve()
-    export_dir = export_dir.expanduser().absolute()
-    config_file = config_file.expanduser().resolve()
-    if not state_dir.is_dir():
-        raise ValueError(f"OpenBao state directory does not exist: {state_dir}")
-    if not config_file.is_file():
-        raise ValueError(f"OpenBao config file does not exist: {config_file}")
-    if 'storage "raft"' not in config_file.read_text(encoding="utf-8"):
-        raise ValueError("self-host OpenBao export requires Raft storage")
-    url = snapshot_url(bao_url)
-    ca_file = state_dir / "tls" / "ca.crt"
-    if not ca_file.is_file() or ca_file.is_symlink():
-        raise ValueError("OpenBao public TLS CA is missing from KMS state")
-    if (export_dir.is_symlink() or not export_dir.is_dir()
-            or (os.name == "posix" and stat.S_IMODE(export_dir.stat().st_mode) != 0o700)):
-        raise ValueError("OpenBao export directory must already be owner-private")
-    export_dir = export_dir.resolve()
-    if export_dir == state_dir or state_dir in export_dir.parents:
-        raise ValueError("OpenBao export directory must be outside the state directory")
-    token = checked_login(Bao(bao_url, ca_file, ""), snapshot_identity_dir.expanduser().absolute())
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    archive = export_dir / f"openbao-raft-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
-    partial = export_dir / (archive.name + ".partial")
-    try:
-        with tempfile.TemporaryDirectory() as temp:
-            snapshot = Path(temp) / "raft.snap"
-            snapshot_sha256 = stream_snapshot(url, token, snapshot, ca_file)
-            manifest = {
-                "created_at": datetime.now(timezone.utc)
-                .isoformat()
-                .replace("+00:00", "Z"),
-                "format": "marty-openbao-raft-snapshot-v2",
-                "snapshot_sha256": snapshot_sha256,
-                "warning": "Contains all OpenBao Raft key custody state; hold unseal material separately.",
-            }
-            descriptor = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            with (
-                os.fdopen(descriptor, "wb") as output,
-                zipfile.ZipFile(output, "w") as bundle,
-            ):
-                bundle.write(snapshot, "raft.snap", compress_type=zipfile.ZIP_STORED)
-                bundle.write(
-                    config_file,
-                    "openbao-selfhost.hcl",
-                    compress_type=zipfile.ZIP_DEFLATED,
-                )
-                bundle.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
-            os.replace(partial, archive)
-    finally:
-        partial.unlink(missing_ok=True)
-    return archive
+    result = operator_bytes(
+        Path(__file__).resolve().parents[1], "operator", "export-snapshot",
+        str(state_dir.expanduser().absolute()), str(export_dir.expanduser().absolute()),
+        str(config_file.expanduser().absolute()), bao_url,
+        str(snapshot_identity_dir.expanduser().absolute()),
+    )
+    return Path(result.decode("utf-8").strip())
 
 
 def main() -> int:

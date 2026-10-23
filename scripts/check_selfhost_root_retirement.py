@@ -9,17 +9,16 @@ backup/restore or business journey.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 from urllib.error import HTTPError
-import zipfile
 
 sys.dont_write_bytecode = True
 from selfhost_operator_inputs import snapshot_origin  # noqa: E402
+from selfhost_native_operator import operator_bytes  # noqa: E402
 from activate_selfhost_renewed_secrets import (  # noqa: E402
     PROJECT, checked_certificates, checked_compose_secret_files, checked_env,
     checked_overlap_mounts,
@@ -132,22 +131,7 @@ def export_current_snapshot(args: argparse.Namespace) -> Path:
     if len(created) != 1:
         raise RuntimeError("scoped Raft snapshot archive is absent or ambiguous")
     archive = created.pop()
-    with zipfile.ZipFile(archive) as bundle:
-        if set(bundle.namelist()) != {"raft.snap", "openbao-selfhost.hcl", "manifest.json"}:
-            raise ValueError("scoped Raft snapshot archive contains unexpected files")
-        if (bundle.getinfo("manifest.json").file_size > 64 * 1024
-                or bundle.getinfo("raft.snap").file_size == 0):
-            raise ValueError("scoped Raft snapshot archive is invalid")
-        manifest = json.loads(bundle.read("manifest.json"))
-        if (not isinstance(manifest, dict)
-                or manifest.get("format") != "marty-openbao-raft-snapshot-v2"):
-            raise ValueError("scoped Raft snapshot archive format is invalid")
-        digest = hashlib.sha256()
-        with bundle.open("raft.snap") as snapshot:
-            while chunk := snapshot.read(1024 * 1024):
-                digest.update(chunk)
-        if digest.hexdigest() != manifest.get("snapshot_sha256"):
-            raise ValueError("scoped Raft snapshot checksum differs")
+    operator_bytes(Path(__file__).resolve().parents[1], "operator", "check-snapshot", str(archive))
     return archive
 
 
@@ -267,8 +251,7 @@ def main() -> int:
     args = build_parser().parse_args()
     try:
         archive = audit(args)
-    except (OSError, ValueError, RuntimeError, HTTPError, subprocess.SubprocessError,
-            zipfile.BadZipFile) as error:
+    except (OSError, ValueError, RuntimeError, HTTPError, subprocess.SubprocessError) as error:
         print(f"self-host root retirement audit failed: {type(error).__name__}",
               file=sys.stderr)
         return 2

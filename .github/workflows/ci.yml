@@ -849,6 +849,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
+      CARGO_PROFILE_DEV_DEBUG: 0
       RUSTC_WRAPPER: sccache
       SCCACHE_GHA_ENABLED: "true"
       SCCACHE_GHA_RW_MODE: READ_ONLY
@@ -902,6 +903,22 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Use mold linker for Rust recovery probe
+        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
+        with:
+          mold-version: 2.41.0
+      - name: Enable compiler cache for Rust recovery probe
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
+        with:
+          version: v0.16.0
+      - name: Keep Rust recovery independent of optional compiler cache
+        shell: bash
+        run: bash scripts/ci/optional-sccache-fallback.sh
+      - name: Prepare Rust KMS operator before scoped provisioning probes
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Qualify Keycloak browser, CIBA, KMS-loss, and PostgreSQL custody
         shell: bash
         run: |
@@ -925,20 +942,6 @@ jobs:
           python3 scripts/probe_didcomm_openbao_file_storage.py
           python3 scripts/probe_selfhost_openbao_raft_bootstrap.py
           python3 scripts/probe_didcomm_openbao_ha.py
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
-        with:
-          toolchain: 1.95.0
-      - name: Use mold linker for Rust recovery probe
-        uses: rui314/setup-mold@10ca16bf91dc22e05ebdc935cad9c75ea248f621
-        with:
-          mold-version: 2.41.0
-      - name: Enable compiler cache for Rust recovery probe
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba
-        with:
-          version: v0.16.0
-      - name: Keep Rust recovery independent of optional compiler cache
-        shell: bash
-        run: bash scripts/ci/optional-sccache-fallback.sh
       - name: Qualify Rust integration-secret recovery with coordinated PostgreSQL and Raft restore
         env:
           MARTY_OPENBAO_PROBE_IMAGE: marty-openbao-didcomm:ci
@@ -2118,6 +2121,61 @@ jobs:
           export MARTY_RUST_CI_REDIS_IMAGE=redis:7.4-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
           docker compose -p marty-rust-ci -f .github/compose/rust-ci-fixtures.yml \
             down --volumes --remove-orphans
+  test-native-operator:
+    name: Native KMS Operator (${{ matrix.arch }})
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+            target: x86_64-unknown-linux-musl
+            elf_machine: 'Advanced Micro Devices X86-64'
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+            target: aarch64-unknown-linux-musl
+            elf_machine: AArch64
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
+      TARGET: ${{ matrix.target }}
+      ELF_MACHINE: ${{ matrix.elf_machine }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+          targets: ${{ matrix.target }}
+      - name: Exercise the static native operator against real HTTPS
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends musl-tools cmake
+          MARTY_DEPLOY_SOURCE_SHA="$(git rev-parse HEAD)"
+          export MARTY_DEPLOY_SOURCE_SHA
+          export MARTY_DEPLOY_RELEASE_TAG=v0.0.0
+          env "CC_${TARGET//-/_}=musl-gcc" cargo build --locked --target "$TARGET" \
+            --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
+          export MARTY_DEPLOY_BIN="$GITHUB_WORKSPACE/rust/target/$TARGET/debug/marty-deploy"
+          readelf -h "$MARTY_DEPLOY_BIN" | grep -F "$ELF_MACHINE"
+          ! readelf -l "$MARTY_DEPLOY_BIN" | grep -q INTERP
+          MARTY_DEPLOY_BIN_SHA256="$(sha256sum "$MARTY_DEPLOY_BIN" | cut -d ' ' -f 1)"
+          export MARTY_DEPLOY_BIN_SHA256
+          python -m pip install --disable-pip-version-check pytest
+          python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_operator_cleanup_cli.py tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys
+
   rust-lint-policy:
     name: Rust Lint and Packaging
     needs: changes
@@ -2798,6 +2856,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
+      CARGO_PROFILE_DEV_DEBUG: 0
       PYTHONPATH: packages
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -2880,6 +2939,12 @@ jobs:
           assert result.not_revoked is None
           assert result.error
           PY
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de
+        with:
+          toolchain: 1.95.0
+      - name: Prepare Rust KMS operator for release contracts
+        if: needs.changes.outputs.planner_only != 'true' && needs.changes.outputs.rollback_test_only != 'true' && needs.changes.outputs.k8s_policy_test_only != 'true' && needs.changes.outputs.didcomm_release_test_only != 'true'
+        run: cargo build --locked --manifest-path rust/Cargo.toml -p marty-deployment-catalog --bin marty-deploy
       - name: Enforce OSS commerce boundary
         run: python scripts/check_oss_boundary.py
       - name: Require workflow policy test collection
@@ -3152,7 +3217,7 @@ jobs:
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
+    needs: [changes, lint, fast-feedback, test-ui-crawler-artifacts, test-ui-crawler-nginx, test-ui, test-services, test-rust-feature-probe, test-openbao-didcomm-plugin, test-rust-services, test-native-operator, rust-lint-policy, test-rust-service-images, public-protocol-contract, test-release-contracts, test-credential-lifecycle-browser, security, rust-supply-chain]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -3180,6 +3245,7 @@ jobs:
       RUST_FEATURE_RESULT: ${{ needs.test-rust-feature-probe.result }}
       RUST_SERVICES_RESULT: ${{ needs.test-rust-services.result }}
       OPENBAO_RESULT: ${{ needs.test-openbao-didcomm-plugin.result }}
+      NATIVE_OPERATOR_RESULT: ${{ needs.test-native-operator.result }}
       RUST_LINT_RESULT: ${{ needs.rust-lint-policy.result }}
       RUST_IMAGES_RESULT: ${{ needs.test-rust-service-images.result }}
       PUBLIC_PROTOCOL_RESULT: ${{ needs.public-protocol-contract.result }}
@@ -3195,7 +3261,7 @@ jobs:
           # Keep the explicit map in sync with ci-gate.needs. An added or
           # removed dependency must update the planned-result policy too.
           read -r -a results <<< "$CI_LANE_RESULTS"
-          [[ "${#results[@]}" -eq 17 ]]
+          [[ "${#results[@]}" -eq 18 ]]
           require_result() {
             local name="$1" actual="$2" expected="$3"
             if [[ "$actual" != "$expected" ]]; then
@@ -3256,6 +3322,7 @@ jobs:
             require_selected test-rust-feature-probe "$RUST_FEATURE_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected test-rust-services "$RUST_SERVICES_RESULT" "$RUST_SELECTED"
             require_selected test-openbao-didcomm-plugin "$OPENBAO_RESULT" "$OPENBAO_SELECTED"
+            require_selected test-native-operator "$NATIVE_OPERATOR_RESULT" "$RUST_SELECTED"
             require_selected rust-lint-policy "$RUST_LINT_RESULT" "$RUST_SELECTED"
             require_selected test-rust-service-images "$RUST_IMAGES_RESULT" "$RUST_RUNTIME_SELECTED"
             require_selected rust-supply-chain "$RUST_SUPPLY_RESULT" "$RUST_SELECTED"

@@ -8,8 +8,30 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+marty-selfhost-identity = { path = "../selfhost-identity" }
 serde_json.workspace = true
+sha2.workspace = true
+zip.workspace = true
+flate2.workspace = true
+spki = { workspace = true, features = ["pem"] }
+x509-cert.workspace = true
+marty-crypto.workspace = true
+marty-openbao-http = { path = "../openbao-http" }
+reqwest.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+base64.workspace = true
+tempfile.workspace = true
+uuid.workspace = true
+url.workspace = true
 
 [[bin]]
 name = "marty-deploy"
 path = "src/main.rs"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio-rustls.workspace = true
+rustls.workspace = true
