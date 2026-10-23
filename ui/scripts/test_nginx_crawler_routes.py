@@ -263,6 +263,10 @@ class NginxCrawlerRouteContract(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertNotIn("marketing fixture", body)
         self.assert_security_headers(headers)
+        status, headers, body = self.request(port, "/openapi.yaml")
+        self.assertEqual(status, 308)
+        self.assertTrue(headers["location"].endswith("/openapi.json"))
+        self.assertNotIn("marketing fixture", body)
         for path in ("/console", "/console/credentials"):
             status, _, body = self.request(port, path)
             self.assertEqual(status, 200)
@@ -282,6 +286,9 @@ class NginxCrawlerRouteContract(unittest.TestCase):
                     self.assertIn("gateway", body)
                     self.assert_security_headers(headers)
         else:
+            status, headers, body = self.request(port, "/openapi.json")
+            self.assertEqual(status, 503)
+            self.assertEqual(json.loads(body)["error"], "openapi_gateway_proxy_required")
             for path in ("/ready", "/health/ready"):
                 status, headers, body = self.request(port, path)
                 self.assertEqual(status, 503)

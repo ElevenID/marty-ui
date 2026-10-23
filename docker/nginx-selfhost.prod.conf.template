@@ -246,6 +246,10 @@ server {
         proxy_set_header X-Forwarded-Host $host;
     }
 
+    location = /openapi.yaml {
+        return 308 /openapi.json;
+    }
+
     location = /openapi.json {
         set $backend_api ${GATEWAY_UPSTREAM};
         proxy_pass http://$backend_api/openapi.json;
