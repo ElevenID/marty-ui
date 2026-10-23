@@ -19,6 +19,7 @@ import {
   getCredentialTemplate,
   activateTrustProfile,
   createTrustProfile,
+  updateTrustProfile,
   synchronizeTrustProfileRegistries,
   listTrustProfiles,
   addTrustProfileIssuer,
@@ -32,6 +33,40 @@ import {
 describe('presentationPolicyApi', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+  })
+
+  describe('Trust Profile sparse updates', () => {
+    it.each([
+      [{ name: 'Renamed' }, { name: 'Renamed' }],
+      [{ description: '' }, { description: '' }],
+      [{ revocation_profile_id: null, auto_generated: false }, { revocation_profile_id: null, auto_generated: false }],
+      [{ framework_type: 'custom', supported_formats: ['sd_jwt_vc'] }, { profile_type: 'CUSTOM', supported_formats: ['SD_JWT_VC'] }],
+      [{ validation_rules: { require_key_usage: false } }, { require_key_usage: false }],
+      [{ allowed_algorithms: ['ES384'] }, { allowed_algorithms: ['ES384'] }],
+      [{ trust_sources: [], trusted_issuers: [{ issuer_did: 'did:web:old.example' }] }, { trust_sources: [] }],
+    ])('sends only the requested changes: %j', async (input, expected) => {
+      let received: unknown
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', ...expected })
+      }))
+
+      await updateTrustProfile('profile-1', input)
+      expect(received).toEqual(expected)
+    })
+
+    it('does not send response-only, tenant, or custody fields on update', async () => {
+      let received: unknown
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', name: 'Renamed' })
+      }))
+      await updateTrustProfile('profile-1', {
+        name: 'Renamed', id: 'profile-1', organization_id: 'other-org',
+        status: 'active', signing_service_id: 'private', description: undefined,
+      })
+      expect(received).toEqual({ name: 'Renamed' })
+    })
   })
 
   describe('Presentation Policies', () => {
