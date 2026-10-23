@@ -409,6 +409,16 @@ fn non_empty(value: Option<String>) -> Option<String> {
     })
 }
 
+fn json_string(object: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
+    object.get(name).and_then(Value::as_str).map(str::to_owned)
+}
+
+pub(crate) fn random_token() -> String {
+    let mut bytes = [0_u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -475,14 +485,4 @@ mod tests {
         assert_eq!(valid.iss.as_deref(), Some("https://canvas.instructure.com"));
         assert_eq!(valid.client_id.as_deref(), Some("client-123"));
     }
-}
-
-fn json_string(object: &serde_json::Map<String, Value>, name: &str) -> Option<String> {
-    object.get(name).and_then(Value::as_str).map(str::to_owned)
-}
-
-pub(crate) fn random_token() -> String {
-    let mut bytes = [0_u8; 32];
-    rand::rng().fill_bytes(&mut bytes);
-    URL_SAFE_NO_PAD.encode(bytes)
 }
