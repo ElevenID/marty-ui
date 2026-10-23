@@ -94,8 +94,13 @@ class OwnedPassportResources:
     def fresh_plan(self, plan):
         result = copy.deepcopy(plan)
         issuer = result["application"]["issuer_did"]
-        require(issuer.startswith("did:web:beta.elevenidllc.com:"), "Owned passport issuer must be local")
-        issuer = issuer + ":demo:" + self.value["run_id"]
+        parts = issuer.split(":")
+        require(len(parts) == 5 and parts[:4] == ["did", "web", "beta.elevenidllc.com", "orgs"]
+                and bool(parts[4]) and len(parts[4]) + len("-demo-") + len(self.value["run_id"]) <= 128,
+                "Owned passport issuer must fit the local did:web organization slug")
+        # The production did:web parser accepts exactly five segments. Keep the
+        # fresh marker inside the organization slug rather than adding DID paths.
+        issuer = issuer + "-demo-" + self.value["run_id"]
         result["application"]["issuer_did"] = issuer
         certificate = result["certificate_plan"]
         certificate["csca"]["issuer_did"] = issuer
@@ -162,19 +167,25 @@ class OwnedPassportResources:
         body = {"name": "Passport demo " + self.value["run_id"], "is_test": True,
                 "scopes": ["credentials:issue"],
                 "expires_at": (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()}
-        code, key = self.call("flow", "POST", "/v1/organizations/" + quote(self.organization, safe="") + "/api-keys", body)
-        require(code == 200 and key.get("organization_id") == self.organization
-                and key.get("name") == body["name"] and key.get("scopes") == body["scopes"]
-                and key.get("scope_type") == "organization" and key.get("enabled") is True
-                and isinstance(key.get("id"), str) and isinstance(key.get("key"), str)
-                and len(key["key"]) >= 32, "Scoped passport API key was not newly created")
+        code, key = self.call("flow", "POST", self.scoped("/v1/api-keys"), body)
+        # Retain the exact newly created authority before checking every
+        # response field, so a contract mismatch cannot orphan a live key.
+        require(code == 200 and isinstance(key, dict)
+                and key.get("organization_id") == self.organization
+                and key.get("name") == body["name"] and isinstance(key.get("id"), str)
+                and bool(key["id"]), "Scoped passport API key identity was not returned")
         self.value["api_key_id"] = key["id"]
-        self.api_key = key["key"]
         self.save()
-        batch._write_private_state(self.key_path, {"schema": "marty.passport-owned-api-key/v1",
-            "run_id": self.value["run_id"], "organization_id": self.organization,
-            "key_id": key["id"], "key": key["key"]}, initial=True)
-        return key["key"]
+        raw_key = key.get("key")
+        if isinstance(raw_key, str) and len(raw_key) >= 32:
+            self.api_key = raw_key
+            batch._write_private_state(self.key_path, {"schema": "marty.passport-owned-api-key/v1",
+                "run_id": self.value["run_id"], "organization_id": self.organization,
+                "key_id": key["id"], "key": raw_key}, initial=True)
+        require(key.get("scopes") == body["scopes"] and key.get("scope_type") == "ORGANIZATION"
+                and key.get("enabled") is True and isinstance(raw_key, str) and len(raw_key) >= 32,
+                "Scoped passport API key was not newly created")
+        return raw_key
 
     def create_issuers(self, plan):
         certificate = plan["certificate_plan"]
@@ -304,8 +315,7 @@ class OwnedPassportResources:
         # Key ownership is supplied only by the same run's actual create port.
         api_key_id = self.value.get("api_key_id")
         require(isinstance(api_key_id, str) and bool(api_key_id), "Cannot revoke unowned passport API authority")
-        code, response = self.call("flow", "DELETE", "/v1/organizations/" + quote(self.organization, safe="")
-                                   + "/api-keys/" + quote(api_key_id, safe=""))
+        code, response = self.call("flow", "DELETE", self.scoped("/v1/api-keys/" + quote(api_key_id, safe="")))
         require(code == 200 and response.get("success") is True, "Owned passport key revocation failed")
         require(check_key_denied() is True, "Retired passport key is still accepted")
         batch.clear_private_state(self.key_path)

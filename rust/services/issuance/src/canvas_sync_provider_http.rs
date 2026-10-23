@@ -40,6 +40,9 @@ use crate::{
     canvas_sync_worker::CanvasSyncTarget,
 };
 
+#[path = "canvas_sync_provider_ags.rs"]
+mod ags;
+
 const AGS_RESULT_READ_SCOPE: &str = "https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly";
 const NRPS_MEMBERSHIP_READ_SCOPE: &str =
     "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly";
@@ -170,6 +173,7 @@ impl CollectionProtocol {
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 enum LtiCollectionKind {
     AgsResult,
+    AgsLineItem,
     NrpsMembership,
 }
 
@@ -177,6 +181,7 @@ impl LtiCollectionKind {
     const fn scope(self) -> &'static str {
         match self {
             Self::AgsResult => AGS_RESULT_READ_SCOPE,
+            Self::AgsLineItem => ags::LINE_ITEM_READ_SCOPE,
             Self::NrpsMembership => NRPS_MEMBERSHIP_READ_SCOPE,
         }
     }
@@ -184,6 +189,7 @@ impl LtiCollectionKind {
     const fn accept(self) -> &'static str {
         match self {
             Self::AgsResult => AGS_RESULT_ACCEPT,
+            Self::AgsLineItem => ags::LINE_ITEM_ACCEPT,
             Self::NrpsMembership => NRPS_MEMBERSHIP_ACCEPT,
         }
     }
@@ -695,7 +701,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             let results = self
                 .lti_collection(
                     resources,
-                    &format!("{}/results", line_item.trim_end_matches('/')),
+                    &ags::results_url(&line_item)?,
                     LtiCollectionKind::AgsResult,
                     Some(subject),
                     100,
@@ -704,7 +710,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                 .await?;
             let record = results.first().cloned().unwrap_or_else(|| json!({}));
             validate_ags_record(&record)?;
-            let source_payload = selected_payload(
+            let mut source_payload = selected_payload(
                 &record,
                 &[
                     "id",
@@ -714,8 +720,15 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                     "timestamp",
                 ],
             );
+            let mut assertion = ags_assertion(&record);
+            if ags::activity_name_requested(resources, requirement) {
+                ags::validate_result_binding(&results, &line_item, subject)?;
+                let name = self.read_ags_activity_name(resources, &line_item).await?;
+                assertion.insert("activity_name".into(), Value::String(name.clone()));
+                source_payload.insert("activity_name".into(), Value::String(name));
+            }
             return Ok(CanvasAuthoritativeObservation {
-                assertion: ags_assertion(&record),
+                assertion,
                 effective_at: timestamp(record.get("timestamp")),
                 source_payload,
                 verification_method: "LTI_AGS_RESULT_READ",
@@ -725,9 +738,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
             .filter(|value| !value.is_empty())
             .ok_or(CanvasProviderReadError::Unavailable)?;
         let record = self.rest_record(resources, requirement, user).await?;
-        let effective_at = ["updated_at", "graded_at", "completed_at"]
-            .iter()
-            .find_map(|key| timestamp(record.get(*key)));
+        let effective_at = rest_effective_at(&text(requirement.get("fact_type")), &record);
         Ok(CanvasAuthoritativeObservation {
             assertion: rest_assertion(&text(requirement.get("fact_type")), &record),
             source_payload: normalized_rest_payload(&record),
@@ -822,7 +833,7 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
                             assertion: rest_assertion("canvas.course_completion", &record),
                             source_payload: normalized_rest_payload(&record),
                             verification_method: "CANVAS_OAUTH_API_READ",
-                            effective_at: timestamp(record.get("updated_at")),
+                            effective_at: rest_effective_at("canvas.course_completion", &record),
                         },
                     );
                 }
@@ -880,6 +891,22 @@ impl CanvasAuthoritativeProvider for HttpCanvasAuthoritativeProvider {
         }
         Ok(snapshot)
     }
+}
+
+fn rest_effective_at(fact_type: &str, record: &Value) -> Option<DateTime<Utc>> {
+    // Canvas progress.completed_at records the first completion event, not the
+    // revision of the mutable course-progress snapshot. After a downgrade and
+    // recovery it can predate the downgrade, which would leave the deny fact
+    // current despite a fresh completed=true read. Use observation time for
+    // course progress when no explicit revision timestamp is available (the
+    // processor fills it when effective_at is absent). A provider updated_at
+    // still represents the revision and must retain its existing semantics.
+    if fact_type == "canvas.course_completion" {
+        return timestamp(record.get("updated_at"));
+    }
+    ["updated_at", "graded_at", "completed_at"]
+        .iter()
+        .find_map(|key| timestamp(record.get(*key)))
 }
 
 impl HttpCanvasAuthoritativeProvider {

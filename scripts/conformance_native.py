@@ -384,14 +384,16 @@ def verify_release(
     manifest: Path, checksums: Path, revision: str, image: str, *, runner=subprocess.run
 ) -> dict[str, Any]:
     """Reuse authoritative release inputs plus the existing GitHub attestation trust."""
+    stage = "manifest validation"
     try:
         plan = RELEASE["validate_release_inputs"](
-            manifest, checksums, expected_ui_revision=revision
+            manifest, checksums, expected_ui_revision=revision, rust_only=True
         )
         require(
             plan["images"]["services"]["reference"] == image,
             "Native image differs from the authenticated release",
         )
+        stage = "manifest attestation"
         _run(
             [
                 "gh",
@@ -403,13 +405,15 @@ def verify_release(
             ],
             runner=runner,
         )
+        stage = "manifest revalidation"
         require(
             RELEASE["validate_release_inputs"](
-                manifest, checksums, expected_ui_revision=revision
+                manifest, checksums, expected_ui_revision=revision, rust_only=True
             )
             == plan,
             "Release inputs changed during attestation verification",
         )
+        stage = "native capability source"
         source = _run(
             ["git", "show", f"{revision}:{CAPABILITY_PATH}"],
             runner=runner,
@@ -426,7 +430,7 @@ def verify_release(
         RELEASE["OfficialReleaseError"],
         json.JSONDecodeError,
     ):
-        raise ValueError("Native release qualification failed") from None
+        raise ValueError(f"Native release qualification failed at {stage}") from None
 
 
 def probe_image(

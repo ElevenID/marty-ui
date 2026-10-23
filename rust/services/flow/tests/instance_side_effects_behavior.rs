@@ -155,16 +155,21 @@ impl PhysicalDocumentProvider for Physical {
                 )
             }
         };
+        let mut data = [
+            ("application_id".into(), json!("application-1")),
+            ("flow_execution_id".into(), json!(request.flow_instance_id)),
+            ("status".into(), json!("DRAFT")),
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeMap<String, Value>>();
+        if request.operation == PhysicalDocumentOperation::SignSod {
+            data.insert("sod_sha256".into(), json!("signed-hash"));
+            data.insert("sod_signature_verified".into(), json!(true));
+        }
         Ok(PhysicalDocumentResult {
             operation: request.operation,
             status: "DRAFT".into(),
-            data: [
-                ("application_id".into(), json!("application-1")),
-                ("flow_execution_id".into(), json!(request.flow_instance_id)),
-                ("status".into(), json!("DRAFT")),
-            ]
-            .into_iter()
-            .collect(),
+            data,
             route: Some(PhysicalDocumentRoute {
                 method: method.into(),
                 path,
@@ -431,6 +436,14 @@ async fn physical_inputs_are_consumed_and_every_operation_is_typed() {
         );
     }
     assert!(advanced.context["physical_document_job"].is_object());
+    assert_eq!(
+        advanced.context["physical_document_job"]["sod_sha256"],
+        "signed-hash"
+    );
+    assert_eq!(
+        advanced.context["physical_document_job"]["sod_signature_verified"],
+        true
+    );
     assert_eq!(physical.requests.lock().unwrap().len(), 7);
     assert_eq!(
         advanced.context["physical_document_route_trace"],

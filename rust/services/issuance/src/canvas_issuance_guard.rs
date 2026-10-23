@@ -7,6 +7,25 @@ use tracing::warn;
 
 use crate::credential::{CredentialIssuanceError, CredentialTransaction, IssuerContext};
 
+pub(crate) const LIST_CURRENT_FACTS: &str = "SELECT jsonb_build_object(
+        'id', fact.id, 'organization_id', fact.organization_id,
+        'application_id', fact.application_id, 'subject_id', fact.subject_id,
+        'provider', fact.provider, 'fact_type', fact.fact_type,
+        'scope', fact.scope, 'assertion', fact.assertion,
+        'verification', fact.verification, 'source', fact.source,
+        'requirement_id', fact.requirement_id, 'logical_key', fact.logical_key,
+        'source_revision', fact.source_revision, 'payload_hash', fact.payload_hash,
+        'effective_at', fact.effective_at, 'observed_at', fact.observed_at,
+        'created_at', fact.created_at
+    ) FROM issuance_service.evidence_fact_heads AS head
+    JOIN issuance_service.evidence_facts AS fact
+      ON fact.organization_id = head.organization_id
+     AND fact.application_id = head.application_id
+     AND fact.logical_key = head.logical_key
+     AND fact.id = head.fact_id
+    WHERE head.organization_id = $1 AND head.application_id = $2
+    ORDER BY fact.observed_at, fact.created_at, fact.id";
+
 #[derive(Clone, Debug)]
 pub struct CanvasGuardConfig {
     pub enabled: bool,
@@ -66,7 +85,7 @@ impl PostgresCanvasIssuanceGuard {
                  'application_template_id', application_template_id,
                  'integration_context', integration_context,
                  'status', status,
-                 'issuance_transaction_id', issuance_transaction_id
+                 'issuance_transaction_id', issuance_transaction_id, 'form_data', form_data
              )
              FROM issuance_service.applications
              WHERE id = $1",
@@ -195,7 +214,8 @@ impl PostgresCanvasIssuanceGuard {
                  'id', id, 'organization_id', organization_id,
                  'credential_template_id', credential_template_id,
                  'approval_policy_set_id', approval_policy_set_id,
-                 'status', status
+                 'status', status, 'claim_collection_rules', claim_collection_rules, 'form_fields', form_fields,
+                 'name', name, 'description', description, 'application_validity_days', application_validity_days
              )
              FROM issuance_service.application_templates
              WHERE organization_id = $1 AND id = $2",
@@ -211,33 +231,11 @@ impl PostgresCanvasIssuanceGuard {
         organization_id: &str,
         application_id: &str,
     ) -> Result<Vec<Value>, sqlx::Error> {
-        sqlx::query_scalar(
-            "SELECT jsonb_build_object(
-                 'id', fact.id, 'organization_id', fact.organization_id,
-                 'application_id', fact.application_id,
-                 'subject_id', fact.subject_id, 'provider', fact.provider,
-                 'fact_type', fact.fact_type, 'scope', fact.scope,
-                 'assertion', fact.assertion, 'verification', fact.verification,
-                 'source', fact.source, 'requirement_id', fact.requirement_id,
-                 'logical_key', fact.logical_key,
-                 'source_revision', fact.source_revision,
-                 'payload_hash', fact.payload_hash,
-                 'effective_at', fact.effective_at,
-                 'observed_at', fact.observed_at, 'created_at', fact.created_at
-             )
-             FROM issuance_service.evidence_fact_heads AS head
-             JOIN issuance_service.evidence_facts AS fact
-               ON fact.organization_id = head.organization_id
-              AND fact.application_id = head.application_id
-              AND fact.logical_key = head.logical_key
-              AND fact.id = head.fact_id
-             WHERE head.organization_id = $1 AND head.application_id = $2
-             ORDER BY fact.observed_at, fact.created_at, fact.id",
-        )
-        .bind(organization_id)
-        .bind(application_id)
-        .fetch_all(&self.pool)
-        .await
+        sqlx::query_scalar(LIST_CURRENT_FACTS)
+            .bind(organization_id)
+            .bind(application_id)
+            .fetch_all(&self.pool)
+            .await
     }
 
     async fn load_policy_set(
@@ -361,6 +359,33 @@ pub fn evaluate_canvas_guard_snapshot(
     )?;
     if decision.get("allowed").and_then(Value::as_bool) != Some(true) {
         return Err("current_evidence_policy_denied");
+    }
+    if template
+        .get("claim_collection_rules")
+        .and_then(Value::as_array)
+        .is_some_and(|rules| !rules.is_empty())
+    {
+        // Time-derived claims retain the original reservation clock; current
+        // evidence is still checked against the live signing-time clock above.
+        let projected = crate::canvas_claim_projection::project_canvas_claims(
+            application,
+            template,
+            binding,
+            &snapshot.evidence_facts,
+            transaction.created_at,
+            now,
+            config.evidence_max_age,
+        )?;
+        if projected
+            .iter()
+            .any(|(name, value)| transaction.claims.get(name) != Some(value))
+            || transaction
+                .claims
+                .keys()
+                .any(|name| name != "_vct" && !projected.contains_key(name))
+        {
+            return Err("canvas_claim_projection_changed");
+        }
     }
     Ok(())
 }
@@ -936,7 +961,7 @@ pub(crate) fn evaluate_canvas_evidence_policy(
     serde_json::from_str(&decision).map_err(|_| "current_evidence_policy_denied")
 }
 
-fn fact_matches(
+pub(crate) fn fact_matches(
     fact: &Value,
     requirement: &Value,
     application: &Map<String, Value>,
@@ -971,7 +996,11 @@ fn fact_matches(
     })
 }
 
-fn fact_is_verified_and_fresh(fact: &Value, now: DateTime<Utc>, max_age: Duration) -> bool {
+pub(crate) fn fact_is_verified_and_fresh(
+    fact: &Value,
+    now: DateTime<Utc>,
+    max_age: Duration,
+) -> bool {
     if max_age.is_zero()
         || !text(
             fact.get("verification")
@@ -1206,6 +1235,79 @@ mod tests {
             ),
             Ok(())
         );
+    }
+
+    #[test]
+    fn mapped_canvas_claims_rebind_to_current_evidence_at_signing_and_recover() {
+        let mut state = snapshot();
+        state.application["form_data"] = json!({"score_percent":1000});
+        state.application_template["form_fields"] = json!([{"field_id":"score_percent"}]);
+        state.application_template["claim_collection_rules"] = json!([{
+            "claim_name":"score_percent","source":"EVIDENCE_EXTRACTION",
+            "source_config":{"fact_type":"canvas.assignment_score","json_pointer":"/assertion/score_percent"}
+        }]);
+        state.binding["credential_template_snapshot"]["claims"] =
+            json!([{"name":"score_percent","required":true}]);
+        let mut transaction = transaction();
+        transaction.created_at = now() - chrono::Duration::seconds(30);
+        transaction.claims.insert("score_percent".into(), json!(92));
+        // A newer observation is permitted; a stored claim must still equal
+        // its verified value, not the applicant's forged fallback.
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(&transaction, &issuer(), &state, &config(), now()),
+            Ok(())
+        );
+        state.evidence_facts[0]["assertion"]["score_percent"] = json!(93);
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(&transaction, &issuer(), &state, &config(), now()),
+            Err("canvas_claim_projection_changed")
+        );
+        transaction.claims.insert("score_percent".into(), json!(93));
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(&transaction, &issuer(), &state, &config(), now()),
+            Ok(())
+        );
+        transaction
+            .claims
+            .insert("result".into(), json!({"forged":true}));
+        assert_eq!(
+            evaluate_canvas_guard_snapshot(&transaction, &issuer(), &state, &config(), now()),
+            Err("canvas_claim_projection_changed")
+        );
+    }
+
+    #[test]
+    fn canvas_claim_projection_reuse_refreshes_values_without_rotating_capabilities() {
+        use crate::canvas_award_candidate_approval::{
+            canvas_claim_time, reuse_projected_canvas_approval_transaction,
+        };
+        let mut existing = transaction();
+        existing.status = CredentialTransactionStatus::Pending;
+        existing.created_at = now() - chrono::Duration::seconds(30);
+        existing.claims = json!({"score_percent":91,"obsolete":"remove"})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut planned = transaction();
+        planned.id = "new-proposal".into();
+        planned.claims = json!({"score_percent":95}).as_object().unwrap().clone();
+        let template = json!({"claim_collection_rules":[{"claim_name":"score_percent"}]})
+            .as_object()
+            .unwrap()
+            .clone();
+        let refreshed =
+            reuse_projected_canvas_approval_transaction(&existing, &planned, true, &template);
+        assert_eq!(refreshed.claims, planned.claims);
+        assert_eq!(refreshed.id, existing.id);
+        assert_eq!(refreshed.pre_authorized_code, existing.pre_authorized_code);
+        assert_eq!(refreshed.created_at, existing.created_at);
+        assert_eq!(
+            canvas_claim_time(Some(&existing), now()),
+            existing.created_at
+        );
+        let legacy =
+            reuse_projected_canvas_approval_transaction(&existing, &planned, true, &Map::new());
+        assert_eq!(legacy.claims, existing.claims);
     }
 
     #[test]

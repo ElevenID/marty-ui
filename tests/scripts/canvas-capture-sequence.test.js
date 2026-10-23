@@ -38,11 +38,13 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
   const review = { id: 'review', application_id: APP, credential_id: 'credential', status: 'open' };
   const marty = {
     async get(url) {
-      if (url.startsWith('/v1/issuance?')) return state.reserved ? [{ ...scope, id: 'tx', status: 'pending' }] : [];
-      if (url.startsWith('/v1/issued-credentials?')) return state.issued ? [record] : [];
+      if (url.startsWith('/v1/issuance?')) return state.reserved || (fail === 'denied-transaction-reserved' && state.grade === 40)
+        ? [{ ...scope, id: 'tx', status: 'pending' }] : [];
+      if (url.startsWith('/v1/issued-credentials?')) return state.issued || (fail === 'denied-credential-issued' && state.grade === 40)
+        ? [record] : [];
       if (url === '/v1/issued-credentials/credential') return record;
       if (url.startsWith('/v1/issuance/tx?')) return { ...scope, id: 'tx' };
-      if (url.endsWith('/evidence-facts')) {
+      if (url.endsWith('/evidence-facts?current_only=true') || url.endsWith('/evidence-facts')) {
         if ((fail === 'post-denial-stale-evidence' && state.jobs === 4)
           || (fail === 'post-recovery-stale-evidence' && state.jobs === 5)) return state.lastFacts;
         const facts = [{ id: `fact-${state.revision}`, provider: 'canvas',
@@ -81,8 +83,11 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
   };
   const page = {
     async evaluate() { return { claim: { unsigned: !state.issued,
-      status: state.approved ? 'ready_to_claim' : 'pending_claim', available: state.approved } }; },
-    getByTestId(id) { return { waitFor: async () => {}, click: async () => {
+      status: state.approved ? 'ready_to_claim' : 'pending_claim',
+      available: state.approved || (fail === 'denied-claimable' && state.grade === 40) } }; },
+    getByTestId(id) { return { waitFor: async () => {}, count: async () =>
+      id === 'canvas-claim-action' && (state.approved || (fail === 'denied-claimable' && state.grade === 40)) ? 1 : 0,
+    click: async () => {
       if (id === 'canvas-claim-action') {
         assert.equal(state.claimObserved, true, 'Claim observer must precede the product click');
         state.claimClicked = true;
@@ -122,6 +127,10 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     } },
   };
   const operations = { ...stock,
+    async waitForCanvasCourseCompletion() { return { requirement_count: 1, requirement_completed_count: 1 }; },
+    async validateAndActivateBinding() { return { activation: { ready: true } }; },
+    async waitForLatestRosterJob() { return { result: { pending_claim: 1 } }; },
+    async waitForCandidate() { return { status: 'pending_claim' }; },
     async launchLearnerResource() { return { page, bootstrap: { application_id: APP,
       organization_id: fail === 'foreign-bootstrap' ? 'foreign' : 'org', application_template_id: 'application-template',
       credential_template_id: 'template', canvas_platform_id: 'platform', canvas_program_binding_id: 'binding' } }; },
@@ -129,7 +138,8 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
     async triggerLearnerSync() {
       state.jobs++;
       const job = { ...scope, id: `job-${state.jobs}`, status: 'succeeded', created_at: new Date(10000).toISOString(),
-        result: { policy_allowed: state.grade === 95, requirements_checked: 1 } };
+        result: { policy_allowed: state.grade === 95 && !(fail === 'recovery-transient-course' && state.jobs === 3),
+          requirements_checked: 1 } };
       if (fail === 'denial-sync' && state.grade === 40) throw Error('Worker failed');
       if (fail === 'stale-job' && state.jobs === 2) job.created_at = new Date(0).toISOString();
       return { body: { sync: { job_id: job.id } }, job };
@@ -145,7 +155,10 @@ function harness({ scenario = 'external-evidence-to-credential', fail = '' } = {
       state.issued = true;
       return { ok: true, receipt: { id: 'wallet-record', vct: setup.templates.credential.vct } };
     },
-    async verify() { return { session: { ok: true }, wallet: { ok: true }, result: {
+    async verify() { if (fail === 'wallet-presentation-rejected') return {
+      session: { ok: true, status: 200, requestUri: '[present]' },
+      wallet: { ok: false, status: 400 }, result: null };
+    return { session: { ok: true }, wallet: { ok: true }, result: {
       httpStatus: 200, status: fail === 'verification-missing-status' ? undefined
         : fail === 'verification-pending' ? 'PENDING' : 'COMPLETED',
       evaluation: fail === 'verification-missing-evaluation' ? undefined : fail === 'verification-denied' ? 'failed' : 'passed',
@@ -163,7 +176,7 @@ test('D08 current operations bind one launch, approval, receipt, verifier and re
   assert.equal(h.report.correctionReview.resolved, true);
   assert.equal(h.report.credentialId, 'credential');
   assert.equal(h.state.legacy, true);
-  assert.equal(h.report.deniedApproval.httpStatus, 409);
+  assert.equal(h.report.deniedApproval.claimAvailable, false);
   assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, true);
   assert.deepEqual(h.report.untrustedIngest.before, h.report.untrustedIngest.after);
   assert.doesNotThrow(() => requireCaptureMutationReconciliation(h.report));
@@ -179,6 +192,23 @@ test('D07 runs fresh pre-issuance denial/recovery and retired-ingest operation w
   assert.equal(h.report.behaviorAssertions.invalid_evidence_provenance_denied, true);
 });
 
+test('recovery requires a new permitting job after transient course recalculation', async () => {
+  const h = harness({ scenario: 'canvas-learning-achievement', fail: 'recovery-transient-course' });
+  await h.run();
+  assert.equal(h.report.recoveryRetries.length, 1);
+  assert.equal(h.report.recoveryRetries[0].policyAllowed, false);
+  assert.equal(h.report.preIssuanceCorrection.recovered.policyAllowed, true);
+  assert.equal(h.report.preIssuanceCorrection.recovered.jobId, 'job-4');
+});
+
+test('rejected wallet presentation cannot qualify verification', async () => {
+  const h = harness({ scenario: 'canvas-learning-achievement', fail: 'wallet-presentation-rejected' });
+  await assert.rejects(h.run(), /completed wallet presentation/);
+  assert.equal(h.report.verificationAttempt.walletStatus, 400);
+  assert.equal(h.report.verification, undefined);
+  assert.deepEqual(h.report.behaviorAssertions, {});
+});
+
 for (const fail of ['foreign-claim-application', 'foreign-claim-organization', 'foreign-claim-transaction', 'claim-http-failed']) {
   test(`${fail} cannot deliver a foreign or failed offer to the wallet`, async () => {
     const h = harness({ fail });
@@ -190,21 +220,23 @@ for (const fail of ['foreign-claim-application', 'foreign-claim-organization', '
   });
 }
 
-for (const fail of ['denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable',
-  'denied-approval-wrong-reason', 'ingest-side-effect']) {
-  test(`${fail} cannot qualify and leaves uncertain mutation ownership for reconciliation`, async () => {
+for (const fail of ['denied-transaction-reserved', 'denied-credential-issued', 'denied-claimable',
+  'denied-approval-reserved', 'denied-approval-issued', 'denied-approval-claimable', 'denied-approval-wrong-reason']) {
+  test(`${fail} cannot qualify the denied evidence path`, async () => {
     const h = harness({ fail }); await assert.rejects(h.run());
     assert.equal(h.state.grade, 95);
     assert.deepEqual(h.report.behaviorAssertions, {});
-    assert.throws(() => requireCaptureMutationReconciliation(h.report), /uncertain/);
-    assert.equal(h.report.pendingOperations.includes(fail === 'ingest-side-effect'
-      ? 'legacy-evidence-ingest' : 'scoped-approval'), true);
-    if (fail === 'ingest-side-effect') {
-      assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, false);
-      assert.notDeepEqual(h.report.untrustedIngest.before, h.report.untrustedIngest.after);
-    }
   });
 }
+
+test('retired-ingest side effect cannot qualify and leaves mutation ownership uncertain', async () => {
+  const h = harness({ fail: 'ingest-side-effect' }); await assert.rejects(h.run());
+  assert.equal(h.state.grade, 95);
+  assert.deepEqual(h.report.behaviorAssertions, {});
+  assert.throws(() => requireCaptureMutationReconciliation(h.report), /uncertain/);
+  assert.equal(h.report.pendingOperations.includes('legacy-evidence-ingest'), true);
+  assert.equal(h.report.untrustedIngest.authoritativeStateUnchanged, false);
+});
 
 for (const fail of ['post-denial-stale-evidence', 'post-recovery-stale-evidence']) {
   test(`${fail} cannot turn a fresh job or review into fresh authoritative evidence`, async () => {

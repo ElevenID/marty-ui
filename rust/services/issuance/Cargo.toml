@@ -34,6 +34,7 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
+marty-claim-collection.workspace = true
 axum.workspace = true
 async-trait.workspace = true
 base64.workspace = true

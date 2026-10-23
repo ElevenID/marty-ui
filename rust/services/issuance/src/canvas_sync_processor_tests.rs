@@ -3,6 +3,51 @@ use std::sync::Mutex;
 use super::*;
 
 #[test]
+fn canvas_claim_activity_name_is_authoritative_and_part_of_the_observation_hash_input() {
+    let mut record = json!({"score":95,"assignment":{"id":9,"name":"Canvas learning check","points_possible":100}});
+    assert_eq!(
+        rest_assertion("canvas.quiz_score", &record)["activity_name"],
+        "Canvas learning check"
+    );
+    let before = normalized_rest_payload(&record);
+    record["assignment"]["name"] = json!("Renamed learning check");
+    assert_ne!(normalized_rest_payload(&record), before);
+    record["assignment"]["name"] = json!({"invalid":"object"});
+    assert!(!rest_assertion("canvas.quiz_score", &record).contains_key("activity_name"));
+}
+
+#[test]
+fn absent_canvas_activity_name_preserves_frozen_successful_fact_contract() {
+    let frozen: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/canvas-worker-timeout-oracle.json"
+    ))
+    .unwrap();
+    let expected = &frozen["observations"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|case| case["case"] == "application_prompt")
+        .unwrap()["outcome"]["facts"][0]["assertion"];
+    let mut record =
+        json!({"score":90.0,"workflow_state":"graded","assignment":{"points_possible":100.0}});
+    for name in [
+        None,
+        Some(Value::Null),
+        Some(json!(" ")),
+        Some(json!({"invalid":"object"})),
+    ] {
+        if let Some(name) = name {
+            record["assignment"]["name"] = name;
+        }
+        assert_eq!(
+            Value::Object(rest_assertion("canvas.assignment_score", &record)),
+            *expected
+        );
+        assert!(!normalized_rest_payload(&record).contains_key("activity_name"));
+    }
+}
+
+#[test]
 fn roster_bounds_use_lossless_integer_grammar_and_clamp_before_conversion() {
     assert_eq!(
         CanvasRosterBounds::from_values(None, None).unwrap(),

@@ -2845,7 +2845,7 @@ async fn create_contract_schema(pool: &sqlx::PgPool) {
         "CREATE TABLE issuance_service.application_templates (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL,
             credential_template_id TEXT NOT NULL, approval_policy_set_id TEXT,
-            status TEXT NOT NULL)",
+            status TEXT NOT NULL, name TEXT, description TEXT, claim_collection_rules JSON NOT NULL DEFAULT '[]'::json, form_fields JSON NOT NULL DEFAULT '[]'::json, application_validity_days INTEGER NOT NULL DEFAULT 30)",
         "CREATE TABLE issuance_service.canvas_platforms (
             id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, canvas_account_id TEXT,
             registration_status TEXT, enabled BOOLEAN NOT NULL, archived_at TIMESTAMPTZ)",

@@ -25,7 +25,7 @@ def owned(tmp_path, monkeypatch):
         route = urlsplit(path).path
         if route.endswith("/api-keys"):
             return 200, {**body, "id": "new-key", "organization_id": "00000000-0000-0000-0000-000000000001",
-                         "scope_type": "organization", "enabled": True, "key": "k" * 40}
+                         "scope_type": "ORGANIZATION", "enabled": True, "key": "k" * 40}
         if route.endswith("/api-keys/new-key"):
             return 200, {"success": True}
         if "issuer-identities" in route:
@@ -82,6 +82,8 @@ def owned(tmp_path, monkeypatch):
     original["certificate_plan"]["organization_id"] = journal.organization
     original["application"]["issuer_did"] = "did:web:beta.elevenidllc.com:orgs:00000000-0000-0000-0000-000000000001"
     fresh = journal.fresh_plan(original)
+    assert len(fresh["application"]["issuer_did"].split(":")) == 5
+    assert fresh["application"]["issuer_did"].endswith("-demo-" + journal.value["run_id"])
     journal.create_issuers(fresh)
     fresh = journal.create_inputs(fresh, {"name_prefix": "Source control",
         "compliance_profile_id": "10000000-0000-0000-0000-000000000005"})
@@ -99,9 +101,19 @@ def owned(tmp_path, monkeypatch):
     return journal, calls, records, kwargs, status
 
 
+def test_fresh_issuer_rejects_an_extra_did_path(owned):
+    journal, _, _, _, _ = owned
+    plan_value = copy.deepcopy(journal.value["plan"])
+    plan_value["application"]["issuer_did"] += ":another"
+    with pytest.raises(PassportOwnershipError, match="did:web organization slug"):
+        journal.fresh_plan(plan_value)
+
+
 def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
     journal, calls, records, kwargs, _ = owned
     assert journal.retire(**kwargs)["complete"] is True
+    assert ("flow", "POST", "/v1/api-keys?organization_id=" + journal.organization) in calls
+    assert ("flow", "DELETE", "/v1/api-keys/new-key?organization_id=" + journal.organization) in calls
     assert all(row["status"] == "DEPRECATED" for row in records.values())
     assert [row[:2] for row in calls if row[0] == "private"] == [
         ("private", "GET"), ("private", "POST"), ("private", "GET")]
@@ -109,6 +121,22 @@ def test_exact_fresh_setup_and_retirement_preserve_terminal_history(owned):
     assert persisted["cleanup_complete"] is True and len(persisted["jobs"][0]["jobs"]) == 2
     assert "k" * 40 not in journal.path.read_text()
     assert not journal.key_path.exists()
+
+
+def test_rejected_key_response_retains_exact_authority_for_teardown(tmp_path):
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    org = "00000000-0000-0000-0000-000000000001"
+    journal = OwnedPassportResources(private / "owned.json", org,
+        request=lambda role, method, path, body, headers=None: (200, {
+            **body, "id": "new-key", "organization_id": org,
+            "scope_type": "WRONG", "enabled": True, "key": "k" * 40}),
+        private_signing=lambda *args: None)
+    with pytest.raises(PassportOwnershipError, match="Scoped passport API key"):
+        journal.create_key()
+    assert json.loads(journal.path.read_text())["api_key_id"] == "new-key"
+    assert "k" * 40 not in journal.path.read_text()
+    assert journal.key_path.exists()
 
 
 @pytest.mark.parametrize("failure", ["foreign-job", "duplicate-job", "pending-mutation", "changed-resource", "key-revived", "session-revived"])

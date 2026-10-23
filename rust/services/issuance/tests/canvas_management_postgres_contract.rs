@@ -1099,6 +1099,43 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         .await
         .unwrap()
         .unwrap();
+    let initial = unscoped.resources(&target).await.unwrap().unwrap();
+    let template = initial.application_template.as_ref().unwrap();
+    let template_id = template["id"].as_str().unwrap();
+    let original_rules = template["claim_collection_rules"].clone();
+    let mapped_rules = json!([{"claim_name":"activity_name","source":"EVIDENCE_EXTRACTION",
+        "source_config":{"requirement_id":"ags-score","fact_type":"canvas.ags_result",
+            "json_pointer":"/assertion/activity_name"}}]);
+    sqlx::query(
+        "UPDATE issuance_service.application_templates SET claim_collection_rules = $1
+        WHERE id = $2 AND organization_id = $3",
+    )
+    .bind(&mapped_rules)
+    .bind(template_id)
+    .bind(&target.organization_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mapped = unscoped.resources(&target).await.unwrap().unwrap();
+    let loaded_rules = mapped.application_template.as_ref().unwrap()["claim_collection_rules"]
+        .as_array()
+        .unwrap();
+    assert_eq!(loaded_rules, mapped_rules.as_array().unwrap());
+    assert!(marty_claim_collection::evidence_pointer_requested(
+        loaded_rules,
+        &json!({"requirement_id":"ags-score","fact_type":"canvas.ags_result"}),
+        "/assertion/activity_name"
+    ));
+    sqlx::query(
+        "UPDATE issuance_service.application_templates SET claim_collection_rules = $1
+        WHERE id = $2 AND organization_id = $3",
+    )
+    .bind(original_rules)
+    .bind(template_id)
+    .bind(&target.organization_id)
+    .execute(pool)
+    .await
+    .unwrap();
     let resources = unscoped.resources(&target).await.unwrap().unwrap();
     let original = roster_storage(pool).await;
     let candidate = CanvasRosterCandidate {
@@ -1423,7 +1460,7 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             organization_id text NOT NULL,
             credential_template_id text,
             approval_policy_set_id text,
-            status text NOT NULL)",
+            status text NOT NULL, name TEXT, description TEXT, claim_collection_rules JSON NOT NULL DEFAULT '[]'::json, form_fields JSON NOT NULL DEFAULT '[]'::json, application_validity_days INTEGER NOT NULL DEFAULT 30)",
     )
     .execute(pool)
     .await

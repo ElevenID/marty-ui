@@ -12,6 +12,31 @@ const { acquireWalletSession } = require('./demo-wallet-session');
 const { login, selectOrg } = require('./audit-beta-credential-lifecycle');
 const { VIDEO_SIZE, finalizeVideo, showStep, showVerificationResult } = require('./demo-recording');
 
+function localOverlayBinding(env = process.env) {
+  const filename = env.DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT;
+  if (!filename) return null;
+  assert.equal(filename, '/capture-prerequisites/native-overlay.json');
+  assert.equal(env.RECORD_VIDEO, '0', 'Native overlay is restricted to functional reruns');
+  const bytes = fs.readFileSync(filename);
+  const digest = createHash('sha256').update(bytes).digest('hex');
+  assert.equal(digest, env.DEMO_LOCAL_NATIVE_OVERLAY_SHA256, 'Native overlay receipt changed');
+  const receipt = JSON.parse(bytes);
+  assert.equal(receipt.mode, 'EPHEMERAL_LOCAL_NATIVE_OVERLAY');
+  assert.equal(receipt.state, 'APPLIED_LOCAL_ONLY');
+  assert.equal(receipt.productionReleaseQualified, false);
+  assert.equal(receipt.imagesBuiltForCandidate, false);
+  assert.equal(receipt.imageSourceMarkerRemainsBaseline, true);
+  assert.match(receipt.sourceRevision, /^[a-f0-9]{40}$/);
+  assert.equal(receipt.rows?.length, 8);
+  for (const row of receipt.rows) {
+    assert.match(row.candidateSha256, /^[a-f0-9]{64}$/);
+    assert.equal(row.observedAfterSha256, row.candidateSha256);
+  }
+  return {nativeSourceRevision:receipt.sourceRevision, receiptSha256:digest,
+    baselineSourceIds:[...new Set(receipt.rows.map(row => row.imageSourceId))],
+    releaseQualified:false, betaImageMarkersRemainBaseline:true};
+}
+
 async function main() {
   const scenario = process.argv[2];
   assert.ok(['canvas-learning-achievement', 'external-evidence-to-credential'].includes(scenario));
@@ -32,6 +57,7 @@ async function main() {
   const evidence = await require(helper).createLiveEvidenceClient();
   const dir = path.resolve(process.env.DEMO_ARTIFACT_DIR);
   const recording = process.env.RECORD_VIDEO === '1';
+  const overlay = localOverlayBinding();
   const report = { scenario, startedAt: new Date().toISOString(), status: 'FAIL',
     executionBoundary,
     releaseReady: false, captureClassification: 'FIRST_PARTY_BROWSER_RUST_WALLET',
@@ -39,7 +65,7 @@ async function main() {
     nativeIndependentWalletCapture: false, operations: [], behaviorAssertions: {}, failures: [] };
   const setupState = {};
   const contexts = [], videos = new Map();
-  let browser, setup, session, adminPage, complete = false, applicationId;
+  let browser, setup, session, adminPage, complete = false, applicationId, phase = 'deployment';
   const save = (file, value) => fs.writeFileSync(path.join(dir, file), JSON.stringify(value, null, 2) + '\n', { flag: 'wx' });
   async function recordContext() {
     const context = await browser.newContext({ viewport: VIDEO_SIZE,
@@ -59,10 +85,22 @@ async function main() {
   }
   try {
     report.deployment = await deployment();
+    if (overlay) {
+      assert.deepEqual(overlay.baselineSourceIds, [report.deployment.source],
+        'Local overlay and public beta marker refer to different baselines');
+      report.localOverlayBinding = {...overlay};
+      delete report.localOverlayBinding.baselineSourceIds;
+    }
     // This exact recorder checkout is already bound by the parent and helper
     // handshake. The imported report remains a prerequisite, never an assertion.
-    const { loadCanvasPortabilityAttestation } = require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'));
-    const prerequisite = loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
+    const localEngineering = process.env.CANVAS_LOCAL_ENGINEERING_PREREQUISITE === '1';
+    assert.equal(localEngineering, Boolean(overlay),
+      'Local engineering prerequisite requires the exact native overlay binding');
+    const prerequisite = localEngineering
+      ? require(path.join(path.dirname(helper), 'canvasLocalEngineeringPrerequisite.js'))
+        .loadCanvasLocalEngineeringPrerequisite(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)
+      : require(path.join(path.dirname(helper), 'canvasPortabilityAttestation.js'))
+        .loadCanvasPortabilityAttestation(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH);
     assert.equal(prerequisite.summary.marty_release_version, report.deployment.marker);
     assert.equal(prerequisite.summary.marty_source_id, report.deployment.source);
     report.prerequisite = prerequisite.summary;
@@ -73,6 +111,7 @@ async function main() {
     assert.deepEqual(actual, input);
     browser = await chromium.launch({ headless: process.env.HEADED !== '1' });
     const ledger = new stock.ObservationLedger(report.startedAt, { scope: 'CURRENT_RUN_SETUP_PREREQUISITES_ONLY' });
+    phase = 'canvas-fixture-setup';
     setup = await stock.prepareCanvasCaptureFixtures({ browser, ledger, state: setupState,
       runSuffix: actual.runId, ownershipDirectory: dir, pass: (id, detail) => ledger.pass(id, detail),
       prerequisiteDirectory: path.dirname(path.resolve(process.env.CANVAS_PORTABILITY_ATTESTATION_PATH)) });
@@ -102,22 +141,26 @@ async function main() {
     evidence.bindPage(canvasPage);
     if (recording) videos.set(`${scenario}-canvas.webm`, canvasPage.video());
     const popups = [];
-    // This context records every page. A real assignment popup is retained;
-    // unexpected additional pages fail instead of silently escaping capture.
+    // Initial and repeat assignment launches each open an actual LTI window.
+    // Bind and retain both; any further page fails the capture below.
     learner.on('page', page => {
       popups.push(page);
-      if (popups.length === 1) {
+      if (popups.length <= 2) {
         evidence.bindPage(page);
-        if (recording) videos.set(`${scenario}.webm`, page.video());
+        if (recording) videos.set(popups.length === 1 ? `${scenario}.webm`
+          : `${scenario}-repeat-launch.webm`, page.video());
       }
     });
     const admin = await recordContext();
     adminPage = await admin.newPage();
     evidence.bindPage(adminPage);
     if (recording) videos.set(`${scenario}-admin.webm`, adminPage.video());
+    phase = 'admin-login';
     await login(adminPage, stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_EMAIL'),
       stock.requireSecretFile('CANVAS_CAPTURE_ADMIN_PASSWORD'));
+    phase = 'admin-org-selection';
     await selectOrg(adminPage);
+    phase = 'wallet-session';
     const walletContext = await recordContext();
     session = await acquireWalletSession(walletContext, { origin: 'http://127.0.0.1:8787', runId: actual.runId });
     report.walletSession = session.evidence;
@@ -125,7 +168,10 @@ async function main() {
     evidence.bindPage(walletPage);
     if (recording) videos.set(`${scenario}-wallet.webm`, walletPage.video());
     const checkpoint = async (page, phase, facts) => {
-      assert.equal(popups.length, 1, 'Uncaptured or unexpected Canvas launch window');
+      report.windowObservation = { popupCount: popups.length,
+        initialPage: page === canvasPage, observedPopup: popups.includes(page) };
+      assert.ok(popups.length <= 2 && (page === canvasPage || popups.includes(page)),
+        'Uncaptured or unexpected Canvas launch window');
       report.landmarks ||= [];
       report.landmarks.push({ phase, observedAt: new Date().toISOString(), facts,
         alignment: 'DRIVER_LANDMARK_ONLY_REQUIRES_MEASURED_SOURCE_FRAMES' });
@@ -150,58 +196,33 @@ async function main() {
         } else { assert.equal(await card.count(), 0, 'Resolved review remains open in the actual queue'); }
       }
     };
+    phase = 'canvas-feature-sequence';
     await runCanvasCapture({ setup, page: canvasPage, adminPage, walletPage, scenario,
       checkpoint, report, onApplication: id => { applicationId = id; } });
-    assert.equal(popups.length, 1, 'Canvas opened an unexpected additional capture page');
+    assert.ok(popups.length <= 2,
+      'Canvas opened an unexpected additional capture page');
     assert.deepEqual(await deployment(), report.deployment, 'Beta deployment changed during Canvas capture');
     complete = true;
   } catch (error) {
     // Do not put response bodies, bearer offers or credentials in reports.
-    report.failures.push({ stage: 'execution', type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
+    report.failures.push({ stage: 'execution', phase, type: error.name, code: error.code || 'CANVAS_CAPTURE_FAILED' });
   } finally {
+    let cleanupComplete = true;
     async function cleanup(operation, fn) {
       try { await fn(); return true; } catch (error) {
         complete = false;
+        cleanupComplete = false;
         report.failures.push({ stage: 'cleanup', operation, type: error.name });
         return false;
       }
     }
     if (session) await cleanup('wallet-session', () => session.close());
     const state = setup || setupState;
-    let retired = true;
-    if (state.marty && applicationId) retired = await cleanup('owned-issuance-retirement', async () => {
-      const records = await state.marty.get(`/v1/issued-credentials?organization_id=${encodeURIComponent(state.organizationId || process.env.CANVAS_OSS_ORGANIZATION_ID)}`);
-      const owned = records.filter(r => r.application_id === applicationId);
-      assert.ok(owned.length <= 1);
-      for (const record of owned) {
-        assert.equal(record.organization_id, state.organizationId);
-        assert.equal(record.credential_template_id, state.templates.credential.id);
-        assert.equal(record.flow_execution_id, report.transactionId);
-        const id = record.credential_id || record.id;
-        await state.marty.post(`/v1/issued-credentials/${encodeURIComponent(id)}/revoke`, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
-        const current = await state.marty.get(`/v1/issued-credentials/${encodeURIComponent(id)}`);
-        assert.equal(String(current.status).toUpperCase(), 'REVOKED');
-      }
-      // Retain application history. An unused reserved offer needs explicit
-      // transaction revocation; never treat withdrawal as retirement.
-      if (!owned.length && report.transactionId) {
-        const transactionPath = `/v1/issuance/${encodeURIComponent(report.transactionId)}`;
-        const scoped = `${transactionPath}?organization_id=${encodeURIComponent(state.organizationId)}`;
-        const exact = transaction => {
-          assert.equal(transaction.id, report.transactionId);
-          assert.equal(transaction.application_id, applicationId);
-          assert.equal(transaction.organization_id, state.organizationId);
-          assert.equal(transaction.credential_template_id, state.templates.credential.id);
-          assert.ok(!transaction.issued_at, 'Transaction already issued');
-        };
-        exact(await state.marty.get(scoped));
-        await state.marty.post(`${transactionPath}/revoke`, { reason: 'Run-owned Canvas capture cleanup' }, [200]);
-        const retired = await state.marty.get(scoped);
-        exact(retired);
-        assert.equal(String(retired.status).toLowerCase(), 'revoked');
-      }
-      requireCaptureMutationReconciliation(report);
-    });
+    const retired = await cleanup('owned-issuance-retirement', () => stock.retireCanvasApplication({
+      marty: state.marty, applicationId, organizationId: state.organizationId,
+      credentialTemplateId: state.templates?.credential?.id, transactionId: report.transactionId,
+      reconcile: () => requireCaptureMutationReconciliation(report),
+    }));
     report.resourceRetirementConfirmed = retired;
     let disconnected = retired;
     if (retired && state.marty && state.platformId && state.oauthConnected) disconnected = await cleanup('oauth-disconnect', async () => {
@@ -209,16 +230,29 @@ async function main() {
       assert.equal(result.status, 'disconnected');
       assert.equal(result.scopes.length, 0);
     });
-    if (disconnected && state.marty && state.platformId) await cleanup('platform', () =>
+    let referencesRemoved = disconnected;
+    if (disconnected && state.marty && state.platformId) referencesRemoved = await cleanup('platform', () =>
       state.marty.delete(`/v1/integrations/canvas/platforms/${encodeURIComponent(state.platformId)}`, [204]));
-    if (disconnected && state.marty && state.integrationSecretId) await cleanup('oauth-secret', () =>
+    if (referencesRemoved && state.marty && state.integrationSecretId) referencesRemoved = await cleanup('oauth-secret', () =>
       state.marty.delete(`/v1/integrations/canvas/integration-secrets/${encodeURIComponent(state.integrationSecretId)}`, [204]));
+    if (referencesRemoved) await cleanup('owned-canvas-fixtures', async () => {
+      report.canvasFixtureCleanup = await stock.retireCanvasSetupFixtures(state, retired, disconnected);
+    });
     for (const context of contexts) await cleanup('recording-context', () => context.close());
     for (const [file, video] of videos) await cleanup('recording-finalization', () => finalizeVideo(video, dir, file));
     if (browser) await cleanup('browser', () => browser.close());
+    report.cleanup = { complete: cleanupComplete };
     report.completedAt = new Date().toISOString();
     report.status = complete ? 'PASS' : 'FAIL';
-    report.releaseReady = complete;
+    report.functionalReady = complete;
+    report.operations_verified = complete;
+    report.cleanup = {complete:complete && report.resourceRetirementConfirmed === true};
+    report.releaseReady = complete && !overlay;
+    if (overlay) {
+      report.qualification = 'LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS';
+      report.signedManifestVerified = false;
+      report.demo_qualified = false;
+    }
     save('report.json', report);
     try { if (complete) await evidence.complete(); } finally { evidence.close(); }
   }
@@ -229,4 +263,4 @@ if (require.main === module) main().catch(error => {
   process.stderr.write(`Canvas capture initialization failed (${code}).\n`);
   process.exitCode = 1;
 });
-module.exports = { main };
+module.exports = { main, localOverlayBinding };

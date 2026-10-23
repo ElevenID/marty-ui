@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -15,6 +16,7 @@ use marty_issuance_service::{
     canvas_award_candidate_service::{
         CanvasAwardCandidateApprovalError, CanvasAwardCandidateApprover,
     },
+    canvas_issuance_guard::CanvasGuardConfig,
     canvas_lti_bootstrap::CanvasLtiBootstrapApplication,
     canvas_lti_experience::{
         canvas_lti_experience_session_context, CanvasLtiExperienceSessionContext,
@@ -26,6 +28,15 @@ use marty_issuance_service::{
     },
 };
 use serde_json::{json, Map, Value};
+
+fn guard_config() -> CanvasGuardConfig {
+    CanvasGuardConfig {
+        enabled: true,
+        pilot_organizations: BTreeSet::from(["org-1".into()]),
+        evidence_max_age: Duration::from_secs(900),
+        readiness_max_age: Duration::from_secs(900),
+    }
+}
 
 fn now() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 8, 29, 16, 0, 0)
@@ -123,6 +134,7 @@ fn binding() -> Map<String, Value> {
 
 fn snapshot() -> CanvasAwardApprovalSnapshot {
     CanvasAwardApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: object(json!({
             "id": "application-1",
             "organization_id": "org-1",
@@ -205,6 +217,7 @@ fn approval_debug_output_redacts_snapshots_and_capabilities() {
     let binding_secret = "private-binding";
     let capability_secret = "private-pre-authorized-code";
     let private_snapshot = CanvasAwardApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: object(json!({"secret": application_secret})),
         application_template: object(json!({"secret": template_secret})),
         binding: object(json!({"secret": binding_secret})),
@@ -236,7 +249,7 @@ fn approval_plan_uses_only_the_validated_template_snapshot() {
         &snapshot(),
         &seed(),
         now(),
-        Duration::from_secs(900),
+        &guard_config(),
     )
     .unwrap();
     assert_eq!(transaction.status, CredentialTransactionStatus::Pending);
@@ -273,9 +286,60 @@ fn approval_plan_uses_only_the_validated_template_snapshot() {
         &drift,
         &seed(),
         now(),
-        Duration::from_secs(900),
+        &guard_config(),
     )
     .is_none());
+}
+
+#[test]
+fn automatic_projection_uses_evidence_age_independently_of_binding_readiness() {
+    let mut state = snapshot();
+    state
+        .binding
+        .insert("readiness_validated_at".into(), json!(now()));
+    state.application.get_mut("integration_context").unwrap()["canvas"]["lti_subject"] =
+        json!("learner-subject-1");
+    state.application_template.insert(
+        "claim_collection_rules".into(),
+        json!([{
+            "claim_name":"achievement", "source":"EVIDENCE_EXTRACTION",
+            "source_config":{"requirement_id":"grade", "json_pointer":"/assertion/score_percent"}
+        }]),
+    );
+    let scope = json!({"course_id":"course-1", "activity_id":"activity-1"});
+    state.binding.insert(
+        "evidence_requirements".into(),
+        json!([{
+            "requirement_id":"grade", "source":"canvas_rest", "fact_type":"canvas.assignment_score",
+            "scope":scope, "pass_rule":{"min_score_percent":80}, "required":true
+        }]),
+    );
+    state.evidence_facts = vec![json!({
+        "id":"fact-1", "organization_id":"org-1", "application_id":"application-1",
+        "provider":"canvas", "subject_id":"learner-subject-1", "requirement_id":"grade",
+        "fact_type":"canvas.assignment_score", "source":{"source":"canvas_rest"}, "scope":scope,
+        "logical_key":"grade", "source_revision":"revision-1", "payload_hash":"hash-1",
+        "verification":{"status":"VERIFIED"}, "assertion":{"score_percent":92},
+        "observed_at":now() - chrono::Duration::seconds(60)
+    })];
+    for (readiness_seconds, evidence_seconds, expected) in [(30, 900, true), (900, 30, false)] {
+        let mut config = guard_config();
+        config.readiness_max_age = Duration::from_secs(readiness_seconds);
+        config.evidence_max_age = Duration::from_secs(evidence_seconds);
+        let result = plan_canvas_award_approval(
+            &context(),
+            &application(),
+            &plan(),
+            &state,
+            &seed(),
+            now(),
+            &config,
+        );
+        assert_eq!(result.is_some(), expected);
+        if let Some(transaction) = result {
+            assert_eq!(transaction.claims["achievement"], json!(92));
+        }
+    }
 }
 
 struct Repository {
@@ -375,7 +439,7 @@ fn service(
         }),
         Arc::new(Seeds),
         Arc::new(Clock),
-        Duration::from_secs(900),
+        guard_config(),
     )
 }
 

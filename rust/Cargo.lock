@@ -3650,6 +3650,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "chrono",
+ "marty-claim-collection",
  "marty-event-stream",
  "mmf-platform",
  "mmf-security",
@@ -3847,6 +3848,14 @@ dependencies = [
  "url",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "marty-claim-collection"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
 ]
 
 [[package]]
@@ -4290,6 +4299,7 @@ dependencies = [
  "hyper-util",
  "jsonwebtoken",
  "log",
+ "marty-claim-collection",
  "marty-crypto",
  "marty-didcomm",
  "marty-emrtd-issuance",

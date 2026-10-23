@@ -907,3 +907,32 @@ fn stock_canvas_bulk_progress_joins_user_display_id_and_nested_progress() {
         json!(false)
     );
 }
+
+#[test]
+fn recovered_course_progress_uses_fresh_observation_order() {
+    let stale_completion = json!({
+        "completed_at": "2026-10-21T02:59:28Z",
+        "requirement_count": 2,
+        "requirement_completed_count": 2
+    });
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &stale_completion),
+        None
+    );
+    let mut revised = stale_completion.clone();
+    revised["updated_at"] = json!("2026-10-21T03:00:28Z");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        timestamp(revised.get("updated_at"))
+    );
+    revised["updated_at"] = json!("invalid");
+    assert_eq!(
+        rest_effective_at("canvas.course_completion", &revised),
+        None
+    );
+    assert!(rest_effective_at(
+        "canvas.assignment_score",
+        &json!({"graded_at": "2026-10-21T03:00:28Z"})
+    )
+    .is_some());
+}

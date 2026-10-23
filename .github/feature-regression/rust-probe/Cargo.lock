@@ -3116,6 +3116,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "marty-claim-collection"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+]
+
+[[package]]
 name = "marty-crypto"
 version = "0.2.2"
 source = "git+https://github.com/ElevenID/marty-core?rev=3f5dbb20999f773a765fd0b427a9050a6dc99fed#3f5dbb20999f773a765fd0b427a9050a6dc99fed"
@@ -3210,6 +3218,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "log",
+ "marty-claim-collection",
  "marty-crypto",
  "marty-didcomm",
  "marty-emrtd-issuance",

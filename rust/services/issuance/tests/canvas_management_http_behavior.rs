@@ -247,6 +247,7 @@ fn approval_object(value: Value) -> Map<String, Value> {
 
 fn approval_snapshot() -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
+        evidence_facts: Vec::new(),
         application: approval_object(json!({
             "id": "application-approval-1",
             "organization_id": "org-1",

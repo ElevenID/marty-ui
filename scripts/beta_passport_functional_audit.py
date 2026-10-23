@@ -15,6 +15,8 @@ import os
 import re
 import subprocess
 import sys
+import traceback
+import uuid
 from functools import partial
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -26,6 +28,22 @@ ORIGIN = "https://beta.elevenidllc.com"
 ROLES = ("gateway", "flow", "signing-keys", "issuance-native",
          "passport-beta-bureau", "passport-callback-signer")
 CALLBACK_NETWORK = "elevenid-beta-passport-callback-signing"
+
+def local_native_overlay_binding() -> dict[str, Any] | None:
+    """Verify the shared developer overlay independently of release markers."""
+    receipt = os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_RECEIPT")
+    if not receipt:
+        return None
+    binder = Path(os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER", ""))
+    require(binder.is_absolute() and binder.is_file() and not binder.is_symlink()
+            and binder.name == "run-real-canvas-engineering-contract.py"
+            and hashlib.sha256(binder.read_bytes()).hexdigest()
+                == os.environ.get("DEMO_LOCAL_NATIVE_OVERLAY_BINDER_SHA256"),
+            "Local native overlay verifier is unavailable or changed")
+    specification = importlib.util.spec_from_file_location("local_native_overlay_verifier", binder)
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module.verify_local_overlay(Path(receipt).resolve(strict=True), docker_context="desktop-linux")
 FEATURES = {
     "gateway": {"PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
                 "PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED": "false",
@@ -62,6 +80,15 @@ def session_id(value):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise PassportPrerequisiteError(message)
+
+
+def require_direct_beta_transport() -> None:
+    # The shared Node/Python runner explicitly sets "0" for disabled proxy mode.
+    # Reject every other nonempty value; string truthiness cannot express this flag.
+    require(os.environ.get("BETA_LOCAL_PROXY", "") in ("", "0")
+            and os.environ.get("BETA_ORIGIN", ORIGIN) == ORIGIN
+            and os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED", "1") == "1",
+            "Passport fresh operations require the exact beta origin and normal TLS")
 
 
 def docker_json(*arguments: str) -> list[dict[str, Any]]:
@@ -181,11 +208,17 @@ class ObservedPassportRequests:
     """
 
     def __init__(self, capture, browser, *, csca_session: str, dsc_session: str,
-                 flow_session: str, api_key: str):
+                 flow_session: str, api_key: str, callback_container_id: str,
+                 callback_post=None):
         require(len({session_id(csca_session), session_id(dsc_session), session_id(flow_session)}) == 3,
                 "Separate governed passport sessions are required")
+        require(re.fullmatch(r"[0-9a-f]{64}", callback_container_id) is not None,
+                "Selected callback container is invalid")
+        from scripts.probe_passport_beta_negative_callbacks import post_internal_callback
         self.capture = capture
         self.api_key = api_key
+        self.callback_container_id = callback_container_id
+        self.callback_post = callback_post or post_internal_callback
         self.sessions = {"csca": csca_session, "dsc": dsc_session, "flow": flow_session}
         self.contexts = []
         self.pages = {}
@@ -269,7 +302,8 @@ class ObservedPassportRequests:
         resource = re.fullmatch(
             r"/v1/(?:application-templates|credential-templates|delivery-destinations|flows/definitions)"
             r"(?:/[A-Za-z0-9._:-]{1,255}(?:/(?:activate|validate|deprecate))?)?", endpoint.path)
-        key = re.fullmatch(r"/v1/organizations/[A-Za-z0-9_-]{1,128}/api-keys(?:/[A-Za-z0-9_-]{1,128})?", endpoint.path)
+        key = (re.fullmatch(r"/v1/api-keys(?:/[A-Za-z0-9_-]{1,128})?", endpoint.path)
+               and re.fullmatch(r"organization_id=[0-9a-f-]{36}", endpoint.query))
         identity = endpoint.path in ("/v1/signing-keys/issuer-identities", "/v1/signing-keys/issuer-identities/resolve")
         require((role == "flow" and (resource or key)) or
                 (role in ("csca", "dsc") and identity) or
@@ -302,20 +336,23 @@ class ObservedPassportRequests:
             require(status == 200 and _ == {"authenticated": False}, "Old owned passport session remains accepted")
         return True
 
-    def failure_teardown(self, *, organization, key_id, old_key, probe_path):
+    def failure_teardown(self, *, organization, key_id, old_key, probe_path,
+                         owned_issuers=(), owned_run_id=None):
         """Bounded custody teardown, even when Page evidence has already failed.
 
         Actual API-context responses are inspected without fabricating Page/IPC
         observations. This path can never turn the failed scenario into a pass.
         """
         result = {"complete": False, "qualificationEligible": False, "keyDenied": key_id is None,
-                  "sessionsRetired": 0, "errors": []}
+                  "issuerIdentitiesRetired": 0, "sessionsRetired": 0, "errors": []}
 
-        def response(role, method, path, headers=None):
+        def response(role, method, path, headers=None, payload=None):
             require(path.startswith("/") and not path.startswith("//") and ".." not in path,
                     "Invalid bounded passport teardown path")
             actual = self.pages[role].context.request.fetch(ORIGIN + path, method=method,
-                headers=headers or {}, max_redirects=0, timeout=30000, fail_on_status_code=False)
+                headers=({"content-type": "application/json", **(headers or {})} if payload is not None else headers or {}),
+                data=json.dumps(payload, separators=(",", ":")) if payload is not None else None,
+                max_redirects=0, timeout=30000, fail_on_status_code=False)
             raw = actual.body()
             require(len(raw) <= 131072, "Passport teardown response exceeds bounds")
             body = json.loads(raw) if raw and method != "POST" else {}
@@ -325,12 +362,33 @@ class ObservedPassportRequests:
             try:
                 require(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key_id) and old_key == self.api_key,
                         "Cannot tear down foreign passport key")
-                route = "/v1/organizations/" + quote(organization, safe="") + "/api-keys/" + quote(key_id, safe="")
+                route = "/v1/api-keys/" + quote(key_id, safe="") + "?organization_id=" + quote(organization, safe="")
                 code, body = response("flow", "DELETE", route)
                 require(code == 200 and body.get("success") is True, "Owned passport key revocation failed")
                 code, _ = response("api", "GET", probe_path, {"x-api-key": old_key})
                 require(code == 401, "Old passport key remains accepted")
                 result["keyDenied"] = True
+            except Exception as error:
+                result["errors"].append(type(error).__name__)
+        for owned in owned_issuers:
+            try:
+                role, identity = owned["role"], owned["tuple"]
+                require(role in ("csca", "dsc") and owned.get("creation_returned") is True
+                        and isinstance(owned_run_id, str) and re.fullmatch(r"[a-f0-9]{32}", owned_run_id)
+                        and identity == {"issuer_did": identity["issuer_did"],
+                            "key_purpose": "csca" if role == "csca" else "x509_doc_signer",
+                            "credential_format": "ICAO_EMRTD", "algorithm": "ES256"}
+                        and identity["issuer_did"].startswith("did:web:beta.elevenidllc.com:orgs:")
+                        and identity["issuer_did"].endswith("-demo-" + owned_run_id),
+                        "Cannot retire an unproven passport issuer identity")
+                route = "/v1/signing-keys/issuer-identities?organization_id=" + quote(organization, safe="")
+                code, deleted = response(role, "DELETE", route, payload=identity)
+                require(code == 200 and all(deleted.get("deleted", {}).get(k) == v for k, v in identity.items()),
+                        "Owned passport issuer deletion failed")
+                code, _ = response(role, "POST", "/v1/signing-keys/issuer-identities/resolve?organization_id="
+                                   + quote(organization, safe=""), payload=identity)
+                require(code == 404, "Retired passport issuer identity still resolves")
+                result["issuerIdentitiesRetired"] += 1
             except Exception as error:
                 result["errors"].append(type(error).__name__)
         for role in ("csca", "dsc", "flow"):
@@ -344,7 +402,8 @@ class ObservedPassportRequests:
                 result["sessionsRetired"] += 1
             except Exception as error:
                 result["errors"].append(type(error).__name__)
-        result["complete"] = result["keyDenied"] and result["sessionsRetired"] == 3
+        result["complete"] = (result["keyDenied"] and result["sessionsRetired"] == 3
+                              and result["issuerIdentitiesRetired"] == len(owned_issuers))
         return result
 
     def flow_request(self, method, path, body, session):
@@ -361,18 +420,9 @@ class ObservedPassportRequests:
                            {"x-api-key": api_key})
 
     def negative_post(self, body: bytes, signature: str | None):
-        if __package__:
-            from .probe_passport_beta_negative_callbacks import denial_projection
-        else:
-            from probe_passport_beta_negative_callbacks import denial_projection
         require(isinstance(body, bytes) and len(body) <= 8192,
                 "Passport callback input exceeds bounds")
-        # Preserve exactly the bytes signed by the production KMS helper.
-        encoded = body.decode("utf8")
-        headers = {"x-personalization-signature": signature} if signature is not None else {}
-        status, result = self._fetch("api", "POST", "/v1/passport/webhooks/personalization",
-                                     encoded, headers)
-        return status, denial_projection(result)
+        return self.callback_post(self.callback_container_id, body, signature)
 
 
 def bound_json(binding: dict[str, str], *, private: bool = False) -> dict[str, Any]:
@@ -398,13 +448,96 @@ def bound_json(binding: dict[str, str], *, private: bool = False) -> dict[str, A
     return result
 
 
+FAILURE_STAGES = frozenset({
+    "SOURCE_IMPORTS", "DIRECT_TRANSPORT", "ACKNOWLEDGED_INPUTS", "COORDINATED_SOURCE",
+    "PROTECTED_RUNTIME", "PUBLIC_MARKERS", "PRIVATE_CUSTODY", "PRODUCTION_INVARIANTS",
+    "BROWSER_CONTEXT", "OWNED_SETUP", "FRESH_OPERATIONS", "OWNED_RETIREMENT",
+    "FINAL_INVARIANTS", "EVIDENCE_COMPLETION",
+})
+
+
+def coordinated_product_workspace(repository: Path, manifest_file: Path) -> Path:
+    """The acknowledged product input names marty-ui, not its ten-repo workspace."""
+    require(repository.is_absolute() and repository.is_dir() and repository.name == "marty-ui"
+            and (repository / ".git").exists()
+            and manifest_file.resolve().is_relative_to((repository / "tests/artifacts").resolve()),
+            "Passport fixed product repository or source manifest is unavailable")
+    return repository.parent
+
+
+def retain_private_failure(capture, error: Exception) -> None:
+    """Bounded stage/type only; never exception text, frames, IDs or custody."""
+    try:
+        binding = capture.inputs.get("scenario", {}).get("privateFixture", {})
+        fixture = Path(binding.get("path", ""))
+        private = (Path.home() / ".codex/private").resolve()
+        require(fixture.is_absolute() and fixture.is_file()
+                and fixture.resolve().is_relative_to(private)
+                and all(not parent.is_symlink() for parent in (fixture, *fixture.parents)),
+                "Diagnostic custody unavailable")
+        if os.name == "posix":
+            require(fixture.parent.stat().st_mode & 0o077 == 0, "Diagnostic directory is not private")
+        stage = getattr(capture, "_passport_failure_stage", "SOURCE_IMPORTS")
+        require(stage in FAILURE_STAGES, "Unknown diagnostic stage")
+        known = {"PassportPrerequisiteError", "RuntimeError", "ValueError", "OSError",
+                 "FileNotFoundError", "PermissionError", "AssertionError", "ImportError", "ModuleNotFoundError"}
+        error_type = type(error).__name__
+        record = {"schema": "marty.passport-private-failure/v1", "stage": stage,
+                  "errorType": error_type if error_type in known else "Exception",
+                  "qualificationEligible": False}
+        # Locations only: exception text and frame locals can contain session
+        # cookies, API keys or document material. Keep the private diagnostic
+        # useful without copying those values into any recorder artifact.
+        source_root = Path(__file__).resolve().parent.parent
+        recorder_client = Path(os.environ.get("DEMO_PYTHON_CAPTURE_CLIENT", "")).resolve()
+        source_trace = []
+        for frame in traceback.extract_tb(error.__traceback__)[-20:]:
+            try:
+                relative = Path(frame.filename).resolve().relative_to(source_root)
+            except ValueError:
+                if Path(frame.filename).resolve() != recorder_client:
+                    continue
+                relative = Path("recorder-client/external_python_evidence.py")
+            source_trace.append({"module": str(relative).replace("\\", "/"),
+                                 "function": frame.name, "line": frame.lineno})
+        record["sourceTrace"] = source_trace
+        capture_failure = getattr(capture, "failed", None)
+        if capture_failure is not None:
+            record["captureFailureType"] = type(capture_failure).__name__
+            record["captureFailureTrace"] = []
+            for frame in traceback.extract_tb(capture_failure.__traceback__)[-8:]:
+                if Path(frame.filename).resolve() == recorder_client:
+                    record["captureFailureTrace"].append({
+                        "module": "recorder-client/external_python_evidence.py",
+                        "function": frame.name, "line": frame.lineno})
+        output = fixture.with_name("passport-failure-" + uuid.uuid4().hex + ".json")
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf8") as stream:
+            json.dump(record, stream, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except Exception:
+        # Retention must never hide the original failed operation or adopt a path.
+        return
+
+
 def run_bound_capture(capture) -> dict[str, Any]:
+    try:
+        return _run_bound_capture(capture)
+    except Exception as error:
+        retain_private_failure(capture, error)
+        raise
+
+
+def _run_bound_capture(capture) -> dict[str, Any]:
     """Fulfil sealed source/fixture/runtime boundaries before fresh operations.
 
     The invoking engineering wrapper owns the existing global beta operation
     lock. Canonical functional completion requires fresh operations and owned cleanup
     review; this component emits only fresh operation evidence and its limits.
     """
+    capture._passport_failure_stage = "SOURCE_IMPORTS"
     root = Path(__file__).resolve().parents[1]
     # Isolated Python is launched by the owned Node bridge. Import only this
     # already Git-bound repository, never PYTHONPATH or fixture-specified code.
@@ -421,10 +554,9 @@ def run_bound_capture(capture) -> dict[str, Any]:
     from scripts.canvas_oss_beta_lifecycle import assert_beta
     from playwright.sync_api import sync_playwright
 
-    require(not os.environ.get("BETA_LOCAL_PROXY")
-            and os.environ.get("BETA_ORIGIN", ORIGIN) == ORIGIN
-            and os.environ.get("NODE_TLS_REJECT_UNAUTHORIZED", "1") == "1",
-            "Passport fresh operations require the exact beta origin and normal TLS")
+    capture._passport_failure_stage = "DIRECT_TRANSPORT"
+    require_direct_beta_transport()
+    capture._passport_failure_stage = "ACKNOWLEDGED_INPUTS"
     scenario = capture.inputs.get("scenario")
     require(capture.inputs.get("origin") == ORIGIN and isinstance(scenario, dict)
             and set(scenario) == {"runtimeReceipt", "deploymentManifest", "sourceManifest", "stackManifest",
@@ -449,17 +581,22 @@ def run_bound_capture(capture) -> dict[str, Any]:
             and stack_manifest.get("release_ready") is False
             and stack_manifest.get("public_demo_ready") is False,
             "Passport local stack manifest differs from the actual deployment")
-    workspace = Path(scenario["productWorkspace"])
-    require(workspace.is_absolute(), "Passport fixed product workspace is unavailable")
+    capture._passport_failure_stage = "COORDINATED_SOURCE"
+    workspace = coordinated_product_workspace(Path(scenario["productWorkspace"]),
+        Path(scenario["sourceManifest"]["path"]))
     source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
     # On ordinary beta this fails here, before custody is read or any HTTP call:
     # the simulator profile must have actually been deployed and independently
     # receipt-bound, never inferred from a services image containing its binary.
+    capture._passport_failure_stage = "PROTECTED_RUNTIME"
     initial_runtime = verify_runtime(receipt, deployment)
+    overlay_binding = local_native_overlay_binding()
+    capture._passport_failure_stage = "PUBLIC_MARKERS"
     public = assert_beta()
     require(public.get("source_id") == receipt["sourceId"]
             and public.get("release_version") == receipt["release"],
             "Public beta markers differ from the protected passport product")
+    capture._passport_failure_stage = "PRIVATE_CUSTODY"
     fixture = bound_json(scenario["privateFixture"], private=True)
     require(os.environ.get("RECORD_VIDEO") == "0", "Fresh passport adapter currently requires a recording-free functional run")
     require(set(fixture) == {"schema", "plan", "resourcePlan", "custody", "privateStatePath", "privateHandoffPath"}
@@ -481,6 +618,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
     batch.ensure_private_state_available(ownership_path)
     require(len({session_id(custody["cscaSession"]), session_id(custody["dscSession"]), session_id(custody["flowSession"])}) == 3,
             "Canonical passport operations require three distinct dedicated sessions")
+    capture._passport_failure_stage = "PRODUCTION_INVARIANTS"
     before = production_snapshot()
     attachments = production_attachment_sha256()
 
@@ -489,9 +627,12 @@ def run_bound_capture(capture) -> dict[str, Any]:
             bound_json(scenario[name], private=name == "privateFixture")
         require(verify_runtime(receipt, deployment) == initial_runtime,
                 "Protected passport runtime changed during fresh operations")
+        require(local_native_overlay_binding() == overlay_binding,
+                "Local native overlay changed during fresh operations")
         require(assert_beta() == public, "Public beta source changed during fresh operations")
 
     try:
+        capture._passport_failure_stage = "BROWSER_CONTEXT"
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=True)
             ports = None
@@ -500,7 +641,9 @@ def run_bound_capture(capture) -> dict[str, Any]:
             try:
                 ports = ObservedPassportRequests(capture, browser,
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
-                    flow_session=custody["flowSession"], api_key="")
+                    flow_session=custody["flowSession"], api_key="",
+                    callback_container_id=initial_runtime["containers"]["passport-beta-bureau"])
+                capture._passport_failure_stage = "OWNED_SETUP"
                 owned = OwnedPassportResources(ownership_path, fixture["plan"]["application"]["organization_id"],
                     request=ports.resource_request,
                     private_signing=partial(private_signing_request, initial_runtime["containers"]["signing-keys"]))
@@ -508,6 +651,7 @@ def run_bound_capture(capture) -> dict[str, Any]:
                 owned.create_issuers(owned_plan)
                 api_key = owned.create_key()
                 ports.api_key = api_key
+                capture._passport_failure_stage = "FRESH_OPERATIONS"
                 result = fresh.exercise(owned_plan, source_commit=receipt["sourceRevision"],
                     stack_manifest_sha256=scenario["stackManifest"]["sha256"],
                     csca_session=custody["cscaSession"], dsc_session=custody["dscSession"],
@@ -527,11 +671,13 @@ def run_bound_capture(capture) -> dict[str, Any]:
                                            post=ports.negative_post))
                 selected = json.loads(handoff.read_text(encoding="utf8"))
                 key_probe = "/v1/passport/applications/" + quote(selected["application_id"], safe="") + "/production-status"
+                capture._passport_failure_stage = "OWNED_RETIREMENT"
                 result["cleanup"] = owned.retire(selected=selected,
                     certificate_id=owned_plan["certificate_plan"]["csca"]["certificate_id"],
                     check_key_denied=lambda: ports.passport_request("GET", key_probe, None, api_key)[0] == 401,
                     retire_sessions=ports.retire_sessions)
-                result.update(releaseReady=True, cleanup_scope="owned_flow_templates_issuer_certificate_and_runtime_authority")
+                result.update(releaseReady=overlay_binding is None, functionalReady=True,
+                    cleanup_scope="owned_flow_templates_issuer_certificate_and_runtime_authority")
             finally:
                 try:
                     if ports:
@@ -545,7 +691,10 @@ def run_bound_capture(capture) -> dict[str, Any]:
                             # dedicated sessions; unresolved resources stay journaled.
                             authority = ports.failure_teardown(
                                 organization=fixture["plan"]["application"]["organization_id"],
-                                key_id=key_id, old_key=ports.api_key, probe_path=probe_path)
+                                key_id=key_id, old_key=ports.api_key, probe_path=probe_path,
+                                owned_issuers=(owned.value["issuer_identities"] if owned
+                                    and capture._passport_failure_stage == "OWNED_SETUP" else ()),
+                                owned_run_id=owned.value["run_id"] if owned else None)
                             if owned:
                                 owned.value["authority_retirement"] = authority
                                 if authority["keyDenied"] and owned.key_path.exists():
@@ -559,6 +708,12 @@ def run_bound_capture(capture) -> dict[str, Any]:
                         with cleanup_path.open("x", encoding="utf8") as output:
                             json.dump(cleanup, output, indent=2)
                             output.write("\n")
+                        if result is not None and cleanup["complete"] is True:
+                            # Detach live Page listeners while Playwright's event
+                            # loop still exists. The recorder client cannot remove
+                            # them after the sync_playwright context exits.
+                            capture._passport_failure_stage = "EVIDENCE_COMPLETION"
+                            capture.complete()
                 finally:
                     try:
                         if ports:
@@ -570,8 +725,13 @@ def run_bound_capture(capture) -> dict[str, Any]:
                 "Production changed during the fresh passport operation window")
         recheck()
         source_manifest.verify_manifest(workspace, Path(scenario["sourceManifest"]["path"]))
+    capture._passport_failure_stage = "EVIDENCE_COMPLETION"
     result.update(productRevision=receipt["sourceRevision"], productSourceId=receipt["sourceId"],
-                  productionInvariantPreserved=True, qualification="CURRENT_SOURCE_FUNCTIONAL_OPERATIONS",
+                  effectiveNativeProductRevision=(overlay_binding or {}).get("nativeSourceRevision", receipt["sourceRevision"]),
+                  localOverlayBinding=overlay_binding,
+                  productionInvariantPreserved=True,
+                  qualification=("LOCAL_MIXED_RUNTIME_FUNCTIONAL_OPERATIONS" if overlay_binding
+                                 else "CURRENT_SOURCE_FUNCTIONAL_OPERATIONS"),
                   ownershipJournalSha256=hashlib.sha256(ownership_path.read_bytes()).hexdigest(),
                   stackManifestKind="LOCAL_DEPLOYED_DEMO_MANIFEST", signedManifestVerified=False)
     output = Path(os.environ["DEMO_ARTIFACT_DIR"]) / "passport-fresh-operations.json"
@@ -580,7 +740,6 @@ def run_bound_capture(capture) -> dict[str, Any]:
     with output.open("x", encoding="utf8") as stream:
         json.dump(result, stream, indent=2)
         stream.write("\n")
-    capture.complete()
     return result
 
 

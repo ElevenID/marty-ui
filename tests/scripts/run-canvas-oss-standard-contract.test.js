@@ -20,6 +20,7 @@ const {
   selectProductionBadgeTemplates,
   contractFailureLocation,
   canvasTokenExpiration,
+  selectCanvasTokenExpirationTime,
   freshCanvasLearnerEmail,
   martyRequestSummary,
   createHolderProof,
@@ -30,6 +31,7 @@ const {
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
+  CanvasSessionClient,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
@@ -37,6 +39,32 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('Canvas token retirement uses its existing password session and decoded CSRF cookie', async () => {
+  const calls = [];
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies(origin) { assert.equal(origin, 'https://canvas-test.elevenidllc.com'); return [{ name: '_csrf_token', value: 'synthetic%2Bcsrf%3D' }]; },
+    request: { async fetch(url, options) {
+      calls.push({ url, options });
+      return { status: () => 200, json: async () => ({}), text: async () => '{}', headers: () => ({}) };
+    } },
+  });
+  const result = await client.request('DELETE', '/api/v1/users/1/tokens/2', { includeStatus: true });
+  assert.equal(result.status, 200);
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'synthetic+csrf=');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(calls[0].options.maxRedirects, 0);
+});
+
+test('Canvas session mutations without CSRF or outside the API origin never reach transport', async () => {
+  let calls = 0;
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies() { return []; }, request: { async fetch() { calls++; } },
+  });
+  await assert.rejects(client.request('DELETE', '/api/v1/users/1/tokens/2'));
+  await assert.rejects(client.request('GET', 'https://foreign.example/api/v1/users/1'));
+  assert.equal(calls, 0);
+});
 
 test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
   const error = new Error('secret-token request https://issuer.example?code=private-value');
@@ -635,4 +663,40 @@ test('course recovery waits for current nonempty counts despite retained complet
   const canvas = { get: async path => { paths.push(path); return paths.length === 1 ? stale : recovered; } };
   assert.equal(await waitForCanvasCourseCompletion(canvas, { course: { id: 'course-1' }, learner: { id: 'learner-1' } }), recovered);
   assert.deepEqual(paths, ['/api/v1/courses/course-1/users/learner-1/progress', '/api/v1/courses/course-1/users/learner-1/progress']);
+});
+
+function stockTimeWidget({ value = '12:00 AM', expanded = false, committedValue } = {}) {
+  const calls = [];
+  const time = {
+    async fill(next) { calls.push(['fill', next]); if (next !== value) expanded = true; value = next; },
+    async getAttribute(name) { assert.equal(name, 'aria-expanded'); return String(expanded); },
+    async press(key) { assert.equal(key, 'ArrowDown'); calls.push(['press', key]); expanded = true; },
+    async inputValue() { return value; },
+  };
+  const page = { getByRole(role, options) {
+    assert.equal(role, 'option'); assert.equal(options.exact, true);
+    return { async click() {
+      assert.equal(expanded, true, 'stock options only exist while the combobox is open');
+      calls.push(['click', options.name]); value = committedValue ?? options.name; expanded = false;
+    } };
+  } };
+  return { page, time, calls };
+}
+
+test('Canvas token time explicitly opens a closed same-value midnight combobox', async () => {
+  const widget = stockTimeWidget();
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '12:00 AM');
+  assert.deepEqual(widget.calls, [['fill', '12:00 AM'], ['press', 'ArrowDown'], ['click', '12:00 AM']]);
+});
+
+test('Canvas token time selects the exact option without moving an already-open selection', async () => {
+  const widget = stockTimeWidget({ expanded: true });
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM');
+  assert.deepEqual(widget.calls, [['fill', '1:30 AM'], ['click', '1:30 AM']]);
+});
+
+test('Canvas token time rejects a stale committed option before token submission', async () => {
+  const widget = stockTimeWidget({ committedValue: '12:00 AM' });
+  await assert.rejects(selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM'),
+    error => error.code === 'canvas_personal_token_time_uncommitted');
 });
