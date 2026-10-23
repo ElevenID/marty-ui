@@ -10,7 +10,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import approle_operation  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation  # noqa: E402
 from selfhost_operator_inputs import private_file  # noqa: E402
 from selfhost_operator_inputs import snapshot_origin as snapshot_origin  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
@@ -51,6 +51,9 @@ def main() -> int:
         if len(root_token) < 20:
             raise ValueError("snapshot bootstrap root token is invalid")
         bootstrap(Bao(args.bao_addr, args.bao_ca, root_token), args.output)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"self-host snapshot identity failed: {type(error).__name__}", file=sys.stderr)
         return 2

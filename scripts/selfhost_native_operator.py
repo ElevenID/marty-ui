@@ -9,6 +9,15 @@ import re
 import subprocess
 
 
+class OperatorCleanupError(RuntimeError):
+    """A mutating operator could not confirm rollback; safe for CLI diagnostics."""
+
+    def __init__(self, message: str):
+        if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed"}:
+            message = "Rust operator cleanup is unconfirmed"
+        super().__init__(message)
+
+
 def operator_command(root: Path, *args: str) -> list[str]:
     binary = os.environ.get("MARTY_DEPLOY_BIN", "").strip()
     if binary:
@@ -67,9 +76,7 @@ def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
                             capture_output=True, check=False, timeout=timeout)
     if result.returncode == 3:
         message = result.stderr.decode("utf-8", errors="replace").strip()
-        if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed"}:
-            message = "Rust operator cleanup is unconfirmed"
-        raise RuntimeError(message)
+        raise OperatorCleanupError(message)
     if result.returncode:
         # Native commands use fixed diagnostics; never echo public input or tokens.
         raise RuntimeError("Rust operator validation failed")

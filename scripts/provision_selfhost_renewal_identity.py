@@ -17,7 +17,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import approle_operation, approle_policy  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation, approle_policy  # noqa: E402
 from selfhost_operator_inputs import private_file, private_empty_or_source  # noqa: E402
 from selfhost_operator_inputs import write_private as write_private  # noqa: E402
 from activate_selfhost_renewed_secrets import checked_certificates, checked_tokens  # noqa: E402
@@ -199,6 +199,9 @@ def main() -> int:
                     raise ValueError("renewal retirement inputs are incomplete")
                 retire(Bao(args.bao_addr, args.bao_ca, ""),
                        args.identity, args.retired_identity)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"self-host renewal identity failed: {type(error).__name__}", file=sys.stderr)
         return 2

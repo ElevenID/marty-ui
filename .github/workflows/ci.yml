@@ -2174,7 +2174,7 @@ jobs:
           MARTY_DEPLOY_BIN_SHA256="$(sha256sum "$MARTY_DEPLOY_BIN" | cut -d ' ' -f 1)"
           export MARTY_DEPLOY_BIN_SHA256
           python -m pip install --disable-pip-version-check pytest
-          python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys
+          python -m pytest -q tests/test_export_selfhost_openbao.py tests/test_selfhost_native_approle.py tests/test_selfhost_approle_policy_parity.py tests/test_selfhost_operator_cleanup_cli.py tests/test_selfhost_native_operator.py::test_native_spki_matches_openssl_for_supported_operator_keys
 
   rust-lint-policy:
     name: Rust Lint and Packaging

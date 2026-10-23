@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from provision_selfhost_evidence_identity import checked_login as evidence_login
 from provision_selfhost_evidence_identity import mint as mint_evidence_token
+from selfhost_native_operator import OperatorCleanupError
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
     CUSTODY_SIGNER_LEAF_ACL,
@@ -236,6 +237,9 @@ def main() -> int:
                            args.project_name,
                            refresh_token=args.refresh_token,
                            identity_root=args.identity_root)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except ValueError as error:
         print(f"OpenBao custody signer provisioning failed: {error}", file=sys.stderr)
         return 2

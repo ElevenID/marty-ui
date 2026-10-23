@@ -11,7 +11,7 @@ import sys
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
-from selfhost_native_operator import approle_operation  # noqa: E402
+from selfhost_native_operator import OperatorCleanupError, approle_operation  # noqa: E402
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
 from provision_selfhost_snapshot_identity import APPROLE as READER_ROLE, AUTH_MOUNT, POLICY as READER_POLICY, ROLE_ID_FILE as READER_ROLE_ID_FILE, SECRET_ID_FILE as READER_SECRET_ID_FILE, checked_login as reader_login  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
@@ -132,6 +132,9 @@ def main() -> int:
                               args.rotator_identity)
             else:
                 retire_rotator(client, args.identity, args.retired_identity)
+    except OperatorCleanupError as error:
+        print(str(error), file=sys.stderr)
+        return 3
     except (OSError, ValueError, RuntimeError, HTTPError) as error:
         print(f"self-host snapshot rotation failed: {type(error).__name__}",
               file=sys.stderr)
