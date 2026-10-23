@@ -365,6 +365,12 @@ def validate_model(
         raise ValueError("Invalid native conformance model") from None
 
 
+class _CommandFailed(ValueError):
+    def __init__(self, returncode: int):
+        self.returncode = returncode
+        super().__init__(f"Native conformance preflight command failed (exit {returncode})")
+
+
 def _run(command: list[str], *, runner, capture: bool = False, timeout: int = 60):
     result = runner(
         command,
@@ -376,7 +382,8 @@ def _run(command: list[str], *, runner, capture: bool = False, timeout: int = 60
         timeout=timeout,
         check=False,
     )
-    require(result.returncode == 0, "Native conformance preflight command failed")
+    if result.returncode:
+        raise _CommandFailed(result.returncode)
     return result.stdout if capture else None
 
 
@@ -424,6 +431,10 @@ def verify_release(
         )
         validate_capabilities(json.loads(source))
         return plan
+    except _CommandFailed as error:
+        raise ValueError(
+            f"Native release qualification failed at {stage} (exit {error.returncode})"
+        ) from None
     except (
         OSError,
         subprocess.SubprocessError,
