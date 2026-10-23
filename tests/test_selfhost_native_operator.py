@@ -13,7 +13,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("operation,timeout", [("approle-bootstrap", None), ("approle-mint", None),
-                                            ("approle-login", 300), ("approle-policy", 300)])
+                                            ("approle-login", 300), ("approle-policy", 300),
+                                            ("approle-rotate", None), ("approle-retire", None),
+                                            ("leaf-refresh", None)])
 def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
     from types import SimpleNamespace
     from scripts import selfhost_native_operator as native

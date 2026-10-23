@@ -5,7 +5,6 @@ import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.error import HTTPError
 
 import pytest
 
@@ -36,114 +35,6 @@ def test_refresh_requires_evidence_identity_before_root_token_use(
                          "marty-selfhost-openbao-qualification",
                          refresh_token=True)
     assert (output_root / "selfhost_custody_signer_token").read_text(encoding="ascii") == "old"
-
-
-@pytest.mark.parametrize("lost_response", [False, True])
-def test_refresh_preserves_new_token_if_revocation_is_ambiguous(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, lost_response: bool,
-) -> None:
-    token_file = tmp_path / "selfhost_custody_signer_token"
-    token_file.write_text("old", encoding="ascii")
-    active_tokens = {"old", "new"}
-
-    class Operator:
-        endpoint = "https://127.0.0.1:18200"
-        ca = tmp_path / "ca.crt"
-
-    class Leaf:
-        def __init__(self, _endpoint, _ca, token):
-            assert token == "old"
-
-        def request(self, method, path):
-            assert (method, path) == ("POST", "auth/token/revoke-self")
-            assert token_file.read_text(encoding="ascii") == "old"
-            if lost_response:
-                active_tokens.discard("old")
-            raise HTTPError("https://127.0.0.1", 503, "unavailable", {}, None)
-
-    monkeypatch.setattr(signer, "Bao", Leaf)
-    with pytest.raises(RuntimeError, match="operator recovery"):
-        signer.refresh_scoped_token(
-            Operator(), token_file, "new",
-            lambda path, value, mode: path.write_text(value, encoding="ascii"),
-        )
-    assert token_file.read_text(encoding="ascii") == "old"
-    assert token_file.with_name(token_file.name + ".new").read_text(encoding="ascii") == "new"
-    assert active_tokens == ({"new"} if lost_response else {"old", "new"})
-
-
-def test_rootless_refresh_uses_old_leaf_self_revocation(tmp_path: Path,
-                                                        monkeypatch: pytest.MonkeyPatch) -> None:
-    token_file = tmp_path / "selfhost_custody_signer_token"
-    token_file.write_text("old", encoding="ascii")
-    calls = []
-
-    class Operator:
-        endpoint = "https://127.0.0.1:18200"
-        ca = tmp_path / "ca.crt"
-
-    class Leaf:
-        def __init__(self, endpoint, ca, token):
-            assert (endpoint, ca, token) == (Operator.endpoint, Operator.ca, "old")
-
-        def request(self, method, path):
-            assert token_file.read_text(encoding="ascii") == "old"
-            calls.append((method, path))
-
-    monkeypatch.setattr(signer, "Bao", Leaf)
-    signer.refresh_scoped_token(
-        Operator(), token_file, "new",
-        lambda path, value, mode: path.write_text(value, encoding="ascii"),
-    )
-    assert calls == [("POST", "auth/token/revoke-self")]
-    assert token_file.read_text(encoding="ascii") == "new"
-
-
-@pytest.mark.parametrize("new_lookup_valid", [False, True])
-def test_expired_leaf_403_requires_live_operator_lookup_of_replacement(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, new_lookup_valid: bool,
-) -> None:
-    token_file = tmp_path / "selfhost_custody_signer_token"
-    token_file.write_text("expired", encoding="ascii")
-
-    class Operator:
-        endpoint = "https://127.0.0.1:18200"
-        ca = tmp_path / "ca.crt"
-
-        def request(self, method, path, body):
-            assert (method, path) == ("POST", "auth/token/lookup")
-            if body["token"] == "expired":
-                raise HTTPError(self.endpoint, 403, "denied", {}, None)
-            assert body["token"] == "replacement"
-            return {"data": {"ttl": 3599 if new_lookup_valid else 0}}
-
-    class Leaf:
-        def __init__(self, endpoint, ca, token):
-            assert (endpoint, ca, token) == (Operator.endpoint, Operator.ca,
-                                             "expired")
-
-        def request(self, method, path):
-            assert (method, path) == ("POST", "auth/token/revoke-self")
-            raise HTTPError(Operator.endpoint, 403, "expired", {}, None)
-
-    monkeypatch.setattr(signer, "Bao", Leaf)
-    if new_lookup_valid:
-        signer.refresh_scoped_token(
-            Operator(), token_file, "replacement",
-            lambda path, value, _mode: path.write_text(value, encoding="ascii"),
-        )
-        assert token_file.read_text(encoding="ascii") == "replacement"
-        assert not token_file.with_name(token_file.name + ".new").exists()
-    else:
-        with pytest.raises(RuntimeError, match="operator recovery"):
-            signer.refresh_scoped_token(
-                Operator(), token_file, "replacement",
-                lambda path, value, _mode: path.write_text(value, encoding="ascii"),
-            )
-        assert token_file.read_text(encoding="ascii") == "expired"
-        assert token_file.with_name(token_file.name + ".new").read_text() == (
-            "replacement"
-        )
 
 
 def test_rootless_identity_cannot_share_runtime_secret_directory(

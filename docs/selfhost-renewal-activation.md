@@ -35,7 +35,13 @@ files, then revokes the old SecretID. Keep the old identity directory until
 revocation has been confirmed; after a failure following the new files being
 written, finish with `--mode retire --identity <replacement-identity>
 --retired-identity <old-identity>` (no `--output`). A failed rotation before
-the replacement is written destroys the newly minted SecretID. After success,
+the replacement is written attempts to destroy the newly minted SecretID.
+These transactions run in the matching Rust `marty-deploy` operator; the Python
+entrypoint and its arguments are unchanged. Exit status 3 means creation,
+cleanup, or retirement could not be confirmed: preserve both identity
+directories and investigate before retrying. If the SecretID creation response
+was lost, the old identity is retained but additional remote authority may
+exist without a locally staged replacement. After success,
 the old identity must fail login and a fresh `--mode login` with the new one
 must pass. This rotates the AppRole credential only, not a Transit key or CA;
 coordinated Raft restore and lost-identity recovery still need rehearsal.

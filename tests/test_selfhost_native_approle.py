@@ -50,6 +50,11 @@ def approle_server(tmp_path):
     def dispatch(method, path, body, token):
         mount, role, policy, leaf_role, leaf_policy = ROLES[state.role]
         state.seen.append((method, path, body, token))
+        if getattr(state, "hook", None):
+            result = state.hook(method, path, body, token)
+            if result is not None:
+                return result
+        token = getattr(state, "token_aliases", {}).get(token, token)
         if (method, path, token) in state.overrides:
             return state.overrides[method, path, token]
         if (method, path) in state.overrides:
@@ -140,6 +145,9 @@ def approle_server(tmp_path):
             try:
                 code, response = dispatch(self.command, self.path.removeprefix("/v1/"), body,
                                           self.headers.get("X-Vault-Token"))
+                if code == 0:
+                    self.close_connection = True
+                    return
                 data = json.dumps(response).encode() if code != 204 else b""
             except Exception as error:
                 state.errors.append(error)

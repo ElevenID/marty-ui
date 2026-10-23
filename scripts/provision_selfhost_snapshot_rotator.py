@@ -12,10 +12,10 @@ from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
 from selfhost_native_operator import OperatorCleanupError, approle_operation  # noqa: E402
-from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
-from provision_selfhost_snapshot_identity import APPROLE as READER_ROLE, AUTH_MOUNT, POLICY as READER_POLICY, ROLE_ID_FILE as READER_ROLE_ID_FILE, SECRET_ID_FILE as READER_SECRET_ID_FILE, checked_login as reader_login  # noqa: E402
+from selfhost_operator_inputs import private_file, snapshot_origin  # noqa: E402
+from provision_selfhost_snapshot_identity import APPROLE as READER_ROLE, AUTH_MOUNT, POLICY as READER_POLICY, ROLE_ID_FILE as READER_ROLE_ID_FILE, SECRET_ID_FILE as READER_SECRET_ID_FILE  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
-    RotationSpec, retire as retire_secret_id, rotate as rotate_secret_id,
+    RotationSpec,
 )
 from selfhost_openbao_client import Bao  # noqa: E402
 
@@ -53,26 +53,22 @@ def checked_login(bao: Bao, identity: Path) -> str:
 
 def rotate_reader(bao: Bao, identity: Path, output: Path,
                   rotator: Path) -> None:
-    rotate_secret_id(bao, identity, output, READER_ROTATION, reader_login,
-                     private_empty_or_source, private_file, write_private,
-                     manager_login=lambda client: checked_login(client, rotator))
+    approle_operation(bao, "rotate", "snapshot", identity, output=str(output),
+                      manager_identity=str(rotator))
 
 
 def retire_reader(bao: Bao, identity: Path, retired: Path,
                   rotator: Path) -> None:
-    retire_secret_id(bao, identity, retired, READER_ROTATION, reader_login,
-                     private_empty_or_source, private_file,
-                     manager_login=lambda client: checked_login(client, rotator))
+    approle_operation(bao, "retire", "snapshot", identity, retired=str(retired),
+                      manager_identity=str(rotator))
 
 
 def rotate_rotator(bao: Bao, identity: Path, output: Path) -> None:
-    rotate_secret_id(bao, identity, output, ROTATOR_ROTATION, checked_login,
-                     private_empty_or_source, private_file, write_private)
+    approle_operation(bao, "rotate", "snapshot-rotator", identity, output=str(output))
 
 
 def retire_rotator(bao: Bao, identity: Path, retired: Path) -> None:
-    retire_secret_id(bao, identity, retired, ROTATOR_ROTATION, checked_login,
-                     private_empty_or_source, private_file)
+    approle_operation(bao, "retire", "snapshot-rotator", identity, retired=str(retired))
 
 
 def main() -> int:

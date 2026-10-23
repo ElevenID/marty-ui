@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import stat
@@ -16,7 +17,7 @@ from urllib.error import HTTPError
 from provision_selfhost_disposable_tls import read_protected_root_token, verified_openbao_owner
 from provision_selfhost_evidence_identity import checked_login as evidence_login
 from provision_selfhost_evidence_identity import mint as mint_evidence_token
-from selfhost_native_operator import OperatorCleanupError
+from selfhost_native_operator import OperatorCleanupError, operator_bytes
 from selfhost_openbao_client import (
     CUSTODY_SIGNER,
     CUSTODY_SIGNER_LEAF_ACL,
@@ -36,34 +37,9 @@ def refresh_scoped_token(bao: Bao, token_file: Path, token: str,
     if temporary.exists() or temporary.is_symlink():
         raise ValueError("pending custody token refresh requires operator recovery")
     write(temporary, token, 0o400)
-    try:
-        try:
-            Bao(bao.endpoint, bao.ca, old_token).request("POST", "auth/token/revoke-self")
-        except HTTPError as error:
-            if error.code in (400, 403):
-                try:
-                    bao.request("POST", "auth/token/lookup", {"token": old_token})
-                except HTTPError as lookup_error:
-                    if lookup_error.code == 403:
-                        # OpenBao can return 403 for an expired token. Prove
-                        # this operator can still look up the new live leaf,
-                        # so the old 403 is not an operator ACL or TTL failure.
-                        current = bao.request("POST", "auth/token/lookup",
-                                              {"token": token}).get("data", {})
-                        if (not isinstance(current, dict)
-                                or type(current.get("ttl")) is not int
-                                or current["ttl"] <= 0):
-                            raise RuntimeError("new custody token lookup is invalid")
-                    elif lookup_error.code not in (400, 404):
-                        raise
-                else:
-                    raise RuntimeError("old custody token is still active") from error
-            else:
-                raise
-    except (OSError, RuntimeError, HTTPError) as error:
-        # A lost response does not tell us whether the old token was revoked.
-        # Keep both values recoverable; never revoke the only potentially live one.
-        raise RuntimeError("pending custody token refresh requires operator recovery") from error
+    operator_bytes(SOURCE_ROOT, "operator", "leaf-refresh", bao.endpoint, str(bao.ca),
+                   input=json.dumps({"old_token": old_token, "new_token": token,
+                                     "operator_token": bao.token}).encode("utf-8"))
     # If replacement fails, the new token remains in .new for operator recovery.
     os.replace(temporary, token_file)
 

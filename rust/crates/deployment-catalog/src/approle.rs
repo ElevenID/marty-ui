@@ -16,6 +16,8 @@ use std::{
 
 pub const CLEANUP_BOOTSTRAP: &str = "AppRole bootstrap cleanup is incomplete";
 pub const CLEANUP_LEAF: &str = "AppRole leaf cleanup is unconfirmed";
+pub const CLEANUP_ROTATION: &str = "AppRole rotation requires operator recovery";
+pub const CLEANUP_REFRESH: &str = "Scoped token refresh requires operator recovery";
 const SIGNER: &str = "selfhost-qualification-custody-v1";
 const SIGNER_POLICY: &str = "selfhost-qualification-custody-signer";
 const AUDIT_POLICY: &str = "selfhost-qualification-audit";
@@ -446,6 +448,18 @@ pub async fn login(
     } else {
         vec![]
     };
+    validated_login(bao, role, &role_id, &secret_id, policy_names, &context).await
+}
+
+async fn validated_login(
+    bao: &OpenBaoHttp,
+    role: Role,
+    role_id: &str,
+    secret_id: &str,
+    policy_names: Vec<String>,
+    context: &Value,
+) -> Result<Value> {
+    let spec = role.spec();
     let response = request(
         bao,
         Method::POST,
@@ -555,7 +569,7 @@ pub async fn login(
                 Some(token),
             )
             .await?["data"]["policy"]
-                != policy(role, &context)?
+                != policy(role, context)?
             {
                 return Err(REFUSAL);
             }
@@ -676,7 +690,7 @@ pub async fn login(
                 return Err(REFUSAL);
             }
             for (policy_name, expected) in [
-                (spec.policy, policy(role, &context)?),
+                (spec.policy, policy(role, context)?),
                 (SNAPSHOT_POLICY, policy(Role::Snapshot, &json!({}))?),
             ] {
                 if request(
@@ -712,6 +726,270 @@ pub async fn login(
         }
     }
     Ok(json!({"role_id":role_id,"secret_id":secret_id,"names":policy_names,"token":token}))
+}
+
+fn credential<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
+    value[key].as_str().filter(|v| !v.is_empty()).ok_or(REFUSAL)
+}
+
+async fn revoked(bao: &OpenBaoHttp, role: Role, role_id: &str, secret_id: &str) -> Result<()> {
+    let response = builder(
+        bao,
+        Method::POST,
+        &format!("auth/{}/login", role.spec().mount),
+        Some(&json!({"role_id": role_id, "secret_id": secret_id})),
+        None,
+    )
+    .send()
+    .await
+    .map_err(|_| REFUSAL)?;
+    if !matches!(
+        response.status(),
+        StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN
+    ) {
+        return Err(REFUSAL);
+    }
+    Ok(())
+}
+
+fn rotation_directory(role: Role, path: &Path) -> bool {
+    let prefix = match role {
+        Role::Audit => "audit-identity",
+        Role::Evidence => "evidence-identity",
+        Role::Snapshot => "snapshot-identity",
+        Role::SnapshotRotator => "snapshot-rotator-identity",
+        _ => return false,
+    };
+    path.file_name()
+        .and_then(|v| v.to_str())
+        .is_some_and(|name| {
+            name == prefix
+                || name
+                    .strip_prefix(prefix)
+                    .and_then(|v| v.strip_prefix('-'))
+                    .is_some_and(|v| {
+                        (1..=80).contains(&v.len())
+                            && v.bytes()
+                                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                    })
+        })
+}
+
+async fn rotation_authority(
+    bao: &OpenBaoHttp,
+    role: Role,
+    context: &Value,
+    fallback: &str,
+) -> Result<String> {
+    if role != Role::Snapshot {
+        return Ok(fallback.to_owned());
+    }
+    let manager = Path::new(credential(context, "manager_identity")?);
+    let login = login(bao, Role::SnapshotRotator, manager, &json!({})).await?;
+    Ok(credential(&login, "token")?.to_owned())
+}
+
+/// Commit a verified replacement before retiring the previous SecretID.
+/// Once retirement starts, preserve the staged identity for operator recovery.
+pub async fn rotate(
+    bao: &OpenBaoHttp,
+    role: Role,
+    identity: &Path,
+    context: &Value,
+    retiring: bool,
+) -> Result<()> {
+    if role == Role::CaRotation {
+        return Err(REFUSAL);
+    }
+    let identity = private_directory(identity)?;
+    let other = private_directory(Path::new(credential(
+        context,
+        if retiring { "retired" } else { "output" },
+    )?))?;
+    if identity == other
+        || (!retiring
+            && role != Role::Renewal
+            && (identity.parent() != other.parent()
+                || !rotation_directory(role, &identity)
+                || !rotation_directory(role, &other)))
+    {
+        return Err(REFUSAL);
+    }
+    if !retiring && fs::read_dir(&other).map_err(|_| REFUSAL)?.next().is_some() {
+        return Err(REFUSAL);
+    }
+    let spec = role.spec();
+    let current = login(bao, role, &identity, context).await?;
+    let role_id = credential(&current, "role_id")?;
+    let old_secret = credential(&current, "secret_id")?;
+    let old_token = credential(&current, "token")?;
+    let path = format!("auth/{}/role/{}/secret-id", spec.mount, spec.role);
+    if retiring {
+        let retired_role = private_file(&other.join(spec.role_file))?;
+        let retired_secret = private_file(&other.join(spec.secret_file))?;
+        if retired_role.trim() != role_id || retired_secret.trim() == old_secret {
+            return Err(REFUSAL);
+        }
+        let token = rotation_authority(bao, role, context, old_token).await?;
+        request(
+            bao,
+            Method::POST,
+            &format!("{path}/destroy"),
+            Some(&json!({"secret_id": retired_secret.trim()})),
+            Some(&token),
+        )
+        .await
+        .map_err(|_| CLEANUP_ROTATION)?;
+        return revoked(bao, role, role_id, retired_secret.trim())
+            .await
+            .map_err(|_| CLEANUP_ROTATION);
+    }
+    let create_token = rotation_authority(bao, role, context, old_token).await?;
+    let created = request(
+        bao,
+        Method::POST,
+        &path,
+        Some(&json!({})),
+        Some(&create_token),
+    )
+    .await
+    .map_err(|_| CLEANUP_ROTATION)?;
+    let new_secret = created["data"]["secret_id"]
+        .as_str()
+        .filter(|v| v.len() >= 20 && *v != old_secret)
+        .ok_or(CLEANUP_ROTATION)?;
+    let files: Vec<_> = [
+        Some(spec.role_file),
+        Some(spec.secret_file),
+        spec.names_file,
+    ]
+    .into_iter()
+    .flatten()
+    .map(|n| other.join(n))
+    .collect();
+    let staged: Result<Value> = async {
+        // Renewal historically qualifies the replacement before writing any
+        // credential or policy receipt. Other roles validate their staged files.
+        let qualified = if role == Role::Renewal {
+            let mut renewed_context = context.clone();
+            renewed_context["names"] = current["names"].clone();
+            Some(
+                validated_login(
+                    bao,
+                    role,
+                    role_id,
+                    new_secret,
+                    names(&current["names"])?,
+                    &renewed_context,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        write_private(&other.join(spec.role_file), role_id, 512)?;
+        write_private(&other.join(spec.secret_file), new_secret, 512)?;
+        if let Some(file) = spec.names_file {
+            write_private(
+                &other.join(file),
+                &serde_json::to_string(&current["names"]).map_err(|_| REFUSAL)?,
+                4096,
+            )?;
+        }
+        match qualified {
+            Some(value) => Ok(value),
+            None => login(bao, role, &other, context).await,
+        }
+    }
+    .await;
+    let replacement = match staged {
+        Ok(value) => value,
+        Err(error) => {
+            // Try every local cleanup and remote revocation, even if one fails.
+            let mut clean = true;
+            for file in files {
+                if let Err(e) = fs::remove_file(file) {
+                    clean &= e.kind() == std::io::ErrorKind::NotFound;
+                }
+            }
+            clean &= request(
+                bao,
+                Method::POST,
+                &format!("{path}/destroy"),
+                Some(&json!({"secret_id": new_secret})),
+                Some(&create_token),
+            )
+            .await
+            .is_ok();
+            return Err(if clean { error } else { CLEANUP_ROTATION });
+        }
+    };
+    let destroy_token = rotation_authority(bao, role, context, credential(&replacement, "token")?)
+        .await
+        .map_err(|_| CLEANUP_ROTATION)?;
+    request(
+        bao,
+        Method::POST,
+        &format!("{path}/destroy"),
+        Some(&json!({"secret_id": old_secret})),
+        Some(&destroy_token),
+    )
+    .await
+    .map_err(|_| CLEANUP_ROTATION)?;
+    revoked(bao, role, role_id, old_secret)
+        .await
+        .map_err(|_| CLEANUP_ROTATION)
+}
+
+/// The caller has durably staged the replacement; never discard it on uncertainty.
+pub async fn refresh_leaf(bao: &OpenBaoHttp, context: &Value) -> Result<()> {
+    let old = credential(context, "old_token")?;
+    let new = credential(context, "new_token")?;
+    let operator = credential(context, "operator_token")?;
+    if old == new {
+        return Err(REFUSAL);
+    }
+    let status = builder(bao, Method::POST, "auth/token/revoke-self", None, Some(old))
+        .send()
+        .await
+        .map_err(|_| CLEANUP_REFRESH)?
+        .status();
+    if status.is_success() {
+        return Ok(());
+    }
+    if !matches!(status, StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN) {
+        return Err(CLEANUP_REFRESH);
+    }
+    let response = builder(
+        bao,
+        Method::POST,
+        "auth/token/lookup",
+        Some(&json!({"token": old})),
+        Some(operator),
+    )
+    .send()
+    .await
+    .map_err(|_| CLEANUP_REFRESH)?;
+    match response.status() {
+        StatusCode::BAD_REQUEST | StatusCode::NOT_FOUND => Ok(()),
+        StatusCode::FORBIDDEN => {
+            let data = request(
+                bao,
+                Method::POST,
+                "auth/token/lookup",
+                Some(&json!({"token": new})),
+                Some(operator),
+            )
+            .await
+            .map_err(|_| CLEANUP_REFRESH)?;
+            if data["data"]["ttl"].as_u64().is_some_and(|v| v > 0) {
+                Ok(())
+            } else {
+                Err(CLEANUP_REFRESH)
+            }
+        }
+        _ => Err(CLEANUP_REFRESH),
+    }
 }
 
 async fn absent(bao: &OpenBaoHttp, path: &str, token: &str) -> Result<()> {
