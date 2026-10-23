@@ -916,6 +916,7 @@ services:
       DEVICE_REGISTRATION_SIGNING_KEYS_KEY: ${DEVICE_REGISTRATION_SIGNING_KEYS_KEY:-dev-device-registration-signing-keys-key-change-me}
       SIGNING_KEYS_REDIS_URL: redis://redis:6379/2
       SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE: /bao/verify-grant/token
+      HAIP_KMS_TOKEN_FILE: /bao/haip-token/token
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       BAO_ADDR: https://openbao:8200
       BAO_CACERT: /bao/public-ca/ca.crt
@@ -932,6 +933,7 @@ services:
       - openbao_public_ca:/bao/public-ca:ro
       - openbao_signing_keys_token:/bao/signing-keys-token:ro
       - openbao_verify_grant:/bao/verify-grant:ro
+      - openbao_haip_token:/bao/haip-token:ro
     depends_on:
       db-migrate:
         condition: service_completed_successfully
