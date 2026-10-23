@@ -1,5 +1,5 @@
 import { Navigate, Route, Routes } from 'react-router';
-import { Box, CircularProgress, Typography } from '@mui/material';
+import { Alert, Box, CircularProgress, Typography } from '@mui/material';
 
 import { get } from '../../services/api';
 import ProtectedRoute, { ApplicantConsoleRoute, OrgConsoleRoute } from '../../components/ProtectedRoute';
@@ -15,6 +15,7 @@ import JoinOrganizationPage from '../../components/pages/JoinOrganizationPage';
 import CreateOrganizationPage from '../../components/organizations/CreateOrganizationPage';
 import OrgConsoleUnavailable from '../../components/console/OrgConsoleUnavailable';
 import { useAuth } from '../../hooks/useAuth';
+import { usePermissions } from '../../hooks/usePermissions';
 import { useConsole, getDefaultLandingPath } from '../../contexts/ConsoleContext';
 import {
   ConsoleDashboard,
@@ -93,6 +94,16 @@ function GuardLoadingState({ message }) {
       </Typography>
     </Box>
   );
+}
+
+// Gate the page before mounting its data loaders, including direct and legacy URLs.
+function OperatorRoute({ action = 'view', children }) {
+  const { can, isLoading } = usePermissions();
+  if (isLoading) return <GuardLoadingState message="Checking operator permissions..." />;
+  if (!can('signing-key', action)) {
+    return <Alert severity="error">You do not have permission to {action === 'create' ? 'configure' : 'view'} key management for this organization.</Alert>;
+  }
+  return children;
 }
 
 function resolveConsoleHomePath({ mode, activeOrgId, memberships, isOrgBootstrapRequired }) {
@@ -185,14 +196,18 @@ function ConsoleRoutes() {
         <Route path="deploy/canvas" element={<CanvasIntegrationsPage />} />
         <Route path="connect/delivery-destinations" element={<DeliveryDestinationsPage />} />
         <Route path="deploy/issuer-identity/new" element={<IssuerIdentityWizard />} />
-        <Route path="deploy/key-management" element={<SigningKeysPage />} />
-        <Route path="deploy/key-management/services" element={<Navigate to="/console/org/deploy/key-management" replace />} />
-        <Route path="deploy/key-management/services/new" element={<KeyManagementServiceWizard />} />
+        <Route path="operator" element={<Navigate to="/console/org/operator/key-management" replace />} />
+        <Route path="operator/key-management" element={<OperatorRoute><SigningKeysPage /></OperatorRoute>} />
+        <Route path="operator/key-management/services" element={<Navigate to="/console/org/operator/key-management" replace />} />
+        <Route path="operator/key-management/services/new" element={<OperatorRoute action="create"><KeyManagementServiceWizard /></OperatorRoute>} />
+        <Route path="deploy/key-management" element={<Navigate to="/console/org/operator/key-management" replace />} />
+        <Route path="deploy/key-management/services" element={<Navigate to="/console/org/operator/key-management" replace />} />
+        <Route path="deploy/key-management/services/new" element={<Navigate to="/console/org/operator/key-management/services/new" replace />} />
         {/* Legacy redirects */}
         <Route path="deploy/dids" element={<Navigate to="/console/org/deploy/issuer-identity" replace />} />
-        <Route path="deploy/signing-keys" element={<Navigate to="/console/org/deploy/key-management" replace />} />
-        <Route path="deploy/signing-keys/settings" element={<Navigate to="/console/org/deploy/key-management/services" replace />} />
-        <Route path="deploy/signing-keys/services/new" element={<Navigate to="/console/org/deploy/key-management/services/new" replace />} />
+        <Route path="deploy/signing-keys" element={<Navigate to="/console/org/operator/key-management" replace />} />
+        <Route path="deploy/signing-keys/settings" element={<Navigate to="/console/org/operator/key-management/services" replace />} />
+        <Route path="deploy/signing-keys/services/new" element={<Navigate to="/console/org/operator/key-management/services/new" replace />} />
         <Route path="deploy/lanes" element={<LanesDevicesPage />} />
         <Route path="deploy/webhooks" element={<Navigate to="/console/org/webhooks" replace />} />
         <Route path="flows" element={<FlowsPage />} />

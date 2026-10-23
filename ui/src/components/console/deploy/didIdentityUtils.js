@@ -32,8 +32,8 @@ export const getDidIdentityTabs = () => [
 ]
 
 export const getKeyManagementTabs = () => [
-  { label: 'Keys', path: '/console/org/deploy/key-management' },
-  { label: 'Services', path: '/console/org/deploy/key-management/services' },
+  { label: 'Keys', path: '/console/org/operator/key-management' },
+  { label: 'Services', path: '/console/org/operator/key-management/services' },
 ]
 
 export const getDidIdentityBreadcrumbs = (t) => [

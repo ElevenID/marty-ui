@@ -21,9 +21,7 @@ const { listPublicIssuerIdentities, rebindIssuerIdentity, deleteIssuerIdentity, 
   showNotification: vi.fn(),
 }));
 
-vi.mock('../../../services/issuerIdentitiesApi', () => ({ default: { listPublicIssuerIdentities: (...args: unknown[]) => listPublicIssuerIdentities(...args) } }));
-
-vi.mock('../../../services/signingKeysApi', () => ({
+vi.mock('../../../services/issuerIdentitiesApi', () => ({
   default: {
     listPublicIssuerIdentities: (...args: unknown[]) => listPublicIssuerIdentities(...args),
     rebindIssuerIdentity: (...args: unknown[]) => rebindIssuerIdentity(...args),

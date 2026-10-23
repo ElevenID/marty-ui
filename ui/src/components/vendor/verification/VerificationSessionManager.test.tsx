@@ -36,7 +36,7 @@ vi.mock('../../../services/zkVerificationApi', () => ({
   getVerificationFlowResult: (...args: unknown[]) => mockGetVerificationFlowResult(...args),
 }));
 
-vi.mock('../../../services/signingKeysApi', () => ({
+vi.mock('../../../services/issuerIdentitiesApi', () => ({
   listPublicIssuerIdentities: (...args: unknown[]) => mockListPublicIssuerIdentities(...args),
 }));
 

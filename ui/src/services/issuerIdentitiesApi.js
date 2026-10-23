@@ -1,5 +1,5 @@
 /** Public DID identity operations. Provider configuration belongs to signingKeysApi. */
-import { get, post } from './api';
+import { get, post, put, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
@@ -162,4 +162,134 @@ export async function getTemplateIssuerOptions(params = {}) {
   };
 }
 
-export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities, getTemplateIssuerOptions, inspectIssuerIdentity };
+function withIdentityOrganizationQuery(path, params = {}) {
+  return withQuery(path, buildDefinedQueryString({ organization_id: organization(params, 'using public identity material') }));
+}
+
+/**
+ * Get the org JWKS document (published public keys).
+ * @param {string} [organizationId]
+ * @returns {Promise<Object>} JWKS document
+ */
+export async function getOrgJwks(organizationId) {
+  return get(withIdentityOrganizationQuery('/v1/signing-keys/jwks', organizationId));
+}
+
+/**
+ * Get the org DID document.
+ * @param {string} [organizationId]
+ * @returns {Promise<Object>} DID document
+ */
+export async function getOrgDidDocument(organizationId) {
+  return get(withIdentityOrganizationQuery('/v1/signing-keys/did-document', organizationId));
+}
+
+// ---------------------------------------------------------------------------
+// Provider-neutral issuer identities
+// ---------------------------------------------------------------------------
+
+/**
+ * Rebind one DID-selected identity to Marty's compatible default signing
+ * service. Provider and key coordinates remain private to the service.
+ */
+export async function rebindIssuerIdentity(body) {
+  const organizationId = organization(body, 'rebinding issuer identities');
+  return patch(`${BASE_PATH}`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+  });
+}
+
+/**
+ * Attach a public certificate chain to one DID-selected managed identity.
+ */
+export async function storeIssuerIdentityCertificate(body) {
+  const organizationId = organization(body, 'attaching issuer certificates');
+  return put(`${BASE_PATH}/certificate`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    cert_pem: body?.cert_pem,
+    cert_chain_pem: body?.cert_chain_pem,
+  });
+}
+
+/** Enroll only public CSCA material; Rust resolves the managed key internally. */
+export async function enrollCscaCertificate(body) {
+  const organizationId = organization(body, 'enrolling CSCA certificates');
+  return put(`${BASE_PATH}/csca-certificate`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    certificate_id: body?.certificate_id,
+    cert_pem: body?.cert_pem,
+    cert_chain_pem: body?.cert_chain_pem,
+  });
+}
+
+/** Issue a beta CSCA certificate using the selected managed issuer profile. */
+export async function issueCscaSelfSignedCertificate(body) {
+  return post(withIdentityOrganizationQuery(`${BASE_PATH}/csca-self-signed-certificate`, body), {
+    issuer_did: body?.issuer_did,
+    certificate_id: body?.certificate_id,
+    credential_format: 'ICAO_EMRTD',
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+    validity_days: body?.validity_days,
+  });
+}
+
+/** Issue a beta DSC certificate through managed DSC and CSCA profiles. */
+export async function issueDscCertificate(body) {
+  return post(withIdentityOrganizationQuery(`${BASE_PATH}/dsc-certificate`, body), {
+    dsc_issuer_did: body?.dsc_issuer_did,
+    csca_issuer_did: body?.csca_issuer_did,
+    csca_certificate_id: body?.csca_certificate_id,
+    credential_format: 'ICAO_EMRTD',
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+    validity_days: body?.validity_days,
+    idempotency_key: body?.idempotency_key,
+  });
+}
+
+/** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
+export async function generateIssuerIdentityCsr(body) {
+  const organizationId = organization(body, 'generating an issuer CSR');
+  return put(`${BASE_PATH}/certificate-csr`, {
+    organization_id: organizationId,
+    issuer_did: body?.issuer_did,
+    key_purpose: body?.key_purpose,
+    credential_format: body?.credential_format,
+    algorithm: body?.algorithm,
+    country: body?.country,
+    organization: body?.organization,
+    common_name: body?.common_name,
+  });
+}
+
+/**
+ * Retire exactly one DID-selected managed identity.
+ */
+export async function deleteIssuerIdentity(body) {
+  const organizationId = organization(body, 'retiring issuer identities');
+  return del(`${BASE_PATH}`, {
+    body: JSON.stringify({
+      organization_id: organizationId,
+      issuer_did: body?.issuer_did,
+      key_purpose: body?.key_purpose,
+      credential_format: body?.credential_format,
+      algorithm: body?.algorithm,
+    }),
+  });
+}
+
+export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities, getTemplateIssuerOptions, inspectIssuerIdentity, getOrgJwks, getOrgDidDocument, rebindIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, issueCscaSelfSignedCertificate, issueDscCertificate, generateIssuerIdentityCsr, deleteIssuerIdentity };

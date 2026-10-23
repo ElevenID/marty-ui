@@ -18,6 +18,8 @@ import ConsoleDashboard from '../ConsoleDashboard'
 
 const mockNavigate = vi.fn()
 
+vi.mock('../../../hooks/usePermissions', () => ({ usePermissions: () => ({ can: () => true, isLoading: false }) }));
+
 // Mock auth hook
 vi.mock('@hooks/useAuth', () => ({
   useAuth: () => ({
@@ -539,6 +541,7 @@ describe('ConsoleDashboard', () => {
         data: {
           ...emptyDashboardData,
           setupIntent: 'issue',
+          issuerIdentities: partialDashboardData.issuerIdentities,
           trustProfiles: [{ id: 1, name: 'Active Profile', status: 'active' }],
         },
         loading: false,
@@ -589,7 +592,7 @@ describe('ConsoleDashboard', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/console/org/flows/definitions/new')
     })
 
-    it('should prioritize signing service setup when trust dependencies are blocked by KMS', () => {
+    it('routes issuer setup through public DIDs when no KMS metadata is available', () => {
       mockDashboardReturn = {
         data: {
           ...emptyDashboardData,
@@ -608,7 +611,8 @@ describe('ConsoleDashboard', () => {
 
       render(<ConsoleDashboard />)
 
-      expect(screen.getByText('Register Signing Service')).toBeInTheDocument()
+      expect(screen.queryByText('Register Signing Service')).not.toBeInTheDocument()
+      expect(screen.getByRole('heading', { name: 'Set Up Issuer Identity' })).toBeInTheDocument()
       expect(screen.queryByText('Create Trust Profile')).not.toBeInTheDocument()
     })
 

@@ -32,6 +32,10 @@ python examples/protocol-consumer/client.py --base-url https://your-api.example 
 
 The response separates organization registry material, current managed-signer matching and fresh public HTTPS resolution. Use its `canonical_document_url` to view publication. Stored documents may be a labeled legacy projection; their presence does not prove public reachability. `assertion_ready` requires matching stored/public keys and assertion authorization; it does not qualify credential issuance, certificate trust or interoperability. Failed public resolution preserves the stored document for inspection. Refresh after publication or key rotation. Certificate state describes expiry and public-key matching, without establishing chain trust. Only the configured publication authority is probed, with bounded timeouts and no internal resolution fallback or private selectors.
 
+The console keeps these public identity operations under **Deploy > Issuer Identity**. Connector endpoints, provider credentials, key references and rotation are in **Operator > Key Management**. Operator metadata requires `signing-key:view`; registering or changing services requires `signing-key:create` in the console. Existing API-key `keys:read` / `keys:write` rules are unchanged. Legacy console URLs redirect through the same permission guards.
+
+Browser integrations use `issuerIdentitiesApi` for DID discovery, inspection, certificate/CSR operations and retirement. `signingKeysApi` owns operator configuration and retains compatibility exports for older integrations. Public requests use the organization and DID tuple; they do not select a signing-service ID or provider key reference. Trusting external issuers does not require local KMS setup. The dashboard's active-DID setup state does not establish live signer health or public publication.
+
 Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
 
 ```powershell

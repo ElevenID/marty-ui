@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
 import { createIssuerIdentity, getIssuerIdentityCapabilities, getTemplateIssuerOptions, listPublicIssuerIdentities, inspectIssuerIdentity } from '../issuerIdentitiesApi';
+import * as identities from '../issuerIdentitiesApi';
+import legacy, * as legacyExports from '../signingKeysApi';
 import inspection from '../../../../contracts/issuer-identity-inspection-example.json';
 
 describe('public issuer identity client', () => {
@@ -90,5 +92,46 @@ describe('public issuer identity client', () => {
     context.organization_id = 'org-a';
     context.rejected_issuers[0].reason = 'private-key-error';
     await expect(getTemplateIssuerOptions({ organization_id: 'org-a', compliance_profile_id: 'profile-a' })).rejects.toThrow(/invalid organization/);
+  });
+});
+
+
+describe('public issuer lifecycle client and compatibility exports', () => {
+  const tuple = { organization_id: 'org-a', issuer_did: 'did:example:issuer', key_purpose: 'vc_jwt_issuer', credential_format: 'SD_JWT_VC', algorithm: 'ES256' };
+  const custody = { signing_service_id: 'forbidden', key_reference: 'forbidden', provider: 'forbidden', private_key: 'forbidden' };
+  const certificate = { cert_pem: 'PUBLIC CERT', cert_chain_pem: 'PUBLIC CHAIN' };
+  const subject = { country: 'US', organization: 'Example Org', common_name: 'Example Issuer' };
+  const cases = [
+    ['rebindIssuerIdentity', 'PATCH', '', tuple, tuple],
+    ['deleteIssuerIdentity', 'DELETE', '', tuple, tuple],
+    ['storeIssuerIdentityCertificate', 'PUT', '/certificate', { ...tuple, ...certificate }, { ...tuple, ...certificate }],
+    ['generateIssuerIdentityCsr', 'PUT', '/certificate-csr', { ...tuple, ...subject }, { ...tuple, ...subject }],
+    ['enrollCscaCertificate', 'PUT', '/csca-certificate', { ...tuple, ...certificate, certificate_id: 'csca' }, { organization_id: 'org-a', issuer_did: tuple.issuer_did, credential_format: tuple.credential_format, algorithm: 'ES256', certificate_id: 'csca', ...certificate }],
+    ['issueCscaSelfSignedCertificate', 'POST', '/csca-self-signed-certificate', { ...tuple, ...subject, certificate_id: 'csca', validity_days: 30 }, { issuer_did: tuple.issuer_did, certificate_id: 'csca', credential_format: 'ICAO_EMRTD', ...subject, validity_days: 30 }],
+    ['issueDscCertificate', 'POST', '/dsc-certificate', { ...tuple, ...subject, dsc_issuer_did: 'did:example:dsc', csca_issuer_did: 'did:example:csca', csca_certificate_id: 'csca', validity_days: 30, idempotency_key: 'request-id' }, { dsc_issuer_did: 'did:example:dsc', csca_issuer_did: 'did:example:csca', csca_certificate_id: 'csca', credential_format: 'ICAO_EMRTD', ...subject, validity_days: 30, idempotency_key: 'request-id' }],
+  ] as const;
+  it.each(cases)('%s preserves the public wire contract without accepting custody selectors', async (name, method, suffix, input, body) => {
+    let observed: unknown;
+    server.use(http.all('*/v1/signing-keys/issuer-identities*', async ({ request }) => {
+      const url = new URL(request.url);
+      observed = { method: request.method, path: url.pathname, query: [...url.searchParams], body: await request.json() };
+      return HttpResponse.json({ ok: true });
+    }));
+    await identities[name]({ ...input, ...custody });
+    expect(observed).toEqual({ method, path: '/v1/signing-keys/issuer-identities' + suffix,
+      query: method === 'POST' ? [['organization_id', 'org-a']] : [], body });
+    expect(legacyExports[name]).toBe(identities[name]);
+    expect(legacy[name]).toBe(identities[name]);
+  });
+  it.each(['getOrgJwks', 'getOrgDidDocument'] as const)('%s requires explicit scope for public documents and preserves old callers', async (name) => {
+    let observed: string | undefined;
+    server.use(http.get('*/v1/signing-keys/*', ({ request }) => { observed = request.url; return HttpResponse.json({ public: true }); }));
+    await expect(identities[name]()).rejects.toMatchObject({ code: 'ORG_REQUIRED' });
+    expect(await identities[name]('org/a')).toEqual({ public: true });
+    const url = new URL(observed!);
+    expect(url.pathname).toBe('/v1/signing-keys/' + (name === 'getOrgJwks' ? 'jwks' : 'did-document'));
+    expect([...url.searchParams]).toEqual([['organization_id', 'org/a']]);
+    expect(legacyExports[name]).toBe(identities[name]);
+    expect(legacy[name]).toBe(identities[name]);
   });
 });

@@ -31,7 +31,6 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import SwapHorizIcon from '@mui/icons-material/SwapHoriz';
 import UploadFileOutlinedIcon from '@mui/icons-material/UploadFileOutlined';
 
-import signingKeysApi from '../../../services/signingKeysApi';
 import issuerIdentitiesApi from '../../../services/issuerIdentitiesApi';
 import { createIdempotencyKey } from '../../../services/idempotency';
 import { useConsole } from '../../../contexts/ConsoleContext';
@@ -192,10 +191,10 @@ export default function DidIdentitiesPage() {
         setIssuePendingRetry(true);
       }
       const result = csca
-        ? await signingKeysApi.issueCscaSelfSignedCertificate({
+        ? await issuerIdentitiesApi.issueCscaSelfSignedCertificate({
           ...subject, issuer_did: issuing.issuer_did, certificate_id: issueForm.certificate_id.trim(),
         })
-        : await signingKeysApi.issueDscCertificate(dscRequest);
+        : await issuerIdentitiesApi.issueDscCertificate(dscRequest);
       if (issueEpoch === issueEpochRef.current) {
         if (dscRequest) {
           try {
@@ -265,7 +264,7 @@ export default function DidIdentitiesPage() {
     setSubmitting(true);
     setError('');
     try {
-      await signingKeysApi.deleteIssuerIdentity({
+      await issuerIdentitiesApi.deleteIssuerIdentity({
         organization_id: activeOrgId,
         issuer_did: retiring.issuer_did,
         key_purpose: retiring.key_purpose,
@@ -295,7 +294,7 @@ export default function DidIdentitiesPage() {
     setSubmitting(true);
     setError('');
     try {
-      const result = await signingKeysApi.rebindIssuerIdentity({
+      const result = await issuerIdentitiesApi.rebindIssuerIdentity({
         organization_id: activeOrgId,
         issuer_did: rebinding.issuer_did,
         key_purpose: rebinding.key_purpose,
@@ -340,14 +339,14 @@ export default function DidIdentitiesPage() {
         cert_chain_pem: certificate.cert_chain_pem.trim(),
       };
       if (certifying.key_purpose === 'csca') {
-        await signingKeysApi.enrollCscaCertificate({
+        await issuerIdentitiesApi.enrollCscaCertificate({
           ...publicCertificate,
           certificate_id: certificate.certificate_id.trim(),
         });
         if (actionEpoch !== issueEpochRef.current) return;
         showNotification?.('Public CSCA trust anchor enrolled.', 'success');
       } else {
-        await signingKeysApi.storeIssuerIdentityCertificate({
+        await issuerIdentitiesApi.storeIssuerIdentityCertificate({
           ...publicCertificate,
           key_purpose: certifying.key_purpose,
         });
@@ -378,7 +377,7 @@ export default function DidIdentitiesPage() {
     setSubmitting(true);
     setError('');
     try {
-      const result = await signingKeysApi.generateIssuerIdentityCsr({
+      const result = await issuerIdentitiesApi.generateIssuerIdentityCsr({
         organization_id: activeOrgId,
         issuer_did: certifying.issuer_did,
         key_purpose: certifying.key_purpose,

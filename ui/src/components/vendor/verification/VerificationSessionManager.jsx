@@ -35,7 +35,7 @@ import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import { useNotifications } from '../../../hooks/useNotifications';
 import { startVerificationFlow, getVerificationFlowResult } from '../../../services/zkVerificationApi';
 import { listFlowExecutions } from '../../../services/flowsApi';
-import { listPublicIssuerIdentities } from '../../../services/signingKeysApi';
+import { listPublicIssuerIdentities } from '../../../services/issuerIdentitiesApi';
 import PolicySelectStep from './steps/PolicySelectStep';
 import SessionConfigStep from './steps/SessionConfigStep';
 import QRDisplayStep from './steps/QRDisplayStep';

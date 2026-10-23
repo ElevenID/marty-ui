@@ -1,17 +1,17 @@
 /**
- * Signing Keys API Service
+ * Operator signing-service and KMS API client
  * 
- * Manages cryptographic signing keys for credential issuance and verification.
- * Keys can be rotated, and HSM/Vault integration can be configured.
+ * Public DID operations are implemented by issuerIdentitiesApi.
+ * Legacy public exports below preserve existing integrations.
  */
 
 import { get, post, put, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
-import { createIssuerIdentity, listPublicIssuerIdentities } from './issuerIdentitiesApi';
+import { createIssuerIdentity, listPublicIssuerIdentities, getOrgJwks, getOrgDidDocument, rebindIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, issueCscaSelfSignedCertificate, issueDscCertificate, generateIssuerIdentityCsr, deleteIssuerIdentity } from './issuerIdentitiesApi';
 
-// Compatibility exports while console consumers migrate to the public client.
-export { createIssuerIdentity, listPublicIssuerIdentities } from './issuerIdentitiesApi';
+// Compatibility exports; public DID workflows use issuerIdentitiesApi directly.
+export { createIssuerIdentity, listPublicIssuerIdentities, getOrgJwks, getOrgDidDocument, rebindIssuerIdentity, storeIssuerIdentityCertificate, enrollCscaCertificate, issueCscaSelfSignedCertificate, issueDscCertificate, generateIssuerIdentityCsr, deleteIssuerIdentity } from './issuerIdentitiesApi';
 
 const BASE_PATH = '/v1/signing-keys';
 
@@ -317,132 +317,6 @@ export async function listHolderKeys(filters = {}) {
     organization_id: requireOrganizationId(filters, 'loading holder keys'),
   });
   return get(withQuery(`${BASE_PATH}/holder-keys`, queryString));
-}
-
-/**
- * Get the org JWKS document (published public keys).
- * @param {string} [organizationId]
- * @returns {Promise<Object>} JWKS document
- */
-export async function getOrgJwks(organizationId) {
-  return get(withOrganizationQuery(`${BASE_PATH}/jwks`, organizationId));
-}
-
-/**
- * Get the org DID document.
- * @param {string} [organizationId]
- * @returns {Promise<Object>} DID document
- */
-export async function getOrgDidDocument(organizationId) {
-  return get(withOrganizationQuery(`${BASE_PATH}/did-document`, organizationId));
-}
-
-// ---------------------------------------------------------------------------
-// Provider-neutral issuer identities
-// ---------------------------------------------------------------------------
-
-/**
- * Rebind one DID-selected identity to Marty's compatible default signing
- * service. Provider and key coordinates remain private to the service.
- */
-export async function rebindIssuerIdentity(body) {
-  const organizationId = requireOrganizationId(body, 'rebinding issuer identities');
-  return patch(`${BASE_PATH}/issuer-identities`, {
-    organization_id: organizationId,
-    issuer_did: body?.issuer_did,
-    key_purpose: body?.key_purpose,
-    credential_format: body?.credential_format,
-    algorithm: body?.algorithm,
-  });
-}
-
-/**
- * Attach a public certificate chain to one DID-selected managed identity.
- */
-export async function storeIssuerIdentityCertificate(body) {
-  const organizationId = requireOrganizationId(body, 'attaching issuer certificates');
-  return put(`${BASE_PATH}/issuer-identities/certificate`, {
-    organization_id: organizationId,
-    issuer_did: body?.issuer_did,
-    key_purpose: body?.key_purpose,
-    credential_format: body?.credential_format,
-    algorithm: body?.algorithm,
-    cert_pem: body?.cert_pem,
-    cert_chain_pem: body?.cert_chain_pem,
-  });
-}
-
-/** Enroll only public CSCA material; Rust resolves the managed key internally. */
-export async function enrollCscaCertificate(body) {
-  const organizationId = requireOrganizationId(body, 'enrolling CSCA certificates');
-  return put(`${BASE_PATH}/issuer-identities/csca-certificate`, {
-    organization_id: organizationId,
-    issuer_did: body?.issuer_did,
-    credential_format: body?.credential_format,
-    algorithm: body?.algorithm,
-    certificate_id: body?.certificate_id,
-    cert_pem: body?.cert_pem,
-    cert_chain_pem: body?.cert_chain_pem,
-  });
-}
-
-/** Issue a beta CSCA certificate using the selected managed issuer profile. */
-export async function issueCscaSelfSignedCertificate(body) {
-  return post(withOrganizationQuery(`${BASE_PATH}/issuer-identities/csca-self-signed-certificate`, body), {
-    issuer_did: body?.issuer_did,
-    certificate_id: body?.certificate_id,
-    credential_format: 'ICAO_EMRTD',
-    country: body?.country,
-    organization: body?.organization,
-    common_name: body?.common_name,
-    validity_days: body?.validity_days,
-  });
-}
-
-/** Issue a beta DSC certificate through managed DSC and CSCA profiles. */
-export async function issueDscCertificate(body) {
-  return post(withOrganizationQuery(`${BASE_PATH}/issuer-identities/dsc-certificate`, body), {
-    dsc_issuer_did: body?.dsc_issuer_did,
-    csca_issuer_did: body?.csca_issuer_did,
-    csca_certificate_id: body?.csca_certificate_id,
-    credential_format: 'ICAO_EMRTD',
-    country: body?.country,
-    organization: body?.organization,
-    common_name: body?.common_name,
-    validity_days: body?.validity_days,
-    idempotency_key: body?.idempotency_key,
-  });
-}
-
-/** Build a public PKCS#10 request using the selected issuer identity's KMS key. */
-export async function generateIssuerIdentityCsr(body) {
-  const organizationId = requireOrganizationId(body, 'generating an issuer CSR');
-  return put(`${BASE_PATH}/issuer-identities/certificate-csr`, {
-    organization_id: organizationId,
-    issuer_did: body?.issuer_did,
-    key_purpose: body?.key_purpose,
-    credential_format: body?.credential_format,
-    algorithm: body?.algorithm,
-    country: body?.country,
-    organization: body?.organization,
-    common_name: body?.common_name,
-  });
-}
-
-/**
- * Retire exactly one DID-selected managed identity.
- */
-export async function deleteIssuerIdentity(body) {
-  const organizationId = requireOrganizationId(body, 'retiring issuer identities');
-  return del(`${BASE_PATH}/issuer-identities`, {
-    body: JSON.stringify({
-      organization_id: organizationId,
-      issuer_did: body?.issuer_did,
-      key_purpose: body?.key_purpose,
-      credential_format: body?.credential_format,
-      algorithm: body?.algorithm,
-    }),
-  });
 }
 
 export default {
