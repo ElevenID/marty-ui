@@ -2,10 +2,20 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
 import subprocess
+
+
+class OperatorCleanupError(RuntimeError):
+    """A mutating operator could not confirm rollback; safe for CLI diagnostics."""
+
+    def __init__(self, message: str):
+        if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed"}:
+            message = "Rust operator cleanup is unconfirmed"
+        super().__init__(message)
 
 
 def operator_command(root: Path, *args: str) -> list[str]:
@@ -57,12 +67,32 @@ def operator_command(root: Path, *args: str) -> list[str]:
 
 
 def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
-    timeout = None if args[1:2] == ("export-snapshot",) else 300
-    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",)):
+    # Native requests remain individually bounded. Do not kill a mutating
+    # transaction while it is revoking a leaf or rolling back remote authority.
+    timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",)) else 300
+    if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",)):
         timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,
                             capture_output=True, check=False, timeout=timeout)
+    if result.returncode == 3:
+        message = result.stderr.decode("utf-8", errors="replace").strip()
+        raise OperatorCleanupError(message)
     if result.returncode:
         # Native commands use fixed diagnostics; never echo public input or tokens.
         raise RuntimeError("Rust operator validation failed")
     return result.stdout
+
+
+def approle_operation(bao, operation: str, role: str, identity: Path, **context):
+    if operation == "bootstrap":
+        context["root_token"] = bao.token
+    return json.loads(operator_bytes(
+        Path(__file__).resolve().parents[1], "operator", f"approle-{operation}", role,
+        bao.endpoint, str(bao.ca), str(identity), input=json.dumps(context).encode("utf-8"),
+    ))
+
+
+def approle_policy(role: str, **context) -> str:
+    return json.loads(operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                                    "approle-policy", role,
+                                    input=json.dumps(context).encode("utf-8")))

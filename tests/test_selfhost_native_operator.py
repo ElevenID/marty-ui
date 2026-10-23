@@ -3,12 +3,31 @@ from pathlib import Path
 import subprocess
 import hashlib
 import os
+import base64
 
 import pytest
 
 from scripts.selfhost_native_operator import operator_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.mark.parametrize("operation,timeout", [("approle-bootstrap", None), ("approle-mint", None),
+                                            ("approle-login", 300), ("approle-policy", 300)])
+def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
+    from types import SimpleNamespace
+    from scripts import selfhost_native_operator as native
+
+    monkeypatch.setattr(native, "operator_command", lambda *_: ["native-operator"])
+
+    def run(command, **kwargs):
+        assert command == ["native-operator"]
+        assert kwargs["timeout"] == timeout
+        assert kwargs["capture_output"] is True
+        return SimpleNamespace(returncode=0, stdout=b"{}")
+
+    monkeypatch.setattr(native.subprocess, "run", run)
+    assert native.operator_bytes(ROOT, "operator", operation, input=b"{}") == b"{}"
 
 
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])
@@ -25,6 +44,11 @@ def test_native_spki_matches_openssl_for_supported_operator_keys(tmp_path: Path,
     expected = subprocess.run(["openssl", "pkey", "-pubin", "-outform", "DER"],
                               input=public, capture_output=True, check=True).stdout
     assert operator_bytes(ROOT, "operator", "public-spki", input=public) == expected
+    if kind == "ED25519":
+        from scripts.selfhost_openbao_client import ed25519_public_pem
+        encoded = base64.b64encode(expected[-32:]).decode("ascii")
+        assert operator_bytes(ROOT, "operator", "ed25519-spki", input=encoded.encode()) == expected
+        assert ed25519_public_pem(encoded).encode() == public.replace(b"\r\n", b"\n")
 
 
 def test_native_certificate_spki_matches_openssl() -> None:

@@ -22,6 +22,16 @@ timeout; steady progress can continue beyond five minutes. The independent Rust
 validator reads an archive without extraction. Actual restore qualification
 remains a separate requirement.
 
+The same Rust operator owns scoped AppRole bootstrap and login for audit,
+evidence, renewal, CA rotation, snapshot export, and snapshot rotation. Python
+entrypoints retain their arguments and generation checks. Audit/evidence leaf
+minting verifies scope, lineage, TTL, and its existing canaries; failed leaf
+verification attempts revocation. Failed bootstrap removes only authority owned
+by that transaction. Snapshot rotation retains the reader's shared auth mount.
+An explicit cleanup-incomplete diagnostic requires operator reconciliation before
+retrying. Credentials travel through captured standard input/output, never command
+arguments; do not run native login or mint commands with output attached to a terminal.
+
 This is the standalone external OpenBao setup for the workstation-local self-host production stack. It stays outside the main application compose project, keeps its state on durable host storage, and writes the scoped `openbao_service_token` into the shared self-host secret directory.
 
 ## Paths

@@ -1,20 +1,18 @@
 //! Scoped, keyless Raft export. No root or unseal material is read.
 use crate::operator::{Result, REFUSAL};
+use crate::operator_files::private_directory;
 use chrono::Utc;
 use marty_openbao_http::OpenBaoHttp;
-use reqwest::{Method, StatusCode};
-use serde_json::{json, Value};
+use reqwest::StatusCode;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
 use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
-
-const POLICY: &str = "selfhost-raft-snapshot-read";
-const MAX_INPUT: u64 = 64 * 1024;
 
 /// Keep export authority tied to an explicit local HTTPS port.
 pub fn origin(value: &str) -> Result<&str> {
@@ -50,120 +48,6 @@ pub fn origin(value: &str) -> Result<&str> {
     Ok(value.trim_end_matches('/'))
 }
 
-fn private_directory(path: &Path) -> Result<PathBuf> {
-    if !path.is_absolute() {
-        return Err(REFUSAL);
-    }
-    let info = fs::symlink_metadata(path).map_err(|_| REFUSAL)?;
-    if !info.is_dir() || info.file_type().is_symlink() {
-        return Err(REFUSAL);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if info.permissions().mode() & 0o7777 != 0o700 {
-            return Err(REFUSAL);
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        Err(REFUSAL)
-    }
-    #[cfg(unix)]
-    fs::canonicalize(path).map_err(|_| REFUSAL)
-}
-
-fn private_credential(path: &Path) -> Result<String> {
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-    }
-    let file = options.open(path).map_err(|_| REFUSAL)?;
-    let info = file.metadata().map_err(|_| REFUSAL)?;
-    if !info.is_file() || info.len() > MAX_INPUT {
-        return Err(REFUSAL);
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if info.permissions().mode() & 0o077 != 0 {
-            return Err(REFUSAL);
-        }
-    }
-    let mut value = String::new();
-    file.take(MAX_INPUT + 1)
-        .read_to_string(&mut value)
-        .map_err(|_| REFUSAL)?;
-    if value.len() as u64 > MAX_INPUT || value.trim().len() < 20 {
-        return Err(REFUSAL);
-    }
-    Ok(value.trim().to_owned())
-}
-
-async fn snapshot_login(bao: &OpenBaoHttp, identity: &Path) -> Result<String> {
-    let identity = private_directory(identity)?;
-    let role = private_credential(&identity.join("snapshot-role-id"))?;
-    let secret = private_credential(&identity.join("snapshot-secret-id"))?;
-    let response = bao
-        .client()
-        .post(format!("{}/v1/auth/selfhost-snapshot/login", bao.origin()))
-        .timeout(Duration::from_secs(10))
-        .json(&json!({"role_id":role,"secret_id":secret}))
-        .send()
-        .await
-        .map_err(|_| REFUSAL)?;
-    if !response.status().is_success() {
-        return Err(REFUSAL);
-    }
-    let mut response = response;
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|_| REFUSAL)? {
-        if bytes.len() + chunk.len() > 1024 * 1024 {
-            return Err(REFUSAL);
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    let response: Value = serde_json::from_slice(&bytes).map_err(|_| REFUSAL)?;
-    let auth = &response["auth"];
-    let token = auth["client_token"]
-        .as_str()
-        .filter(|s| s.len() >= 20)
-        .ok_or(REFUSAL)?;
-    let ttl = auth["lease_duration"].as_u64().ok_or(REFUSAL)?;
-    if auth["policies"] != json!([POLICY]) || !(1..=3600).contains(&ttl) {
-        return Err(REFUSAL);
-    }
-    for (method, path, body) in [
-        (Method::GET, "transit/keys/foreign-snapshot-probe", None),
-        (
-            Method::POST,
-            "auth/token/create",
-            Some(json!({"ttl":"invalid"})),
-        ),
-        (
-            Method::GET,
-            "sys/policies/acl/selfhost-raft-snapshot-read",
-            None,
-        ),
-    ] {
-        let mut request = bao
-            .client()
-            .request(method, format!("{}/v1/{path}", bao.origin()))
-            .timeout(Duration::from_secs(10))
-            .header("X-Vault-Token", token);
-        if let Some(body) = body {
-            request = request.json(&body);
-        }
-        if request.send().await.map_err(|_| REFUSAL)?.status() != StatusCode::FORBIDDEN {
-            return Err(REFUSAL);
-        }
-    }
-    Ok(token.to_owned())
-}
-
 /// Create the existing v2 archive with scoped AppRole authority and atomic publication.
 pub async fn export(
     state: &Path,
@@ -195,7 +79,9 @@ pub async fn export(
     }
     let bao = OpenBaoHttp::connect_with_read_timeout(endpoint, Some(&ca), Duration::from_secs(300))
         .map_err(|_| REFUSAL)?;
-    let token = snapshot_login(&bao, identity).await?;
+    let login =
+        crate::approle::login(&bao, crate::approle::Role::Snapshot, identity, &json!({})).await?;
+    let token = login["token"].as_str().ok_or(REFUSAL)?;
     let mut response = bao
         .client()
         .get(format!("{}/v1/sys/storage/raft/snapshot", bao.origin()))

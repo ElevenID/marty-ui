@@ -47,12 +47,11 @@ def ed25519_public_pem(raw_base64: str) -> str:
         raise ValueError("OpenBao Ed25519 public key is invalid") from error
     if len(raw) != 32 or base64.b64encode(raw).decode("ascii") != raw_base64:
         raise ValueError("OpenBao Ed25519 public key is invalid")
-    der = bytes.fromhex("302a300506032b6570032100") + raw
+    der = operator_bytes(Path(__file__).resolve().parents[1], "operator",
+                         "ed25519-spki", input=raw_base64.encode("ascii"))
     pem = "-----BEGIN PUBLIC KEY-----\n"
     pem += base64.b64encode(der).decode("ascii") + "\n"
     pem += "-----END PUBLIC KEY-----\n"
-    if public_key_der(pem) != der:
-        raise ValueError("OpenBao Ed25519 public key is invalid")
     return pem
 
 

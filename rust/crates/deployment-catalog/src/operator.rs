@@ -6,6 +6,24 @@ use std::io::{Read, Seek};
 pub const REFUSAL: &str = "KMS operator input refused";
 pub type Result<T> = std::result::Result<T, &'static str>;
 
+/// Decode OpenBao's canonical, public-only Ed25519 value as standard SPKI.
+pub fn ed25519_spki(encoded: &str) -> Result<Vec<u8>> {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    if encoded.len() != 44 {
+        return Err(REFUSAL);
+    }
+    let raw = STANDARD.decode(encoded).map_err(|_| REFUSAL)?;
+    if raw.len() != 32 || STANDARD.encode(&raw) != encoded {
+        return Err(REFUSAL);
+    }
+    let mut der = vec![
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    der.extend(raw);
+    marty_crypto::jwk::public_key_der_to_jwk(&der).map_err(|_| REFUSAL)?;
+    Ok(der)
+}
+
 /// Convert a bounded public PEM or certificate to canonical public SPKI DER.
 /// Trust-chain/issuer validation remains the caller's separate responsibility.
 pub fn public_spki(pem: &[u8], certificate: bool) -> Result<Vec<u8>> {
