@@ -15,6 +15,22 @@ from check_public_protocol_documentation import (  # noqa: E402
 )
 
 
+def test_public_documentation_rejects_second_static_openapi_contract(tmp_path: Path) -> None:
+    public = tmp_path / "ui/public"
+    public.mkdir(parents=True)
+    (public / "openapi.yaml").write_text("openapi: 3.1.0\npaths: {}\n", encoding="utf-8")
+    with pytest.raises(AssertionError, match="canonical /openapi.json"):
+        assert_documented_public_boundary(tmp_path)
+
+
+def test_public_documentation_rejects_stale_schema_download_links(tmp_path: Path) -> None:
+    source = tmp_path / "ui/src"
+    source.mkdir(parents=True)
+    (source / "Download.jsx").write_text('<a href="/openapi.yaml">Download</a>', encoding="utf-8")
+    with pytest.raises(AssertionError, match="links must use /openapi.json"):
+        assert_documented_public_boundary(tmp_path)
+
+
 def test_public_documentation_rejects_custody_selector_guidance(
     tmp_path: Path,
 ) -> None:

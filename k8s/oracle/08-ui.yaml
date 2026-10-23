@@ -58,6 +58,20 @@ data:
         }
 
         # Keycloak realm routes — proxy to keycloak service
+        location = /openapi.yaml {
+            absolute_redirect off;
+            return 308 /openapi.json;
+        }
+
+        location = /openapi.json {
+            set $backend_api gateway.marty-prod.svc.cluster.local:8000;
+            proxy_pass http://$backend_api/openapi.json;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto https;
+        }
+
         location ^~ /realms/ {
             set $keycloak keycloak.marty-prod.svc.cluster.local:8080;
             proxy_pass http://$keycloak;
