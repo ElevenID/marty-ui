@@ -662,5 +662,7 @@ mod tests {
     }
 }
 
+pub mod approle;
 pub mod operator;
+mod operator_files;
 pub mod snapshot;

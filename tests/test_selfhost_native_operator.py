@@ -11,6 +11,24 @@ from scripts.selfhost_native_operator import operator_bytes
 ROOT = Path(__file__).resolve().parents[1]
 
 
+@pytest.mark.parametrize("operation,timeout", [("approle-bootstrap", None), ("approle-mint", None),
+                                            ("approle-login", 300), ("approle-policy", 300)])
+def test_native_transactions_cannot_be_killed_during_cleanup(monkeypatch, operation, timeout):
+    from types import SimpleNamespace
+    from scripts import selfhost_native_operator as native
+
+    monkeypatch.setattr(native, "operator_command", lambda *_: ["native-operator"])
+
+    def run(command, **kwargs):
+        assert command == ["native-operator"]
+        assert kwargs["timeout"] == timeout
+        assert kwargs["capture_output"] is True
+        return SimpleNamespace(returncode=0, stdout=b"{}")
+
+    monkeypatch.setattr(native.subprocess, "run", run)
+    assert native.operator_bytes(ROOT, "operator", operation, input=b"{}") == b"{}"
+
+
 @pytest.mark.parametrize("kind", ["RSA", "EC", "ED25519"])
 def test_native_spki_matches_openssl_for_supported_operator_keys(tmp_path: Path, kind: str) -> None:
     private = tmp_path / "synthetic.pem"

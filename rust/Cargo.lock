@@ -3969,11 +3969,13 @@ dependencies = [
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
  "flate2",
  "libc",
  "marty-crypto",
  "marty-openbao-http",
+ "marty-selfhost-identity",
  "reqwest",
  "rustls",
  "serde_json",
@@ -4562,6 +4564,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "marty-openbao-http",
+ "marty-selfhost-identity",
  "mmf-platform",
  "reqwest",
  "serde_json",
@@ -4722,6 +4725,10 @@ dependencies = [
  "windows-sys 0.52.0",
  "zip",
 ]
+
+[[package]]
+name = "marty-selfhost-identity"
+version = "0.1.0"
 
 [[package]]
 name = "marty-service-acceptance"

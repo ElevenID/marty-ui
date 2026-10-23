@@ -10,7 +10,6 @@ change policies or operate an unrelated mount.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import re
@@ -20,9 +19,9 @@ import tempfile
 from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
+from selfhost_native_operator import approle_operation, approle_policy  # noqa: E402
 from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
-from provision_selfhost_renewal_identity import NAME, existing_policy_names, operator_acl  # noqa: E402
-from provision_selfhost_disposable_tls import KEY_NAMES  # noqa: E402
+from provision_selfhost_renewal_identity import existing_policy_names  # noqa: E402
 from selfhost_openbao_client import Bao  # noqa: E402
 
 
@@ -75,68 +74,11 @@ def checked_issuer_certificate(certificate: str, kind: str, version: int) -> Non
 
 
 def rotation_acl(names: list[str]) -> str:
-    """Add bounded CA provisioning paths to the reviewed renewal authority."""
-    base = operator_acl(names, allow_secret_id_rotation=False)
-    paths: dict[str, tuple[str, ...]] = {
-        f"sys/policies/acl/{POLICY}": ("read",),
-    }
-    for version in VERSIONS:
-        for prefix, roles in (("workload-pki", tuple(sorted(KEY_NAMES))),
-                              ("keycloak-pki", ("rs256",))):
-            mount = f"{prefix}-v{version}"
-            paths[f"sys/mounts/{mount}"] = ("create", "read", "update")
-            paths[f"{mount}/root/generate/internal"] = ("create", "update")
-            paths[f"{mount}/cert/ca"] = ("read",)
-            for role in roles:
-                paths[f"{mount}/roles/{role}"] = ("create", "read", "update")
-                paths[f"{mount}/sign/{role}"] = ("update",)
-    return base + "\n" + "\n".join(
-        f'path "{path}" {{ capabilities = {json.dumps(list(caps))} }}'
-        for path, caps in sorted(paths.items())
-    )
+    return approle_policy("ca-rotation", names=names)
 
 
 def checked_login(bao: Bao, identity: Path) -> str:
-    identity = private_empty_or_source(identity, empty=False)
-    if identity.stat().st_uid != os.getuid():
-        raise ValueError("CA-rotation identity has an unexpected owner")
-    role_id = private_file(identity / ROLE_ID_FILE).strip()
-    secret_id = private_file(identity / SECRET_ID_FILE).strip()
-    names = json.loads(private_file(identity / POLICY_NAMES_FILE))
-    if (not isinstance(names, list) or len(names) != 21
-            or not all(isinstance(name, str) and NAME.fullmatch(name) for name in names)
-            or len(set(names)) != 21):
-        raise ValueError("CA-rotation policy receipt is invalid")
-    if len(role_id) < 20 or len(secret_id) < 20:
-        raise ValueError("CA-rotation AppRole credentials are invalid")
-    response = bao.request("POST", f"auth/{AUTH_MOUNT}/login", {
-        "role_id": role_id, "secret_id": secret_id,
-    }, authenticate=False)
-    auth = response.get("auth", {})
-    token = auth.get("client_token")
-    if (not isinstance(token, str) or len(token) < 20
-            or auth.get("policies") != [POLICY]
-            or type(auth.get("lease_duration")) is not int
-            or not 3600 <= auth["lease_duration"] <= 8 * 60 * 60):
-        raise ValueError("CA-rotation AppRole returned an invalid scoped token")
-    actual = bao.request("GET", f"sys/policies/acl/{POLICY}", token=token) \
-        .get("data", {}).get("policy")
-    if actual != rotation_acl(names):
-        raise ValueError("CA-rotation ACL drifted from exact reviewed paths")
-    for method, path, body in (
-        ("POST", "sys/mounts/unrelated-ca-probe", {"type": "pki"}),
-        ("GET", "transit/export/signing-key/workload-tls-organization-server", None),
-        ("PUT", "sys/policies/acl/ca-escalation-probe", {"policy": "invalid"}),
-        ("POST", "auth/selfhost-renew/role/kms-renewer/secret-id", {}),
-        ("POST", "sys/mounts/workload-pki-v9", {"type": "pki"}),
-    ):
-        try:
-            bao.request(method, path, body, token=token)
-        except HTTPError as error:
-            if error.code == 403:
-                continue
-        raise ValueError("CA-rotation operator exceeded exact reviewed authority")
-    return token
+    return approle_operation(bao, "login", "ca-rotation", identity)["token"]
 
 
 def bootstrap(bao: Bao, current: Path, output: Path) -> None:
@@ -144,56 +86,7 @@ def bootstrap(bao: Bao, current: Path, output: Path) -> None:
     if output.stat().st_uid != os.getuid():
         raise ValueError("CA-rotation identity output has an unexpected owner")
     names = existing_policy_names(bao, current)
-    auth = bao.request("GET", "sys/auth").get("data", {})
-    if not isinstance(auth, dict) or f"{AUTH_MOUNT}/" in auth:
-        raise ValueError("CA-rotation AppRole mount already exists")
-    try:
-        bao.request("GET", f"sys/policies/acl/{POLICY}")
-    except HTTPError as error:
-        if error.code != 404:
-            raise
-    else:
-        raise ValueError("CA-rotation policy already exists")
-    bao.request("POST", f"sys/auth/{AUTH_MOUNT}", {"type": "approle"})
-    try:
-        bao.request("PUT", f"sys/policies/acl/{POLICY}", {
-            "policy": rotation_acl(names),
-        })
-        bao.request("POST", f"auth/{AUTH_MOUNT}/role/{APPROLE}", {
-            "bind_secret_id": True, "secret_id_num_uses": 0, "secret_id_ttl": 0,
-            "token_policies": [POLICY], "token_no_default_policy": True,
-            "token_ttl": "8h", "token_max_ttl": "24h", "token_type": "service",
-        })
-        role_id = bao.request("GET", f"auth/{AUTH_MOUNT}/role/{APPROLE}/role-id") \
-            .get("data", {}).get("role_id")
-        secret_id = bao.request("POST", f"auth/{AUTH_MOUNT}/role/{APPROLE}/secret-id", {}) \
-            .get("data", {}).get("secret_id")
-        if (not isinstance(role_id, str) or len(role_id) < 20
-                or not isinstance(secret_id, str) or len(secret_id) < 20):
-            raise ValueError("CA-rotation AppRole credentials are absent")
-        write_private(output / ROLE_ID_FILE, role_id)
-        write_private(output / SECRET_ID_FILE, secret_id)
-        write_private(output / POLICY_NAMES_FILE,
-                      json.dumps(sorted(names), separators=(",", ":")), max_bytes=4096)
-        checked_login(bao, output)
-    except Exception as error:
-        cleanup_failed = False
-        for path in (f"auth/{AUTH_MOUNT}/role/{APPROLE}",
-                     f"sys/policies/acl/{POLICY}", f"sys/auth/{AUTH_MOUNT}"):
-            try:
-                bao.request("DELETE", path)
-            except HTTPError as cleanup_error:
-                cleanup_failed |= cleanup_error.code != 404
-            except Exception:
-                cleanup_failed = True
-        for name in (ROLE_ID_FILE, SECRET_ID_FILE, POLICY_NAMES_FILE):
-            try:
-                (output / name).unlink(missing_ok=True)
-            except OSError:
-                cleanup_failed = True
-        if cleanup_failed:
-            raise RuntimeError("CA-rotation bootstrap cleanup is incomplete") from error
-        raise
+    approle_operation(bao, "bootstrap", "ca-rotation", output, names=names)
 
 
 def stage_issuer(bao: Bao, identity: Path, output: Path,
