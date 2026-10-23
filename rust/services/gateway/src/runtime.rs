@@ -1018,6 +1018,11 @@ async fn proxy_handler(
     if request.method() == "POST" && request.uri().path() == "/v1/issuance" {
         return issuance_create_handler(state, request).await;
     }
+    if request.method() == "POST"
+        && request.uri().path() == "/v1/credential-templates/issuer-options"
+    {
+        return template_issuer_options_handler(state, request).await;
+    }
     if request.method() == "POST" && request.uri().path() == "/v1/credential-templates" {
         return credential_template_create_handler(state, request).await;
     }
@@ -2484,6 +2489,186 @@ async fn deployment_profile_create_handler(
     upstream_response(response)
 }
 
+async fn load_template_issuer_context(
+    state: &Arc<GatewayRuntimeState>,
+    identity: &TrustedIdentityContext,
+    input: &crate::template_issuer_options::OptionsRequest,
+) -> Result<crate::template_issuer_options::TemplateIssuerContext, Response> {
+    input
+        .validate()
+        .map_err(|error| detail_response(error.0, error.1))?;
+    if identity.organization_id.as_deref() != Some(&input.organization_id) {
+        return Err(detail_response(
+            403,
+            "Request is not authorized for this organization",
+        ));
+    }
+    let path = format!(
+        "/v1/compliance-profiles/{}",
+        utf8_percent_encode(&input.compliance_profile_id, NON_ALPHANUMERIC)
+    );
+    let response = execute_proxy_request(
+        state,
+        identity,
+        HttpMethod::Get,
+        &path,
+        Vec::new(),
+        BTreeMap::new(),
+    )
+    .await
+    .map_err(|response| {
+        detail_response(
+            if matches!(response.status().as_u16(), 403 | 404 | 422) {
+                response.status().as_u16()
+            } else {
+                503
+            },
+            "Compliance profile could not be loaded.",
+        )
+    })?;
+    let profile = response_json(&response)
+        .ok_or_else(|| detail_response(502, "Compliance profile returned invalid data."))?;
+    crate::template_issuer_options::TemplateIssuerContext::from_profile(input, &profile)
+        .map_err(|error| detail_response(error.0, error.1))
+}
+
+async fn resolve_template_issuer_binding(
+    state: &Arc<GatewayRuntimeState>,
+    context: &crate::template_issuer_options::TemplateIssuerContext,
+    issuer_did: &str,
+) -> Result<Vec<Value>, crate::template_issuer_options::OptionsError> {
+    use crate::template_issuer_options::OptionsError;
+    let mut bindings = Vec::new();
+    for format in &context.formats {
+        let response = signing_service_request(state, HttpMethod::Post, "/internal/compat/resolve-issuer-did", Some(serde_json::to_vec(&json!({
+            "organization_id":context.organization_id, "issuer_did":issuer_did,
+            "credential_format":format.signing_wire(), "key_purpose":format.issuer_key_purpose()
+        })).expect("public issuer resolution"))).await
+            .map_err(|_| OptionsError(503, "Issuer registry is unavailable."))?;
+        match response.status_code {
+            409 => {
+                return Err(OptionsError(
+                    409,
+                    "Issuer DID is ambiguous for the template. Repair its registry bindings.",
+                ))
+            }
+            400 | 404 | 422 => {
+                return Err(OptionsError(
+                    422,
+                    "Issuer DID is incompatible with the template.",
+                ))
+            }
+            status if status >= 400 => {
+                return Err(OptionsError(503, "Issuer registry is unavailable."))
+            }
+            _ => {}
+        }
+        let resolved = response_json(&response)
+            .ok_or(OptionsError(502, "Issuer registry returned invalid data."))?;
+        bindings.push(context.binding(issuer_did, *format, &resolved)?);
+    }
+    Ok(bindings)
+}
+
+async fn template_issuer_options_handler(
+    state: Arc<GatewayRuntimeState>,
+    request: Request,
+) -> Response {
+    let identity = request
+        .extensions()
+        .get::<TrustedIdentityContext>()
+        .cloned()
+        .unwrap_or_default();
+    let bytes = match to_bytes(request.into_body(), state.maximum_body_bytes).await {
+        Ok(bytes) => bytes,
+        Err(_) => return detail_response(413, "Request body too large"),
+    };
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_slice(&bytes)
+    {
+        Ok(input) => input,
+        Err(_) => {
+            return detail_response(422, "Issuer option request is outside the public contract.")
+        }
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
+        Err(response) => return response,
+    };
+    let mut list = GatewayRequest::new(
+        HttpMethod::Get,
+        "/v1/signing-keys/issuer-identities",
+        now_ms(),
+    );
+    list.query = BTreeMap::from([
+        (
+            "organization_id".into(),
+            vec![context.organization_id.clone()],
+        ),
+        (
+            "credential_format".into(),
+            vec![context.primary.canonical().into()],
+        ),
+        (
+            "key_purpose".into(),
+            vec![context.primary.issuer_key_purpose().into()],
+        ),
+    ]);
+    let response = match state
+        .proxy
+        .execute(
+            list,
+            &identity,
+            &proxy_overrides(&state, "/v1/signing-keys/issuer-identities", &identity),
+        )
+        .await
+    {
+        Ok(response) if response.status_code < 400 => response,
+        Ok(response) if response.status_code == 409 => {
+            return detail_response(
+                409,
+                "Issuer inventory is ambiguous. Repair its registry bindings.",
+            )
+        }
+        _ => return detail_response(503, "Issuer inventory is unavailable."),
+    };
+    let body = response_json(&response);
+    let Some(identities) = body.as_ref().and_then(|body| body["identities"].as_array()) else {
+        return detail_response(502, "Issuer inventory returned invalid data.");
+    };
+    let mut dids = BTreeSet::new();
+    for identity in identities {
+        let Some(did) = identity["issuer_did"]
+            .as_str()
+            .filter(|did| did.starts_with("did:") && did.len() <= 2048)
+        else {
+            return detail_response(502, "Issuer inventory returned an invalid identity.");
+        };
+        if identity["status"] != "active"
+            || identity["key_purpose"] != context.primary.issuer_key_purpose()
+            || identity["credential_format"]
+                .as_str()
+                .and_then(|format| marty_credential_template::CredentialFormat::parse(format).ok())
+                != Some(context.primary)
+        {
+            return detail_response(502, "Issuer inventory returned an incompatible identity.");
+        }
+        dids.insert(did.to_owned());
+    }
+    let mut available = Vec::new();
+    let mut rejected = Vec::new();
+    for did in dids {
+        match resolve_template_issuer_binding(&state, &context, &did).await {
+            Ok(bindings) => available.push(json!({"issuer_did":did, "bindings":bindings})),
+            Err(error) if matches!(error.0,409|422) => rejected.push(json!({"issuer_did":did, "reason":if error.0==409 {"ambiguous_identity"} else {"incompatible_identity"}})),
+            Err(error) => return detail_response(error.0, error.1),
+        }
+    }
+    let mut result = context.describe();
+    result["identities"] = json!(available);
+    result["rejected_issuers"] = json!(rejected);
+    ([("cache-control", "no-store")], Json(result)).into_response()
+}
+
 async fn credential_template_create_handler(
     state: Arc<GatewayRuntimeState>,
     request: Request,
@@ -2531,81 +2716,39 @@ async fn credential_template_create_handler(
             return response;
         }
     }
-    let compliance_profile_id = body["compliance_profile_id"]
-        .as_str()
-        .expect("validated compliance profile");
-    let compliance_path = format!(
-        "/v1/compliance-profiles/{}",
-        utf8_percent_encode(compliance_profile_id, NON_ALPHANUMERIC)
-    );
-    let compliance = match execute_proxy_request(
-        &state,
-        &identity,
-        HttpMethod::Get,
-        &compliance_path,
-        Vec::new(),
-        BTreeMap::new(),
-    )
-    .await
-    {
-        Ok(response) => response,
+    let input: crate::template_issuer_options::OptionsRequest = match serde_json::from_value(
+        json!({
+            "organization_id":organization_id,
+            "compliance_profile_id":body["compliance_profile_id"],
+            "credential_payload_format":body.get("credential_payload_format").filter(|value| !value.is_null())
+                .or_else(|| body["supported_formats"].as_array().and_then(|values| values.first())),
+            "supported_formats":body["supported_formats"]
+        }),
+    ) {
+        Ok(input) => input,
+        Err(_) => return detail_response(422, "Template format selection is invalid."),
+    };
+    let context = match load_template_issuer_context(&state, &identity, &input).await {
+        Ok(context) => context,
         Err(response) => return response,
     };
-    let Some(compliance) = response_json(&compliance) else {
-        return detail_response(502, "Compliance profile service returned invalid data");
-    };
-    if compliance
-        .get("organization_id")
-        .and_then(Value::as_str)
-        .is_some_and(|owner| owner != organization_id)
-    {
-        return detail_response(
-            403,
-            "Access denied: compliance profile belongs to another organization",
-        );
+    if let Err(error) = context.validate_template(&body) {
+        return detail_response(error.0, error.1);
     }
     let issuer_did = body["issuer_did"]
         .as_str()
         .expect("validated DID")
         .to_owned();
-    let credential_format = credential_template_issuer_format(&body);
-    let key_purpose = issuer_key_purpose(credential_format.as_deref());
-    let resolved = match signing_service_request(
-        &state,
-        HttpMethod::Post,
-        "/internal/compat/resolve-issuer-did",
-        Some(
-            serde_json::to_vec(&json!({
-                "organization_id": organization_id, "issuer_did": issuer_did,
-                "credential_format": credential_format, "key_purpose": key_purpose
-            }))
-            .expect("resolution request"),
-        ),
-    )
-    .await
-    {
-        Ok(response) if response.status_code < 400 => response,
-        Ok(response) => return upstream_response(response),
-        Err(response) => return response,
-    };
-    let valid_identity = response_json(&resolved).is_some_and(|resolved| {
-        resolved.get("ok") == Some(&Value::Bool(true))
-            && resolved.get("organization_id").and_then(Value::as_str)
-                == Some(organization_id.as_str())
-            && resolved.get("issuer_did").and_then(Value::as_str) == Some(issuer_did.as_str())
-            && resolved.get("key_purpose").and_then(Value::as_str) == Some(key_purpose)
-            && resolved
-                .get("public_jwk")
-                .and_then(Value::as_object)
-                .is_some_and(|jwk| {
-                    !["d", "p", "q", "k"]
-                        .iter()
-                        .any(|field| jwk.contains_key(*field))
-                })
-    });
-    if !valid_identity {
-        return detail_response(422, "issuer_did must resolve to exactly one active organization-owned signing identity for this template.");
+    if let Err(error) = resolve_template_issuer_binding(&state, &context, &issuer_did).await {
+        return detail_response(error.0, error.1);
     }
+    body["credential_payload_format"] = json!(context.primary.canonical());
+    body["supported_formats"] = json!(context
+        .formats
+        .iter()
+        .map(|format| format.canonical())
+        .collect::<Vec<_>>());
+    body["issuance_protocol"] = json!(context.protocol.wire());
     body["issuer_did"] = Value::String(issuer_did);
     let response = match execute_json_proxy(
         &state,
@@ -2635,17 +2778,6 @@ async fn credential_template_create_handler(
     response.body = serde_json::to_vec(&projected).ok();
     response.headers.remove("content-length");
     upstream_response(response)
-}
-
-fn credential_template_issuer_format(body: &Value) -> Option<String> {
-    body.get("credential_payload_format")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            body.get("supported_formats")
-                .and_then(Value::as_array)
-                .and_then(|values| (values.len() == 1).then(|| values[0].as_str()).flatten())
-        })
-        .and_then(crate::issuance_create::public_format)
 }
 
 fn issuer_key_purpose(credential_format: Option<&str>) -> &'static str {
@@ -5162,6 +5294,7 @@ fn map_failure(
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("../tests/support/template_issuer_options_behavior.rs");
     use marty_signing_grant::{GrantClaims, GrantEnvelope};
     use std::{
         collections::BTreeSet,
@@ -5710,7 +5843,7 @@ mod tests {
                 }))
                 .expect("profiles"),
                 "/v1/compliance-profiles/profile%2D1" => {
-                    br#"{"id":"profile-1","organization_id":"org-1"}"#.to_vec()
+                    br#"{"id":"profile-1","organization_id":"org-1","status":"ACTIVE","credential_format":"SD_JWT_VC","issuance_protocol":"OID4VCI_PRE_AUTH"}"#.to_vec()
                 }
                 path if path.starts_with("/.well-known/openid-credential-issuer") => {
                     serde_json::to_vec(&json!({
@@ -5849,6 +5982,7 @@ mod tests {
                         "verification_method_id": "did:web:issuer.example#issuer-key",
                         "key_purpose": "vc_jwt_issuer",
                         "algorithm": "ES256",
+                        "issuer_profile":{"organization_id":"org-1","issuer_did":"did:web:issuer.example","key_purpose":"vc_jwt_issuer","credential_format":"SD_JWT_VC","algorithm":"ES256","status":"active"},
                         "public_jwk": {"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}
                     }))
                     .expect("issuer DID response")
@@ -9796,7 +9930,7 @@ mod tests {
                     .uri("/v1/credential-templates")
                     .header("cookie", "sessionId=valid")
                     .header("content-type", "application/json")
-                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
+                    .body(Body::from(br#"{"organization_id":"org-1","name":"employee","credential_type":"EmployeeCredential","vct":"https://issuer.example/credentials/EmployeeCredential","claims":[{"name":"birth_date","claim_type":"date","required":true,"selectively_disclosable":true,"namespace":"org.iso.18013.5.1"}],"supported_formats":["sd_jwt_vc"],"compliance_profile_id":"profile-1","issuer_did":"did:web:issuer.example"}"#.as_slice()))
                     .expect("request"),
             )
             .await
@@ -9813,20 +9947,41 @@ mod tests {
     }
 
     #[test]
-    fn credential_template_issuer_format_normalizes_legacy_payload_aliases() {
+    fn template_issuer_context_normalizes_aliases_and_resolves_every_declared_format() {
         let contract: Value = serde_json::from_str(include_str!(
             "../../../../contracts/gateway-credential-template-behavior.json"
         ))
-        .expect("credential-template contract");
+        .unwrap();
         for case in contract["issuer_resolution_format_aliases"]
             .as_array()
-            .expect("format alias cases")
+            .unwrap()
         {
-            assert_eq!(
-                credential_template_issuer_format(case).as_deref(),
-                case["expected"].as_str(),
-                "{case}"
-            );
+            let input = crate::template_issuer_options::OptionsRequest {
+                organization_id: "org-1".into(),
+                compliance_profile_id: "profile-1".into(),
+                credential_payload_format: case["credential_payload_format"]
+                    .as_str()
+                    .map(str::to_owned),
+                supported_formats: case
+                    .get("supported_formats")
+                    .map(|value| serde_json::from_value(value.clone()).unwrap()),
+            };
+            let primary = marty_credential_template::CredentialFormat::parse(
+                case["expected_formats"][0].as_str().unwrap(),
+            )
+            .unwrap();
+            let profile = json!({"id":"profile-1", "organization_id":"org-1", "status":"ACTIVE",
+                "credential_format":primary.canonical(), "issuance_protocol":"OID4VCI_PRE_AUTH"});
+            let context = crate::template_issuer_options::TemplateIssuerContext::from_profile(
+                &input, &profile,
+            )
+            .unwrap();
+            let wire: Vec<_> = context
+                .formats
+                .iter()
+                .map(|format| format.signing_wire())
+                .collect();
+            assert_eq!(json!(wire), case["expected_formats"], "{case}");
         }
     }
 

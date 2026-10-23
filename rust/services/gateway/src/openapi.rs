@@ -17,6 +17,14 @@ pub fn schemas() -> Value {
         "../../../../contracts/issuer-identity-capabilities-response.json"
     ))
     .expect("public identity capabilities schema");
+    schemas["runtime__template_issuer_options_request"] = serde_json::from_str(include_str!(
+        "../../../../contracts/template-issuer-options-request.json"
+    ))
+    .expect("template issuer options request schema");
+    schemas["runtime__template_issuer_options_response"] = serde_json::from_str(include_str!(
+        "../../../../contracts/template-issuer-options-response.json"
+    ))
+    .expect("template issuer options response schema");
     schemas
 }
 pub fn protocol_revision() -> &'static str {
@@ -34,6 +42,31 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Post && path == "/v1/credential-templates/issuer-options" {
+        operation["summary"] = json!("Discover compatible, unambiguous template issuer DIDs");
+        operation["description"] = json!("Requires credential-template:create in the selected organization. Validates an active compliance profile and every declared credential format; no algorithm or private binding selector is accepted. Template creation repeats these checks.");
+        operation["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/runtime__template_issuer_options_request"}}}});
+        for (status, description) in [
+            (401, "Authentication required."),
+            (403, "Organization or permission is not authorized."),
+            (409, "Issuer inventory is ambiguous."),
+            (
+                422,
+                "Invalid, inactive or incompatible template dependencies.",
+            ),
+            (502, "A dependency returned an invalid binding."),
+            (
+                503,
+                "A required dependency is unavailable; no cached or default choices are returned.",
+            ),
+        ] {
+            operation["responses"][status.to_string()] = json!({"description":description});
+        }
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__template_issuer_options_response"}}});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if method == Get && path == "/v1/signing-keys/issuer-identities/capabilities" {
         operation["summary"] = json!("Discover organization issuer identity creation options");
         operation["parameters"] = json!([query_parameter(

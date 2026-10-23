@@ -1,3 +1,4 @@
+from copy import deepcopy
 import json
 from pathlib import Path
 import re
@@ -94,3 +95,44 @@ def test_identity_capability_extension_is_strict_and_contains_no_custody_fields(
     value["creation_options"][0]["key_reference"] = "private"
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(value)
+
+
+def test_template_issuer_options_extensions_enforce_nested_public_boundaries():
+    request = jsonschema.Draft202012Validator(json.loads(
+        (ROOT / "contracts/template-issuer-options-request.json").read_text()
+    ))
+    scope = {"organization_id": "org-a", "compliance_profile_id": "profile-a"}
+    request.validate(scope)
+    request.validate({**scope, "supported_formats": ["SD_JWT_VC", "MDOC"]})
+    for forbidden in ["algorithm", "signing_service_id", "key_reference", "issuer_profile_id"]:
+        with pytest.raises(jsonschema.ValidationError):
+            request.validate({**scope, forbidden: "private"})
+    response = jsonschema.Draft202012Validator(json.loads(
+        (ROOT / "contracts/template-issuer-options-response.json").read_text()
+    ))
+    value = {
+        **scope, "credential_payload_format": "SD_JWT_VC", "supported_formats": ["SD_JWT_VC"],
+        "issuance_protocol": "OID4VCI_PRE_AUTH",
+        "requirements": {"vct": True, "doctype": False, "revocation_profile": True, "x509_certificate": False},
+        "identities": [{"issuer_did": "did:example:issuer", "bindings": [{
+            "credential_format": "SD_JWT_VC", "key_purpose": "vc_jwt_issuer", "algorithm": "ES256"
+        }]}],
+        "rejected_issuers": [{"issuer_did": "did:example:ambiguous", "reason": "ambiguous_identity"}],
+    }
+    response.validate(value)
+    response.validate({**value, "identities": [], "rejected_issuers": []})
+    for path, key, invalid in [
+        ([], "key_reference", "private"),
+        (["identities", 0], "signing_service_id", "private"),
+        (["identities", 0, "bindings", 0], "key_reference", "private"),
+        (["identities", 0, "bindings", 0], "public_jwk", {"d": "private"}),
+        (["requirements"], "doctype", "false"),
+        (["rejected_issuers", 0], "reason", "private-key-error"),
+    ]:
+        mutated = deepcopy(value)
+        cursor = mutated
+        for segment in path:
+            cursor = cursor[segment]
+        cursor[key] = invalid
+        with pytest.raises(jsonschema.ValidationError):
+            response.validate(mutated)

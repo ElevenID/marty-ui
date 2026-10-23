@@ -697,6 +697,7 @@ describe('presentationPolicyApi', () => {
         compliance_profile_id: '123e4567-e89b-12d3-a456-426614174000',
         supported_wallet_ids: ['removed-wallet-selection'],
         issuance_protocol: 'oid4vci',
+        _issuer_selection: { organization_id: 'org-1', issuer_did: 'did:web:issuer.example.com' },
         wallet_configs: [{ wallet_id: 'removed-wallet-config' }],
         claims: [],
         validity_rules: {
@@ -714,7 +715,8 @@ describe('presentationPolicyApi', () => {
         not_before_offset_seconds: 900,
       })
       expect(receivedData).not.toHaveProperty('supported_wallet_ids')
-      expect(receivedData).not.toHaveProperty('issuance_protocol')
+      expect(receivedData.issuance_protocol).toBe('oid4vci')
+      expect(receivedData).not.toHaveProperty('_issuer_selection')
       expect(receivedData).not.toHaveProperty('wallet_configs')
     })
 

@@ -477,17 +477,13 @@ fn issuer_identity(
 }
 
 fn key_purpose(credential_format: &str) -> &'static str {
-    match credential_format
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_")
-        .as_str()
-    {
-        "mso_mdoc" | "mdoc" | "zk_mdoc" => "mdoc_dsc",
-        "vds_nc" | "vdsnc" => "vdsnc_signing",
-        "icao_emrtd" => "x509_doc_signer",
-        _ => "vc_jwt_issuer",
-    }
+    crate::CredentialFormat::parse(if credential_format.trim().eq_ignore_ascii_case("vdsnc") {
+        "vds_nc"
+    } else {
+        credential_format
+    })
+    .map(crate::CredentialFormat::issuer_key_purpose)
+    .unwrap_or("vc_jwt_issuer")
 }
 
 fn trust_profile_issuer_identifiers(

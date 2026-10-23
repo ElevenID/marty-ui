@@ -13,7 +13,7 @@ use serde_json::{json, Map, Value};
 
 use crate::issuance_native;
 
-pub const EXPECTED_ROUTE_COUNT: usize = 455;
+pub const EXPECTED_ROUTE_COUNT: usize = 456;
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayContract {
@@ -734,6 +734,7 @@ fn public_route(path: &str) -> bool {
 
 fn gateway_owned(path: &str) -> bool {
     path == "/openapi.json"
+        || path == "/v1/credential-templates/issuer-options"
         || path == "/docs"
         || path == "/redoc"
         || path.starts_with("/.well-known/")

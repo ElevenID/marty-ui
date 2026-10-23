@@ -1,5 +1,5 @@
 /** Public DID identity operations. Provider configuration belongs to signingKeysApi. */
-import { get } from './api';
+import { get, post } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, requireOrganizationId, withQuery } from './queryUtils';
 
@@ -54,4 +54,39 @@ export async function getIssuerIdentityCapabilities(params = {}) {
   };
 }
 
-export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities };
+export async function getTemplateIssuerOptions(params = {}) {
+  const organizationId = organization(params, 'loading template issuer options');
+  const result = await post('/v1/credential-templates/issuer-options', {
+    organization_id: organizationId,
+    compliance_profile_id: params.compliance_profile_id,
+    ...(params.credential_payload_format ? { credential_payload_format: params.credential_payload_format } : {}),
+    ...(Array.isArray(params.supported_formats) ? { supported_formats: params.supported_formats } : {}),
+  });
+  if (result?.organization_id !== organizationId
+    || result?.compliance_profile_id !== params.compliance_profile_id
+    || typeof result?.credential_payload_format !== 'string'
+    || typeof result?.issuance_protocol !== 'string'
+    || !Array.isArray(result?.supported_formats) || result.supported_formats.length === 0
+    || !result.supported_formats.every((format) => typeof format === 'string' && format)
+    || !['vct', 'doctype', 'revocation_profile', 'x509_certificate'].every((field) => typeof result?.requirements?.[field] === 'boolean')
+    || !Array.isArray(result?.identities) || !result.identities.every((identity) => typeof identity?.issuer_did === 'string'
+      && identity.issuer_did.startsWith('did:') && Array.isArray(identity.bindings) && identity.bindings.length > 0
+      && identity.bindings.every((binding) => ['credential_format', 'key_purpose', 'algorithm'].every((field) => typeof binding?.[field] === 'string' && binding[field])))
+    || !Array.isArray(result?.rejected_issuers)
+    || !result.rejected_issuers.every((identity) => typeof identity?.issuer_did === 'string'
+      && identity.issuer_did.startsWith('did:')
+      && ['ambiguous_identity', 'incompatible_identity'].includes(identity.reason))) {
+    throw new Error('Template issuer options returned invalid organization or compatibility data.');
+  }
+  return {
+    organization_id: result.organization_id, compliance_profile_id: result.compliance_profile_id,
+    credential_payload_format: result.credential_payload_format, supported_formats: result.supported_formats,
+    issuance_protocol: result.issuance_protocol,
+    requirements: Object.fromEntries(['vct', 'doctype', 'revocation_profile', 'x509_certificate'].map((field) => [field, result.requirements[field]])),
+    identities: result.identities.map(({ issuer_did, bindings }) => ({ issuer_did,
+      bindings: bindings.map(({ credential_format, key_purpose, algorithm }) => ({ credential_format, key_purpose, algorithm })) })),
+    rejected_issuers: result.rejected_issuers.map(({ issuer_did, reason }) => ({ issuer_did, reason })),
+  };
+}
+
+export default { createIssuerIdentity, listPublicIssuerIdentities, getIssuerIdentityCapabilities, getTemplateIssuerOptions };

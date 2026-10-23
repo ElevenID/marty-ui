@@ -775,7 +775,11 @@ pub fn resolve_resource_lookup(path: &str) -> Option<ResourceLookup> {
     let segment = &captures[1];
     let id = &captures[2];
     let (service, template, reserved): (&str, &str, &[&str]) = match segment {
-        "credential-templates" => ("credential-templates", "/v1/credential-templates/{id}", &[]),
+        "credential-templates" => (
+            "credential-templates",
+            "/v1/credential-templates/{id}",
+            &["issuer-options"],
+        ),
         "trust-profiles" => (
             "trust-profiles",
             "/internal/v1/resource-owners/trust-profiles/{id}",

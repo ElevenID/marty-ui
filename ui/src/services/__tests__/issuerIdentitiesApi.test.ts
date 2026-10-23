@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { http, HttpResponse } from 'msw';
 import { server } from '@test/mocks/server';
-import { createIssuerIdentity, getIssuerIdentityCapabilities } from '../issuerIdentitiesApi';
+import { createIssuerIdentity, getIssuerIdentityCapabilities, getTemplateIssuerOptions } from '../issuerIdentitiesApi';
 
 describe('public issuer identity client', () => {
   it('requires an explicit organization before discovery or creation', async () => {
@@ -36,5 +36,29 @@ describe('public issuer identity client', () => {
       signing_service_id: 'forbidden', key_reference: 'forbidden', kms_provider: 'forbidden' });
     expect(observed).toEqual({ organization_id: 'org-a', issuer_did: 'did:web:issuer.example:orgs:a',
       key_purpose: 'vc_jwt_issuer', credential_format: 'SD_JWT_VC', algorithm: 'ES256' });
+  });
+
+  it('scopes template discovery and projects nested public bindings without custody selectors', async () => {
+    let observed: unknown;
+    const context = { organization_id: 'org-a', compliance_profile_id: 'profile-a',
+      credential_payload_format: 'SD_JWT_VC', supported_formats: ['SD_JWT_VC'], issuance_protocol: 'OID4VCI_PRE_AUTH',
+      requirements: { vct: true, doctype: false, revocation_profile: true, x509_certificate: false },
+      identities: [{ issuer_did: 'did:example:issuer', bindings: [{ credential_format: 'SD_JWT_VC',
+        key_purpose: 'vc_jwt_issuer', algorithm: 'ES256', key_reference: 'private' }], service_id: 'private' }],
+      rejected_issuers: [{ issuer_did: 'did:example:ambiguous', reason: 'ambiguous_identity' }] };
+    server.use(http.post('*/v1/credential-templates/issuer-options', async ({ request }) => {
+      observed = await request.json();
+      return HttpResponse.json(context);
+    }));
+    const result = await getTemplateIssuerOptions({ organization_id: 'org-a', compliance_profile_id: 'profile-a',
+      supported_formats: ['SD_JWT_VC'], algorithm: 'ES256', key_reference: 'private' });
+    expect(observed).toEqual({ organization_id: 'org-a', compliance_profile_id: 'profile-a', supported_formats: ['SD_JWT_VC'] });
+    expect(JSON.stringify(result)).not.toContain('private');
+    expect(result.identities[0].bindings).toEqual([{ credential_format: 'SD_JWT_VC', key_purpose: 'vc_jwt_issuer', algorithm: 'ES256' }]);
+    context.organization_id = 'org-b';
+    await expect(getTemplateIssuerOptions({ organization_id: 'org-a', compliance_profile_id: 'profile-a' })).rejects.toThrow(/invalid organization/);
+    context.organization_id = 'org-a';
+    context.rejected_issuers[0].reason = 'private-key-error';
+    await expect(getTemplateIssuerOptions({ organization_id: 'org-a', compliance_profile_id: 'profile-a' })).rejects.toThrow(/invalid organization/);
   });
 });

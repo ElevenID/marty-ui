@@ -26,6 +26,7 @@ marty-oid4vci.workspace = true
 marty-passport-auth = { path = "../../crates/passport-auth" }
 marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-deployment-profile = { path = "../deployment-profile" }
+marty-credential-template = { path = "../credential-template" }
 mmf-platform.workspace = true
 mmf-security.workspace = true
 percent-encoding.workspace = true

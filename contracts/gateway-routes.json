@@ -21,7 +21,7 @@
       "MIPVersionMiddleware"
     ]
   },
-  "route_count": 455,
+  "route_count": 456,
   "routes": [
     {
       "include_in_schema": true,
@@ -543,6 +543,12 @@
       "include_in_schema": true,
       "method": "POST",
       "path": "/v1/credential-templates",
+      "status_code": 200
+    },
+    {
+      "include_in_schema": true,
+      "method": "POST",
+      "path": "/v1/credential-templates/issuer-options",
       "status_code": 200
     },
     {

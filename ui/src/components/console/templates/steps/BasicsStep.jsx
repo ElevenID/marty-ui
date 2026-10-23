@@ -68,13 +68,12 @@ const BasicsStep = ({ data, onChange }) => {
       {/* VCT (Verifiable Credential Type) */}
       <TextField
         fullWidth
-        required
         label={t('wizards.credentialTemplate.basicsStep.fields.vct')}
         value={data.vct || ''}
         onChange={(e) => onChange({ vct: e.target.value })}
         sx={{ mb: 3 }}
         placeholder={t('wizards.credentialTemplate.basicsStep.placeholders.vct')}
-        helperText={t('wizards.credentialTemplate.basicsStep.helpers.vct')}
+        helperText="The selected Compliance Profile determines whether a credential type URI is required."
       />
 
       {/* Description */}

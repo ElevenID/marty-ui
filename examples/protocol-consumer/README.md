@@ -22,6 +22,8 @@ $capabilities.creation_options
 
 Choose a complete `key_purpose` / `credential_format` / `algorithm` tuple from this response and use its `managed_issuer_did_prefix` when creating a managed issuer identity. Refresh discovery after organization or configuration changes. These are configuration-derived creation options; issuance compatibility, provider health and public DID resolution are checked in their respective workflows. Empty options or an unavailable response block creation. The console rechecks the selected tuple before provisioning.
 
+Before creating a credential template, call `POST /v1/credential-templates/issuer-options` with your `organization_id`, active `compliance_profile_id`, and optional `credential_payload_format` and `supported_formats`. This operation requires the same organization permission as template creation. It returns the derived format, issuance protocol, required VCT/doctype/lifecycle fields and compatible public issuer DIDs. Every declared format must resolve unambiguously to its intended signing purpose. Ambiguous DIDs appear only in `rejected_issuers`; no algorithm or private key/profile selector can resolve that ambiguity through this API. Unavailable discovery blocks selection. Template creation repeats these checks, so refresh options if the registry or compliance profile changes. Compatibility discovery does not establish provider health or DID publication.
+
 Save a VCDM v2 credential object matching your template's claims to `credential.json`, then issue it:
 
 ```powershell

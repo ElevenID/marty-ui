@@ -554,7 +554,7 @@ export function buildCredentialTemplatePayload(data = {}) {
     generate_artifacts_automatically: _generateArtifactsAutomatically,
     auto_generate_artifacts: _autoGenerateArtifacts,
     supported_wallet_ids: _supportedWalletIds,
-    issuance_protocol: _issuanceProtocol,
+    _issuer_selection: _issuerSelection,
     wallet_configs: _walletConfigs,
     compliance_profile: _embeddedComplianceProfile,
     issuer_profile_id: _issuerProfileId,
