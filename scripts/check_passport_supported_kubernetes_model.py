@@ -196,7 +196,10 @@ def approved_runtime_spec(spec: dict) -> bool:
             and runtime["capabilities"].get("add") in (None, []))
 
 
-def kubernetes_config_value(container: dict, data: dict, name: str) -> object:
+def kubernetes_config_value(
+    container: dict, data: dict, name: str, *,
+    require: Callable[[bool, str], None] = require,
+) -> object:
     """Resolve a required setting without accepting an envFrom override."""
     entries = container.get("env", [])
     require(isinstance(entries, list), "Kubernetes passport environment is invalid")

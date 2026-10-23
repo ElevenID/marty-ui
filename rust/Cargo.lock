@@ -3969,7 +3969,13 @@ dependencies = [
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "marty-crypto",
  "serde_json",
+ "sha2 0.10.9",
+ "spki",
+ "x509-cert",
+ "zip",
 ]
 
 [[package]]

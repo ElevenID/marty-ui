@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import zipfile
 
 import pytest
@@ -127,7 +128,11 @@ def test_snapshot_preflight_accepts_only_secret_free_archive(
     )
     snapshot = b"synthetic encrypted snapshot"
 
-    def fake_export(*_args, **_kwargs):
+    real_run = subprocess.run
+
+    def fake_export(command, **kwargs):
+        if not (len(command) > 1 and command[1].endswith("export-selfhost-openbao.py")):
+            return real_run(command, **kwargs)
         archive = tmp_path / "openbao-raft-synthetic.zip"
         with zipfile.ZipFile(archive, "w") as bundle:
             bundle.writestr("raft.snap", snapshot)
@@ -142,7 +147,7 @@ def test_snapshot_preflight_accepts_only_secret_free_archive(
 
     monkeypatch.setattr(retirement.subprocess, "run", fake_export)
     if include_recovery:
-        with pytest.raises(ValueError, match="unexpected files"):
+        with pytest.raises(RuntimeError, match="Rust operator validation failed"):
             retirement.export_current_snapshot(args)
     else:
         assert retirement.export_current_snapshot(args).name == "openbao-raft-synthetic.zip"

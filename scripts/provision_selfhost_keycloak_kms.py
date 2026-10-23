@@ -227,7 +227,7 @@ def provision(bao: Bao, *, renew: bool = False,
         if not isinstance(public_key, str) or not isinstance(certificate, str):
             raise RuntimeError("disposable Keycloak RS256 public key is absent")
         require_cert_lifetime(certificate)
-        # OpenSSL only receives public data. Verify the mounted certificate is
+        # Rust only receives public data. Verify the mounted certificate is
         # bound to the non-exportable Transit version that Keycloak will sign.
         if certificate_public_key_der(certificate) != public_key_der(public_key):
             raise RuntimeError("disposable Keycloak RS256 certificate key differs")

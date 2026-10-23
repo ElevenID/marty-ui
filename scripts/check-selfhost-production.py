@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import ipaddress
 import json
 import os
@@ -25,6 +24,7 @@ sys.path.insert(0, str(REPO_ROOT / "packages"))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 from canvas_worker_runtime import classify_worker_launch  # noqa: E402
+from selfhost_native_operator import operator_command  # noqa: E402
 
 
 class CheckError(RuntimeError):
@@ -176,47 +176,10 @@ def get_compose_services(env_file: Path, compose_file: Path) -> list[dict[str, A
 
 
 def catalog_lines(*args: str) -> list[str]:
-    binary = os.environ.get("MARTY_DEPLOY_BIN", "").strip()
-    if binary:
-        expected_sha = os.environ.get("MARTY_DEPLOY_BIN_SHA256", "").strip().lower()
-        source_sha = os.environ.get("MARTY_DEPLOY_SOURCE_SHA", "").strip()
-        release_tag = os.environ.get("MARTY_DEPLOY_RELEASE_TAG", "").strip()
-        if not expected_sha:
-            raise CheckError("MARTY_DEPLOY_BIN_SHA256 is required")
-        if not re.fullmatch(r"[0-9a-f]{64}", expected_sha):
-            raise CheckError("MARTY_DEPLOY_BIN_SHA256 is invalid")
-        if not re.fullmatch(r"[0-9a-f]{40}", source_sha):
-            raise CheckError("MARTY_DEPLOY_SOURCE_SHA is required and must be valid")
-        if not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", release_tag):
-            raise CheckError("MARTY_DEPLOY_RELEASE_TAG is required and must be valid")
-        binary_path = Path(binary)
-        if not binary_path.is_file():
-            raise CheckError("MARTY_DEPLOY_BIN is not a file")
-        with binary_path.open("rb") as handle:
-            actual_sha = hashlib.file_digest(handle, "sha256").hexdigest()
-        if actual_sha != expected_sha:
-            raise CheckError("MARTY_DEPLOY_BIN digest mismatch")
-        identity = subprocess.run(
-            [str(binary_path), "--build-identity"],
-            check=False, capture_output=True, text=True,
-        )
-        if identity.returncode != 0 or identity.stdout.strip() != f"{source_sha}:{release_tag}":
-            raise CheckError("MARTY_DEPLOY_BIN source or tag mismatch")
-        if (REPO_ROOT / ".git").exists():
-            checkout = subprocess.run(
-                ["git", "-C", str(REPO_ROOT), "rev-parse", "--verify", "HEAD^{commit}"],
-                check=False, capture_output=True, text=True,
-            )
-            if checkout.returncode != 0 or checkout.stdout.strip() != source_sha:
-                raise CheckError("MARTY_DEPLOY_BIN source differs from checkout HEAD")
-        command = [str(binary_path), "--repo-root", str(REPO_ROOT), *args]
-    else:
-        command = [
-            "cargo", "+1.95.0", "run", "--quiet", "--locked",
-            "--manifest-path", str(REPO_ROOT / "rust/Cargo.toml"),
-            "-p", "marty-deployment-catalog", "--bin", "marty-deploy",
-            "--", "--repo-root", str(REPO_ROOT), *args,
-        ]
+    try:
+        command = operator_command(REPO_ROOT, *args)
+    except RuntimeError as error:
+        raise CheckError(str(error)) from error
     result = subprocess.run(
         command,
         check=False, capture_output=True, text=True, cwd=REPO_ROOT,
