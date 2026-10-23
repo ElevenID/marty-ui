@@ -845,6 +845,8 @@ services:
       TRUST_PROFILE_SERVICE_URL: http://trust-profile:8004
       ISSUANCE_NATIVE_SERVICE_URL: http://issuance-native:8005
       ISSUANCE_API_KEY: ${ISSUANCE_API_KEY:-dev-issuance-api-key}
+      SIGNING_KEYS_SERVICE_URL: http://signing-keys:8017
+      SIGNING_KEYS_INTERNAL_API_KEY: ${SIGNING_KEYS_INTERNAL_API_KEY:-dev-signing-keys-internal-api-key}
       PUBLIC_DOMAIN: ${PUBLIC_DOMAIN:-localhost}
       PUBLIC_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}
       ISSUER_BASE_URL: ${PUBLIC_API_URL:-http://gateway:8000}

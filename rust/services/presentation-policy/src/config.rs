@@ -68,17 +68,20 @@ pub enum PresentationPolicyConfigError {
 
 impl PresentationPolicyServiceConfig {
     pub fn from_env() -> Result<Self, PresentationPolicyConfigError> {
-        let mut values = std::env::vars().collect::<BTreeMap<_, _>>();
-        for name in ["GRPC_SERVICE_TOKEN", "ISSUANCE_API_KEY"] {
-            load_secret(&mut values, name)?;
-        }
-        Self::from_values(values)
+        Self::from_values(std::env::vars())
     }
 
     pub fn from_values(
         values: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, PresentationPolicyConfigError> {
-        let values = values.into_iter().collect::<BTreeMap<_, _>>();
+        let mut values = values.into_iter().collect::<BTreeMap<_, _>>();
+        for name in [
+            "GRPC_SERVICE_TOKEN",
+            "ISSUANCE_API_KEY",
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+        ] {
+            load_secret(&mut values, name)?;
+        }
         let environment = environment(value(&values, "ENVIRONMENT").unwrap_or("development"))?;
         let http_addr = listener(
             &values,
@@ -158,12 +161,20 @@ impl PresentationPolicyServiceConfig {
         {
             return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
         }
-        let signing_registry_api_key = if value(&values, "SIGNING_KEYS_INTERNAL_API_KEY").is_some()
-        {
-            secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?
-        } else {
-            None
-        };
+        // Match the registry owner's 16-byte minimum, including development.
+        // Other service secrets retain their independent 32-byte policy.
+        let signing_registry_api_key = value(&values, "SIGNING_KEYS_INTERNAL_API_KEY")
+            .map(|key| {
+                if key.len() < 16 {
+                    Err(PresentationPolicyConfigError::SecretTooShort {
+                        name: "SIGNING_KEYS_INTERNAL_API_KEY",
+                        minimum: 16,
+                    })
+                } else {
+                    Ok(key.to_owned())
+                }
+            })
+            .transpose()?;
         let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
             .unwrap_or("")
             .split(',')
@@ -395,6 +406,9 @@ fn load_secret(
     };
     let secret =
         fs::read_to_string(path).map_err(|_| PresentationPolicyConfigError::SecretFile { name })?;
+    if secret.trim().is_empty() {
+        return Err(PresentationPolicyConfigError::SecretFile { name });
+    }
     values.insert(name.into(), secret.trim().into());
     Ok(())
 }
