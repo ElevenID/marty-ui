@@ -246,12 +246,13 @@ export function extractVerificationSummary(session = {}) {
   };
 }
 
-function CheckLine({ label, value }) {
+function CheckLine({ label, value, uncheckedLabel }) {
   const known = value !== undefined && value !== null;
   const ok = Boolean(value);
+  const unchecked = known && !ok && Boolean(uncheckedLabel);
   return (
     <Stack direction="row" spacing={1} alignItems="center">
-      {known ? (
+      {known && !unchecked ? (
         ok ? <CheckCircleIcon color="success" fontSize="small" /> : <ErrorIcon color="error" fontSize="small" />
       ) : (
         <HelpOutlineIcon color="disabled" fontSize="small" />
@@ -259,8 +260,8 @@ function CheckLine({ label, value }) {
       <Typography variant="body2">{label}</Typography>
       <Chip
         size="small"
-        label={known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
-        color={known ? (ok ? 'success' : 'error') : 'default'}
+        label={unchecked ? uncheckedLabel : known ? (ok ? 'Passed' : 'Failed') : 'Not reported'}
+        color={known && !unchecked ? (ok ? 'success' : 'error') : 'default'}
         variant="outlined"
         sx={{ ml: 'auto' }}
       />
@@ -387,7 +388,7 @@ function VerificationResultSummary({ session }) {
             Verification checks
           </Typography>
           <CheckLine label="Trust profile accepted the issuer" value={summary.trustValidated} />
-          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} />
+          <CheckLine label="Revocation/status was checked" value={summary.revocationChecked} uncheckedLabel="Not checked" />
           <CheckLine label="Credential signature was valid" value={summary.signatureValid} />
         </Stack>
 
