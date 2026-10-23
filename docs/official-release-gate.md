@@ -37,6 +37,15 @@ the failing stage and exit code without exposing command output or credentials.
 A fresh exact-source candidate must pass all seven official suites; the failed
 run and its summaries remain unchanged.
 
+Candidate run 39902897491 passed authenticated native preflight and KMS-only
+bootstrap, but all seven lanes stopped before assertions because the Envoy
+issuance bridge retained a source build without a released image binding.
+The GHCR overlay now selects the same immutable services artifact for that
+bridge, preserving its keyless entrypoint and scoped KMS configuration.
+Released startup rejects any remaining source build in the rendered graph,
+and the isolated executable probe checks both issuance and bridge linkage.
+These startup checks do not establish a protocol pass.
+
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not
 require a public release or modify the ordinary reviewed release pin. Its

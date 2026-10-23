@@ -339,6 +339,13 @@ def validate_model(
                 "Local native build selector is incompatible",
             )
         else:
+            unbound_builds = sorted(
+                name for name, service in services.items() if service.get("build")
+            )
+            require(
+                not unbound_builds,
+                "Released conformance contains source builds: " + ", ".join(unbound_builds),
+            )
             require(
                 not native.get("build") and native.get("pull_policy") == "always",
                 "Released native mode must not build or reuse mutable images",
@@ -354,6 +361,14 @@ def validate_model(
             require(
                 image == gateway.get("image"),
                 "Gateway/native services artifacts must be paired",
+            )
+            bridge = services.get("envoy-issuance-bridge", {})
+            require(
+                bridge.get("image") == image
+                and bridge.get("pull_policy") == "always"
+                and bridge.get("entrypoint")
+                == ["/usr/local/bin/marty-keyless-grpc-bridge"],
+                "Envoy issuance bridge must use the exact services artifact and keyless entrypoint",
             )
     except (
         KeyError,
@@ -499,7 +514,7 @@ def probe_image(
                 "/bin/sh",
                 image,
                 "-ec",
-                'test -x /usr/local/bin/marty-issuance-service; test -x /app/services/entrypoint.sh; native_linkage=$(ldd /usr/local/bin/marty-issuance-service); case "$native_linkage" in *"not found"*) exit 1;; esac',
+                'test -x /app/services/entrypoint.sh; for binary in /usr/local/bin/marty-issuance-service /usr/local/bin/marty-keyless-grpc-bridge; do test -x "$binary"; native_linkage=$(ldd "$binary"); case "$native_linkage" in *"not found"*) exit 1;; esac; done',
             ],
             runner=runner,
             capture=True,
