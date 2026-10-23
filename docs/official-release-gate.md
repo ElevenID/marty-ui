@@ -2,7 +2,7 @@
 
 Product CD prepares and attests the exact five-role manifest from its durable
 digest transaction before version-tag promotion. It calls the shared official
-suite at immutable integration main source `641af7793867bae9bc64b7c40ed5a0e721dc4e80`,
+suite at immutable integration main source `7b0a46e57ac254067c5069654498327f3ff366d6`,
 including the product's KMS-only setup. All seven lanes must succeed.
 
 The no-write release claim checks that the literal harness pin is an ancestor
@@ -10,7 +10,7 @@ of integration `main`, and matches the caller's `harness_revision`. Pin the
 accepted merge commit after integration, rather than a squash-merged PR head
 whose branch can be deleted. Candidate run 39873517844 could not resolve the
 old PR-head reusable workflow; restoring its original branch allowed run
-39874228600 to start. That ref remains required by the in-flight older source.
+39874228600 to start. That ref remains preserved for reproducibility of the older source.
 The accepted merge commit has the identical Git tree to the reviewed PR head.
 
 Native conformance startup uses the shared release validator in Rust-only mode
@@ -22,6 +22,20 @@ legacy manifest policy. The corrected preflight passes against that actual
 candidate, including real GitHub manifest attestation and its committed native
 capability floor. This read-only check is not an official protocol pass; the
 failed lane summaries remain failed and a fresh candidate execution is required.
+
+Candidate run 39886188606 completed KMS-only bootstrap and all five image/runtime
+gates, but its seven official lanes failed native startup before protocol
+assertions. The run step did not supply GitHub authentication for manifest
+attestation. The same immutable manifest passes the native release preflight
+with authenticated `gh attestation verify`; this is not a protocol qualification.
+
+The shared harness supplies its read-only job token only to trusted native
+startup and strips all GitHub authentication aliases before invoking upstream
+suite processes. The common subprocess environment helper enforces this boundary
+for both the lane runner and the stack adapter. Native preflight failures report
+the failing stage and exit code without exposing command output or credentials.
+A fresh exact-source candidate must pass all seven official suites; the failed
+run and its summaries remain unchanged.
 
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not

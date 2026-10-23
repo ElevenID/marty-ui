@@ -547,6 +547,31 @@ def test_native_conformance_rechecks_rust_only_policy_after_attestation(tmp_path
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(("command", "stage", "code"), [
+    ("gh", "manifest attestation", 4),
+    ("git", "native capability source", 128),
+])
+def test_native_preflight_reports_failed_stage_without_command_output(
+    tmp_path: Path, command: str, stage: str, code: int,
+) -> None:
+    from types import SimpleNamespace
+
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
+
+    def runner(args, **options):
+        assert options["stderr"] == subprocess.DEVNULL
+        return SimpleNamespace(returncode=code if args[0] == command else 0,
+                               stdout="sensitive command output must stay suppressed")
+
+    with pytest.raises(ValueError, match=f"failed at {stage} \\(exit {code}\\)") as failure:
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=runner)
+    assert "sensitive" not in str(failure.value)
+
+
 def test_rejects_tampered_or_mismatched_release_inputs(tmp_path: Path) -> None:
     manifest = _manifest()
     manifest_path, checksums = _write_release(tmp_path, manifest)
