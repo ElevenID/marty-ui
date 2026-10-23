@@ -24,6 +24,8 @@ base64.workspace = true
 tempfile.workspace = true
 uuid.workspace = true
 url.workspace = true
+rustls.workspace = true
+rustls-webpki.workspace = true
 
 [[bin]]
 name = "marty-deploy"
@@ -34,4 +36,3 @@ libc = "0.2"
 
 [dev-dependencies]
 tokio-rustls.workspace = true
-rustls.workspace = true
