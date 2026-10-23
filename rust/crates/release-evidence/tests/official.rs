@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 const MANIFEST: &[u8] = b"synthetic manifest for gate unit controls only";
 
 fn summary(lane: &str) -> Value {
-    json!({
+    let mut value = json!({
         "schema": "elevenid.sanitized-official-interop/v1", "lane": lane,
         "harness_commit": "b".repeat(40), "result": {"passed":true, "exit_code":0},
         "stack": {"schema":"elevenid.official-stack-material/v1", "marty_commit":"a".repeat(40),
@@ -16,7 +16,23 @@ fn summary(lane: &str) -> Value {
             "marty":{"commit":"a".repeat(40)}, "execution_mode":"active",
             "exclusions":{"expected_failures":[]}
         }}], "junit":[{"tests":2,"failures":0,"errors":0,"skipped":1}]
-    })
+    });
+    if !matches!(lane, "w3c-v2" | "eudi") {
+        let evidence = &mut value["official_evidence"][0]["evidence"];
+        evidence["exclusions"]["expected_skips"] = json!([{"test-name":"optional"}]);
+        evidence["module_results"] = json!({
+            "schema":"elevenid.official-oidf-module-results/v1", "source_policy":"unmodified",
+            "passed":true, "counts":{"PASSED":1,"SKIPPED":1},
+            "pending_review":[],"unexpected_skips":[],
+            "modules":[
+                {"test_name":"happy","status":"FINISHED","result":"PASSED"},
+                {"test_name":"optional","status":"FINISHED","result":"SKIPPED"}
+            ],
+            "plan_coverage":{"complete":true,"expected_modules":["happy","optional"],
+                "missing_modules":[],"exported_module_count":2}
+        });
+    }
+    value
 }
 
 fn validate(values: &[Value]) -> Result<(), &'static str> {
@@ -83,4 +99,55 @@ fn eudi_integer_zero_skips_and_absent_oidf_skip_count_are_valid() {
         .unwrap()
         .remove("skipped");
     assert!(validate(&values).is_ok());
+}
+
+#[test]
+fn exit_zero_cannot_promote_review_missing_or_incomplete_oidf_modules() {
+    for (pointer, replacement) in [
+        ("", Value::Null),
+        ("/source_policy", json!("modified")),
+        ("/passed", json!(false)),
+        ("/pending_review", json!(["happy"])),
+        ("/unexpected_skips", json!(["optional"])),
+        ("/modules", json!([])),
+        ("/modules/0/result", json!("REVIEW")),
+        ("/modules/0/status", json!("WAITING")),
+        ("/modules/0/test_name", json!("foreign")),
+        ("/modules/0/test_name", json!("optional")),
+        ("/counts/PASSED", json!(2)),
+        ("/plan_coverage/complete", json!(false)),
+        ("/plan_coverage/missing_modules", json!(["negative"])),
+        (
+            "/plan_coverage/expected_modules",
+            json!(["happy", "optional", "negative"]),
+        ),
+        ("/plan_coverage/expected_modules", json!(["happy", "happy"])),
+        ("/plan_coverage/exported_module_count", json!(3)),
+    ] {
+        for index in 0..5 {
+            let mut values = LANES.map(summary);
+            let modules = &mut values[index]["official_evidence"][0]["evidence"]["module_results"];
+            *modules.pointer_mut(pointer).unwrap() = replacement.clone();
+            assert!(
+                validate(&values).is_err(),
+                "must reject {pointer} in {}",
+                LANES[index]
+            );
+        }
+    }
+}
+
+#[test]
+fn only_explicitly_disposed_optional_skips_can_pass_and_never_an_all_skipped_plan() {
+    let mut values = LANES.map(summary);
+    values[0]["official_evidence"][0]["evidence"]["exclusions"]["expected_skips"] = json!([]);
+    assert!(validate(&values).is_err());
+
+    let mut values = LANES.map(summary);
+    let evidence = &mut values[0]["official_evidence"][0]["evidence"];
+    evidence["exclusions"]["expected_skips"] =
+        json!([{"test-name":"optional"},{"test-name":"happy"}]);
+    evidence["module_results"]["modules"][0]["result"] = json!("SKIPPED");
+    evidence["module_results"]["counts"] = json!({"SKIPPED":2});
+    assert!(validate(&values).is_err());
 }
