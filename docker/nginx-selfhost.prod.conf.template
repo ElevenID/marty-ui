@@ -247,6 +247,7 @@ server {
     }
 
     location = /openapi.yaml {
+        absolute_redirect off;
         return 308 /openapi.json;
     }
 
