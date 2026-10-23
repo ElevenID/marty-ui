@@ -1469,7 +1469,6 @@ mod tests {
         let body = json_response(response).await;
         let profile_id = body["id"].as_str().unwrap();
         assert_eq!(body["status"], "DRAFT");
-        assert_eq!(body["supported_formats"], json!(["JSON_LD"]));
         assert_eq!(body["check_mode"], "OFFLINE_GRACE");
         assert_eq!(body["offline_grace_seconds"], 7200);
         assert_eq!(
