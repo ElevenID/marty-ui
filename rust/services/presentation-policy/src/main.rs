@@ -71,12 +71,22 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let repository: Arc<dyn PolicyRepository> = store;
     let authorization: Arc<dyn PolicyAuthorization> = control.clone();
     let application = Arc::new(PolicyApplication::new(repository, authorization));
-    let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(ResolvingCredentialKernel::new(
-        Arc::new(marty_issuer_key_resolution::NativeIssuerKeyResolver::new(
+    let mut resolving_kernel = ResolvingCredentialKernel::new(Arc::new(
+        marty_issuer_key_resolution::NativeIssuerKeyResolver::new(
             config.did_resolution_base_urls.clone(),
             config.did_web_allowed_hosts.clone(),
-        )),
+        ),
     ));
+    if let Some(key) = &config.signing_registry_api_key {
+        resolving_kernel = resolving_kernel.with_registry(Arc::new(
+            marty_issuer_key_resolution::registry::HttpOrganizationIssuerResolver::new(
+                &config.signing_registry_url,
+                key,
+                config.dependency_timeout,
+            )?,
+        ));
+    }
+    let kernel: Arc<dyn CredentialVerificationKernel> = Arc::new(resolving_kernel);
     let trust: Arc<dyn PresentationTrustResolver> = control.clone();
     let status: Arc<dyn CredentialStatusResolver> = control;
     let verification = Arc::new(VerifiedFactsOrchestrator::new(kernel, trust, status)?);

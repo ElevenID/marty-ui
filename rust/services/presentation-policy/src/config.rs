@@ -46,6 +46,8 @@ pub struct PresentationPolicyServiceConfig {
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
     pub issuance_api_key: Option<String>,
+    pub signing_registry_url: String,
+    pub signing_registry_api_key: Option<String>,
     pub dependency_timeout: Duration,
     pub workload_server_tls: Option<WorkloadServerTlsFiles>,
     pub release_version: String,
@@ -142,6 +144,26 @@ impl PresentationPolicyServiceConfig {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        let signing_registry_url = service_url(
+            value(&values, "SIGNING_KEYS_SERVICE_URL").unwrap_or("http://signing-keys:8017"),
+            "SIGNING_KEYS_SERVICE_URL",
+        )?;
+        let registry_endpoint =
+            Url::parse(&signing_registry_url).map_err(|_| invalid("SIGNING_KEYS_SERVICE_URL"))?;
+        if !registry_endpoint.username().is_empty()
+            || registry_endpoint.password().is_some()
+            || registry_endpoint.query().is_some()
+            || registry_endpoint.fragment().is_some()
+            || registry_endpoint.path() != "/"
+        {
+            return Err(invalid("SIGNING_KEYS_SERVICE_URL"));
+        }
+        let signing_registry_api_key = if value(&values, "SIGNING_KEYS_INTERNAL_API_KEY").is_some()
+        {
+            secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?
+        } else {
+            None
+        };
         let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
             .unwrap_or("")
             .split(',')
@@ -182,6 +204,8 @@ impl PresentationPolicyServiceConfig {
             credential_status_url_template,
             service_token,
             issuance_api_key,
+            signing_registry_url,
+            signing_registry_api_key,
             dependency_timeout: Duration::from_secs(number(
                 &values,
                 "PRESENTATION_POLICY_DEPENDENCY_TIMEOUT_SECONDS",

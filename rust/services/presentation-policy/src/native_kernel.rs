@@ -22,13 +22,29 @@ type OpenBadgeDocument = (JsonObject, JsonObject);
 /// not alter the policy's trust profile or mark any issuer as trusted.
 pub struct ResolvingCredentialKernel {
     resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
+    registry: Option<
+        std::sync::Arc<dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver>,
+    >,
 }
 
 impl ResolvingCredentialKernel {
     pub fn new(
         resolver: std::sync::Arc<dyn marty_issuer_key_resolution::IssuerKeyResolver>,
     ) -> Self {
-        Self { resolver }
+        Self {
+            resolver,
+            registry: None,
+        }
+    }
+
+    pub fn with_registry(
+        mut self,
+        registry: std::sync::Arc<
+            dyn marty_issuer_key_resolution::governed::OrganizationIssuerResolver,
+        >,
+    ) -> Self {
+        self.registry = Some(registry);
+        self
     }
 }
 
@@ -47,6 +63,114 @@ impl CredentialVerificationKernel for ResolvingCredentialKernel {
             DetectedCredentialFormat::W3cVc | DetectedCredentialFormat::OpenbadgeV3
         ) {
             if let Some(token) = context.token.as_str() {
+                if let Some((issuer, kid)) = jwt_selector(token) {
+                    let sources: Vec<_> = context
+                        .trust_profile
+                        .as_ref()
+                        .and_then(|p| p.document.get("trust_sources"))
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter(|source| source.get("enabled") != Some(&Value::Bool(false)))
+                        .filter(|source| {
+                            source.get("issuer_did").and_then(Value::as_str)
+                                == Some(issuer.as_str())
+                        })
+                        .collect();
+                    if !sources.is_empty() {
+                        let Some(kid) = kid else {
+                            return Ok(rejected("Issuer DID signing method is required"));
+                        };
+                        if sources.len() != 1 {
+                            return Ok(rejected("Ambiguous issuer DID trust sources"));
+                        }
+                        let source = sources[0];
+                        let controls = source.get("did_resolution").cloned().unwrap_or_else(|| {
+                            if source.get("organization_id").is_some() {
+                                json!({})
+                            } else {
+                                json!({"resolver_type":"PUBLIC_DID"})
+                            }
+                        });
+                        let policy = match serde_json::from_value(controls) {
+                            Ok(value) => value,
+                            Err(_) => return Ok(rejected("Invalid issuer DID resolution policy")),
+                        };
+                        let pins = match source.get("verification_method_ids") {
+                            Some(value) => {
+                                match serde_json::from_value::<Vec<String>>(value.clone()) {
+                                    Ok(value) => value,
+                                    Err(_) => {
+                                        return Ok(rejected("Invalid issuer DID method pins"))
+                                    }
+                                }
+                            }
+                            None => Vec::new(),
+                        };
+                        let algorithm = token
+                            .split('.')
+                            .next()
+                            .and_then(decode_jwt_object)
+                            .and_then(|h| h.get("alg").and_then(Value::as_str).map(str::to_owned));
+                        let Some(algorithm) = algorithm else {
+                            return Ok(rejected("Issuer algorithm is required"));
+                        };
+                        let request =
+                            marty_issuer_key_resolution::governed::IssuerResolutionRequest {
+                                organization_id: source
+                                    .get("organization_id")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned),
+                                issuer_did: issuer,
+                                verification_method_ids: pins,
+                                credential_format: "VC_JWT".into(),
+                                key_purpose: "vc_jwt_issuer".into(),
+                                algorithm,
+                                policy,
+                            };
+                        // A scoped source must never reuse an unrelated relationship
+                        // key or fall through to ambient public DID resolution.
+                        let material = if request
+                            .policy
+                            .registry_first(request.organization_id.as_deref())
+                        {
+                            let Some(registry) = self.registry.as_ref() else {
+                                return Ok(rejected("Organization issuer registry is unavailable"));
+                            };
+                            marty_issuer_key_resolution::governed::resolve_governed_issuer(
+                                &request,
+                                registry.as_ref(),
+                                self.resolver.as_ref(),
+                            )
+                            .await
+                        } else {
+                            self.resolver.resolve(&request.issuer_did).await.and_then(
+                                |mut material| {
+                                    material.verification_keys =
+                                        marty_issuer_key_resolution::policy::pin_assertion_keys(
+                                            &request.issuer_did,
+                                            &request.verification_method_ids,
+                                            &material.verification_keys,
+                                        )?;
+                                    Ok(material)
+                                },
+                            )
+                        };
+                        let Ok(material) = material else {
+                            return Ok(rejected("Issuer DID trust resolution failed"));
+                        };
+                        let keys: Vec<_> = material
+                            .verification_keys
+                            .into_iter()
+                            .filter(|k| k.get("kid").and_then(Value::as_str) == Some(kid.as_str()))
+                            .collect();
+                        if keys.len() != 1 {
+                            return Ok(rejected("Issuer DID signing method is not authorized"));
+                        }
+                        resolved.resolved_issuer_public_jwk = Some(keys[0].clone());
+                        return RustCredentialKernel.verify(&resolved).await;
+                    }
+                }
                 if governed_public_jwk(context, token).is_none() {
                     if let Some((issuer, Some(kid))) = jwt_selector(token) {
                         if issuer.starts_with("did:web:") && kid.starts_with(&format!("{issuer}#"))
@@ -349,8 +473,10 @@ async fn verify_vc_jwt_material(
 ) -> Result<VerifiedJwtMaterial, PresentationVerificationError> {
     let token = token_string(&context.token)?;
     let mut request = json!({"token": token});
-    if let Some(public_jwk) =
-        governed_public_jwk(context, token).or_else(|| context.resolved_issuer_public_jwk.clone())
+    if let Some(public_jwk) = context
+        .resolved_issuer_public_jwk
+        .clone()
+        .or_else(|| governed_public_jwk(context, token))
     {
         request["issuer_public_jwk"] = public_jwk;
     }
