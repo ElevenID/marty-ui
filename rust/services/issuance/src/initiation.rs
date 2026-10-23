@@ -6,7 +6,7 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use mmf_config::numeric_config::PythonConfigInteger;
 use rand::RngCore;
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
@@ -22,6 +22,7 @@ const RESERVED_CLAIMS: &[&str] = &[
     "_credential_subject",
     "_credential_document",
 ];
+#[cfg(test)]
 const VCDM_V2_CONTEXT: &str = "https://www.w3.org/ns/credentials/v2";
 pub const DEFAULT_INITIATION_OFFER_TTL_MINUTES: i64 = 10_080;
 
@@ -702,38 +703,14 @@ fn optional_string(value: &Option<String>) -> &str {
 }
 
 fn validate_credential_document(document: &Value, issuer_did: &str) -> Result<(), InitiationError> {
-    let document = document
-        .as_object()
-        .filter(|document| !document.is_empty())
-        .ok_or(InitiationError::InvalidCredentialDocument)?;
-    if document.contains_key("proof") {
-        return Err(InitiationError::CredentialDocumentSigned);
-    }
-    let valid_context = document
-        .get("@context")
-        .and_then(Value::as_array)
-        .and_then(|context| context.first())
-        .and_then(Value::as_str)
-        == Some(VCDM_V2_CONTEXT);
-    if !valid_context {
-        return Err(InitiationError::InvalidCredentialDocument);
-    }
-    let has_vc_type = match document.get("type") {
-        Some(Value::String(value)) => value == "VerifiableCredential",
-        Some(Value::Array(values)) => values
-            .iter()
-            .any(|value| value.as_str() == Some("VerifiableCredential")),
-        _ => false,
-    };
-    if !has_vc_type {
-        return Err(InitiationError::InvalidCredentialDocument);
-    }
-    validate_subject(
-        document
-            .get("credentialSubject")
-            .ok_or(InitiationError::InvalidCredentialDocument)?,
+    marty_verification::vcdm::validate_vcdm_issuance_document_json(
+        &json!({"credential": document, "issuer_did": issuer_did}).to_string(),
     )
-    .map_err(|_| InitiationError::InvalidCredentialDocument)?;
+    .map_err(|code| match code.as_str() {
+        "credential_must_be_unsigned" => InitiationError::CredentialDocumentSigned,
+        "issuer_did_mismatch" => InitiationError::CredentialDocumentIssuerMismatch,
+        _ => InitiationError::InvalidCredentialDocument,
+    })?;
     if document.get("issuer").and_then(identifier) != Some(issuer_did) {
         return Err(InitiationError::CredentialDocumentIssuerMismatch);
     }
@@ -1293,6 +1270,28 @@ mod tests {
             request.validate(),
             Err(InitiationError::CredentialDocumentIssuerMismatch)
         );
+    }
+
+    #[test]
+    fn unsigned_document_boundary_uses_shared_vcdm_validation() {
+        let fixtures: Value =
+            serde_json::from_str(marty_verification::vcdm::issuance_behavior_fixture_json())
+                .unwrap();
+        for case in fixtures["document_cases"].as_array().unwrap() {
+            let issuer = case["issuer_did"].as_str().unwrap();
+            let mut document = case["credential"].clone();
+            // Initiation requires the caller's resolved issuer; the builder
+            // also supports documents whose issuer has not yet been inserted.
+            if let Some(object) = document.as_object_mut() {
+                object.entry("issuer").or_insert_with(|| json!(issuer));
+            }
+            assert_eq!(
+                validate_credential_document(&document, issuer).is_ok(),
+                case["expected_error"].is_null(),
+                "{}",
+                case["name"]
+            );
+        }
     }
 
     #[test]
