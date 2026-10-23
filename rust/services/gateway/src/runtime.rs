@@ -9831,6 +9831,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn vc_api_documented_scope_and_input_failures_match_handlers() {
+        let document = GatewayContract::load()
+            .expect("gateway contract")
+            .openapi_document("test");
+        for (path, selection) in [
+            (
+                "/v1/vc-api/credentials/issue",
+                "credential_template_id=template-1&issuer_did=did%3Aweb%3Aissuer.example",
+            ),
+            (
+                "/v1/vc-api/credentials/verify",
+                "presentation_policy_id=policy-1",
+            ),
+            (
+                "/v1/vc-api/presentations/verify",
+                "presentation_policy_id=policy-1",
+            ),
+        ] {
+            for (query, expected) in [
+                (String::new(), StatusCode::UNPROCESSABLE_ENTITY),
+                (
+                    format!("?organization_id=org-other&{selection}"),
+                    StatusCode::FORBIDDEN,
+                ),
+                (
+                    format!("?organization_id=org-1&{selection}"),
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ),
+            ] {
+                let response = runtime_router()
+                    .oneshot(
+                        Request::builder()
+                            .method("POST")
+                            .uri(format!("{path}{query}"))
+                            .header("cookie", "sessionId=valid")
+                            .header("content-type", "application/json")
+                            .body(Body::from("{}"))
+                            .expect("request"),
+                    )
+                    .await
+                    .expect("response");
+                assert_eq!(response.status(), expected, "{path}{query}");
+                assert!(
+                    document["paths"][path]["post"]["responses"][expected.as_str()].is_object(),
+                    "runtime status must be documented for {path}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn vc_api_issuance_handler_redeems_through_canonical_oid4vci_service() {
         let response = runtime_router()
             .oneshot(
