@@ -242,6 +242,41 @@ function buildTrustProfilePayload(data = {}) {
   };
 }
 
+// PATCH must not inherit creation defaults: omitted security settings belong
+// to the stored profile. Explicit null/false/empty values remain intentional.
+function buildTrustProfilePatch(data = {}) {
+  const patch = {};
+  const fields = [
+    'name', 'description', 'compliance_status', 'trust_purposes',
+    'trusted_assertion_formats', 'revocation_policy', 'revocation_profile_id',
+    'time_policy', 'allowed_issuers', 'denied_issuers', 'system_issuer_overrides',
+    'compatible_compliance_codes', 'verification_policy_set_id', 'auto_generated',
+  ];
+  for (const field of fields) {
+    if (Object.hasOwn(data, field) && data[field] !== undefined) patch[field] = data[field];
+  }
+  const profileType = data.profile_type ?? data.framework_type;
+  if (profileType !== undefined) patch.profile_type = normalizeTrustProfileType(profileType);
+  if (data.supported_formats !== undefined) {
+    patch.supported_formats = data.supported_formats?.map(normalizeTrustProfileFormat) ?? null;
+  }
+  if (data.trust_sources !== undefined) {
+    patch.trust_sources = data.trust_sources?.map(normalizePublicTrustSource) ?? null;
+  } else if (data.trusted_issuers !== undefined) {
+    patch.trust_sources = trustSourcesFromTrustedIssuers(data.trusted_issuers);
+  }
+  // Top-level rule fields merge with the current backend rules. A nested
+  // replacement would fill omitted rule fields with defaults on deserialization.
+  for (const field of [
+    'allowed_algorithms', 'min_key_size_rsa', 'min_key_size_ec',
+    'require_key_usage', 'max_chain_depth', 'allow_self_signed',
+  ]) {
+    const value = data[field] !== undefined ? data[field] : data.validation_rules?.[field];
+    if (value !== undefined) patch[field] = value;
+  }
+  return patch;
+}
+
 function normalizeTrustProfile(data = {}) {
   const trust_sources = Array.isArray(data.trust_sources) ? data.trust_sources : [];
   const trusted_issuers = Array.isArray(data.trusted_issuers) && data.trusted_issuers.length > 0
@@ -840,7 +875,7 @@ export async function getTrustProfile(id) {
  * Update a trust profile
  */
 export async function updateTrustProfile(id, data) {
-  const result = await patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePayload(data));
+  const result = await patch(`${TRUST_PROFILE_BASE}/${id}`, buildTrustProfilePatch(data));
   return normalizeTrustProfile(result);
 }
 
