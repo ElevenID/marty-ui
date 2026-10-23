@@ -164,6 +164,8 @@ function trustSourcesFromTrustedIssuers(trustedIssuers = []) {
       description: issuer.description || null,
       issuer_did: issuer.issuer_did,
       source_type: 'PINNED_ISSUER',
+      ...Object.fromEntries(['organization_id', 'verification_method_ids', 'did_resolution']
+        .filter((field) => issuer[field] !== undefined).map((field) => [field, issuer[field]])),
     }));
 }
 

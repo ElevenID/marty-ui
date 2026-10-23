@@ -36,6 +36,18 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profile sparse updates', () => {
+    it('retains DID controls when converting trusted issuer selections to sources', async () => {
+      const controls = { organization_id: 'org-1', verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 } }
+      let received: any
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', ...received })
+      }))
+      await updateTrustProfile('profile-1', { trusted_issuers: [{ did: 'did:web:issuer.example', ...controls }] })
+      expect(received.trust_sources).toEqual([{ source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', description: null, ...controls }])
+    })
+
     it('preserves explicit DID resolution controls without custody fields', async () => {
       const source = {
         source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', organization_id: 'org-1',
