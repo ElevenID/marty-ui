@@ -424,7 +424,7 @@ fn data_integrity_evidence(
     if result.get("valid").and_then(Value::as_bool) != Some(true) {
         return Ok(rejected_counted(
             "VCDM Data Integrity",
-            error_count(&result),
+            error_count(result),
         ));
     }
     let is_presentation = result.get("kind").and_then(Value::as_str) == Some("presentation");
