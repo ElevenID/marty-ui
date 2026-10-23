@@ -1260,7 +1260,10 @@ mod tests {
                 .unwrap();
         for case in fixtures["document_cases"].as_array().unwrap() {
             let mut request = request(CredentialBuilderKind::DataIntegrity);
-            request.issuer.issuer_did = case["issuer_did"].as_str().unwrap().to_owned();
+            request.issuer.issuer_did = case["issuer_did"]
+                .as_str()
+                .unwrap_or("did:web:issuer.example.test")
+                .to_owned();
             request.credential_document = Some(case["credential"].clone());
             if let Some(id) = case["credential"].get("id").and_then(Value::as_str) {
                 request.credential_id = id.to_owned();

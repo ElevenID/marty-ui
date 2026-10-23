@@ -1278,7 +1278,9 @@ mod tests {
             serde_json::from_str(marty_verification::vcdm::issuance_behavior_fixture_json())
                 .unwrap();
         for case in fixtures["document_cases"].as_array().unwrap() {
-            let issuer = case["issuer_did"].as_str().unwrap();
+            let issuer = case["issuer_did"]
+                .as_str()
+                .unwrap_or("did:web:issuer.example.test");
             let mut document = case["credential"].clone();
             // Initiation requires the caller's resolved issuer; the builder
             // also supports documents whose issuer has not yet been inserted.

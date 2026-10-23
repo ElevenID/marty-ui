@@ -806,8 +806,8 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn related_resource_transport_enforces_all_declared_digests() {
+    #[test]
+    fn related_resource_transport_enforces_all_declared_digests() {
         use base64::engine::general_purpose::URL_SAFE_NO_PAD;
         use sha2::{Digest, Sha256, Sha384, Sha512};
 
