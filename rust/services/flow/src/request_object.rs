@@ -405,11 +405,8 @@ pub async fn build_profiled_request_object(
         } else {
             "direct_post.jwt"
         });
-        payload["client_metadata"]["encrypted_response_enc_values_supported"] = if dc_api {
-            json!(["A128GCM", "A256GCM"])
-        } else {
-            json!(["A256GCM"])
-        };
+        payload["client_metadata"]["encrypted_response_enc_values_supported"] =
+            json!(["A128GCM", "A256GCM"]);
         payload["client_metadata"]["jwks"] = json!({"keys": [public_jwk]});
     }
     if let Some(wallet_nonce) = options

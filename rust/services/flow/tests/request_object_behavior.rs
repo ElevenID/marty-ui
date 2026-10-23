@@ -470,8 +470,8 @@ async fn haip_keys_are_remote_and_only_the_reference_is_persisted() {
     let request = payload(&result.compact_jwt);
     assert_eq!(request["response_mode"], "direct_post.jwt");
     assert_eq!(
-        request["client_metadata"]["encrypted_response_enc_values_supported"][0],
-        "A256GCM"
+        request["client_metadata"]["encrypted_response_enc_values_supported"],
+        json!(["A128GCM", "A256GCM"])
     );
     assert!(request["client_metadata"]["jwks"]["keys"][0]
         .get("d")
