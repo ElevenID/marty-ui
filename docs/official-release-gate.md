@@ -75,6 +75,15 @@ Old five-gate transactions cannot qualify or resume under this new policy;
 they remain historical evidence and must not be rewritten as passing it.
 
 Source checks and synthetic unit controls do not establish an official pass.
+Local feedback also found that the old conformance composition mixed a workload
+CA with plaintext control-plane targets. Conformance now layers the existing
+beta workload configuration before the protocol and isolation overlays, reusing
+its remote KMS TLS identities, authenticated Redis and gRPC bindings. The native
+selection extends only the neutral executable definition so it cannot overwrite
+those deployed bindings with development settings. Both issuance owners must
+retain the scoped HTTPS control-plane targets and public CA. The shared harness
+generates disposable Redis and device credentials alongside its other run inputs.
+
 The adapter and product gate must complete protected integration and a real
 candidate execution before claiming release qualification. Keep beta runtime,
 disposable conformance stacks, demo acceptance and editorial review distinct.

@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PROJECT = re.compile(r"^marty-conformance-[a-z0-9](?:[a-z0-9-]{1,46}[a-z0-9])?$")
 BASE_FILES = (
     "docker-compose.base.yml",
+    "docker-compose.beta.yml",
     "docker-compose.profile.oidf.yml",
 )
 GHCR_FILE = "docker-compose.profile.ghcr.yml"
@@ -75,8 +76,7 @@ def compose_command(
     if use_ghcr:
         # The released image overlay must follow the OIDF source-build
         # definition so its build reset also applies to the keyless edge.
-        files.insert(2, GHCR_FILE)
-        files.insert(3, IMMUTABLE_INFRA_FILE)
+        files.extend((GHCR_FILE, IMMUTABLE_INFRA_FILE))
     else:
         # The base stack defines the source-built Rust services. The UI is
         # deliberately supplied by a mode-specific profile because released
