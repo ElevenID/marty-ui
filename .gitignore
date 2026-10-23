@@ -108,6 +108,7 @@ tests/artifacts/
 # Runtime state and generated browser evidence belong in local volumes or CI artifacts.
 .selfhost-state/
 .beta-workload-identity/
+.dev-integration-secret-tls/
 tests/demo-recordings/
 tests/demo-recordings-report/
 
@@ -151,11 +152,30 @@ ehthumbs.db
 Thumbs.db
 
 # =============================================================================
-# Custom: Keep wheels directory
+# Core-owned native wheels are resolved from digest-pinned releases.
 # =============================================================================
-# Don't ignore wheels directory - we want to commit pre-built wheels
-!wheels/
-!wheels/*.whl
+wheels/
 
 # WASM build artifact
 ui/src/wasm/marty-biometrics-pkg/
+
+# Generated diagnostics and per-task implementation evidence
+tests/pytest-results/
+tests/wallet-debug.png
+.hermes/implementation_reuse_review.yaml
+
+# Local qualification receipts are generated output.
+
+# Generated implementation/review evidence: keep out of source control.
+# Retain only for active review; see ElevenID/.github local-evidence retention.
+/artifacts/
+/_codex-artifacts/
+/_codex-diagnostics/
+/_codex-ci-diagnostics/
+/.codex-validation/
+/_codex-validation/
+/test-temp/
+/.hermes/implementation_reuse_review.yaml
+/_codex-worktrees/
+/worktrees/
+/reports/generated/

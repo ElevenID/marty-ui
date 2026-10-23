@@ -173,6 +173,17 @@ impl ResourceOwnerProvider for HttpGatewayProvider {
         let body = self.bounded_body(response).await?;
         let value: serde_json::Value = serde_json::from_slice(&body)
             .map_err(|_| SecurityError::InvalidAuthenticationResult)?;
+        // System compliance profiles deliberately have no tenant owner. Keep
+        // normal gateway membership/scope authorization and native immutability;
+        // do not mistake this explicit catalog shape for a failed owner lookup.
+        if service == "compliance-profiles"
+            && value.get("is_system").and_then(serde_json::Value::as_bool) == Some(true)
+            && value
+                .get("organization_id")
+                .is_none_or(serde_json::Value::is_null)
+        {
+            return Ok(None);
+        }
         let organization_id = value
             .get("organization_id")
             .and_then(serde_json::Value::as_str)
@@ -411,6 +422,7 @@ impl GatewayIdentityProvider for GrpcIdentityProvider {
         }
         Ok(Some(SessionIdentity {
             user_id: user.user_id,
+            authentication_time_unix: response.authentication_time_unix,
             email: optional_string(user.email),
             username: optional_string(user.username),
             given_name: optional_string(user.given_name),
@@ -670,6 +682,7 @@ mod tests {
         match request.uri().path() {
             "/health" => (StatusCode::OK, Json(json!({"status": "healthy"}))),
             "/internal/v1/resource-owners/trust-profiles/profile-1"
+            | "/internal/v1/resource-owners/presentation-policies/policy-1"
                 if request
                     .headers()
                     .get("x-api-key")
@@ -710,6 +723,15 @@ mod tests {
                 (StatusCode::OK, Json(json!({"organization_id": "org-2"})))
             }
             "/malformed" => (StatusCode::OK, Json(json!({"unexpected": true}))),
+            "/system-profile" => (StatusCode::OK, Json(json!({"is_system": true}))),
+            "/system-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": true, "organization_id": null})),
+            ),
+            "/tenant-profile-null" => (
+                StatusCode::OK,
+                Json(json!({"is_system": false, "organization_id": null})),
+            ),
             _ => (StatusCode::NOT_FOUND, Json(json!({"detail": "not found"}))),
         }
     }
@@ -725,6 +747,88 @@ mod tests {
                 .expect("fixture server");
         });
         format!("http://{address}")
+    }
+
+    #[tokio::test]
+    async fn presentation_policy_owner_lookup_uses_authenticated_http_projection() {
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([("presentation-policies".into(), fixture_url().await)]),
+            "internal-secret",
+            None,
+            Some("service-secret".into()),
+            Some(4096),
+        )
+        .unwrap();
+        let lookup =
+            crate::authorization::resolve_resource_lookup("/v1/presentation-policies/policy-1")
+                .unwrap();
+        let context = ResourceOwnerContext {
+            headers: BTreeMap::from([
+                ("x-api-key-id".into(), "key-1".into()),
+                ("x-api-key-scopes".into(), "templates:read".into()),
+                ("x-organization-id".into(), "org-1".into()),
+            ]),
+        };
+        assert_eq!(
+            provider
+                .resolve_organization(lookup.service, &lookup.path, &context)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("org-1")
+        );
+        // Owner resolution is independent of actor grants; gateway authorization
+        // subsequently returns403 for this actor's absent trust:read scope.
+        assert!(crate::authorization::authorize_api_key(
+            "presentation-policy:view",
+            "org-1",
+            Some("org-1"),
+            &["templates:read".into()]
+        )
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn system_compliance_owner_is_explicit_without_relaxing_other_owner_contracts() {
+        let url = fixture_url().await;
+        let provider = HttpGatewayProvider::new(
+            BTreeMap::from([
+                ("compliance-profiles".into(), url.clone()),
+                ("trust-profiles".into(), url),
+            ]),
+            "internal-secret",
+            None,
+            None,
+            Some(4096),
+        )
+        .unwrap();
+        for path in ["/system-profile", "/system-profile-null"] {
+            assert_eq!(
+                provider
+                    .resolve_organization(
+                        "compliance-profiles",
+                        path,
+                        &ResourceOwnerContext::default()
+                    )
+                    .await
+                    .unwrap(),
+                None
+            );
+            assert!(provider
+                .resolve_organization("trust-profiles", path, &ResourceOwnerContext::default())
+                .await
+                .is_err());
+        }
+        for path in ["/tenant-profile-null", "/malformed"] {
+            assert!(provider
+                .resolve_organization(
+                    "compliance-profiles",
+                    path,
+                    &ResourceOwnerContext::default()
+                )
+                .await
+                .is_err());
+        }
     }
 
     #[tokio::test]

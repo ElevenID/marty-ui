@@ -1,23 +1,11 @@
 """Guards for captured observations, not a substitute for Rust adoption gates."""
 
-import ast
 import hashlib
 import json
 from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-_CAPTURE_TREE = ast.parse(
-    (ROOT / "scripts/capture_signing_response_reference.py").read_text(encoding="utf-8")
-)
-_CAPTURE_LITERALS = {
-    node.targets[0].id: ast.literal_eval(node.value)
-    for node in _CAPTURE_TREE.body
-    if isinstance(node, ast.Assign)
-    and len(node.targets) == 1
-    and isinstance(node.targets[0], ast.Name)
-    and node.targets[0].id in {"REVISION", "SOURCES"}
-}
 REFERENCE = json.loads(
     (ROOT / "contracts/signing-response-python-reference.json").read_text(
         encoding="utf-8"
@@ -39,16 +27,6 @@ def outward(name, caller):
 
 class SigningResponseReferenceTests(unittest.TestCase):
     def test_scope_counts_sources_and_original_corpus_unchanged(self):
-        self.assertEqual(
-            REFERENCE["reference"]["commit"], _CAPTURE_LITERALS["REVISION"]
-        )
-        self.assertEqual(
-            {
-                path: value["git_blob"]
-                for path, value in REFERENCE["reference"]["sources"].items()
-            },
-            _CAPTURE_LITERALS["SOURCES"],
-        )
         self.assertEqual(
             [
                 len(REFERENCE[name])

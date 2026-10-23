@@ -4,6 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import runpy
 import shutil
+import uuid
 
 import pytest
 
@@ -45,12 +46,33 @@ def test_flow_fixture_renders_frozen_selfhost_with_closed_native_additions(tmp_p
     result = GATE["render"](spec(tmp_path), ["docker", "compose"])
     assert result["schema"] == "marty.flow-rendered-selection/v1"
     assert set(result["profiles"]) == {"base", "base_native", "selfhost"}
+    for profile in result["profiles"].values():
+        assert uuid.UUID(profile["environment"]["MARTY_ORG_ID"]) == uuid.UUID(
+            "00000000-0000-0000-0000-000000000001"
+        )
+    for name in ("base", "base_native"):
+        assert (
+            result["profiles"][name]["original_environment"]["ISSUANCE_GRPC_TARGET"]
+            == "https://issuance-native:9005"
+        )
+        assert result["profiles"][name]["environment"]["ISSUANCE_GRPC_TARGET"].startswith(
+            "http://127.0.0.1:"
+        )
     assert (
         result["profiles"]["selfhost"]["original_environment"][
             "ISSUANCE_GRPC_TARGET"
         ]
-        == "issuance-native:9005"
+        == "https://issuance-native:9005"
     )
+    assert not (tmp_path / "flow_workload_client_key").exists()
+    assert not (tmp_path / "flow_workload_server_key").exists()
+    for name in (
+        "flow_workload_client_cert",
+        "flow_workload_server_cert",
+        "openbao_tls_ca_cert",
+        "workload_identity_ca_cert",
+    ):
+        assert "PRIVATE KEY" not in (tmp_path / name).read_text(encoding="ascii")
 
 
 def test_flow_selfhost_additions_require_closed_interpolation():
@@ -72,28 +94,39 @@ def test_flow_selfhost_additions_require_closed_interpolation():
 
 
 @pytest.mark.parametrize(
-    "owner,target",
+    "owner,target,profile",
     [
-        ("issuance:9005", "legacy_rpc"),
-        ("issuance-native:9005", "native_rpc"),
+        ("issuance:9005", "legacy_rpc", "base"),
+        ("issuance-native:9005", "native_rpc", "base"),
+        ("https://issuance-native:9005", "native_rpc", "base"),
+        ("https://issuance-native:9005", "native_rpc", "selfhost"),
     ],
 )
 def test_target_mapping_preserves_selection_and_all_unrelated_values(
-    tmp_path, owner, target
+    tmp_path, owner, target, profile
 ):
     inputs = spec(tmp_path)
     assert GATE["validate_spec"](inputs) == tmp_path
     original = service(owner)
     baseline = deepcopy(original)
-    actual = GATE["mapped_environment"](original, inputs)
+    actual = GATE["mapped_environment"](original, inputs, profile)
     expected = dict(original["environment"])
+    if profile != "selfhost":
+        expected.pop("GRPC_WORKLOAD_TLS_CA_CERT")
     expected.update(
-        ISSUANCE_GRPC_TARGET=inputs[target],
+        ISSUANCE_GRPC_TARGET=(
+            inputs[target].replace("http://", "https://", 1)
+            if owner.startswith("https://") and profile == "selfhost"
+            else inputs[target]
+        ),
         ISSUANCE_SERVICE_URL=inputs["legacy_http"],
         ISSUANCE_API_KEY_FILE=(tmp_path / "issuance_api_key").as_posix(),
         SIGNING_KEYS_INTERNAL_API_KEY_FILE=(tmp_path / "issuance_api_key").as_posix(),
-        GRPC_WORKLOAD_TLS_CA_CERT=(tmp_path / "workload_identity_ca_cert").as_posix(),
     )
+    if profile == "selfhost":
+        expected["GRPC_WORKLOAD_TLS_CA_CERT"] = (
+            tmp_path / "workload_identity_ca_cert"
+        ).as_posix()
     assert actual == expected
     assert original == baseline
 
@@ -134,12 +167,12 @@ def test_mapping_cannot_hide_missing_or_unowned_bindings(tmp_path, fault):
         value["environment"]["UNOWNED_FILE"] = "/run/secrets/unowned"
         value["secrets"].append({"source": "unowned"})
     with pytest.raises((AssertionError, KeyError)):
-        GATE["mapped_environment"](value, spec(tmp_path))
+        GATE["mapped_environment"](value, spec(tmp_path), "base")
 
 
 def test_actual_loader_factory_and_mandatory_gate_are_registered():
     source = (
-        ROOT / "rust/services/issuance/tests/support/flow_rendered_selection.rs"
+        ROOT / "rust/crates/flow-acceptance/tests/support/flow_rendered_selection.rs"
     ).read_text()
     assert "FlowServiceConfig::from_env()" in source
     assert "FlowGrpcChannelFactories::from_config(&config)" in source
@@ -147,7 +180,9 @@ def test_actual_loader_factory_and_mandatory_gate_are_registered():
     assert ".env_clear()" in source
     assert "GrpcIssuanceProvider::new" not in source
     script = (ROOT / "scripts/ci/run-published-canvas-contracts.sh").read_text()
+    inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text()
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in script
     assert (
-        "grep -Fx 'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
-        in script
+        "'flow_rendered_settings_select_native_rpc_and_preserve_legacy_http: test'"
+        in inventory
     )

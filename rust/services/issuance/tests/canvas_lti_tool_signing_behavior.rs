@@ -4,15 +4,79 @@ use async_trait::async_trait;
 use axum::{body::Body, http::Request};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use marty_issuance_service::canvas_lti_tool_signing::{
-    CanvasLtiToolIdentityResolver, CanvasLtiToolJwtSigner, CanvasLtiToolSignatureProvider,
-    CanvasLtiToolSigningError, IssuerDidCanvasLtiToolJwtSigner,
+    CanvasLtiSigningKind, CanvasLtiToolIdentityResolver, CanvasLtiToolJwtSigner,
+    CanvasLtiToolSignatureProvider, CanvasLtiToolSigningError, HttpCanvasLtiToolSignatureProvider,
+    IssuerDidCanvasLtiToolJwtSigner,
 };
 use marty_issuance_service::{
     http::router_with_canvas_lti_tool_signer, transport::TransportPolicy, IssuanceRuntime,
     IssuanceServiceConfig,
 };
 use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+use marty_signing_grant::{SigningOrigin, HEADER_NAME};
 use serde_json::{json, Value};
+
+#[path = "support/contract_grant.rs"]
+mod contract_grant;
+
+#[tokio::test]
+async fn http_canvas_signer_mints_only_its_bound_remote_grant() {
+    use axum::{http::HeaderMap, routing::post, Json, Router};
+    let app = Router::new().route(
+        "/internal/issuer-dids/sign",
+        post(|headers: HeaderMap, Json(body): Json<Value>| async move {
+            let grant = marty_signing_grant::GrantEnvelope::from_header_value(
+                headers[HEADER_NAME].to_str().unwrap(),
+            )
+            .unwrap();
+            assert_eq!(grant.claims.origin, SigningOrigin::IssuanceCanvas);
+            assert_eq!(grant.claims.operation_id, "deep-link:session-1:nonce-1");
+            assert_eq!(
+                grant.claims.key_reference.as_deref(),
+                Some("transit/keys/canvas-1")
+            );
+            assert_eq!(grant.claims.key_purpose, "lti_tool_signing");
+            assert_eq!(grant.claims.algorithm, "RS256");
+            assert_eq!(
+                grant.claims.payload_sha256_b64,
+                marty_signing_grant::payload_digest(b"exact-jwt-signing-input")
+            );
+            assert!(body.get("signing_key_reference").is_none());
+            Json(json!({
+                "ok": true,
+                "issuer_did": body["issuer_did"],
+                "algorithm": body["algorithm"],
+                "verification_method_id": "did:web:issuer.example:canvas#key-1",
+                "signature_raw_b64": URL_SAFE_NO_PAD.encode([1_u8, 2, 3]),
+            }))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let endpoint = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let provider = HttpCanvasLtiToolSignatureProvider::new_with_grant(
+        format!("{endpoint}/internal").parse().unwrap(),
+        Some("issuer-sign-key"),
+        std::time::Duration::from_secs(2),
+        contract_grant::ContractGrantMinter(SigningOrigin::IssuanceCanvas),
+    )
+    .unwrap();
+    assert_eq!(
+        provider
+            .sign(
+                "org-a",
+                "did:web:issuer.example:canvas",
+                "did:web:issuer.example:canvas#key-1",
+                "transit/keys/canvas-1",
+                "deep-link:session-1:nonce-1",
+                b"exact-jwt-signing-input",
+            )
+            .await
+            .unwrap(),
+        URL_SAFE_NO_PAD.encode([1_u8, 2, 3])
+    );
+    server.abort();
+}
 use tower::ServiceExt;
 
 #[derive(Default)]
@@ -36,7 +100,7 @@ impl CanvasLtiToolIdentityResolver for Resolver {
     }
 }
 
-type SignatureRequest = (String, String, String, Vec<u8>);
+type SignatureRequest = (String, String, String, String, String, Vec<u8>);
 
 #[derive(Default)]
 struct Signatures {
@@ -51,12 +115,16 @@ impl CanvasLtiToolSignatureProvider for Signatures {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.requests.lock().unwrap().push((
             organization_id.to_owned(),
             issuer_did.to_owned(),
             verification_method_id.to_owned(),
+            signing_key_reference.to_owned(),
+            operation_id.to_owned(),
             payload.to_vec(),
         ));
         Ok(self
@@ -72,6 +140,7 @@ fn identity(issuer_did: &str, kid: &str) -> Value {
     json!({
         "ok": true,
         "issuer_did": issuer_did,
+        "signing_key_reference": "transit/keys/canvas-tool-1",
         "verification_method_id": kid,
         "public_jwk": {
             "kid": kid,
@@ -123,10 +192,14 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
     });
     let signatures = Arc::new(Signatures::default());
     let token = signer(resolver.clone(), signatures.clone())
-        .sign_jwt(&json!({
-            "title": "Crème brûlée",
-            "aud": "https://canvas.example.edu",
-        }))
+        .sign_jwt(
+            &json!({
+                "title": "Crème brûlée",
+                "aud": "https://canvas.example.edu",
+            }),
+            CanvasLtiSigningKind::DeepLink,
+            "synthetic-session:nonce",
+        )
         .await
         .unwrap();
 
@@ -150,8 +223,10 @@ async fn signer_uses_only_the_organization_did_and_exact_rs256_method() {
     assert_eq!(&requests[0].0, "system-tools");
     assert_eq!(&requests[0].1, issuer_did);
     assert_eq!(&requests[0].2, &kid);
+    assert_eq!(&requests[0].3, "transit/keys/canvas-tool-1");
+    assert_eq!(&requests[0].4, "deep-link:synthetic-session:nonce");
     assert_eq!(
-        requests[0].3,
+        requests[0].5,
         format!("{}.{}", parts[0], parts[1]).as_bytes()
     );
 }
@@ -199,17 +274,40 @@ async fn signer_fails_closed_for_configuration_and_resolver_key_drift() {
             resolver.clone(),
             signatures.clone(),
         );
-        assert_eq!(incomplete.sign_jwt(&json!({})).await.unwrap_err(), expected);
+        assert_eq!(
+            incomplete
+                .sign_jwt(
+                    &json!({}),
+                    CanvasLtiSigningKind::DeepLink,
+                    "synthetic-session:nonce"
+                )
+                .await
+                .unwrap_err(),
+            expected
+        );
         assert_eq!(incomplete.public_jwks().await.unwrap_err(), expected);
         assert!(resolver.requests.lock().unwrap().is_empty());
         assert!(signatures.requests.lock().unwrap().is_empty());
     }
 
+    assert_eq!(
+        signer(resolver.clone(), signatures.clone())
+            .sign_jwt(&json!({}), CanvasLtiSigningKind::DeepLink, "")
+            .await
+            .unwrap_err(),
+        CanvasLtiToolSigningError::InvalidSigningOperation
+    );
+    assert!(resolver.requests.lock().unwrap().is_empty());
+
     let issuer_did = "did:web:issuer.example:canvas";
     *resolver.response.lock().unwrap() = identity(issuer_did, "did:web:other.example#key-1");
     assert_eq!(
         signer(resolver.clone(), signatures.clone())
-            .sign_jwt(&json!({}))
+            .sign_jwt(
+                &json!({}),
+                CanvasLtiSigningKind::DeepLink,
+                "synthetic-session:nonce"
+            )
             .await
             .unwrap_err(),
         CanvasLtiToolSigningError::InvalidVerificationMethod
@@ -242,7 +340,11 @@ async fn signer_rejects_incomplete_rsa_keys_and_malformed_signature_encoding() {
     });
     assert_eq!(
         signer(resolver.clone(), signatures)
-            .sign_jwt(&json!({}))
+            .sign_jwt(
+                &json!({}),
+                CanvasLtiSigningKind::DeepLink,
+                "synthetic-session:nonce"
+            )
             .await
             .unwrap_err(),
         CanvasLtiToolSigningError::InvalidSignatureEncoding
@@ -258,6 +360,55 @@ async fn signer_rejects_incomplete_rsa_keys_and_malformed_signature_encoding() {
             .unwrap_err(),
         CanvasLtiToolSigningError::InvalidVerificationMethod
     );
+}
+
+#[tokio::test]
+async fn private_key_aliases_never_reach_signing_or_public_jwks() {
+    let contract: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/issuance-canvas-lti-foundation.json"
+    ))
+    .unwrap();
+    let issuer_did = "did:web:issuer.example:canvas";
+    let kid = format!("{issuer_did}#active");
+    for field in contract["tool_signing"]["private_jwk_fields_forbidden"]
+        .as_array()
+        .unwrap()
+    {
+        for value in [Value::Null, json!(""), json!("synthetic-private-material")] {
+            let mut resolution = identity(issuer_did, &kid);
+            resolution["public_jwk"][field.as_str().unwrap()] = value.clone();
+            let resolver = Arc::new(Resolver {
+                response: Mutex::new(resolution),
+                ..Resolver::default()
+            });
+            let signatures = Arc::new(Signatures::default());
+            let tool = signer(resolver.clone(), signatures.clone());
+            assert_eq!(
+                tool.public_jwks().await.unwrap_err(),
+                CanvasLtiToolSigningError::PrivateKeyMaterial
+            );
+            assert_eq!(
+                tool.sign_jwt(&json!({}), CanvasLtiSigningKind::DeepLink, "session:nonce")
+                    .await
+                    .unwrap_err(),
+                CanvasLtiToolSigningError::PrivateKeyMaterial
+            );
+            assert!(signatures.requests.lock().unwrap().is_empty());
+
+            let mut resolution = identity(issuer_did, &kid);
+            let retired = format!("{issuer_did}#retired");
+            let mut jwk = json!({"kty": "RSA", "n": "public-modulus", "e": "AQAB"});
+            jwk[field.as_str().unwrap()] = value;
+            resolution["did_document"] = json!({
+                "verificationMethod": [{"id": retired, "publicKeyJwk": jwk}],
+                "assertionMethod": [kid, retired],
+            });
+            *resolver.response.lock().unwrap() = resolution;
+            let public = tool.public_jwks().await.unwrap();
+            assert_eq!(public["keys"].as_array().unwrap().len(), 1);
+            assert_eq!(public["keys"][0]["kid"], kid);
+        }
+    }
 }
 
 #[tokio::test]

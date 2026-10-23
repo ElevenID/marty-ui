@@ -1,0 +1,19 @@
+✔ accepts an ElevenID LLC platform-versioned final-protocol recorder contract (1.72672ms)
+✔ rejects deprecated and draft protocol identifiers (0.552421ms)
+✔ requires explicit assertion outcomes in every recorder contract (0.189085ms)
+✔ requires native 16:9 capture dimensions (0.315646ms)
+✔ requires an application binary for native Tauri capture (0.454644ms)
+✔ requires exact assertion coverage for an external qualification lane (0.875619ms)
+✔ D-10 configuration executes the complete organization behavior contract (2.581537ms)
+✔ D-02 configuration executes the complete provider-switch behavior contract (0.860396ms)
+✔ D-04 configuration executes the complete employee access behavior contract (0.954717ms)
+✔ driver validation is enforced by recorder config loading (0.758712ms)
+✔ supportingLane selects a separate safe output directory and primary naming is unchanged (0.573724ms)
+ℹ tests 11
+ℹ suites 0
+ℹ pass 11
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18.94057

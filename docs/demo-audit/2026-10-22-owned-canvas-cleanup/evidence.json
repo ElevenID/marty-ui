@@ -1,0 +1,184 @@
+{
+  "scope": "LOCAL_ENGINEERING_OWNED_CANVAS_FIXTURE_RECOVERY_ONLY",
+  "implementationParent": "d092ad4127f1f6259ca70bf39647156c0fe31155",
+  "executionSource": "048557328",
+  "latestVerifiedSource": "3c31d68a3",
+  "focusedTests": {
+    "command": "node --test tests/scripts/canvas-owned-fixture-cleanup.test.js tests/scripts/run-canvas-oss-standard-contract.test.js tests/scripts/canvas-capture-sequence.test.js",
+    "passed": 83,
+    "failed": 0,
+    "skipped": 0
+  },
+  "originalAttempt": {
+    "id": "094f8147-2545-4164-9790-49b6802e3f5c",
+    "result": "FAIL",
+    "reportSha256": "156050b1381e378388f556bdfc4bb5166dc046b69575e3ac12aed073f460b7e4",
+    "preserved": true
+  },
+  "execution": {
+    "completedAt": "2026-10-22T19:12:46.982Z",
+    "sourceSha256": {
+      "canvas-owned-fixture-cleanup.js": "4e56a4f3854dcf0cd1530aa6b61cbd660c0f57bea7c1c187fbd01585a340066c",
+      "run-canvas-oss-standard-contract.js": "01bdb443d6435b1f302b3934c8c51de86d343ef6e98ff57943655c847b633908"
+    },
+    "resources": [
+      {
+        "kind": "learnerAccessToken",
+        "id": "154",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "course",
+        "id": "52",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "externalTool",
+        "id": "54",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "learner",
+        "id": "53",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "ltiDeveloperKey",
+        "id": "10000000000102",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "oauthDeveloperKey",
+        "id": "10000000000103",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "adminAccessToken",
+        "id": "153",
+        "state": "RETIRED"
+      },
+      {
+        "kind": "assignment",
+        "id": "144",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "quiz",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "question",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "module",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      }
+    ],
+    "requests": 30,
+    "oauthBeforeRemoval": {
+      "keyPresent": true,
+      "activeTokenCount": 0
+    },
+    "martyRetirement": {
+      "credentialStatus": "REVOKED",
+      "platformHttpStatus": 404
+    }
+  },
+  "freshSessionVerification": {
+    "completedAt": "2026-10-22T19:20:53.222Z",
+    "sourceSha256": {
+      "canvas-owned-fixture-cleanup.js": "975103a29372f1fa912f4a1df2a5e20d11ad31fce6f639d94a4cd017a94e84af",
+      "run-canvas-oss-standard-contract.js": "41e1d2dd982b94e3176c7191f1b5eb1f76c20ac134c49f07ccb12b4e9efa71ec"
+    },
+    "resources": [
+      {
+        "kind": "course",
+        "id": "52",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "externalTool",
+        "id": "54",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "learner",
+        "id": "53",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "learnerAccessToken",
+        "id": "154",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "adminAccessToken",
+        "id": "153",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "ltiDeveloperKey",
+        "id": "10000000000102",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "oauthDeveloperKey",
+        "id": "10000000000103",
+        "state": "ALREADY_ABSENT"
+      },
+      {
+        "kind": "assignment",
+        "id": "144",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "quiz",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "question",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      },
+      {
+        "kind": "module",
+        "id": "52",
+        "state": "RETIRED_WITH_COURSE",
+        "parentId": "52"
+      }
+    ],
+    "requests": 14,
+    "readOnlyNoOp": true,
+    "allSevenDirectTargetsAbsent": true,
+    "complete": true
+  },
+  "stockProtocol": {
+    "imageId": "sha256:70745c55755d3b7f013837e8d3bce749bedcfaebdd332c2747841adc0abe466b",
+    "identityJoin": "Switchman 4.2.4 Shard::IDS_PER_SHARD = 10000000000000; globally serialized key/account binding is joined to the raw local external-tool key only within the same observed account shard",
+    "tokens": "The running stock TokensController requires an existing password session; scoped token operations reuse browser cookies with CSRF rather than minting another PAT",
+    "learnerRetirement": "Root-account membership is checked through a complete, bounded API inventory; the surviving global user profile is retained"
+  },
+  "betaImageDeploymentChanged": false,
+  "selfhostProductionChanged": false,
+  "kmsMutatedByRecovery": false,
+  "mediaCreated": false,
+  "demoQualified": false,
+  "officialConformancePassed": false,
+  "remaining": [
+    "Protected integration of the cleanup branch after parent PR1471 reaches main",
+    "Fresh complete D07/D08 operations still need authoritative evidence-to-claim projection and current release qualification",
+    "Official seven-lane conformance remains pending the qualified release from PR1472"
+  ]
+}

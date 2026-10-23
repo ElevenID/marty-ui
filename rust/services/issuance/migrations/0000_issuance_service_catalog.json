@@ -1,0 +1,6802 @@
+{
+  "source": "marty-credentials v0.1.78 issuance_event_owner on PostgreSQL 15; migrations unchanged through v0.1.79",
+  "columns": [
+    {
+      "udt": "int4",
+      "name": "application_validity_days",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "approval_policy_set_id",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "approval_strategy",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "claim_collection_rules",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "description",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "evidence_requirements",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "form_fields",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "idempotency_key_hash",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "idempotency_request_hash",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "int8",
+      "name": "management_version",
+      "table": "application_templates",
+      "default": "1",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 64
+    },
+    {
+      "udt": "varchar",
+      "name": "name",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "notification_config",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "required_checks",
+      "table": "application_templates",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "application_templates",
+      "default": "'DRAFT'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "ui_config",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "application_templates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "applicant_identifier",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_template_id",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_id",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "derived_claims",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "applications",
+      "default": "(CURRENT_TIMESTAMP + '30 days'::interval)",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "form_data",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "integration_context",
+      "table": "applications",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuance_transaction_id",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "rejection_reason",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "review_notes",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "reviewed_at",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "reviewer_id",
+      "table": "applications",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "submitted_at",
+      "table": "applications",
+      "default": "CURRENT_TIMESTAMP",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "submitted_evidence",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "applications",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "access_token",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "c_nonce",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "client_id",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "code",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "code_challenge",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "code_challenge_method",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "authorization_sessions",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "credential_configuration_ids",
+      "table": "authorization_sessions",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "dpop_jkt",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "authorization_sessions",
+      "default": "(now() + '00:10:00'::interval)",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_state",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "redirect_uri",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "scope",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "state",
+      "table": "authorization_sessions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "authorization_sessions",
+      "default": "'pending'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "binding_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "candidate_key",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_user_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "claimed_credential_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_award_candidates",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "learner_identity_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "lti_subject",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "observed_at",
+      "table": "canvas_award_candidates",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_award_candidates",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "state",
+      "table": "canvas_award_candidates",
+      "default": "'observed'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_award_candidates",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "assertion",
+      "table": "canvas_candidate_observations",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "candidate_id",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_candidate_observations",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "is_current",
+      "table": "canvas_candidate_observations",
+      "default": "true",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "logical_key",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "observed_at",
+      "table": "canvas_candidate_observations",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "payload_hash",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "requirement_id",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "superseded_observation_id",
+      "table": "canvas_candidate_observations",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "verification",
+      "table": "canvas_candidate_observations",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_account_id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "error_summary",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "first_seen_at",
+      "table": "canvas_event_receipts",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "issuance_response",
+      "table": "canvas_event_receipts",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuance_transaction_id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_seen_at",
+      "table": "canvas_event_receipts",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "payload_hash",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "provider_event_id",
+      "table": "canvas_event_receipts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "canvas_event_receipts",
+      "default": "'processed'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 50,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "attempt_count",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "0",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "timestamptz",
+      "name": "available_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "completed_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "last_error_code",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 120,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "last_error_summary",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "lease_expires_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "lease_owner",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "max_attempts",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "8",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "result",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "started_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "'queued'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "target_id",
+      "table": "canvas_evidence_sync_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_evidence_sync_jobs",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "binding_id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "candidate_id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "config_version",
+      "table": "canvas_evidence_sync_targets",
+      "default": "1",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_evidence_sync_targets",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "canvas_evidence_sync_targets",
+      "default": "true",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_enqueued_at",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_succeeded_at",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "logical_key",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "metadata",
+      "table": "canvas_evidence_sync_targets",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "next_run_at",
+      "table": "canvas_evidence_sync_targets",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "schedule_seconds",
+      "table": "canvas_evidence_sync_targets",
+      "default": "900",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "target_type",
+      "table": "canvas_evidence_sync_targets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_evidence_sync_targets",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_user_id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "conflict_reason",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_learner_identities",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "deployment_id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "lti_subject",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "sis_user_id",
+      "table": "canvas_learner_identities",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "canvas_learner_identities",
+      "default": "'linked'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_learner_identities",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "verified_at",
+      "table": "canvas_learner_identities",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_account_id",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "consumed_at",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_lti_launch_states",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "login_hint",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "lti_message_hint",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "metadata",
+      "table": "canvas_lti_launch_states",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "nonce",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "redirect_uri",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "state",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "canvas_lti_launch_states",
+      "default": "'pending'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 50,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "target_link_uri",
+      "table": "canvas_lti_launch_states",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "canvas_base_url",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "capabilities",
+      "table": "canvas_oauth_authorizations",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "client_id",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "client_secret_ref",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "consumed_at",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_oauth_authorizations",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "platform_config_version",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "redirect_uri",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "scopes",
+      "table": "canvas_oauth_authorizations",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "state_hash",
+      "table": "canvas_oauth_authorizations",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "access_token_secret_ref",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "canvas_base_url",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "capabilities",
+      "table": "canvas_oauth_connections",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "client_id",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "client_secret_ref",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "connected_at",
+      "table": "canvas_oauth_connections",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_oauth_connections",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_refreshed_at",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "platform_config_version",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "reauthorization_required",
+      "table": "canvas_oauth_connections",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "refresh_lease_expires_at",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "refresh_lease_owner",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "refresh_token_secret_ref",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revoke_last_error_code",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 120,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "revoke_retry_at",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "revoke_retry_count",
+      "table": "canvas_oauth_connections",
+      "default": "0",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "json",
+      "name": "scopes",
+      "table": "canvas_oauth_connections",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "canvas_oauth_connections",
+      "default": "'connected'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "token_expires_at",
+      "table": "canvas_oauth_connections",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_oauth_connections",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "backed_up_at",
+      "table": "canvas_platform_state_backups",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "canvas_platform_state_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_platform_state_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_platform_state_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "archived_at",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_account_id",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "canvas_base_url",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "capability_snapshot",
+      "table": "canvas_platforms",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "config_version",
+      "table": "canvas_platforms",
+      "default": "1",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "json",
+      "name": "connection_config",
+      "table": "canvas_platforms",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_platforms",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "display_name",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "canvas_platforms",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "last_connection_error",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_validated_at",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "lti_client_id",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "lti_deployment_id",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "lti_issuer",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "lti_jwks_expires_at",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "lti_jwks_fetched_at",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "lti_jwks_json",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "lti_jwks_url",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "lti_openid_configuration",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "lti_trust_profile",
+      "table": "canvas_platforms",
+      "default": "'hosted_global'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_platforms",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "registration_status",
+      "table": "canvas_platforms",
+      "default": "'draft'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_platforms",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "auto_approve_on_evidence",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "backed_up_at",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "binding_id",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "direct_issue_enabled",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "evidence_requirements",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_program_binding_requirement_backups",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "activated_at",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_template_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "approval_policy_set_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "archived_at",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "auto_approve_on_evidence",
+      "table": "canvas_program_bindings",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "canvas_credentials",
+      "table": "canvas_program_bindings",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "canvas_scope",
+      "table": "canvas_program_bindings",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "config_version",
+      "table": "canvas_program_bindings",
+      "default": "1",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "canvas_program_bindings",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "credential_template_snapshot",
+      "table": "canvas_program_bindings",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "delivery_mode",
+      "table": "canvas_program_bindings",
+      "default": "'wallet_only'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "deployment_profile_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "direct_issue_enabled",
+      "table": "canvas_program_bindings",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "display_name",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "canvas_program_bindings",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "evidence_requirements",
+      "table": "canvas_program_bindings",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "feature_flags",
+      "table": "canvas_program_bindings",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "flow_mode",
+      "table": "canvas_program_bindings",
+      "default": "'elevenid_orchestrated_canvas_evidence'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_mode",
+      "table": "canvas_program_bindings",
+      "default": "'org_managed'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "platform_id",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "readiness_checks",
+      "table": "canvas_program_bindings",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "readiness_validated_at",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "canvas_program_bindings",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "validated_config_version",
+      "table": "canvas_program_bindings",
+      "default": null,
+      "nullable": "YES",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_heartbeat_at",
+      "table": "canvas_worker_heartbeats",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "metadata",
+      "table": "canvas_worker_heartbeats",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "role",
+      "table": "canvas_worker_heartbeats",
+      "default": "'canvas_sync'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "started_at",
+      "table": "canvas_worker_heartbeats",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "worker_id",
+      "table": "canvas_worker_heartbeats",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "canvas_account_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "credential_delivery_records",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "delivery_mode",
+      "table": "credential_delivery_records",
+      "default": "'wallet_only'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "delivery_target",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "external_credential_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "external_issuer_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "last_error",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "jsonb",
+      "name": "metadata",
+      "table": "credential_delivery_records",
+      "default": "'{}'::jsonb",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "credential_delivery_records",
+      "default": "'pending'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "transaction_id",
+      "table": "credential_delivery_records",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "credential_delivery_records",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "evidence_fact_heads",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "fact_id",
+      "table": "evidence_fact_heads",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "logical_key",
+      "table": "evidence_fact_heads",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "evidence_fact_heads",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "evidence_fact_heads",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "jsonb",
+      "name": "assertion",
+      "table": "evidence_facts",
+      "default": "'{}'::jsonb",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "evidence_facts",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "effective_at",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "fact_type",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 160,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "logical_key",
+      "table": "evidence_facts",
+      "default": "''::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "observed_at",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "payload_hash",
+      "table": "evidence_facts",
+      "default": "''::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "provider",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "requirement_id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "jsonb",
+      "name": "scope",
+      "table": "evidence_facts",
+      "default": "'{}'::jsonb",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "jsonb",
+      "name": "source",
+      "table": "evidence_facts",
+      "default": "'{}'::jsonb",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "source_revision",
+      "table": "evidence_facts",
+      "default": "''::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "subject_id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "superseded_fact_id",
+      "table": "evidence_facts",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "jsonb",
+      "name": "verification",
+      "table": "evidence_facts",
+      "default": "'{}'::jsonb",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "binding_id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "evidence_policy_reviews",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "current_decision",
+      "table": "evidence_policy_reviews",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "prior_decision",
+      "table": "evidence_policy_reviews",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "resolution_action",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "resolution_claim_action",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "resolution_claim_token",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 128,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "resolution_claimed_at",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "resolution_notes",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "resolution_recovery_pending",
+      "table": "evidence_policy_reviews",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "resolved_at",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "resolved_by",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "evidence_policy_reviews",
+      "default": "'open'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "triggering_fact_id",
+      "table": "evidence_policy_reviews",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "evidence_policy_reviews",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "issuance_events",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "issuance_events",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "event_type",
+      "table": "issuance_events",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 50,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "issuance_events",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "metadata",
+      "table": "issuance_events",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "issuance_events",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "transaction_id",
+      "table": "issuance_events",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "access_token",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "applicant_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "c_nonce",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "claims",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_payload_format",
+      "table": "issuance_transactions",
+      "default": "'w3c_vcdm_v2_sd_jwt'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 30,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_type",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "delivery_mode",
+      "table": "issuance_transactions",
+      "default": "'wallet_only'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "idempotency_key_hash",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "idempotency_request_hash",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "issued_at",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_algorithm",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 20,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_did_override",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_mode",
+      "table": "issuance_transactions",
+      "default": "'org_managed'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_profile_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "oid4vci_client_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 512,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "pre_auth_code",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "renewable",
+      "table": "issuance_transactions",
+      "default": "false",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "renewal_of_credential_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "renewal_window_days",
+      "table": "issuance_transactions",
+      "default": "30",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "varchar",
+      "name": "reserved_credential_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revocation_profile_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revocation_reason",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "revoked_at",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "selective_disclosure_claims",
+      "table": "issuance_transactions",
+      "default": "'[]'::json",
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "signing_service_id",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "subject_did",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "int4",
+      "name": "validity_days",
+      "table": "issuance_transactions",
+      "default": "365",
+      "nullable": "NO",
+      "scale": 0,
+      "length": null,
+      "precision": 32
+    },
+    {
+      "udt": "json",
+      "name": "wallet_configs",
+      "table": "issuance_transactions",
+      "default": "'[]'::json",
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "zk_predicate_claims",
+      "table": "issuance_transactions",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "applicant_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_hash",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_jwt",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "issued_at",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "issuer_did",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "renewed_from_credential_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "renewed_to_credential_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revocation_profile_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 36,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revocation_reason",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "revoked",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "revoked_at",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "status_list_entries",
+      "table": "issued_credentials",
+      "default": "'[]'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "status_updated_at",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "subject_did",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "transaction_id",
+      "table": "issued_credentials",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "client_id",
+      "table": "oid4vci_client_assertions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 512,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "oid4vci_client_assertions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "oid4vci_client_assertions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "jti",
+      "table": "oid4vci_client_assertions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 256,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "oid4vci_client_assertions",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "oid4vci_ephemeral_capabilities",
+      "default": "clock_timestamp()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "expires_at",
+      "table": "oid4vci_ephemeral_capabilities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "key_digest",
+      "table": "oid4vci_ephemeral_capabilities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "payload",
+      "table": "oid4vci_ephemeral_capabilities",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "purpose",
+      "table": "oid4vci_ephemeral_capabilities",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 32,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "active",
+      "table": "oid4vci_registered_clients",
+      "default": "true",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "client_id",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 512,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "jwks",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "redirect_uris",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "token_endpoint_auth_method",
+      "table": "oid4vci_registered_clients",
+      "default": "'private_key_jwt'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "oid4vci_registered_clients",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "organization_integration_secrets",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "bool",
+      "name": "enabled",
+      "table": "organization_integration_secrets",
+      "default": "true",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "encrypted_secret_value",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "last_used_at",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "metadata",
+      "table": "organization_integration_secrets",
+      "default": "'{}'::json",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "name",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "provider",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "purpose",
+      "table": "organization_integration_secrets",
+      "default": "'api_token'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "secret_hint",
+      "table": "organization_integration_secrets",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 80,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "organization_integration_secrets",
+      "default": "now()",
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "application_template_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "bureau_job_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "completed_at",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "country_code",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 3,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "created_at",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "credential_template_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "delivery_destination_profile_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 128,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "document_type",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 3,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "error_code",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 128,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "error_message",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 1024,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "flow_execution_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "organization_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "json",
+      "name": "quality_result",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "revocation_profile_id",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "text",
+      "name": "secure_artifact_ciphertext",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "secure_artifact_reference",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": 512,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "sod_sha256",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 64,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "status",
+      "table": "physical_document_jobs",
+      "default": "'DRAFT'::character varying",
+      "nullable": "NO",
+      "scale": null,
+      "length": 40,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "submitted_at",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": null,
+      "precision": null
+    },
+    {
+      "udt": "varchar",
+      "name": "tracking_number",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "YES",
+      "scale": null,
+      "length": 255,
+      "precision": null
+    },
+    {
+      "udt": "timestamptz",
+      "name": "updated_at",
+      "table": "physical_document_jobs",
+      "default": null,
+      "nullable": "NO",
+      "scale": null,
+      "length": null,
+      "precision": null
+    }
+  ],
+  "indexes": [
+    {
+      "name": "application_templates_pkey",
+      "ready": true,
+      "table": "application_templates",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX application_templates_pkey ON issuance_service.application_templates USING btree (id)"
+    },
+    {
+      "name": "ix_application_templates_organization_id",
+      "ready": true,
+      "table": "application_templates",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_application_templates_organization_id ON issuance_service.application_templates USING btree (organization_id)"
+    },
+    {
+      "name": "ix_application_templates_status",
+      "ready": true,
+      "table": "application_templates",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_application_templates_status ON issuance_service.application_templates USING btree (status)"
+    },
+    {
+      "name": "ux_application_templates_org_idempotency_key_hash",
+      "ready": true,
+      "table": "application_templates",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_application_templates_org_idempotency_key_hash ON issuance_service.application_templates USING btree (organization_id, idempotency_key_hash) WHERE (idempotency_key_hash IS NOT NULL)"
+    },
+    {
+      "name": "ux_application_templates_tenant_id",
+      "ready": true,
+      "table": "application_templates",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_application_templates_tenant_id ON issuance_service.application_templates USING btree (organization_id, id)"
+    },
+    {
+      "name": "applications_pkey",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX applications_pkey ON issuance_service.applications USING btree (id)"
+    },
+    {
+      "name": "ix_applications_applicant_identifier",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_applications_applicant_identifier ON issuance_service.applications USING btree (applicant_identifier)"
+    },
+    {
+      "name": "ix_applications_organization_id",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_applications_organization_id ON issuance_service.applications USING btree (organization_id)"
+    },
+    {
+      "name": "ix_applications_status",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_applications_status ON issuance_service.applications USING btree (status)"
+    },
+    {
+      "name": "ix_applications_template_id",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_applications_template_id ON issuance_service.applications USING btree (application_template_id)"
+    },
+    {
+      "name": "ux_applications_tenant_id",
+      "ready": true,
+      "table": "applications",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_applications_tenant_id ON issuance_service.applications USING btree (organization_id, id)"
+    },
+    {
+      "name": "authorization_sessions_code_key",
+      "ready": true,
+      "table": "authorization_sessions",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX authorization_sessions_code_key ON issuance_service.authorization_sessions USING btree (code)"
+    },
+    {
+      "name": "authorization_sessions_pkey",
+      "ready": true,
+      "table": "authorization_sessions",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX authorization_sessions_pkey ON issuance_service.authorization_sessions USING btree (id)"
+    },
+    {
+      "name": "ix_authorization_sessions_code",
+      "ready": true,
+      "table": "authorization_sessions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_authorization_sessions_code ON issuance_service.authorization_sessions USING btree (code)"
+    },
+    {
+      "name": "ix_authorization_sessions_issuer_state",
+      "ready": true,
+      "table": "authorization_sessions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_authorization_sessions_issuer_state ON issuance_service.authorization_sessions USING btree (issuer_state)"
+    },
+    {
+      "name": "ix_authorization_sessions_status",
+      "ready": true,
+      "table": "authorization_sessions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_authorization_sessions_status ON issuance_service.authorization_sessions USING btree (status)"
+    },
+    {
+      "name": "canvas_award_candidates_pkey",
+      "ready": true,
+      "table": "canvas_award_candidates",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_award_candidates_pkey ON issuance_service.canvas_award_candidates USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_award_candidates_organization_state",
+      "ready": true,
+      "table": "canvas_award_candidates",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_award_candidates_organization_state ON issuance_service.canvas_award_candidates USING btree (organization_id, state)"
+    },
+    {
+      "name": "ux_canvas_award_candidates_binding_key",
+      "ready": true,
+      "table": "canvas_award_candidates",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_award_candidates_binding_key ON issuance_service.canvas_award_candidates USING btree (binding_id, candidate_key)"
+    },
+    {
+      "name": "ux_canvas_award_candidates_tenant_id",
+      "ready": true,
+      "table": "canvas_award_candidates",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_award_candidates_tenant_id ON issuance_service.canvas_award_candidates USING btree (organization_id, id)"
+    },
+    {
+      "name": "canvas_candidate_observations_pkey",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_candidate_observations_pkey ON issuance_service.canvas_candidate_observations USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_candidate_observations_payload",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE INDEX ix_canvas_candidate_observations_payload ON issuance_service.canvas_candidate_observations USING btree (candidate_id, logical_key, payload_hash)"
+    },
+    {
+      "name": "ux_canvas_candidate_observations_current",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_candidate_observations_current ON issuance_service.canvas_candidate_observations USING btree (candidate_id, logical_key) WHERE is_current"
+    },
+    {
+      "name": "ux_canvas_candidate_observations_tenant_candidate_id",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_candidate_observations_tenant_candidate_id ON issuance_service.canvas_candidate_observations USING btree (organization_id, candidate_id, id)"
+    },
+    {
+      "name": "ux_canvas_candidate_observations_tenant_candidate_logical_id",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 4,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_candidate_observations_tenant_candidate_logical_id ON issuance_service.canvas_candidate_observations USING btree (organization_id, candidate_id, logical_key, id)"
+    },
+    {
+      "name": "ux_canvas_candidate_observations_tenant_id",
+      "ready": true,
+      "table": "canvas_candidate_observations",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_candidate_observations_tenant_id ON issuance_service.canvas_candidate_observations USING btree (organization_id, id)"
+    },
+    {
+      "name": "canvas_event_receipts_pkey",
+      "ready": true,
+      "table": "canvas_event_receipts",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_event_receipts_pkey ON issuance_service.canvas_event_receipts USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_event_receipts_organization_id",
+      "ready": true,
+      "table": "canvas_event_receipts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_event_receipts_organization_id ON issuance_service.canvas_event_receipts USING btree (organization_id)"
+    },
+    {
+      "name": "ix_canvas_event_receipts_provider_event_id",
+      "ready": true,
+      "table": "canvas_event_receipts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_event_receipts_provider_event_id ON issuance_service.canvas_event_receipts USING btree (provider_event_id)"
+    },
+    {
+      "name": "ux_canvas_event_receipts_account_event",
+      "ready": true,
+      "table": "canvas_event_receipts",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_event_receipts_account_event ON issuance_service.canvas_event_receipts USING btree (canvas_account_id, provider_event_id)"
+    },
+    {
+      "name": "canvas_evidence_sync_jobs_pkey",
+      "ready": true,
+      "table": "canvas_evidence_sync_jobs",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_evidence_sync_jobs_pkey ON issuance_service.canvas_evidence_sync_jobs USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_sync_jobs_claim",
+      "ready": true,
+      "table": "canvas_evidence_sync_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE INDEX ix_canvas_sync_jobs_claim ON issuance_service.canvas_evidence_sync_jobs USING btree (status, available_at, lease_expires_at)"
+    },
+    {
+      "name": "ix_canvas_sync_jobs_organization_id",
+      "ready": true,
+      "table": "canvas_evidence_sync_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_sync_jobs_organization_id ON issuance_service.canvas_evidence_sync_jobs USING btree (organization_id)"
+    },
+    {
+      "name": "ux_canvas_sync_jobs_one_active_target",
+      "ready": true,
+      "table": "canvas_evidence_sync_jobs",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": null
+    },
+    {
+      "name": "canvas_evidence_sync_targets_pkey",
+      "ready": true,
+      "table": "canvas_evidence_sync_targets",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_evidence_sync_targets_pkey ON issuance_service.canvas_evidence_sync_targets USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_sync_targets_candidate_id",
+      "ready": true,
+      "table": "canvas_evidence_sync_targets",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_sync_targets_candidate_id ON issuance_service.canvas_evidence_sync_targets USING btree (candidate_id) WHERE (candidate_id IS NOT NULL)"
+    },
+    {
+      "name": "ix_canvas_sync_targets_due",
+      "ready": true,
+      "table": "canvas_evidence_sync_targets",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_sync_targets_due ON issuance_service.canvas_evidence_sync_targets USING btree (enabled, next_run_at)"
+    },
+    {
+      "name": "ux_canvas_sync_targets_org_logical",
+      "ready": true,
+      "table": "canvas_evidence_sync_targets",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_sync_targets_org_logical ON issuance_service.canvas_evidence_sync_targets USING btree (organization_id, logical_key)"
+    },
+    {
+      "name": "ux_canvas_sync_targets_tenant_id",
+      "ready": true,
+      "table": "canvas_evidence_sync_targets",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_sync_targets_tenant_id ON issuance_service.canvas_evidence_sync_targets USING btree (organization_id, id)"
+    },
+    {
+      "name": "canvas_learner_identities_pkey",
+      "ready": true,
+      "table": "canvas_learner_identities",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_learner_identities_pkey ON issuance_service.canvas_learner_identities USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_learner_identities_organization_id",
+      "ready": true,
+      "table": "canvas_learner_identities",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_learner_identities_organization_id ON issuance_service.canvas_learner_identities USING btree (organization_id)"
+    },
+    {
+      "name": "ux_canvas_learner_identities_tenant_id",
+      "ready": true,
+      "table": "canvas_learner_identities",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_learner_identities_tenant_id ON issuance_service.canvas_learner_identities USING btree (organization_id, id)"
+    },
+    {
+      "name": "ux_canvas_learner_identity_numeric_link",
+      "ready": true,
+      "table": "canvas_learner_identities",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_learner_identity_numeric_link ON issuance_service.canvas_learner_identities USING btree (platform_id, deployment_id, canvas_user_id) WHERE (((status)::text = 'linked'::text) AND (canvas_user_id IS NOT NULL))"
+    },
+    {
+      "name": "ux_canvas_learner_identity_subject",
+      "ready": true,
+      "table": "canvas_learner_identities",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_learner_identity_subject ON issuance_service.canvas_learner_identities USING btree (platform_id, deployment_id, lti_subject)"
+    },
+    {
+      "name": "canvas_lti_launch_states_pkey",
+      "ready": true,
+      "table": "canvas_lti_launch_states",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_lti_launch_states_pkey ON issuance_service.canvas_lti_launch_states USING btree (id)"
+    },
+    {
+      "name": "canvas_lti_launch_states_state_key",
+      "ready": true,
+      "table": "canvas_lti_launch_states",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_lti_launch_states_state_key ON issuance_service.canvas_lti_launch_states USING btree (state)"
+    },
+    {
+      "name": "ix_canvas_lti_launch_states_organization_status",
+      "ready": true,
+      "table": "canvas_lti_launch_states",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_lti_launch_states_organization_status ON issuance_service.canvas_lti_launch_states USING btree (organization_id, status)"
+    },
+    {
+      "name": "ix_canvas_lti_launch_states_platform_id",
+      "ready": true,
+      "table": "canvas_lti_launch_states",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_lti_launch_states_platform_id ON issuance_service.canvas_lti_launch_states USING btree (platform_id)"
+    },
+    {
+      "name": "ix_canvas_lti_launch_states_state",
+      "ready": true,
+      "table": "canvas_lti_launch_states",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_lti_launch_states_state ON issuance_service.canvas_lti_launch_states USING btree (state)"
+    },
+    {
+      "name": "canvas_oauth_authorizations_pkey",
+      "ready": true,
+      "table": "canvas_oauth_authorizations",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_oauth_authorizations_pkey ON issuance_service.canvas_oauth_authorizations USING btree (id)"
+    },
+    {
+      "name": "canvas_oauth_authorizations_state_hash_key",
+      "ready": true,
+      "table": "canvas_oauth_authorizations",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_oauth_authorizations_state_hash_key ON issuance_service.canvas_oauth_authorizations USING btree (state_hash)"
+    },
+    {
+      "name": "ix_canvas_oauth_authorizations_expiry",
+      "ready": true,
+      "table": "canvas_oauth_authorizations",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_oauth_authorizations_expiry ON issuance_service.canvas_oauth_authorizations USING btree (expires_at, consumed_at)"
+    },
+    {
+      "name": "ix_canvas_oauth_authorizations_organization_id",
+      "ready": true,
+      "table": "canvas_oauth_authorizations",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_oauth_authorizations_organization_id ON issuance_service.canvas_oauth_authorizations USING btree (organization_id)"
+    },
+    {
+      "name": "ix_canvas_oauth_authorizations_platform_id",
+      "ready": true,
+      "table": "canvas_oauth_authorizations",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_oauth_authorizations_platform_id ON issuance_service.canvas_oauth_authorizations USING btree (platform_id)"
+    },
+    {
+      "name": "canvas_oauth_connections_pkey",
+      "ready": true,
+      "table": "canvas_oauth_connections",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_oauth_connections_pkey ON issuance_service.canvas_oauth_connections USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_oauth_connections_revoke_retry",
+      "ready": true,
+      "table": "canvas_oauth_connections",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_oauth_connections_revoke_retry ON issuance_service.canvas_oauth_connections USING btree (status, revoke_retry_at)"
+    },
+    {
+      "name": "ix_canvas_oauth_connections_status",
+      "ready": true,
+      "table": "canvas_oauth_connections",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_oauth_connections_status ON issuance_service.canvas_oauth_connections USING btree (status, reauthorization_required)"
+    },
+    {
+      "name": "ux_canvas_oauth_connections_platform",
+      "ready": true,
+      "table": "canvas_oauth_connections",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_oauth_connections_platform ON issuance_service.canvas_oauth_connections USING btree (organization_id, platform_id)"
+    },
+    {
+      "name": "canvas_platform_state_backups_pkey",
+      "ready": true,
+      "table": "canvas_platform_state_backups",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_platform_state_backups_pkey ON issuance_service.canvas_platform_state_backups USING btree (platform_id)"
+    },
+    {
+      "name": "ix_canvas_platform_state_backups_organization",
+      "ready": true,
+      "table": "canvas_platform_state_backups",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_platform_state_backups_organization ON issuance_service.canvas_platform_state_backups USING btree (organization_id)"
+    },
+    {
+      "name": "canvas_platforms_pkey",
+      "ready": true,
+      "table": "canvas_platforms",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_platforms_pkey ON issuance_service.canvas_platforms USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_platforms_canvas_account_id",
+      "ready": true,
+      "table": "canvas_platforms",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_platforms_canvas_account_id ON issuance_service.canvas_platforms USING btree (canvas_account_id)"
+    },
+    {
+      "name": "ix_canvas_platforms_organization_id",
+      "ready": true,
+      "table": "canvas_platforms",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_platforms_organization_id ON issuance_service.canvas_platforms USING btree (organization_id)"
+    },
+    {
+      "name": "ux_canvas_platforms_org_account",
+      "ready": true,
+      "table": "canvas_platforms",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_platforms_org_account ON issuance_service.canvas_platforms USING btree (organization_id, canvas_account_id)"
+    },
+    {
+      "name": "ux_canvas_platforms_tenant_id",
+      "ready": true,
+      "table": "canvas_platforms",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_platforms_tenant_id ON issuance_service.canvas_platforms USING btree (organization_id, id)"
+    },
+    {
+      "name": "canvas_program_binding_requirement_backups_pkey",
+      "ready": true,
+      "table": "canvas_program_binding_requirement_backups",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_program_binding_requirement_backups_pkey ON issuance_service.canvas_program_binding_requirement_backups USING btree (binding_id)"
+    },
+    {
+      "name": "ix_canvas_binding_requirement_backups_organization",
+      "ready": true,
+      "table": "canvas_program_binding_requirement_backups",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_binding_requirement_backups_organization ON issuance_service.canvas_program_binding_requirement_backups USING btree (organization_id)"
+    },
+    {
+      "name": "canvas_program_bindings_pkey",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_program_bindings_pkey ON issuance_service.canvas_program_bindings USING btree (id)"
+    },
+    {
+      "name": "ix_canvas_program_bindings_application_template_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_program_bindings_application_template_id ON issuance_service.canvas_program_bindings USING btree (application_template_id)"
+    },
+    {
+      "name": "ix_canvas_program_bindings_credential_template_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_program_bindings_credential_template_id ON issuance_service.canvas_program_bindings USING btree (credential_template_id)"
+    },
+    {
+      "name": "ix_canvas_program_bindings_deployment_profile_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_program_bindings_deployment_profile_id ON issuance_service.canvas_program_bindings USING btree (deployment_profile_id)"
+    },
+    {
+      "name": "ix_canvas_program_bindings_organization_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_program_bindings_organization_id ON issuance_service.canvas_program_bindings USING btree (organization_id)"
+    },
+    {
+      "name": "ix_canvas_program_bindings_platform_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_canvas_program_bindings_platform_id ON issuance_service.canvas_program_bindings USING btree (platform_id)"
+    },
+    {
+      "name": "ux_canvas_program_bindings_tenant_id",
+      "ready": true,
+      "table": "canvas_program_bindings",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_canvas_program_bindings_tenant_id ON issuance_service.canvas_program_bindings USING btree (organization_id, id)"
+    },
+    {
+      "name": "canvas_worker_heartbeats_pkey",
+      "ready": true,
+      "table": "canvas_worker_heartbeats",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX canvas_worker_heartbeats_pkey ON issuance_service.canvas_worker_heartbeats USING btree (worker_id)"
+    },
+    {
+      "name": "ix_canvas_worker_heartbeats_role_fresh",
+      "ready": true,
+      "table": "canvas_worker_heartbeats",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_canvas_worker_heartbeats_role_fresh ON issuance_service.canvas_worker_heartbeats USING btree (role, last_heartbeat_at)"
+    },
+    {
+      "name": "credential_delivery_records_pkey",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX credential_delivery_records_pkey ON issuance_service.credential_delivery_records USING btree (id)"
+    },
+    {
+      "name": "ix_credential_delivery_records_canvas_account_id",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_canvas_account_id ON issuance_service.credential_delivery_records USING btree (canvas_account_id)"
+    },
+    {
+      "name": "ix_credential_delivery_records_credential_id",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_credential_id ON issuance_service.credential_delivery_records USING btree (credential_id)"
+    },
+    {
+      "name": "ix_credential_delivery_records_delivery_target",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_delivery_target ON issuance_service.credential_delivery_records USING btree (delivery_target)"
+    },
+    {
+      "name": "ix_credential_delivery_records_external_credential_id",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_external_credential_id ON issuance_service.credential_delivery_records USING btree (external_credential_id)"
+    },
+    {
+      "name": "ix_credential_delivery_records_organization_id",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_organization_id ON issuance_service.credential_delivery_records USING btree (organization_id)"
+    },
+    {
+      "name": "ix_credential_delivery_records_status",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_status ON issuance_service.credential_delivery_records USING btree (status)"
+    },
+    {
+      "name": "ix_credential_delivery_records_transaction_id",
+      "ready": true,
+      "table": "credential_delivery_records",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_credential_delivery_records_transaction_id ON issuance_service.credential_delivery_records USING btree (transaction_id)"
+    },
+    {
+      "name": "evidence_fact_heads_fact_id_key",
+      "ready": true,
+      "table": "evidence_fact_heads",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX evidence_fact_heads_fact_id_key ON issuance_service.evidence_fact_heads USING btree (fact_id)"
+    },
+    {
+      "name": "evidence_fact_heads_pkey",
+      "ready": true,
+      "table": "evidence_fact_heads",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX evidence_fact_heads_pkey ON issuance_service.evidence_fact_heads USING btree (application_id, logical_key)"
+    },
+    {
+      "name": "ix_evidence_fact_heads_organization_id",
+      "ready": true,
+      "table": "evidence_fact_heads",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_fact_heads_organization_id ON issuance_service.evidence_fact_heads USING btree (organization_id)"
+    },
+    {
+      "name": "evidence_facts_pkey",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX evidence_facts_pkey ON issuance_service.evidence_facts USING btree (id)"
+    },
+    {
+      "name": "ix_evidence_facts_application_id",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_facts_application_id ON issuance_service.evidence_facts USING btree (application_id)"
+    },
+    {
+      "name": "ix_evidence_facts_application_logical_key",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_evidence_facts_application_logical_key ON issuance_service.evidence_facts USING btree (application_id, logical_key)"
+    },
+    {
+      "name": "ix_evidence_facts_application_logical_payload",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE INDEX ix_evidence_facts_application_logical_payload ON issuance_service.evidence_facts USING btree (application_id, logical_key, payload_hash)"
+    },
+    {
+      "name": "ix_evidence_facts_fact_type",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_facts_fact_type ON issuance_service.evidence_facts USING btree (fact_type)"
+    },
+    {
+      "name": "ix_evidence_facts_organization_id",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_facts_organization_id ON issuance_service.evidence_facts USING btree (organization_id)"
+    },
+    {
+      "name": "ix_evidence_facts_provider",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_facts_provider ON issuance_service.evidence_facts USING btree (provider)"
+    },
+    {
+      "name": "ux_evidence_facts_tenant_application_id",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX ux_evidence_facts_tenant_application_id ON issuance_service.evidence_facts USING btree (organization_id, application_id, id)"
+    },
+    {
+      "name": "ux_evidence_facts_tenant_application_logical_id",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 4,
+      "definition": "CREATE UNIQUE INDEX ux_evidence_facts_tenant_application_logical_id ON issuance_service.evidence_facts USING btree (organization_id, application_id, logical_key, id)"
+    },
+    {
+      "name": "ux_evidence_facts_tenant_id",
+      "ready": true,
+      "table": "evidence_facts",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_evidence_facts_tenant_id ON issuance_service.evidence_facts USING btree (organization_id, id)"
+    },
+    {
+      "name": "evidence_policy_reviews_pkey",
+      "ready": true,
+      "table": "evidence_policy_reviews",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX evidence_policy_reviews_pkey ON issuance_service.evidence_policy_reviews USING btree (id)"
+    },
+    {
+      "name": "ix_evidence_policy_reviews_application_id",
+      "ready": true,
+      "table": "evidence_policy_reviews",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_evidence_policy_reviews_application_id ON issuance_service.evidence_policy_reviews USING btree (application_id)"
+    },
+    {
+      "name": "ix_evidence_policy_reviews_organization_status",
+      "ready": true,
+      "table": "evidence_policy_reviews",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_evidence_policy_reviews_organization_status ON issuance_service.evidence_policy_reviews USING btree (organization_id, status)"
+    },
+    {
+      "name": "ux_evidence_policy_reviews_one_open_application",
+      "ready": true,
+      "table": "evidence_policy_reviews",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX ux_evidence_policy_reviews_one_open_application ON issuance_service.evidence_policy_reviews USING btree (application_id) WHERE ((status)::text = 'open'::text)"
+    },
+    {
+      "name": "issuance_events_pkey",
+      "ready": true,
+      "table": "issuance_events",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX issuance_events_pkey ON issuance_service.issuance_events USING btree (id)"
+    },
+    {
+      "name": "ix_issuance_events_application_id",
+      "ready": true,
+      "table": "issuance_events",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_events_application_id ON issuance_service.issuance_events USING btree (application_id)"
+    },
+    {
+      "name": "ix_issuance_events_event_type",
+      "ready": true,
+      "table": "issuance_events",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_events_event_type ON issuance_service.issuance_events USING btree (event_type)"
+    },
+    {
+      "name": "ix_issuance_events_organization_id",
+      "ready": true,
+      "table": "issuance_events",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_events_organization_id ON issuance_service.issuance_events USING btree (organization_id)"
+    },
+    {
+      "name": "ix_issuance_events_transaction_id",
+      "ready": true,
+      "table": "issuance_events",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_events_transaction_id ON issuance_service.issuance_events USING btree (transaction_id)"
+    },
+    {
+      "name": "issuance_transactions_pkey",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX issuance_transactions_pkey ON issuance_service.issuance_transactions USING btree (id)"
+    },
+    {
+      "name": "issuance_transactions_pre_auth_code_key",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX issuance_transactions_pre_auth_code_key ON issuance_service.issuance_transactions USING btree (pre_auth_code)"
+    },
+    {
+      "name": "ix_issuance_transactions_applicant_id",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_applicant_id ON issuance_service.issuance_transactions USING btree (applicant_id)"
+    },
+    {
+      "name": "ix_issuance_transactions_application_id",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_application_id ON issuance_service.issuance_transactions USING btree (application_id)"
+    },
+    {
+      "name": "ix_issuance_transactions_delivery_mode",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_delivery_mode ON issuance_service.issuance_transactions USING btree (delivery_mode)"
+    },
+    {
+      "name": "ix_issuance_transactions_issuer_mode",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_issuer_mode ON issuance_service.issuance_transactions USING btree (issuer_mode)"
+    },
+    {
+      "name": "ix_issuance_transactions_issuer_profile_id",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_issuer_profile_id ON issuance_service.issuance_transactions USING btree (issuer_profile_id)"
+    },
+    {
+      "name": "ix_issuance_transactions_organization_id",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_organization_id ON issuance_service.issuance_transactions USING btree (organization_id)"
+    },
+    {
+      "name": "ix_issuance_transactions_pre_auth_code",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_pre_auth_code ON issuance_service.issuance_transactions USING btree (pre_auth_code)"
+    },
+    {
+      "name": "ix_issuance_transactions_status",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issuance_transactions_status ON issuance_service.issuance_transactions USING btree (status)"
+    },
+    {
+      "name": "ux_issuance_transactions_org_idempotency_key_hash",
+      "ready": true,
+      "table": "issuance_transactions",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_issuance_transactions_org_idempotency_key_hash ON issuance_service.issuance_transactions USING btree (organization_id, idempotency_key_hash)"
+    },
+    {
+      "name": "issued_credentials_pkey",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX issued_credentials_pkey ON issuance_service.issued_credentials USING btree (id)"
+    },
+    {
+      "name": "ix_issued_credentials_applicant_id",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issued_credentials_applicant_id ON issuance_service.issued_credentials USING btree (applicant_id)"
+    },
+    {
+      "name": "ix_issued_credentials_organization_id",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issued_credentials_organization_id ON issuance_service.issued_credentials USING btree (organization_id)"
+    },
+    {
+      "name": "ix_issued_credentials_revocation_profile_id",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issued_credentials_revocation_profile_id ON issuance_service.issued_credentials USING btree (revocation_profile_id)"
+    },
+    {
+      "name": "ix_issued_credentials_status",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issued_credentials_status ON issuance_service.issued_credentials USING btree (status)"
+    },
+    {
+      "name": "ix_issued_credentials_subject_did",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_issued_credentials_subject_did ON issuance_service.issued_credentials USING btree (subject_did)"
+    },
+    {
+      "name": "ux_issued_credentials_tenant_id",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX ux_issued_credentials_tenant_id ON issuance_service.issued_credentials USING btree (organization_id, id)"
+    },
+    {
+      "name": "ux_issued_credentials_transaction_id",
+      "ready": true,
+      "table": "issued_credentials",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX ux_issued_credentials_transaction_id ON issuance_service.issued_credentials USING btree (transaction_id)"
+    },
+    {
+      "name": "ix_oid4vci_client_assertions_expires_at",
+      "ready": true,
+      "table": "oid4vci_client_assertions",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_oid4vci_client_assertions_expires_at ON issuance_service.oid4vci_client_assertions USING btree (expires_at)"
+    },
+    {
+      "name": "oid4vci_client_assertions_pkey",
+      "ready": true,
+      "table": "oid4vci_client_assertions",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX oid4vci_client_assertions_pkey ON issuance_service.oid4vci_client_assertions USING btree (organization_id, client_id, jti)"
+    },
+    {
+      "name": "ix_oid4vci_ephemeral_capabilities_expires_at",
+      "ready": true,
+      "table": "oid4vci_ephemeral_capabilities",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_oid4vci_ephemeral_capabilities_expires_at ON issuance_service.oid4vci_ephemeral_capabilities USING btree (expires_at)"
+    },
+    {
+      "name": "oid4vci_ephemeral_capabilities_pkey",
+      "ready": true,
+      "table": "oid4vci_ephemeral_capabilities",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX oid4vci_ephemeral_capabilities_pkey ON issuance_service.oid4vci_ephemeral_capabilities USING btree (purpose, key_digest)"
+    },
+    {
+      "name": "ix_oid4vci_registered_clients_org_active",
+      "ready": true,
+      "table": "oid4vci_registered_clients",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 2,
+      "definition": "CREATE INDEX ix_oid4vci_registered_clients_org_active ON issuance_service.oid4vci_registered_clients USING btree (organization_id, active)"
+    },
+    {
+      "name": "oid4vci_registered_clients_pkey",
+      "ready": true,
+      "table": "oid4vci_registered_clients",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 2,
+      "definition": "CREATE UNIQUE INDEX oid4vci_registered_clients_pkey ON issuance_service.oid4vci_registered_clients USING btree (organization_id, client_id)"
+    },
+    {
+      "name": "ix_org_integration_secrets_organization_id",
+      "ready": true,
+      "table": "organization_integration_secrets",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_org_integration_secrets_organization_id ON issuance_service.organization_integration_secrets USING btree (organization_id)"
+    },
+    {
+      "name": "ix_org_integration_secrets_provider",
+      "ready": true,
+      "table": "organization_integration_secrets",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_org_integration_secrets_provider ON issuance_service.organization_integration_secrets USING btree (provider)"
+    },
+    {
+      "name": "organization_integration_secrets_pkey",
+      "ready": true,
+      "table": "organization_integration_secrets",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX organization_integration_secrets_pkey ON issuance_service.organization_integration_secrets USING btree (id)"
+    },
+    {
+      "name": "ux_org_integration_secrets_org_provider_name",
+      "ready": true,
+      "table": "organization_integration_secrets",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 3,
+      "definition": "CREATE UNIQUE INDEX ux_org_integration_secrets_org_provider_name ON issuance_service.organization_integration_secrets USING btree (organization_id, provider, name)"
+    },
+    {
+      "name": "ix_physical_document_jobs_bureau_job_id",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_physical_document_jobs_bureau_job_id ON issuance_service.physical_document_jobs USING btree (bureau_job_id)"
+    },
+    {
+      "name": "ix_physical_document_jobs_flow_execution_id",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_physical_document_jobs_flow_execution_id ON issuance_service.physical_document_jobs USING btree (flow_execution_id)"
+    },
+    {
+      "name": "ix_physical_document_jobs_organization_id",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_physical_document_jobs_organization_id ON issuance_service.physical_document_jobs USING btree (organization_id)"
+    },
+    {
+      "name": "ix_physical_document_jobs_status",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": false,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE INDEX ix_physical_document_jobs_status ON issuance_service.physical_document_jobs USING btree (status)"
+    },
+    {
+      "name": "physical_document_jobs_application_id_key",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": true,
+      "primary": false,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX physical_document_jobs_application_id_key ON issuance_service.physical_document_jobs USING btree (application_id)"
+    },
+    {
+      "name": "physical_document_jobs_pkey",
+      "ready": true,
+      "table": "physical_document_jobs",
+      "valid": true,
+      "unique": true,
+      "primary": true,
+      "key_count": 1,
+      "definition": "CREATE UNIQUE INDEX physical_document_jobs_pkey ON issuance_service.physical_document_jobs USING btree (id)"
+    }
+  ],
+  "constraints": [
+    {
+      "name": "application_templates_pkey",
+      "type": "p",
+      "table": "application_templates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "ck_application_templates_idempotency_key_hash",
+      "type": "c",
+      "table": "application_templates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((idempotency_key_hash IS NULL) OR ((idempotency_key_hash)::text ~ '^[0-9a-f]{64}$'::text)))"
+    },
+    {
+      "name": "ck_application_templates_idempotency_pair",
+      "type": "c",
+      "table": "application_templates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((idempotency_key_hash IS NULL) AND (idempotency_request_hash IS NULL)) OR ((idempotency_key_hash IS NOT NULL) AND (idempotency_request_hash IS NOT NULL))))"
+    },
+    {
+      "name": "ck_application_templates_idempotency_request_hash",
+      "type": "c",
+      "table": "application_templates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((idempotency_request_hash IS NULL) OR ((idempotency_request_hash)::text ~ '^[0-9a-f]{64}$'::text)))"
+    },
+    {
+      "name": "ck_application_templates_management_version",
+      "type": "c",
+      "table": "application_templates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((management_version > 0))"
+    },
+    {
+      "name": "applications_pkey",
+      "type": "p",
+      "table": "applications",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "authorization_sessions_code_key",
+      "type": "u",
+      "table": "authorization_sessions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (code)"
+    },
+    {
+      "name": "authorization_sessions_pkey",
+      "type": "p",
+      "table": "authorization_sessions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_award_candidates_application_id_fkey",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "canvas_award_candidates_binding_id_fkey",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (binding_id) REFERENCES issuance_service.canvas_program_bindings(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_award_candidates_claimed_credential_id_fkey",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (claimed_credential_id) REFERENCES issuance_service.issued_credentials(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "canvas_award_candidates_learner_identity_id_fkey",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (learner_identity_id) REFERENCES issuance_service.canvas_learner_identities(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "canvas_award_candidates_pkey",
+      "type": "p",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_award_candidates_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_award_candidates_key",
+      "type": "c",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((btrim((candidate_key)::text) <> ''::text))"
+    },
+    {
+      "name": "ck_canvas_award_candidates_state",
+      "type": "c",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((state)::text = ANY ((ARRAY['observed'::character varying, 'identity_link_required'::character varying, 'eligible'::character varying, 'pending_claim'::character varying, 'claimed'::character varying, 'dismissed'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((state)::text = ANY (ARRAY[('observed'::character varying)::text, ('identity_link_required'::character varying)::text, ('eligible'::character varying)::text, ('pending_claim'::character varying)::text, ('claimed'::character varying)::text, ('dismissed'::character varying)::text])))"
+    },
+    {
+      "name": "fk_canvas_award_candidates_tenant_application",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id) REFERENCES issuance_service.applications(organization_id, id)"
+    },
+    {
+      "name": "fk_canvas_award_candidates_tenant_binding",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, binding_id) REFERENCES issuance_service.canvas_program_bindings(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_canvas_award_candidates_tenant_credential",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, claimed_credential_id) REFERENCES issuance_service.issued_credentials(organization_id, id)"
+    },
+    {
+      "name": "fk_canvas_award_candidates_tenant_identity",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, learner_identity_id) REFERENCES issuance_service.canvas_learner_identities(organization_id, id)"
+    },
+    {
+      "name": "fk_canvas_award_candidates_tenant_platform",
+      "type": "f",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ux_canvas_award_candidates_binding_key",
+      "type": "u",
+      "table": "canvas_award_candidates",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (binding_id, candidate_key)"
+    },
+    {
+      "name": "canvas_candidate_observations_candidate_id_fkey",
+      "type": "f",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (candidate_id) REFERENCES issuance_service.canvas_award_candidates(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_candidate_observations_pkey",
+      "type": "p",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_candidate_observations_superseded_observation_id_fkey",
+      "type": "f",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (superseded_observation_id) REFERENCES issuance_service.canvas_candidate_observations(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "ck_canvas_candidate_observations_revision",
+      "type": "c",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((btrim((requirement_id)::text) <> ''::text) AND (btrim((logical_key)::text) <> ''::text) AND (btrim((payload_hash)::text) <> ''::text)))"
+    },
+    {
+      "name": "fk_canvas_candidate_observations_tenant_candidate",
+      "type": "f",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, candidate_id) REFERENCES issuance_service.canvas_award_candidates(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_canvas_candidate_observations_tenant_superseded",
+      "type": "f",
+      "table": "canvas_candidate_observations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, candidate_id, logical_key, superseded_observation_id) REFERENCES issuance_service.canvas_candidate_observations(organization_id, candidate_id, logical_key, id)"
+    },
+    {
+      "name": "canvas_event_receipts_issuance_transaction_id_fkey",
+      "type": "f",
+      "table": "canvas_event_receipts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (issuance_transaction_id) REFERENCES issuance_service.issuance_transactions(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "canvas_event_receipts_pkey",
+      "type": "p",
+      "table": "canvas_event_receipts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_evidence_sync_jobs_pkey",
+      "type": "p",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_evidence_sync_jobs_target_id_fkey",
+      "type": "f",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (target_id) REFERENCES issuance_service.canvas_evidence_sync_targets(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_sync_jobs_attempts",
+      "type": "c",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((max_attempts >= 1) AND (attempt_count >= 0) AND (attempt_count <= max_attempts)))"
+    },
+    {
+      "name": "ck_canvas_sync_jobs_lease",
+      "type": "c",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((((status)::text = 'leased'::text) AND (lease_owner IS NOT NULL) AND (lease_expires_at IS NOT NULL)) OR (((status)::text <> 'leased'::text) AND (lease_owner IS NULL) AND (lease_expires_at IS NULL))))"
+    },
+    {
+      "name": "ck_canvas_sync_jobs_status",
+      "type": "c",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((status)::text = ANY ((ARRAY['queued'::character varying, 'leased'::character varying, 'retry'::character varying, 'succeeded'::character varying, 'dead_letter'::character varying, 'cancelled'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((status)::text = ANY (ARRAY[('queued'::character varying)::text, ('leased'::character varying)::text, ('retry'::character varying)::text, ('succeeded'::character varying)::text, ('dead_letter'::character varying)::text, ('cancelled'::character varying)::text])))"
+    },
+    {
+      "name": "fk_canvas_sync_jobs_tenant_target",
+      "type": "f",
+      "table": "canvas_evidence_sync_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, target_id) REFERENCES issuance_service.canvas_evidence_sync_targets(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_evidence_sync_targets_application_id_fkey",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_evidence_sync_targets_binding_id_fkey",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (binding_id) REFERENCES issuance_service.canvas_program_bindings(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_evidence_sync_targets_pkey",
+      "type": "p",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_evidence_sync_targets_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_sync_targets_config_version",
+      "type": "c",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((config_version >= 1))"
+    },
+    {
+      "name": "ck_canvas_sync_targets_logical_key",
+      "type": "c",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((btrim((logical_key)::text) <> ''::text))"
+    },
+    {
+      "name": "ck_canvas_sync_targets_schedule",
+      "type": "c",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((schedule_seconds >= 60))"
+    },
+    {
+      "name": "ck_canvas_sync_targets_type",
+      "type": "c",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((target_type)::text = ANY ((ARRAY['learner_application'::character varying, 'background_roster'::character varying, 'award_candidate'::character varying, 'issued_drift'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((target_type)::text = ANY (ARRAY[('learner_application'::character varying)::text, ('background_roster'::character varying)::text, ('award_candidate'::character varying)::text, ('issued_drift'::character varying)::text])))"
+    },
+    {
+      "name": "fk_canvas_sync_targets_candidate_id",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (candidate_id) REFERENCES issuance_service.canvas_award_candidates(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "fk_canvas_sync_targets_tenant_application",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id) REFERENCES issuance_service.applications(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_canvas_sync_targets_tenant_binding",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, binding_id) REFERENCES issuance_service.canvas_program_bindings(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_canvas_sync_targets_tenant_candidate",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, candidate_id) REFERENCES issuance_service.canvas_award_candidates(organization_id, id)"
+    },
+    {
+      "name": "fk_canvas_sync_targets_tenant_platform",
+      "type": "f",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ux_canvas_sync_targets_org_logical",
+      "type": "u",
+      "table": "canvas_evidence_sync_targets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (organization_id, logical_key)"
+    },
+    {
+      "name": "canvas_learner_identities_pkey",
+      "type": "p",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_learner_identities_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_learner_identities_status",
+      "type": "c",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((status)::text = ANY ((ARRAY['subject_verified'::character varying, 'linked'::character varying, 'quarantined'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((status)::text = ANY (ARRAY[('subject_verified'::character varying)::text, ('linked'::character varying)::text, ('quarantined'::character varying)::text])))"
+    },
+    {
+      "name": "ck_canvas_learner_identities_subject",
+      "type": "c",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((btrim((deployment_id)::text) <> ''::text) AND (btrim((lti_subject)::text) <> ''::text)))"
+    },
+    {
+      "name": "fk_canvas_learner_identities_tenant_platform",
+      "type": "f",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ux_canvas_learner_identity_subject",
+      "type": "u",
+      "table": "canvas_learner_identities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (platform_id, deployment_id, lti_subject)"
+    },
+    {
+      "name": "canvas_lti_launch_states_pkey",
+      "type": "p",
+      "table": "canvas_lti_launch_states",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_lti_launch_states_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_lti_launch_states",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_lti_launch_states_state_key",
+      "type": "u",
+      "table": "canvas_lti_launch_states",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (state)"
+    },
+    {
+      "name": "canvas_oauth_authorizations_pkey",
+      "type": "p",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_oauth_authorizations_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_oauth_authorizations_state_hash_key",
+      "type": "u",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (state_hash)"
+    },
+    {
+      "name": "ck_canvas_oauth_authorizations_platform_snapshot",
+      "type": "c",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((platform_config_version >= 1) AND (\"left\"(lower(canvas_base_url), 8) = 'https://'::text)))"
+    },
+    {
+      "name": "ck_canvas_oauth_authorizations_state_hash",
+      "type": "c",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((length((state_hash)::text) = 64))"
+    },
+    {
+      "name": "ck_canvas_oauth_authorizations_tenant_secret_ref",
+      "type": "c",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((\"left\"(client_secret_ref, length((('org_secret://'::text || (organization_id)::text) || '/'::text))) = (('org_secret://'::text || (organization_id)::text) || '/'::text)))"
+    },
+    {
+      "name": "fk_canvas_oauth_authorizations_tenant_platform",
+      "type": "f",
+      "table": "canvas_oauth_authorizations",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_oauth_connections_pkey",
+      "type": "p",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_oauth_connections_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_oauth_connections_platform_snapshot",
+      "type": "c",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((platform_config_version >= 1) AND (\"left\"(lower(canvas_base_url), 8) = 'https://'::text)))"
+    },
+    {
+      "name": "ck_canvas_oauth_connections_refresh_lease",
+      "type": "c",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((refresh_lease_owner IS NULL) AND (refresh_lease_expires_at IS NULL)) OR ((refresh_lease_owner IS NOT NULL) AND (refresh_lease_expires_at IS NOT NULL))))"
+    },
+    {
+      "name": "ck_canvas_oauth_connections_revoke_retry_count",
+      "type": "c",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((revoke_retry_count >= 0))"
+    },
+    {
+      "name": "ck_canvas_oauth_connections_status",
+      "type": "c",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((status)::text = ANY ((ARRAY['connected'::character varying, 'reauthorization_required'::character varying, 'revocation_pending'::character varying, 'disconnected'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((status)::text = ANY (ARRAY[('connected'::character varying)::text, ('reauthorization_required'::character varying)::text, ('revocation_pending'::character varying)::text, ('disconnected'::character varying)::text])))"
+    },
+    {
+      "name": "ck_canvas_oauth_connections_tenant_secret_refs",
+      "type": "c",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((\"left\"(client_secret_ref, length((('org_secret://'::text || (organization_id)::text) || '/'::text))) = (('org_secret://'::text || (organization_id)::text) || '/'::text)) AND ((access_token_secret_ref IS NULL) OR (\"left\"(access_token_secret_ref, length((('org_secret://'::text || (organization_id)::text) || '/'::text))) = (('org_secret://'::text || (organization_id)::text) || '/'::text))) AND ((refresh_token_secret_ref IS NULL) OR (\"left\"(refresh_token_secret_ref, length((('org_secret://'::text || (organization_id)::text) || '/'::text))) = (('org_secret://'::text || (organization_id)::text) || '/'::text)))))"
+    },
+    {
+      "name": "fk_canvas_oauth_connections_tenant_platform",
+      "type": "f",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ux_canvas_oauth_connections_platform",
+      "type": "u",
+      "table": "canvas_oauth_connections",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (organization_id, platform_id)"
+    },
+    {
+      "name": "canvas_platform_state_backups_pkey",
+      "type": "p",
+      "table": "canvas_platform_state_backups",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (platform_id)"
+    },
+    {
+      "name": "canvas_platforms_pkey",
+      "type": "p",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "ck_canvas_platforms_archival_state",
+      "type": "c",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((archived_at IS NULL) OR (enabled = false)))"
+    },
+    {
+      "name": "ck_canvas_platforms_config_version",
+      "type": "c",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((config_version >= 1))"
+    },
+    {
+      "name": "ck_canvas_platforms_lti_trust_profile",
+      "type": "c",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((lti_trust_profile)::text = ANY ((ARRAY['hosted_global'::character varying, 'self_managed_same_origin'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((lti_trust_profile)::text = ANY (ARRAY[('hosted_global'::character varying)::text, ('self_managed_same_origin'::character varying)::text])))"
+    },
+    {
+      "name": "ck_canvas_platforms_registration_status",
+      "type": "c",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((registration_status)::text = ANY ((ARRAY['draft'::character varying, 'verified'::character varying, 'installed'::character varying, 'active'::character varying, 'archived'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((registration_status)::text = ANY (ARRAY[('draft'::character varying)::text, ('verified'::character varying)::text, ('installed'::character varying)::text, ('active'::character varying)::text, ('archived'::character varying)::text])))"
+    },
+    {
+      "name": "ux_canvas_platforms_org_account",
+      "type": "u",
+      "table": "canvas_platforms",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (organization_id, canvas_account_id)"
+    },
+    {
+      "name": "canvas_program_binding_requirement_backups_pkey",
+      "type": "p",
+      "table": "canvas_program_binding_requirement_backups",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (binding_id)"
+    },
+    {
+      "name": "canvas_program_bindings_pkey",
+      "type": "p",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "canvas_program_bindings_platform_id_fkey",
+      "type": "f",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (platform_id) REFERENCES issuance_service.canvas_platforms(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_canvas_program_bindings_activation_state",
+      "type": "c",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((enabled = false) OR ((activated_at IS NOT NULL) AND (validated_config_version = config_version))))"
+    },
+    {
+      "name": "ck_canvas_program_bindings_archival_state",
+      "type": "c",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((archived_at IS NULL) OR (enabled = false)))"
+    },
+    {
+      "name": "ck_canvas_program_bindings_config_versions",
+      "type": "c",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((config_version >= 1) AND ((validated_config_version IS NULL) OR ((validated_config_version >= 1) AND (validated_config_version <= config_version)))))"
+    },
+    {
+      "name": "fk_canvas_program_bindings_tenant_application_template",
+      "type": "f",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_template_id) REFERENCES issuance_service.application_templates(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_canvas_program_bindings_tenant_platform",
+      "type": "f",
+      "table": "canvas_program_bindings",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, platform_id) REFERENCES issuance_service.canvas_platforms(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "canvas_worker_heartbeats_pkey",
+      "type": "p",
+      "table": "canvas_worker_heartbeats",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (worker_id)"
+    },
+    {
+      "name": "credential_delivery_records_credential_id_fkey",
+      "type": "f",
+      "table": "credential_delivery_records",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (credential_id) REFERENCES issuance_service.issued_credentials(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "credential_delivery_records_pkey",
+      "type": "p",
+      "table": "credential_delivery_records",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "credential_delivery_records_transaction_id_fkey",
+      "type": "f",
+      "table": "credential_delivery_records",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (transaction_id) REFERENCES issuance_service.issuance_transactions(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_evidence_fact_heads_logical_key",
+      "type": "c",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((btrim((logical_key)::text) <> ''::text))"
+    },
+    {
+      "name": "evidence_fact_heads_application_id_fkey",
+      "type": "f",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "evidence_fact_heads_fact_id_fkey",
+      "type": "f",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (fact_id) REFERENCES issuance_service.evidence_facts(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "evidence_fact_heads_fact_id_key",
+      "type": "u",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (fact_id)"
+    },
+    {
+      "name": "evidence_fact_heads_pkey",
+      "type": "p",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (application_id, logical_key)"
+    },
+    {
+      "name": "fk_evidence_fact_heads_tenant_application",
+      "type": "f",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id) REFERENCES issuance_service.applications(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_evidence_fact_heads_tenant_fact",
+      "type": "f",
+      "table": "evidence_fact_heads",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id, logical_key, fact_id) REFERENCES issuance_service.evidence_facts(organization_id, application_id, logical_key, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "ck_evidence_facts_revision_metadata",
+      "type": "c",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((logical_key)::text <> ''::text) AND ((source_revision)::text <> ''::text) AND ((payload_hash)::text <> ''::text)))"
+    },
+    {
+      "name": "evidence_facts_application_id_fkey",
+      "type": "f",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "evidence_facts_pkey",
+      "type": "p",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "fk_evidence_facts_superseded_fact_id",
+      "type": "f",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (superseded_fact_id) REFERENCES issuance_service.evidence_facts(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "fk_evidence_facts_tenant_application",
+      "type": "f",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id) REFERENCES issuance_service.applications(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_evidence_facts_tenant_superseded",
+      "type": "f",
+      "table": "evidence_facts",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id, logical_key, superseded_fact_id) REFERENCES issuance_service.evidence_facts(organization_id, application_id, logical_key, id)"
+    },
+    {
+      "name": "ck_evidence_policy_reviews_resolution_claim",
+      "type": "c",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((resolution_claim_token IS NULL) AND (resolution_claim_action IS NULL) AND (resolution_claimed_at IS NULL)) OR (((status)::text = 'open'::text) AND (resolution_claim_token IS NOT NULL) AND ((resolution_claim_action)::text = ANY ((ARRAY['dismiss'::character varying, 'suspend'::character varying, 'revoke'::character varying, 'evidence_recovered'::character varying])::text[])) AND (resolution_claimed_at IS NOT NULL))))",
+      "alternate_definition": "CHECK ((((resolution_claim_token IS NULL) AND (resolution_claim_action IS NULL) AND (resolution_claimed_at IS NULL)) OR (((status)::text = 'open'::text) AND (resolution_claim_token IS NOT NULL) AND ((resolution_claim_action)::text = ANY (ARRAY[('dismiss'::character varying)::text, ('suspend'::character varying)::text, ('revoke'::character varying)::text, ('evidence_recovered'::character varying)::text])) AND (resolution_claimed_at IS NOT NULL))))"
+    },
+    {
+      "name": "ck_evidence_policy_reviews_status",
+      "type": "c",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((status)::text = ANY ((ARRAY['open'::character varying, 'dismissed'::character varying, 'suspended'::character varying, 'revoked'::character varying, 'resolved'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((status)::text = ANY (ARRAY[('open'::character varying)::text, ('dismissed'::character varying)::text, ('suspended'::character varying)::text, ('revoked'::character varying)::text, ('resolved'::character varying)::text])))"
+    },
+    {
+      "name": "evidence_policy_reviews_application_id_fkey",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (application_id) REFERENCES issuance_service.applications(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "evidence_policy_reviews_binding_id_fkey",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (binding_id) REFERENCES issuance_service.canvas_program_bindings(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "evidence_policy_reviews_credential_id_fkey",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (credential_id) REFERENCES issuance_service.issued_credentials(id) ON DELETE CASCADE"
+    },
+    {
+      "name": "evidence_policy_reviews_pkey",
+      "type": "p",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "evidence_policy_reviews_triggering_fact_id_fkey",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (triggering_fact_id) REFERENCES issuance_service.evidence_facts(id) ON DELETE SET NULL"
+    },
+    {
+      "name": "fk_evidence_policy_reviews_tenant_application",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id) REFERENCES issuance_service.applications(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_evidence_policy_reviews_tenant_binding",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, binding_id) REFERENCES issuance_service.canvas_program_bindings(organization_id, id)"
+    },
+    {
+      "name": "fk_evidence_policy_reviews_tenant_credential",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, credential_id) REFERENCES issuance_service.issued_credentials(organization_id, id) ON DELETE CASCADE"
+    },
+    {
+      "name": "fk_evidence_policy_reviews_tenant_fact",
+      "type": "f",
+      "table": "evidence_policy_reviews",
+      "validated": true,
+      "deferrable": false,
+      "definition": "FOREIGN KEY (organization_id, application_id, triggering_fact_id) REFERENCES issuance_service.evidence_facts(organization_id, application_id, id)"
+    },
+    {
+      "name": "issuance_events_pkey",
+      "type": "p",
+      "table": "issuance_events",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "ck_issuance_transactions_idempotency_key_hash",
+      "type": "c",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((idempotency_key_hash IS NULL) OR ((idempotency_key_hash)::text ~ '^[0-9a-f]{64}$'::text)))"
+    },
+    {
+      "name": "ck_issuance_transactions_idempotency_pair",
+      "type": "c",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK ((((idempotency_key_hash IS NULL) AND (idempotency_request_hash IS NULL)) OR ((idempotency_key_hash IS NOT NULL) AND (idempotency_request_hash IS NOT NULL))))"
+    },
+    {
+      "name": "ck_issuance_transactions_idempotency_request_hash",
+      "type": "c",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((idempotency_request_hash IS NULL) OR ((idempotency_request_hash)::text ~ '^[0-9a-f]{64}$'::text)))"
+    },
+    {
+      "name": "ck_issuance_transactions_issuer_algorithm",
+      "type": "c",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((issuer_algorithm IS NULL) OR ((issuer_algorithm)::text = ANY ((ARRAY['ES256'::character varying, 'ES384'::character varying, 'RS256'::character varying, 'EdDSA'::character varying])::text[]))))",
+      "alternate_definition": "CHECK (((issuer_algorithm IS NULL) OR ((issuer_algorithm)::text = ANY (ARRAY[('ES256'::character varying)::text, ('ES384'::character varying)::text, ('RS256'::character varying)::text, ('EdDSA'::character varying)::text]))))"
+    },
+    {
+      "name": "issuance_transactions_pkey",
+      "type": "p",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "issuance_transactions_pre_auth_code_key",
+      "type": "u",
+      "table": "issuance_transactions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (pre_auth_code)"
+    },
+    {
+      "name": "issued_credentials_pkey",
+      "type": "p",
+      "table": "issued_credentials",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "oid4vci_client_assertions_pkey",
+      "type": "p",
+      "table": "oid4vci_client_assertions",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (organization_id, client_id, jti)"
+    },
+    {
+      "name": "ck_oid4vci_ephemeral_capabilities_payload",
+      "type": "c",
+      "table": "oid4vci_ephemeral_capabilities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((((purpose)::text = 'par'::text) AND (payload IS NOT NULL)) OR (((purpose)::text = 'proof_nonce'::text) AND (payload IS NULL))))"
+    },
+    {
+      "name": "ck_oid4vci_ephemeral_capabilities_purpose",
+      "type": "c",
+      "table": "oid4vci_ephemeral_capabilities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "CHECK (((purpose)::text = ANY ((ARRAY['par'::character varying, 'proof_nonce'::character varying])::text[])))",
+      "alternate_definition": "CHECK (((purpose)::text = ANY (ARRAY[('par'::character varying)::text, ('proof_nonce'::character varying)::text])))"
+    },
+    {
+      "name": "oid4vci_ephemeral_capabilities_pkey",
+      "type": "p",
+      "table": "oid4vci_ephemeral_capabilities",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (purpose, key_digest)"
+    },
+    {
+      "name": "oid4vci_registered_clients_pkey",
+      "type": "p",
+      "table": "oid4vci_registered_clients",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (organization_id, client_id)"
+    },
+    {
+      "name": "organization_integration_secrets_pkey",
+      "type": "p",
+      "table": "organization_integration_secrets",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    },
+    {
+      "name": "physical_document_jobs_application_id_key",
+      "type": "u",
+      "table": "physical_document_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "UNIQUE (application_id)"
+    },
+    {
+      "name": "physical_document_jobs_pkey",
+      "type": "p",
+      "table": "physical_document_jobs",
+      "validated": true,
+      "deferrable": false,
+      "definition": "PRIMARY KEY (id)"
+    }
+  ]
+}

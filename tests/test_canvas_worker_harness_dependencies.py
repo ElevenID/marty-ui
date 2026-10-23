@@ -41,16 +41,19 @@ def assert_dependency_setup(steps):
     names = [step.get("name") for step in steps]
     assert names.count(STEP) == 1
     setup = names.index(STEP)
-    assert steps[setup]["if"] == "matrix.lane == 'canvas'"
+    assert steps[setup]["if"] == "matrix.lane == 'canvas' || matrix.lane == 'worker'"
     assert "continue-on-error" not in steps[setup]
     assert setup < names.index("Compile reusable Rust test executables")
+    early = names.index("Fail fast on image-free Canvas renewal configuration")
     rendered = names.index("Prepare required rendered base executable acceptance")
     assert (
         setup
+        < early
         < rendered
         < names.index("Run isolated database contract suites concurrently")
     )
-    assert '"$(command -v python3)"' in steps[rendered]["run"]
+    assert '"$(command -v python3)"' in steps[early]["run"]
+    assert 'test -x "$MARTY_DIDCOMM_TEST_PYTHON"' in steps[rendered]["run"]
     source = steps[setup]["run"]
     install = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -m pip install'
     smoke = '"$RUNNER_TEMP/canvas-worker-harness/bin/python" -I - "$GITHUB_WORKSPACE"'
@@ -74,8 +77,10 @@ def assert_dependency_setup(steps):
         or "run-published-canvas-contracts.sh" in step.get("run", "")
     ]
     assert preflight_steps == [preflight]
-    assert setup < preflight < names.index(
-        "Run isolated database contract suites concurrently"
+    assert (
+        setup
+        < preflight
+        < names.index("Run isolated database contract suites concurrently")
     )
     assert steps[preflight]["run"] == (
         "python3 ../scripts/ci/run-db-contract-groups.py preflights"
@@ -84,6 +89,14 @@ def assert_dependency_setup(steps):
     assert steps[preflight]["shell"] == "bash"
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert not steps[preflight].get("continue-on-error", False)
+    full = names.index("Run isolated database contract suites concurrently")
+    assert steps[full]["if"] == "matrix.lane != 'renewal-unit'"
+    assert not steps[full].get("continue-on-error", False)
+    assert 'if [[ "${{ matrix.lane }}" == worker ]]; then' in steps[full]["run"]
+    assert (
+        "python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas"
+    ) in steps[full]["run"]
     interpreter = [
         step
         for step in steps[:setup]
@@ -105,6 +118,8 @@ def test_dependency_setup_precedes_compile_and_all_native_preflights():
         "late",
         "optional",
         "conditional",
+        "canvas_only",
+        "worker_only",
         "duplicate",
         "pin",
         "interpreter",
@@ -125,6 +140,10 @@ def test_renderer_dependency_guard_rejects_missing_or_ineffective_setup(mutation
         setup["continue-on-error"] = True
     elif mutation == "conditional":
         setup["if"] = "false"
+    elif mutation == "canvas_only":
+        setup["if"] = "matrix.lane == 'canvas'"
+    elif mutation == "worker_only":
+        setup["if"] = "matrix.lane == 'worker'"
     elif mutation == "duplicate":
         steps.append(copy.deepcopy(setup))
     elif mutation == "pin":
@@ -318,15 +337,10 @@ def test_smoke_contains_no_capture_or_environment_mutation():
     corpus = json.loads(
         (ROOT / "contracts/canvas-worker-body-timeout-oracle.json").read_bytes()
     )
-    import hashlib
-
-    for name, digest in corpus[0]["worker_body_timeout"][
-        "capture_source_sha256"
-    ].items():
-        directory = "contracts" if name.endswith(".json") else "scripts"
-        assert (
-            hashlib.sha256(
-                (ROOT / directory / name).read_text(encoding="utf-8").encode()
-            ).hexdigest()
-            == digest
-        )
+    from scripts.canvas_native_rest_contract import bind_current_capture_inputs
+    pins = corpus[0]["worker_body_timeout"]["capture_source_sha256"]
+    bindings = bind_current_capture_inputs(ROOT, pins)
+    for name, digest in pins.items():
+        binding = bindings[name]
+        assert binding["captured_sha256"] == digest
+        assert binding["reviewed_harness_delta"] is (name == "canvas_worker_https_fixture.py")

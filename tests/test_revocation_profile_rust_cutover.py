@@ -20,7 +20,7 @@ def test_python_revocation_service_is_removed() -> None:
         / "tunnel-beta"
         / "revocation-profile-rust.yml"
     ).exists()
-    assert '"name": "revocation_profile"' not in text("services/run_all_migrations.py")
+    assert '"name": "revocation_profile"' not in text("rust/services/signing-keys/src/bootstrap_engine.rs")
 
 
 def test_shared_service_image_dispatches_revocation_to_rust() -> None:

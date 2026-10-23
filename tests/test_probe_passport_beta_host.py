@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,29 @@ from scripts.probe_passport_beta_host import (
     production_attachment_sha256, production_snapshot,
 )
 from scripts import probe_passport_beta_host as probe
+
+
+def test_host_command_uses_utf8_for_github_and_fails_closed_on_decode_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = {}
+
+    def successful(command, **kwargs):
+        seen.update(kwargs)
+        return subprocess.CompletedProcess(command, 0, '{"message":"caf\u00e9"}', "")
+
+    monkeypatch.setattr(probe.subprocess, "run", successful)
+    assert json.loads(probe.run(["gh", "api", "repos/example/compare/a...b"])) == {
+        "message": "caf\u00e9"
+    }
+    assert seen["encoding"] == "utf-8" and seen["errors"] == "strict"
+
+    def undecodable(_command, **_kwargs):
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+
+    monkeypatch.setattr(probe.subprocess, "run", undecodable)
+    with pytest.raises(HostProbeError, match="inspection failed"):
+        probe.run(["gh", "api", "repos/example/compare/a...b"])
 
 
 def runner(*, pending: str = "0", legacy: str = "0", active_flow: str = "0",

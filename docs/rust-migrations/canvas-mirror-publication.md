@@ -4,14 +4,12 @@ Baseline UI: `b5d9d5203511159ff38412fc6eaa691cae636ff8`.
 Reference Credentials: published `v0.1.76`, protected-main commit
 `aaa6a9b8e31e62cd0ab087eef5fc1f4835048e26`, tree
 `819b7458a31c75d28043a4660643b029c5ec4567`.
-The behavioral oracle runs only inside immutable issuance image
+The historical capture executed inside the immutable issuance image
 `ghcr.io/elevenid/marty-credentials-issuance@sha256:815cbba6efc7c91e770a8dd15fe5fa102d252a485073bf60f0e0d5e0a73b28e5`.
-It verifies the release Dockerfile blob and refuses any runtime other than the
-deployed FastAPI `0.109.0`, Pydantic `2.11.7`, and httpx `0.26.0` profile before
-executing a route. CI executes the complete `--check` capture in that image;
-all three reference modes must pass, so static artifact hashes are not accepted
-as behavioral replay evidence. Artifact checks and writes refuse to run without
-the release-image controller.
+The capture generators and their process-control tests have been retired.
+Their implementation is recoverable from Git commit `0ff6000f24e59feb3b5fea0fae0cb156ab545aaf`.
+Current CI checks the frozen artifacts and native Rust behavior. Descriptions
+of the capture machinery below record historical evidence boundaries.
 
 This slice covers six HTTP operations, bridge and Badgr publication, mirror
 health/provenance, publication and lifecycle-retry batches, alerts/webhooks, and
@@ -74,9 +72,10 @@ maintainer review, and all repository CI. The packaged-main gate now starts the
 real issuance executable against the owned PostgreSQL/provider fixture, proves
 all six routes are mounted with authentication-first admission, and performs an
 authenticated mirror-health read. The publication adapter's 51-case corpus and
-15 additional timestamp/cancellation/response cases remain required CI gates.
-Only after those gates pass may the superseded Python route/helper/worker code
-be deleted and the aggregate beta deployment proceed.
+15 additional timestamp/cancellation/response cases were required cutover gates
+at this migration checkpoint. Only after those gates passed could the
+superseded Python route/helper/worker code be deleted and the aggregate beta
+deployment proceed.
 
 ## Ownership and deletion boundary
 
@@ -160,32 +159,25 @@ canonical JSON SHA-256; no timestamp fields or raw metadata are omitted.
 The generic scheduling matrix substitutes batch ports; the four provider-held
 cases retain the actual batch/adapter graph. These are distinct proof scopes.
 
-The parent verifies Git blobs before spawning a single observation child. The
-child rechecks the source envelope and performs no Git/subprocess work. Its
-complete observation phase has a 30-second parent deadline and 4 MiB per-stream
-capture limits. Deadline, output, pipe-reader, startup, missing-global, or
-unowned-origin failure cannot produce an accepted artifact. Source reads have
-their own per-command bound; the 30 seconds does not include those reads.
-The container controller has its own 45-second streaming bound and runs with no
+The historical parent verified Git blobs before spawning a single observation
+child. The child rechecked the source envelope and performed no Git/subprocess
+work. Its complete observation phase had a 30-second parent deadline and
+4 MiB per-stream capture limits. Deadline, output, pipe-reader, startup, missing-global, or
+unowned-origin failure could not produce an accepted artifact. Source reads had
+their own per-command bound; the 30 seconds did not include those reads.
+The container controller had its own 45-second streaming bound and ran with no
 network, a read-only root filesystem and repository mount, no Linux capabilities,
 no-new-privileges, and a bounded 16 MiB temporary filesystem.
 
-Reproduce through the pinned container controller; an ambient Python environment
-is deliberately rejected before route execution:
+Run the retained artifact and behavior guards:
 
 ```text
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --check
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --adapter-reference --check
-python scripts/capture_canvas_mirror_reference.py <credentials-git-checkout> --release-image --publication-boundary-reference --check
 python -m pytest tests/test_canvas_mirror_reference.py
 ```
 
-The normal root test suite discovers the artifact guards without importing
-FastAPI/httpx. `--check` additionally executes the controlled oracle; neither
-command substitutes for the later native/PG/runtime gates. This corpus does not
-claim exhaustive provider configuration/response grammar coverage. Further
-input vectors belong in the reference before their native behavior is
-implemented, with prior observations retained.
+These guards check frozen hashes, complete cases, response shapes and owned
+side effects. Native Rust and PostgreSQL/runtime checks remain separate gates.
+Further vectors require independent observations and review before adoption.
 
 The HTTP corpus includes a success/effect case for every route and rejects
 missing or incorrect management authentication before tenant checks, query
@@ -259,3 +251,7 @@ side effects, both publication providers, replay/retry behavior, alerts and
 webhooks. Qualify concurrent outcomes against observed legacy behavior instead
 of assuming exactly-once remote publication. Keep existing lifecycle, worker,
 UI and demo tests. Native routing stays unchanged until those gates pass.
+
+Capture-script paths retained in the hash-bound contracts identify the original
+historical capture. They are provenance, not executable commands in the current
+checkout; use Git history to inspect the retired tools.

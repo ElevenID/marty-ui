@@ -42,10 +42,15 @@ if __package__:
     )
     from .passport_supported_provisioning_producer import (
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        _tls_bootstrap_args,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
+    )
+    from .passport_remote_tls import accept_remote_tls
+    from .qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
     )
 else:
     from check_passport_supported_rust_model import PROJECT
@@ -71,13 +76,21 @@ else:
     )
     from passport_supported_provisioning_producer import (
         WORKFLOW_REF, ProducerError, _remove_staged_inputs, _write_private,
+        _tls_bootstrap_args,
         collect_record, destroy_disposable_project,
         destroy_partial_disposable_project, issue_disposable_api_key,
         issue_disposable_operator_key, issue_disposable_tenant_probe_key,
         stage_disposable_inputs, verify_plan_release, verify_pre_mutation,
     )
+    from passport_remote_tls import accept_remote_tls
+    from qualify_selfhost_migrations import (
+        PRIVATE_KEY_CONTENT_QUERY, PRIVATE_KEY_SCHEMA_QUERY,
+    )
 
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+if __package__:
+    from .passport_disposable_identity import ORGANIZATION_ID, issuer_did
+else:
+    from passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 
 WORKFLOW_NAME = "Passport Supported Disposable Provisioning Producer"
@@ -137,6 +150,29 @@ def _application(gateway_port: int) -> dict:
         },
         "data_groups": {"DG1": "YQ==", "DG2": "Yg=="},
     }
+
+
+def _assert_disposable_schema(
+    record: dict, environment: dict[str, str], run: Callable[..., bool],
+) -> None:
+    """Reject private-key tables and columns in this owned disposable database."""
+    containers = record.get("containers") if isinstance(record, dict) else None
+    postgres_id = containers.get("postgres") if isinstance(containers, dict) else None
+    if not isinstance(postgres_id, str) or re.fullmatch(r"[0-9a-f]{64}", postgres_id) is None:
+        raise ProducerError("Current disposable PostgreSQL container is unavailable")
+    sql = (
+        "DO $kms_schema$ BEGIN IF EXISTS ("
+        + PRIVATE_KEY_SCHEMA_QUERY.strip()
+        + ") THEN RAISE EXCEPTION 'private-key storage remains'; "
+        "END IF; END $kms_schema$;\n"
+        + PRIVATE_KEY_CONTENT_QUERY
+    )
+    if not run(
+        ["docker", "exec", postgres_id, "psql", "-X", "-v", "ON_ERROR_STOP=1",
+         "-U", "marty", "-d", "marty", "-qAt", "-c", sql],
+        environment, 60,
+    ):
+        raise ProducerError("Disposable database contains private-key storage or is unavailable")
 
 
 def _observe_bound_runtime(
@@ -209,6 +245,7 @@ def produce_disposable_receipt(
         raise ProducerError("Disposable plan has insufficient teardown lease")
     root, env_file = stage_disposable_inputs(plan, gateway_port, now=current)
     output_dir = root / "bootstrap-output"
+    tls_output_dir = root / "tls-output"
     batch_state_dir = root.parent / f"{plan['project']}-native-batch-state"
     batch_state_path = batch_state_dir / "pending.json"
     batch_state_created = False
@@ -237,6 +274,13 @@ def produce_disposable_receipt(
         if not run(_bootstrap_args(plan, root, output_dir, gateway_port), staged_env, 180):
             raise ProducerError("Disposable OpenBao bootstrap failed")
         _accept_bootstrap_files(root, output_dir)
+        _prepare_bootstrap_output(tls_output_dir)
+        if not run(_tls_bootstrap_args(plan, root, tls_output_dir), staged_env, 180):
+            raise ProducerError("Disposable remote TLS bootstrap failed")
+        accept_remote_tls(
+            tls_output_dir, root / "secrets",
+            (root / "secrets" / "bao_root_token").read_text(encoding="ascii"),
+        )
         if plan["surface"] == "selfhost":
             overlay = ROOT / "docker-compose.passport-supported-disposable-selfhost-ceremony.yml"
             if not overlay.is_file():
@@ -281,6 +325,7 @@ def produce_disposable_receipt(
             raise ProducerError("Disposable route teardown budget is exhausted")
         record = record_live(plan_path, plan, environment["GITHUB_RUN_ID"],
                              root, before_probe, inspector)
+        _assert_disposable_schema(record, staged_env, run)
         containers = record.get("containers") if isinstance(record, dict) else None
         signer_id = containers.get("signing-keys") if isinstance(containers, dict) else None
         if not isinstance(signer_id, str):
@@ -420,6 +465,7 @@ def produce_disposable_receipt(
             != certificate["evidence"]["dsc_certificate_sha256"]
             or pre_restart_native_runtime is None):
             raise ProducerError("Disposable Rust Flow execution proof is invalid")
+        _assert_disposable_schema(record, staged_env, run)
         before_inventory = read_clock() if clock is not None or now is None else now
         if (before_inventory.tzinfo is None
             or min(expires, deadline) - before_inventory < RESERVED_TEARDOWN):

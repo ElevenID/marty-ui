@@ -3,6 +3,7 @@
 FROM oven/bun:1.3.14-alpine@sha256:5acc90a93e91ff07bf72aa90a7c9f0fa189765aec90b47bdbf2152d2196383c0 AS builder
 
 ARG UI_VARIANT=public
+ARG SELFHOST_PUBLIC_PROFILE=full
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown
 ARG MARTY_API_CORE_VERSION
@@ -15,6 +16,7 @@ ARG MARTY_BLOG_DIGEST
 # Set environment variables
 ENV NODE_ENV=production
 ENV VITE_UI_VARIANT=${UI_VARIANT}
+ENV VITE_SELFHOST_PUBLIC_PROFILE=${SELFHOST_PUBLIC_PROFILE}
 ENV VITE_ISSUER_API=http://localhost:8080
 ENV VITE_VERIFIER_API=http://localhost:8081
 ENV VITE_WALLET_API=http://localhost:8082
@@ -47,7 +49,8 @@ RUN test -n "$MARTY_API_CORE_VERSION" \
 COPY ui/ .
 
 # Build the application
-RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
+RUN { [ "$SELFHOST_PUBLIC_PROFILE" = "full" ] || [ "$SELFHOST_PUBLIC_PROFILE" = "tester" ]; } \
+    && if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-selfhost dist-final; else bun run build && mv dist dist-final; fi \
     && if [ "$UI_VARIANT" = "public" ]; then \
       test -s dist-final/index.html \
       && grep -q 'ElevenID' dist-final/index.html \
@@ -57,7 +60,7 @@ RUN if [ "$UI_VARIANT" = "selfhost" ]; then bun run build:selfhost && mv dist-se
       "$MARTY_RELEASE_VERSION" "$MARTY_UI_SHA" > dist-final/marty-ui-release.json
 
 # Use nginx to serve the built application
-FROM nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8
+FROM nginx:1.29.1-alpine@sha256:42a516af16b852e33b7682d5ef8acbd5d13fe08fecadc7ed98605ba5e3b26ab8 AS runtime-base
 
 ARG MARTY_RELEASE_VERSION=development
 ARG MARTY_UI_SHA=unknown
@@ -69,7 +72,6 @@ LABEL org.opencontainers.image.source="https://github.com/ElevenID/marty-ui" \
 # Copy both nginx configs - use build arg to select which one
 # Default to PROD for safety - must explicitly opt-in to dev config
 ARG NGINX_CONFIG=nginx.prod.conf
-COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html
 COPY ui/${NGINX_CONFIG} /etc/nginx/conf.d/default.conf
 
 # Expose port
@@ -81,3 +83,25 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 # Start nginx
 CMD ["nginx", "-g", "daemon off;"]
+
+# The self-host image must keep the static source separate from the served
+# directory because the existing startup hook injects deployment-specific
+# runtime metadata before Nginx starts. The customer bundle removes source
+# checkout bind mounts, so both scripts and the source assets belong here.
+FROM runtime-base AS selfhost
+ARG UI_VARIANT=public
+ARG NGINX_CONFIG=nginx.prod.conf
+ARG SELFHOST_PUBLIC_PROFILE=full
+RUN test "$UI_VARIANT" = selfhost && test "$NGINX_CONFIG" = nginx.spa.conf
+LABEL io.elevenid.selfhost.public-profile="${SELFHOST_PUBLIC_PROFILE}"
+COPY --from=builder /workspace/marty-ui/ui/dist-final /opt/marty-ui-static
+COPY scripts/load-secrets-env.sh /scripts/load-secrets-env.sh
+COPY scripts/ui-selfhost-start.sh /docker-entrypoint.d/40-ui-selfhost.sh
+RUN chmod +x /scripts/load-secrets-env.sh /docker-entrypoint.d/40-ui-selfhost.sh
+
+# Keep the existing public image as the default final target. Building the
+# self-host variant requires an explicit target and variant selection.
+FROM runtime-base AS public
+ARG UI_VARIANT=public
+RUN test "$UI_VARIANT" = public
+COPY --from=builder /workspace/marty-ui/ui/dist-final /usr/share/nginx/html

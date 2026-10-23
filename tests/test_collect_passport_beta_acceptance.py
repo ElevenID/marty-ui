@@ -36,6 +36,7 @@ IMAGE_ID = "sha256:" + "c" * 64
 REFERENCE = "ghcr.io/elevenid/marty-ui-oss/services@" + OCI
 UI_URI = "ghcr.io/elevenid/marty-ui-oss/ui"
 MIGRATIONS_URI = "ghcr.io/elevenid/marty-ui-oss/migrations"
+OPENBAO_DIDCOMM_URI = "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"
 
 
 def write(path: Path, value: dict) -> None:
@@ -50,6 +51,8 @@ def fixture(tmp_path: Path) -> tuple[dict, dict, dict]:
                             {"type": "oci", "uri": UI_URI, "digest": "sha256:" + "d" * 64},
                             {"type": "oci", "uri": REFERENCE.split("@")[0], "digest": OCI},
                             {"type": "oci", "uri": MIGRATIONS_URI, "digest": "sha256:" + "e" * 64},
+                            {"type": "oci", "uri": OPENBAO_DIDCOMM_URI,
+                             "digest": "sha256:" + "f" * 64},
                         ]}],
     }
     source = {"schema_version": 2, "source_kind": "official-stack-release",
@@ -221,9 +224,10 @@ def test_attestation_checks_checksum_and_each_immutable_oci(tmp_path: Path, monk
 
     monkeypatch.setattr(subprocess, "run", run)
     oci_digests = {UI_URI: "sha256:" + "d" * 64, REFERENCE.split("@")[0]: OCI,
-                   MIGRATIONS_URI: "sha256:" + "e" * 64}
+                   MIGRATIONS_URI: "sha256:" + "e" * 64,
+                   OPENBAO_DIDCOMM_URI: "sha256:" + "f" * 64}
     assert verify_attestations(manifest_path, oci_digests, COMMIT) is True
-    assert len(calls) == 4
+    assert len(calls) == 1 + len(oci_digests)
     assert calls[0][3] == str(manifest_path)
     assert {call[3] for call in calls[1:]} == {
         f"oci://{uri}@{digest}" for uri, digest in oci_digests.items()

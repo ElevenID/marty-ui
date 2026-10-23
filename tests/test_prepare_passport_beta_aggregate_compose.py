@@ -8,13 +8,34 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 
 from scripts import prepare_passport_beta_aggregate_compose as compose
 from scripts import verify_passport_beta_rust_owner as rust_owner
 from scripts.prepare_passport_beta_aggregate_compose import (
-    BETA_ORIGIN, ComposePlanError, ISSUANCE_IMAGE, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
+    BETA_ORIGIN, ComposePlanError, RUNTIME_ENV, SERVICES_IMAGE, UI_IMAGE,
     SIGNED_APPLICATIONS, NEW_SERVICES, prepare,
 )
+
+
+def test_signed_rust_override_scopes_plaintext_grpc_to_beta():
+    handoff, *_ = candidate()
+    override = compose.image_override(handoff)
+    document = yaml.compose(override)
+    services_node = next(value for key, value in document.value
+                         if key.value == "services")
+    names = [key.value for key, _ in services_node.value]
+    assert len(names) == len(set(names))
+    services = yaml.safe_load(override.replace("!reset null", "null"))["services"]
+    for name in ("issuance", "issuance-native"):
+        environment = services[name]["environment"]
+        assert environment["ENVIRONMENT"] == "beta"
+        assert environment["GRPC_INSECURE_ALLOWED"] == "true"
+    sandbox = services["canvas-sandbox"]
+    assert sandbox["image"] == "${MARTY_SERVICES_IMAGE}"
+    assert sandbox["build"] is None
+    assert sandbox["entrypoint"] == ["/usr/local/bin/marty-canvas-sandbox"]
+    assert sandbox["command"] == []
 
 
 def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
@@ -23,7 +44,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
     image_id = "sha256:" + "c" * 64
     signed = {
         "services_image": SERVICES_IMAGE + "d" * 64,
-        "issuance_image": ISSUANCE_IMAGE + "e" * 64,
+        "issuance_image": SERVICES_IMAGE + "d" * 64,
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "f" * 64},
         "build_only_artifacts": {},
     }
@@ -32,7 +53,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
                        "Labels": {"com.docker.compose.project": "elevenid-beta",
                                   "com.docker.compose.service": "docs"}}}
     observed = []
-    monkeypatch.setattr(compose, "manifest_source", lambda *_: signed)
+    monkeypatch.setattr(compose, "manifest_source", lambda *_, **__: signed)
     monkeypatch.setattr(compose, "inspect", lambda *_: docs)
     monkeypatch.setattr(compose, "render_candidate",
                         lambda handoff: ({"services": {"auth": {}, "gateway": {
@@ -52,7 +73,7 @@ def test_maintenance_preflight_reuses_full_credential_validator(monkeypatch):
 def candidate():
     head = "a" * 40
     services_image = SERVICES_IMAGE + "b" * 64
-    issuance_image = ISSUANCE_IMAGE + "c" * 64
+    issuance_image = services_image
     old_names = sorted((SIGNED_APPLICATIONS - NEW_SERVICES) | {
         "issuance", "postgres", "openbao", "redis", "keycloak",
         "cloudflared", "nginx-proxy", "envoy",
@@ -117,13 +138,35 @@ def candidate():
     services["issuance-native"]["command"] = []
     services["canvas-sync-worker"]["command"] = [
         "/usr/local/bin/marty-canvas-sync-worker"]
+    services["canvas-sandbox"]["entrypoint"] = [
+        "/usr/local/bin/marty-canvas-sandbox"]
+    services["canvas-sandbox"]["command"] = []
+    services["canvas-sandbox"]["healthcheck"] = {
+        "test": ["CMD", "curl", "-fsS", "http://localhost:8017/health"]}
     services["passport-callback-signer"]["networks"] = {
         "passport-callback-signing": None}
     services["openbao"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
     services["passport-beta-bureau"]["networks"] = {
         "marty-network": None, "passport-callback-signing": None}
-    services["issuance"] = {"image": issuance_image}
+    services["issuance"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": [],
+    }
+    services["issuance-migrations"] = {
+        "image": services_image,
+        "entrypoint": ["/usr/local/bin/marty-issuance-service"],
+        "command": ["verify-owned-schema"],
+        "environment": {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
+        },
+        "depends_on": {
+            "organization": {"condition": "service_healthy"},
+            "credential-template": {"condition": "service_healthy"},
+        },
+    }
     services["auth"]["environment"].update({
         "UI_BASE_URL": BETA_ORIGIN,
         "UI_ADDITIONAL_BASE_URLS": "",
@@ -138,7 +181,12 @@ def candidate():
         BETA_ORIGIN + ",http://localhost:9080,http://localhost:3000,http://localhost:5173")
     services["flow"]["environment"]["PUBLIC_BASE_URL"] = BETA_ORIGIN
     services["signing-keys"]["environment"]["PUBLIC_DOMAIN"] = "beta.elevenidllc.com"
-    services["issuance"]["environment"] = {"ISSUER_BASE_URL": BETA_ORIGIN}
+    services["issuance"]["environment"] = {
+        "ISSUER_BASE_URL": BETA_ORIGIN,
+        "SERVICE_NAME": "issuance_native",
+        "MARTY_SCHEMA_STARTUP_MODE": "validate",
+        "CANVAS_MIRROR_WORKER_ENABLED": "false",
+    }
     services["keycloak"]["environment"] = {
         "KC_HOSTNAME": BETA_ORIGIN, "PUBLIC_DOMAIN": "beta.elevenidllc.com",
         "UI_BASE_URL": BETA_ORIGIN,
@@ -167,10 +215,59 @@ def test_rendered_compose_assigns_signed_rust_start_groups():
     assert "gateway" in plan["recreate_applications"]
     assert "cloudflared" in plan["restart_ingress_last"]
     assert "flow" in plan["recreate_applications"]
+    assert "canvas-sandbox" in plan["recreate_applications"]
     assert "postgres" not in plan["target_services"]
     assert plan["preserved_infrastructure"] == ["openbao"]
     assert "openbao" not in plan["restart_infrastructure"]
     assert plan["ui_project"] == "elevenid-beta-ui"
+
+
+@pytest.mark.parametrize("change", ["python-image", "python-entrypoint", "build", "health"])
+def test_old_python_canvas_sandbox_cannot_pass_signed_beta_plan(change):
+    handoff, intent, rendered, ui = candidate()
+    sandbox = rendered["services"]["canvas-sandbox"]
+    if change == "python-image":
+        sandbox["image"] = "python:3.12-slim"
+    elif change == "python-entrypoint":
+        sandbox["entrypoint"] = ["python", "/app/main.py"]
+    elif change == "build":
+        sandbox["build"] = {"context": "."}
+    else:
+        sandbox["healthcheck"]["test"] = ["CMD", "python", "-c", "print('ok')"]
+    with pytest.raises(ComposePlanError, match="signed release|signed Rust runtime"):
+        prepare(handoff, intent, rendered, ui)
+
+
+def test_signed_services_images_package_canvas_sandbox_binary():
+    root = Path(__file__).resolve().parents[1]
+    build = (root / "scripts/build-rust-service-binaries.sh").read_text(encoding="utf-8")
+    public = (root / "services/Dockerfile").read_text(encoding="utf-8")
+    ci = (root / "rust/services/Dockerfile.ci").read_text(encoding="utf-8")
+    assert "-p marty-canvas-sandbox --bin marty-canvas-sandbox" in build
+    assert "target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox" in public
+    assert "-p marty-canvas-sandbox --bin marty-canvas-sandbox" in ci
+    assert "target/release/marty-canvas-sandbox /usr/local/bin/marty-canvas-sandbox" in ci
+
+
+def test_stopped_optional_bridge_cannot_enter_signed_beta_generation():
+    handoff, intent, rendered, ui = candidate()
+    bridge = {"service": "issuance-canvas-localhost-bridge",
+              "container_id": "f" * 64}
+    intent["beta_generation"].append(bridge)
+    intent["stop_container_ids"].append(bridge["container_id"])
+    handoff["stopped_container_ids"].append(bridge["container_id"])
+    rendered["services"][bridge["service"]] = {}
+    with pytest.raises(ComposePlanError, match="cannot enter signed aggregate beta generation"):
+        prepare(handoff, intent, rendered, ui)
+
+
+def test_aggregate_rejects_a_separate_python_issuance_image():
+    handoff, intent, rendered, ui = candidate()
+    handoff["issuance_image"] = (
+        "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "e" * 64
+    )
+    with pytest.raises(ComposePlanError, match="image identities"):
+        prepare(handoff, intent, rendered, ui)
 
 
 @pytest.mark.parametrize("field", compose.TRANSITION_SQL_FILES)
@@ -242,6 +339,9 @@ def test_rendered_compose_rejects_external_provider_profile():
     ("issuance-native", "PERSONALIZATION_BUREAU_URL", "https://external.example"),
     ("issuance-native", "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID", "external"),
     ("issuance-native", "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE", "/run/old-key"),
+    ("issuance-native", "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED", "false"),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET", ""),
+    ("issuance-native", "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE", ""),
 ])
 def test_rendered_compose_rejects_external_or_legacy_passport_binding(service, key, value):
     handoff, intent, rendered, ui = candidate()
@@ -271,7 +371,6 @@ def test_rendered_compose_rejects_wrong_ui_image():
 def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: Path,
                                                                       monkeypatch):
     handoff, _, beta, ui = candidate()
-    monkeypatch.setenv("MARTY_COMMON_DIGEST", "sha256:" + "f" * 64)
     monkeypatch.setenv("MARTY_DOCS_IMAGE", "sha256:" + "f" * 64)
     monkeypatch.setattr(compose, "ROOT", tmp_path)
     monkeypatch.setattr(compose, "COMPOSE_FILES", ("base.yml", "passport.yml"))
@@ -294,8 +393,6 @@ def test_candidate_render_uses_protected_file_list_and_signed_images(tmp_path: P
     assert commands[0][1]["input"] == evidence["image_override"]
     assert commands[0][1]["env"]["MARTY_SERVICES_IMAGE"] == handoff["services_image"]
     assert commands[1][1]["env"]["MARTY_UI_RELEASE_IMAGE"] == handoff["ui_image"]
-    assert commands[0][1]["env"]["MARTY_COMMON_DIGEST"] == (
-        handoff["build_only_artifacts"]["MARTY_COMMON_DIGEST"])
     assert commands[0][1]["env"]["MARTY_DOCS_IMAGE"] == handoff["docs_image"]
     assert set(evidence["compose_files_sha256"]) == {"base.yml", "passport.yml"}
     assert evidence["service_config_hashes"]["flow"] == "0" * 64
@@ -337,20 +434,33 @@ def test_render_recheck_requires_protected_source(monkeypatch):
         compose.verify_render_plan(plan)
 
 
-def test_preserved_openbao_token_matches_new_signer_without_exposing_it(monkeypatch):
+def test_preserved_openbao_raft_custody_excludes_dev_root_and_binds_scoped_signer(monkeypatch):
     handoff, intent, beta, ui = candidate()
     plan = prepare(handoff, intent, beta, ui)
-    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "secret"
+    beta["services"]["passport-callback-signer"]["environment"].update({
+        "BAO_ADDR": "https://openbao:8200",
+        "BAO_CACERT": "/bao/public-ca/ca.crt",
+        "BAO_TOKEN_FILE": "/bao/passport-callback/token",
+    })
+    beta["services"]["openbao-init"] = {"environment": {
+        "BAO_PASSPORT_CALLBACK_TOKEN_FILE": "/bao/passport-callback/token"}}
     monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
     monkeypatch.setattr(compose, "render_candidate", lambda _: (beta, ui, {}))
-    monkeypatch.setattr(compose, "inspect", lambda _id, _runner: {
+    observed = {
         "Id": plan["old_container_ids_by_service"]["openbao"],
-        "Config": {"Env": ["BAO_DEV_ROOT_TOKEN_ID=secret"]},
-    })
-    assert compose.verify_preserved_openbao_token(plan)["verified"] is True
-    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN"] = "wrong"
-    with pytest.raises(ComposePlanError, match="differs from preserved OpenBao"):
-        compose.verify_preserved_openbao_token(plan)
+        "Config": {"Env": [], "Cmd": ["server", "-config=/bao/config/openbao.hcl"]},
+        "Mounts": [{"Type": "volume", "Destination": "/bao/data",
+                    "Name": "elevenid-beta_openbao_data"}],
+    }
+    monkeypatch.setattr(compose, "inspect", lambda _id, _runner: observed)
+    assert compose.verify_preserved_openbao_custody(plan)["verified"] is True
+    observed["Config"]["Env"] = ["BAO_DEV_ROOT_TOKEN_ID=retired"]
+    with pytest.raises(ComposePlanError, match="scoped Raft"):
+        compose.verify_preserved_openbao_custody(plan)
+    observed["Config"]["Env"] = []
+    beta["services"]["passport-callback-signer"]["environment"]["BAO_TOKEN_FILE"] = "/wrong"
+    with pytest.raises(ComposePlanError, match="scoped Raft"):
+        compose.verify_preserved_openbao_custody(plan)
 
 
 def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_path):
@@ -387,10 +497,10 @@ def test_resume_accepts_partial_signed_generation_after_login(monkeypatch, tmp_p
     }
     monkeypatch.setattr(compose, "verify_render_plan", lambda _: {"verified": True})
     monkeypatch.setattr(compose, "render_candidate", lambda _: (rendered, ui, {}))
-    monkeypatch.setattr(compose, "manifest_source", lambda *_: {
+    monkeypatch.setattr(compose, "manifest_source", lambda *_, **__: {
         "manifest_sha256": plan["stack_manifest_sha256"],
         "services_image": plan["services_image"],
-        "issuance_image": plan["issuance_image"],
+        "issuance_image": plan["services_image"],
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": "sha256:" + "d" * 64},
     })
     receipt_hashes = {"fence": plan["fence_receipt_sha256"],

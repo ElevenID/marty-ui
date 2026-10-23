@@ -5,14 +5,15 @@ The original 45-vector signing diagnostic corpus remains unchanged.
 
 ## Reproduction and ownership
 
-`scripts/capture_signing_response_reference.py <credentials-checkout> --check
---summary` reads Git objects at credentials revision
-`d418ac0df283625f43b0c011fb1c72fd7d3013a9`, verifies all four source blobs, and
-executes the complete unchanged signing module. Exact AST-selected original
-LTI signing, organization proof-policy, and readiness callers execute with
-controlled configuration and HTTPX MockTransport. All remote requests use one
-synthetic origin and direct synthetic service keys; the capture environment is
-cleared, preventing operator secret-file fallback. Socket connections are denied.
+The capture generator has been retired; its source remains in Git history.
+The frozen observations and native behavior tests remain. The historical capture
+read Git objects at Credentials revision
+`d418ac0df283625f43b0c011fb1c72fd7d3013a9`, verified all four source blobs, and
+executed the complete unchanged signing module. Exact AST-selected original
+LTI signing, organization proof-policy, and readiness callers executed with
+controlled configuration and HTTPX MockTransport. All remote requests used one
+synthetic origin and direct synthetic service keys; the capture environment was
+cleared, preventing operator secret-file fallback. Socket connections were denied.
 No repository, crypto, deployment, or production configuration is changed.
 
 The FastAPI wrapper tests actual default exception handling/JSON serialization,

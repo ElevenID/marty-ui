@@ -277,8 +277,9 @@ def test_fence_operator_rechecks_old_generation_before_mutation() -> None:
     root = Path(__file__).resolve().parents[1]
     operator = (root / "scripts/install-passport-beta-fence.ps1").read_text(
         encoding="utf-8")
-    assert operator.index("$before = Invoke-FencePython") < operator.index(
+    assert operator.index("$before = if ($recover)") < operator.index(
         "Start-BetaMutation\n")
+    assert "else { Invoke-FencePython -Arguments @(\n" in operator
     assert "$before.observation_sha256 -cne $plan.target_observation_sha256" in operator
     assert "Approved beta service generation or database route changed before fence" in operator
     assert "$after.beta.ui_project -cne $before.beta.ui_project" in operator

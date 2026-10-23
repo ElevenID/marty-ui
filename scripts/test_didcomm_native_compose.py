@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from copy import deepcopy
+import difflib
 import json
 from pathlib import Path
 import re
@@ -14,24 +15,34 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = runpy.run_path(str(ROOT / "scripts/validate_beta_didcomm_configuration.py"))
-assert_native_policy_pairing = VALIDATOR["assert_native_policy_pairing"]
+assert_native_kms_policy = VALIDATOR["assert_base_https_native_kms"]
 DidcommConfigurationError = VALIDATOR["DidcommConfigurationError"]
 BASE = "docker-compose.base.yml"
 BETA = "docker-compose.beta.yml"
 ISOLATION = "docker-compose.profile.conformance.yml"
-LEGACY_AUTHCRYPT = "docker-compose.profile.didcomm-authcrypt.yml"
-AUTHCRYPT = "docker-compose.profile.didcomm-native-authcrypt.yml"
+AUTHCRYPT = "docker-compose.profile.issuance-native-authcrypt.yml"
 CONFORMANCE = "docker-compose.profile.didcomm-native-conformance.yml"
 POLICY_DIRECTORY = "${DIDCOMM_ENCRYPTION_POLICY_DIR:?set DIDCOMM_ENCRYPTION_POLICY_DIR to an exact policy directory}"
 CA_DIRECTORY = (
     "${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to generated conformance material}"
 )
 POLICY_TARGET = "/run/secrets/didcomm-authcrypt"
+POLICY_FILE = POLICY_TARGET + "/didcomm-encryption-policy.json"
+TOKEN_TARGET = "/bao/didcomm-issuance-token"
+TOKEN_FILE = TOKEN_TARGET + "/token"
 CA_TARGET = "/run/secrets/didcomm-conformance-root-ca.pem"
+NATIVE_GRANT_MOUNTS = {
+    ("openbao_public_ca", "/bao/public-ca"),
+    ("openbao_didcomm_issuance_token", TOKEN_TARGET),
+    ("openbao_issuance_credential_grant", "/bao/issuance-credential-grant"),
+    ("openbao_issuance_canvas_grant", "/bao/issuance-canvas-grant"),
+    ("openbao_issuance_readiness_grant", "/bao/issuance-readiness-grant"),
+    ("openbao_issuance_passport_grant", "/bao/issuance-passport-grant"),
+}
 INITIATION_CONTROL_PLANE = {
-    "ORG_GRPC_TARGET": "organization:9002",
-    "CT_GRPC_TARGET": "credential-template:9003",
-    "RP_GRPC_TARGET": "revocation-profile:9013",
+    "ORG_GRPC_TARGET": "https://organization:9002",
+    "CT_GRPC_TARGET": "https://credential-template:9003",
+    "RP_GRPC_TARGET": "https://revocation-profile:9013",
     "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
 }
 
@@ -45,7 +56,7 @@ def assert_initiation_consumer_bindings(model):
         assert native["environment"][name] == legacy["environment"][name] == expected
     assert native["environment"]["ISSUANCE_GRPC_ENABLED"] == "true"
     assert native["environment"]["ISSUANCE_GRPC_PORT"] == "9005"
-    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
     assert flow["environment"]["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
     assert (
         flow["environment"]["GRPC_SERVICE_TOKEN"]
@@ -62,6 +73,18 @@ def assert_initiation_consumer_bindings(model):
         "service_completed_successfully"
     )
     assert native["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert (
+        native["environment"]["GRPC_TLS_CA_CERT"]
+        == "/run/secrets/workload_identity_ca_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT"]
+        == "/run/secrets/openbao_tls_ca_cert"
+    )
+    assert (
+        native["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE"]
+        == "/run/secrets/issuance_tls_kms_token"
+    )
 
 
 def mount(source, target):
@@ -78,10 +101,48 @@ def expected_model(baseline, *, authcrypt, conformance):
     expected = deepcopy(baseline)
     native = expected["services"]["issuance-native"]
     if authcrypt:
-        native["environment"]["DIDCOMM_ENCRYPTION_POLICY_FILE"] = (
-            POLICY_TARGET + "/didcomm-encryption-policy.json"
+        for key, value in (
+            ("DIDCOMM_KMS_ADDR", "https://openbao:8200"),
+            ("DIDCOMM_KMS_CA_CERT_FILE", "/bao/public-ca/ca.crt"),
+            ("DIDCOMM_KMS_TOKEN_FILE", TOKEN_FILE),
+        ):
+            native["environment"].setdefault(key, value)
+        existing_targets = {item.get("target") for item in native.get("volumes", [])}
+        for source, target in (
+            ("openbao_public_ca", "/bao/public-ca"),
+            ("openbao_didcomm_issuance_token", TOKEN_TARGET),
+        ):
+            if target not in existing_targets:
+                native.setdefault("volumes", []).append(
+                    {
+                        "type": "volume",
+                        "source": source,
+                        "target": target,
+                        "read_only": True,
+                    }
+                )
+        native["environment"].update(
+            {
+                "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY_FILE,
+            }
         )
-        native.setdefault("volumes", []).append(mount(POLICY_DIRECTORY, POLICY_TARGET))
+        native.setdefault("volumes", []).append(
+            mount(POLICY_DIRECTORY + "/didcomm-encryption-policy.json", POLICY_FILE)
+        )
+        native.setdefault("depends_on", {})["openbao-init"] = {
+            "condition": "service_completed_successfully",
+            "required": True,
+        }
+        expected["x-native-issuance-policy"] = {
+            "environment": {
+                "DIDCOMM_ENCRYPTION_POLICY_FILE": POLICY_FILE,
+            },
+            "volumes": [
+                mount(
+                    POLICY_DIRECTORY + "/didcomm-encryption-policy.json", POLICY_FILE
+                ),
+            ],
+        }
     if conformance:
         native["environment"].update(
             {
@@ -104,12 +165,22 @@ def assert_model(actual, expected):
         for service in result["services"].values():
             if "volumes" in service:
                 mounts = service["volumes"]
-                assert len({item["target"] for item in mounts}) == len(mounts)
-                mounts.sort(key=lambda item: item["target"])
+                targets = [item["target"] for item in mounts if isinstance(item, dict)]
+                assert len(set(targets)) == len(targets)
+                mounts.sort(
+                    key=lambda item: item["target"] if isinstance(item, dict) else item
+                )
         return result
 
-    assert normalized(actual) == normalized(expected), (
-        "Native DIDComm configuration changed outside its exact boundary"
+    actual = normalized(actual)
+    expected = normalized(expected)
+    assert actual == expected, "".join(
+        difflib.unified_diff(
+            json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
+            json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
+            fromfile="expected",
+            tofile="actual",
+        )
     )
 
 
@@ -146,7 +217,8 @@ def assert_bindings(model, compose_command):
                         "GRPC_SERVICE_TOKEN",
                     ),
                     "issuance": (
-                        "VCDM_RELATED_RESOURCE_URLS", "GRPC_SERVICE_TOKEN",
+                        "VCDM_RELATED_RESOURCE_URLS",
+                        "GRPC_SERVICE_TOKEN",
                         "CANVAS_CREDENTIALS_STATUS_SYNC_URL",
                     ),
                 }.items()
@@ -164,6 +236,8 @@ def assert_bindings(model, compose_command):
         values.update(
             {
                 "DIDCOMM_ENCRYPTION_POLICY_DIR": (directory / "policy").as_posix(),
+                "MARTY_OPENBAO_DIDCOMM_IMAGE": "synthetic.invalid/openbao-didcomm@sha256:"
+                + "d" * 64,
                 "OIDF_TLS_CERT_DIR": (directory / "tls").as_posix(),
             }
         )
@@ -184,9 +258,12 @@ def assert_bindings(model, compose_command):
         default = default_model["services"]["issuance-native"]
         environment = default["environment"]
         assert environment["CANVAS_CREDENTIALS_STATUS_SYNC_URL"] == ""
-        assert default_model["services"]["issuance"]["environment"][
-            "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
-        ] == ""
+        assert (
+            default_model["services"]["issuance"]["environment"][
+                "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+            ]
+            == ""
+        )
         assert environment["VCDM_RELATED_RESOURCE_URLS"] == ""
         assert (
             default_model["services"]["issuance"]["environment"][
@@ -197,7 +274,7 @@ def assert_bindings(model, compose_command):
         for name, expected in INITIATION_CONTROL_PLANE.items():
             assert environment[name] == expected
         flow = default_model["services"]["flow"]["environment"]
-        assert flow["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
+        assert flow["ISSUANCE_GRPC_TARGET"] == "https://issuance-native:9005"
         assert flow["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
         assert flow["GRPC_SERVICE_TOKEN"] == environment["GRPC_SERVICE_TOKEN"]
         assert environment["ISSUANCE_OFFER_TTL_MINUTES"] == "10080"
@@ -207,16 +284,22 @@ def assert_bindings(model, compose_command):
             "true" if has_ca else "false"
         )
         assert environment.get("DIDCOMM_ENCRYPTION_POLICY_FILE") == (
-            POLICY_TARGET + "/didcomm-encryption-policy.json" if has_policy else None
+            POLICY_FILE if has_policy else None
         )
+        assert environment["DIDCOMM_KMS_ADDR"] == "https://openbao:8200"
+        assert environment["DIDCOMM_KMS_CA_CERT_FILE"] == "/bao/public-ca/ca.crt"
+        assert environment["DIDCOMM_KMS_TOKEN_FILE"] == TOKEN_FILE
         assert environment.get("DIDCOMM_TLS_CA_FILE") == (CA_TARGET if has_ca else None)
         sources = {
             item["target"]: item["source"].replace("\\", "/")
             for item in default.get("volumes", [])
         }
-        expected_sources = {}
+        expected_sources = {target: source for source, target in NATIVE_GRANT_MOUNTS}
         if has_policy:
-            expected_sources[POLICY_TARGET] = values["DIDCOMM_ENCRYPTION_POLICY_DIR"]
+            expected_sources[POLICY_FILE] = (
+                values["DIDCOMM_ENCRYPTION_POLICY_DIR"]
+                + "/didcomm-encryption-policy.json"
+            )
         if has_ca:
             expected_sources[CA_TARGET] = values["OIDF_TLS_CERT_DIR"] + "/root-ca.pem"
         assert sources == expected_sources
@@ -252,12 +335,18 @@ def assert_bindings(model, compose_command):
                 == resources
             )
         for status_url in ("", "https://canvas-mirror.example/status?mode=synthetic"):
-            configured = render({"CANVAS_CREDENTIALS_STATUS_SYNC_URL": status_url})["services"]
-            assert configured["issuance-native"]["environment"][
-                "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
-            ] == configured["issuance"]["environment"][
-                "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
-            ] == status_url
+            configured = render({"CANVAS_CREDENTIALS_STATUS_SYNC_URL": status_url})[
+                "services"
+            ]
+            assert (
+                configured["issuance-native"]["environment"][
+                    "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+                ]
+                == configured["issuance"]["environment"][
+                    "CANVAS_CREDENTIALS_STATUS_SYNC_URL"
+                ]
+                == status_url
+            )
         for minutes in ("0", "-5"):
             configured = render({"ISSUANCE_OFFER_TTL_MINUTES": minutes})
             assert (
@@ -313,7 +402,13 @@ def run(compose_command=None):
     )
     for name in ("DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"):
         assert name not in native["environment"]
-    assert not native.get("volumes") and not native.get("extra_hosts")
+    assert {
+        (item["source"], item["target"])
+        for item in native.get("volumes", [])
+        if item.get("type") == "volume" and item.get("read_only") is True
+    } == NATIVE_GRANT_MOUNTS
+    assert len(native["volumes"]) == len(NATIVE_GRANT_MOUNTS)
+    assert not native.get("extra_hosts")
     assert_bindings(base, compose_command)
     for authcrypt, conformance in ((True, False), (False, True), (True, True)):
         files = [BASE, BETA, *([ISOLATION] if conformance else [])]
@@ -330,34 +425,14 @@ def run(compose_command=None):
         )
         if authcrypt and conformance:
             assert_bindings(actual, compose_command)
-    base_legacy_policy = render(BASE, LEGACY_AUTHCRYPT, ISOLATION)
-    assert "issuance-native" in base_legacy_policy["services"]
-    try:
-        assert_native_policy_pairing(base_legacy_policy)
-    except DidcommConfigurationError:
-        pass
-    else:
-        raise AssertionError(
-            "Base legacy authcrypt policy was accepted without native pairing"
-        )
-    base_paired = render(BASE, LEGACY_AUTHCRYPT, AUTHCRYPT, ISOLATION)
+    native_authcrypt = render(BASE, BETA, AUTHCRYPT)
     assert_model(
-        base_paired,
-        expected_model(base_legacy_policy, authcrypt=True, conformance=False),
+        native_authcrypt, expected_model(base, authcrypt=True, conformance=False)
     )
-    assert_native_policy_pairing(base_paired)
-    unpaired = render(BASE, BETA, LEGACY_AUTHCRYPT)
-    try:
-        assert_native_policy_pairing(unpaired)
-    except DidcommConfigurationError:
-        pass
-    else:
-        raise AssertionError(
-            "Legacy-only authcrypt configuration allowed native anoncrypt"
-        )
-    paired = render(BASE, BETA, LEGACY_AUTHCRYPT, AUTHCRYPT)
-    assert_model(paired, expected_model(unpaired, authcrypt=True, conformance=False))
-    assert_native_policy_pairing(paired)
+    assert (
+        "DIDCOMM_ENCRYPTION_POLICY_FILE"
+        not in native_authcrypt["services"]["issuance"]["environment"]
+    )
     image_owner = runpy.run_path(
         str(ROOT / "scripts/test_beta_application_image_compose.py")
     )
@@ -370,13 +445,16 @@ def run(compose_command=None):
         for mode, report in zip(("local", "official"), reports, strict=True):
             overlay = directory / f"{mode}-images.yml"
             overlay.write_text("\n".join(report["lines"]) + "\n", encoding="utf-8")
-            actual = render(BASE, BETA, LEGACY_AUTHCRYPT, AUTHCRYPT, str(overlay))
+            actual = render(BASE, BETA, AUTHCRYPT, str(overlay))
             assert_model(
-                actual, image_owner["expected_model"](paired, report["services"], mode)
+                actual,
+                image_owner["expected_model"](
+                    native_authcrypt, report["services"], mode
+                ),
             )
-            VALIDATOR["validate_model"](actual, authcrypt_enabled=True)
+            assert_native_kms_policy(actual)
     print(
-        "Native DIDComm Compose gates passed: exact merge ownership, synthetic bindings, missing-input rejection and legacy isolation"
+        "Native DIDComm Compose gates passed: exact KMS-only merge ownership and synthetic bindings"
     )
 
 

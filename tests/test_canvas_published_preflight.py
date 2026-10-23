@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import runpy
 import shutil
 import subprocess
+import sys
 import tempfile
+from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,10 +20,24 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/ci/run-published-canvas-contracts.sh"
+MIGRATED_CASES = json.loads(
+    (ROOT / "contracts/canvas-worker-package-migration.json").read_text(
+        encoding="utf-8"
+    )
+)["case_ids"]
 TARGET = "worker_mixed_roster_matches_frozen_published_process"
 TIMEOUT_TARGET = "worker_timeout_matches_frozen_published_process"
 BODY_TIMEOUT_TARGET = "worker_body_timeout_matches_frozen_published_process"
 LEASE_EXPIRY_TARGET = "worker_lease_expiry_matches_frozen_published_process"
+DEADLINE_TARGET = "worker_deadline_matches_frozen_published_process"
+MIXED_ROSTER_REFERENCE = "worker_mixed_roster_reference_matches_published_process"
+BODY_TIMEOUT_REFERENCE = "worker_body_timeout_reference_matches_published_process"
+LEASE_EXPIRY_REFERENCE = "worker_lease_expiry_reference_matches_published_process"
+HISTORICAL_SERIAL = (
+    MIXED_ROSTER_REFERENCE,
+    BODY_TIMEOUT_REFERENCE,
+    LEASE_EXPIRY_REFERENCE,
+)
 PREFLIGHTS = [
     ("mixed-roster-preflight", TARGET),
     ("timeout-preflight", TIMEOUT_TARGET),
@@ -37,13 +52,89 @@ FAST_MODE_SKIPS = [
     "reference_matches_published",
 ]
 SCHEMA_ENV = "MARTY_CANVAS_PUBLISHED_SCHEMA_TEST"
+SELFHOST_CASES = (
+    "packaged_remote_secret_fixture_requires_verified_https",
+    "selfhost_public_image_loader_isolated",
+    "selfhost_public_image_loader_child",
+    "selfhost_packaged_runtime::tests::child_stage_diagnostic_accepts_only_closed_values",
+    "selfhost_packaged_runtime::tests::database_authentication_failure_never_qualifies_as_healthy",
+    "selfhost_packaged_runtime::tests::process_control_child",
+    "selfhost_packaged_runtime::tests::host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery",
+    "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure",
+    "selfhost_packaged_runtime::tests::held_pending_operation_withholds_recovery_and_retains_scratch",
+    "selfhost_packaged_runtime::tests::synthetic_secret_inputs_cover_packaged_issuance_mounts",
+    "selfhost_runtime_sidecar::recovery_tests::pending_operation_record_is_exclusive_validated_and_explicitly_completed",
+    "selfhost_runtime_sidecar::recovery_tests::exact_parent_native_recovery_refuses_foreign_identity_and_mounts",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_distinguishes_missing_markers_from_secret_exposure",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_retries_only_delayed_markers_with_decreasing_read_budget",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_empty_secret_and_zero_budget_before_reading",
+    "selfhost_runtime_sidecar::recovery_tests::log_boundary_does_not_accept_late_success_or_read_again_after_expiry",
+)
+FLOW_CASES = (
+    "didcomm_flow_grpc_provider_preserves_keyed_admission",
+    "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
+    "flow_rendered_provider_child",
+    "flow_actual_main_boots_rendered_base_and_preserves_public_admission",
+    "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
+    "didcomm_http_admission_recovers_real_keyed_reservation",
+    "didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_output_child",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified",
+)
+# These seven cases occupied one contiguous block in the original 170-case
+# mandatory roster. The other two Flow IDs were discovered but not separately
+# listed by the old grep gate; the new executable checks all nine exactly.
+FLOW_HISTORICAL_ROSTER = (
+    "didcomm_http_admission_recovers_real_keyed_reservation",
+    "didcomm_flow_grpc_provider_preserves_keyed_admission",
+    "flow_native_consumer_preserves_artifacts_retries_and_legacy_physical_http",
+    "flow_rendered_settings_select_native_rpc_and_preserve_legacy_http",
+    "flow_actual_main_boots_rendered_base_and_preserves_public_admission",
+    "didcomm_admission_recovery::flow_consumer::public_startup::owned_process_output_and_early_exit_cleanup_are_verified",
+    "didcomm_admission_recovery::flow_consumer::public_startup::loader_capture_preserves_values_and_removes_file_alias_before_direct_spawn",
+)
 PINS = [
-    f"registry.invalid/{name}@sha256:{letter * 64}"
-    for name, letter in (("postgres", "a"), ("issuance", "b"))
+    "postgres@sha256:" + "a" * 64,
+    "registry.invalid/issuance@sha256:" + "b" * 64,
 ]
-MANDATORY_REGISTRATION_COUNT = 165
+MANDATORY_REGISTRATION_COUNT = 149
 MANDATORY_REGISTRATION_SHA256 = (
-    "8161a364b2f639c8eb3b0603487a4931ed639307ff0f5132711dcc8f7d2a792f"
+    "a28b242a5868fcac773121433c4b30a1e9575dafa68bf7ad75ee4ea0189261cb"
+)
+RENDERED_CONFIG = (
+    "rendered_base_process::"
+    "rendered_base_renewal_config_crosses_encryption_and_private_address_policy"
+)
+CURRENT_REGISTRATION_COUNT = 150
+CURRENT_REGISTRATION_SHA256 = (
+    "8569b04acaf09a6206b99aa1922104ecfe37ad22cc16e1beda632615ed55642a"
+)
+PRIVATE_IP_PG = "didcomm_renewal_private_ip_refusal_preserves_published_rows"
+NEW_REGISTRATION_COUNT = 151
+NEW_REGISTRATION_SHA256 = (
+    "9a377b25c50ea1deb399a56de3bde42f1e2665c850ad5f674364258cc4f3942f"
+)
+K8S_RENDERED_CONFIG = (
+    "resolved_kubernetes_runtime::"
+    "resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"
+)
+PRE_ROSTER_REGISTRATION_COUNT = 152
+PRE_ROSTER_REGISTRATION_SHA256 = (
+    "6db8f5ca4bf1e50dc97ff4a7b927ee477009867c8ca87b6674c8dd5167238b89"
+)
+ROSTER_EXPIRY_TESTS = (
+    "worker_roster_metadata_expired_before_write_preserves_current_fields_and_fences",
+    "worker_roster_metadata_expired_during_lock_preserves_current_fields_and_fences",
+)
+RENDERER_BOUNDS = "rendered_base_process::renderer_bounds_proof_is_image_free"
+LATEST_REGISTRATION_COUNT = 155
+LATEST_REGISTRATION_SHA256 = (
+    "53424925027bc7f829d679bbfcc3d2b0ae1077939e5d0b6609e52169c08c8d5f"
+)
+PRE_RENDERER_REGISTRATION_COUNT = 154
+PRE_RENDERER_REGISTRATION_SHA256 = (
+    "f906fbd6b6032660a9a385b770f100ee443a6397295f3133acd25de44289e0de"
 )
 
 
@@ -52,49 +143,211 @@ def required_registrations():
     # it to exercise every current check without copying another long roster.
     names = re.findall(r"grep -Fx '([^']+): test'", SCRIPT.read_text(encoding="utf-8"))
     assert names and all(target in names for _, target in PREFLIGHTS)
+    flow_inventory = (ROOT / "scripts/ci/list-flow-acceptance-cases.sh").read_text(
+        encoding="utf-8"
+    )
+    assert 'list-flow-acceptance-cases.sh" "$flow_executable"' in SCRIPT.read_text(
+        encoding="utf-8"
+    )
+    flow_block = flow_inventory.split(
+        "expected_flow_tests=$(printf '%s\\n' ", 1
+    )[1].split(")\n[[", 1)[0]
+    flow_exact = re.findall(r"'([^']+): test'", flow_block)
+    assert set(flow_exact) == set(FLOW_CASES) and len(flow_exact) == 9
+    assert set(FLOW_HISTORICAL_ROSTER) <= set(flow_exact)
+    anchor = "didcomm_unkeyed_grpc_initiation_composes_real_delivery"
+    assert names.count(anchor) == 1
+    names[names.index(anchor):names.index(anchor)] = FLOW_HISTORICAL_ROSTER
     # Keep each mandatory registration's full-mode place without copying it.
     return [name for index, name in enumerate(names) if name not in names[index + 1 :]]
 
 
 def test_mandatory_full_mode_registration_roster_is_unchanged() -> None:
     names = required_registrations()
-    assert len(names) == MANDATORY_REGISTRATION_COUNT
+    assert len(names) == LATEST_REGISTRATION_COUNT
     assert len(names) == len(set(names))
     assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        LATEST_REGISTRATION_SHA256
+    )
+    assert names.count(RENDERER_BOUNDS) == 1
+    names = [name for name in names if name != RENDERER_BOUNDS]
+    assert len(names) == PRE_RENDERER_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(names).encode()).hexdigest() == (
+        PRE_RENDERER_REGISTRATION_SHA256
+    )
+    assert all(names.count(name) == 1 for name in ROSTER_EXPIRY_TESTS)
+    before_roster = [name for name in names if name not in ROSTER_EXPIRY_TESTS]
+    assert len(before_roster) == PRE_ROSTER_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(before_roster).encode()).hexdigest() == (
+        PRE_ROSTER_REGISTRATION_SHA256
+    )
+    assert before_roster.count(K8S_RENDERED_CONFIG) == 1
+    before_k8s = [name for name in before_roster if name != K8S_RENDERED_CONFIG]
+    assert len(before_k8s) == NEW_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(before_k8s).encode()).hexdigest() == (
+        NEW_REGISTRATION_SHA256
+    )
+    assert names.count(PRIVATE_IP_PG) == 1
+    prior = [name for name in before_k8s if name != PRIVATE_IP_PG]
+    assert len(prior) == CURRENT_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(prior).encode()).hexdigest() == (
+        CURRENT_REGISTRATION_SHA256
+    )
+    assert names.count(RENDERED_CONFIG) == 1
+    historical = [name for name in prior if name != RENDERED_CONFIG]
+    assert len(historical) == MANDATORY_REGISTRATION_COUNT
+    assert hashlib.sha256("\n".join(historical).encode()).hexdigest() == (
         MANDATORY_REGISTRATION_SHA256
     )
 
 
 def test_full_mode_keeps_sensitive_probes_serial_and_other_targets_concurrent() -> None:
     script = SCRIPT.read_text(encoding="utf-8")
+    worker_recorder = 'python3 "$obligation_runner" --name canvas_worker_acceptance --owner canvas -- '
+    composition_recorder = 'python3 "$obligation_runner" --name canvas_composition_acceptance --owner canvas -- '
     preflight = (
-        '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
+        worker_recorder + '"$worker_executable" "$preflight_target" --exact --nocapture --test-threads=1'
     )
-    serial = '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
-    worker_full = '"$worker_executable" --skip "$serial_test" "${preflight_skips[@]}" --nocapture --test-threads=4'
-    json_serial = '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
-    composition_full = '"$composition_executable" --skip "$serial_composition_test" --nocapture --test-threads=4'
-    assert sum(line.strip() == preflight for line in script.splitlines()) == 1
-    assert sum(line.strip() == serial for line in script.splitlines()) == 1
-    assert sum(line.strip() == json_serial for line in script.splitlines()) == 1
+    serial = worker_recorder + '"$worker_executable" "$serial_test" --exact --nocapture --test-threads=1'
+    worker_full = worker_recorder + '"$worker_executable" --skip "$serial_test" --skip "$deadline_serial_test" "${historical_serial_skips[@]}" "${preflight_skips[@]}" --nocapture --test-threads=4'
+    json_serial = composition_recorder + '"$composition_executable" "$serial_composition_test" --exact --nocapture --test-threads=1'
+    composition_full = composition_recorder + '"$composition_executable" --skip "$serial_composition_test" "${config_skips[@]}" "${timeout_skips[@]}" --nocapture --test-threads=4'
+    scoped_kms = (
+        'MARTY_CANVAS_OPENBAO_URL="$kms_url" '
+        'MARTY_CANVAS_OPENBAO_ROOT_TOKEN="$kms_root_token" '
+        'MARTY_CANVAS_OPENBAO_CA_CERT_FILE="$kms_ca_file" '
+    )
     assert (
-        "[[ $((all_tests - parallel_tests)) == $((2 + expected_skipped_worker_tests)) ]]"
+        sum(
+            line.strip() == 'timed canvas_serial "$mode" ' + preflight
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial sql_logging " + serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    deadline_serial = worker_recorder + '"$worker_executable" "$deadline_serial_test" --exact --nocapture --test-threads=1'
+    assert script.count("timed canvas_serial worker_deadline " + deadline_serial) == 2
+    assert script.rindex("timed canvas_serial worker_deadline " + deadline_serial) < script.index(composition_full)
+    assert script.count("run_historical_serial_tests") == 3  # definition and both full paths
+    assert (
+        'historical_serial_tests=("$mixed_roster_serial_test" "$body_timeout_serial_test" "$lease_expiry_serial_test")'
         in script
     )
     assert (
-        script.splitlines().count(composition_full + ' >"$composition_log" 2>&1 &') == 1
+        'timed canvas_serial "$historical_serial_test" ' + worker_recorder + '"$worker_executable" "$historical_serial_test" --exact --nocapture --test-threads=1'
+        in script
     )
-    assert script.splitlines().count(worker_full + ' >"$worker_log" 2>&1 &') == 1
+    assert (
+        sum(
+            line.strip() == "timed canvas_serial json_consumer env " + scoped_kms + json_serial
+            for line in script.splitlines()
+        )
+        == 1
+    )
+    assert (
+        "[[ $((all_tests - parallel_tests)) == $((3 + ${#historical_serial_tests[@]} + expected_skipped_worker_tests + expected_skipped_config_tests + expected_skipped_timeout_tests)) ]]"
+        in script
+    )
+    assert script.count(scoped_kms + composition_full + ' >"$composition_log" 2>&1 &') == 1
+    assert script.count('trap cleanup_canvas_kms EXIT') == 1
+    assert script.count('trap cleanup_target_logs EXIT') == 1
+    assert (
+        script.count(
+            'MARTY_CANVAS_WORKER_RETRY_AFTER_TIER="$retry_after_tier" '
+            'MARTY_CANVAS_WORKER_VALIDATION_TIER="$validation_tier" '
+            + worker_full
+            + ' >"$worker_log" 2>&1 &'
+        )
+        == 1
+    )
+    assert 'tail --pid="$pid"' in script
+    assert script.count(': > "$composition_log"') == 1
+    assert script.count(': > "$worker_log"') == 1
+    assert script.count(': > "$selfhost_log"') == 1
+    assert script.index("trap cleanup_target_logs EXIT") < script.index(
+        ': > "$composition_log"'
+    )
+    assert script.index(': > "$composition_log"') < script.index(composition_full)
+    assert script.index(': > "$worker_log"') < script.index(worker_full)
+    assert (
+        'relay_target_timing "$composition_pid" "$composition_log" "$composition_end" composition &'
+        in script
+    )
+    assert 'relay_target_timing "$worker_pid" "$worker_log" "$worker_end" worker &' in script
+    assert (
+        'relay_target_timing "$selfhost_pid" "$selfhost_log" "$selfhost_end" selfhost &'
+        in script
+    )
     assert script.index(composition_full) < script.index(worker_full)
     assert script.index(json_serial) < script.index(composition_full)
     assert script.index(worker_full) < script.index('wait "$composition_pid"')
+    flow_full = '  "$flow_executable" --nocapture --test-threads=4 >"$flow_log" 2>&1 &'
+    assert script.splitlines().count(flow_full) == 1
+    assert (
+        script.splitlines()[script.splitlines().index(flow_full) - 1]
+        == "  --name flow_acceptance --owner canvas -- \\"
+    )
+    assert script.index('wait "$composition_pid" || composition_status=$?') < script.index(
+        flow_full
+    )
+    assert script.index(flow_full) < script.index('wait "$flow_pid" || flow_status=$?')
+    selfhost_full = (
+        '    "$selfhost_executable" --nocapture --test-threads=4 '
+        '>"$selfhost_log" 2>&1 &'
+    )
+    assert script.splitlines().count(selfhost_full) == 1
+    assert (
+        script.splitlines()[script.splitlines().index(selfhost_full) - 1]
+        == "    --name selfhost_acceptance --owner canvas -- \\"
+    )
+    assert script.index('require_selfhost_tests "$selfhost_tests"') < script.index(
+        selfhost_full
+    )
+    assert 'if [[ -n "$flow_pid" ]]; then kill "$flow_pid"' in script
+    assert 'if [[ -n "$flow_relay_pid" ]]; then wait "$flow_relay_pid"' in script
+    assert script.count("if (( expected_skipped_config_tests == 0 )); then") == 1
+    assert (
+        script.count(
+            "grep -Fo 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1' \"$composition_log\""
+        )
+        == 2
+    )
+    assert (
+        script.count(
+            "grep -Fo 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1' \"$composition_log\""
+        )
+        == 1
+    )
     assert script.rstrip().endswith(
-        "(( composition_status == 0 && worker_status == 0 ))"
+        'python3 "$(dirname "${BASH_SOURCE[0]}")/check_canvas_tier_obligations.py" '
+        '--require-execution canvas "$worker_log"'
     )
     assert sorted(set(re.findall(r"--test-threads=(\d+)", script))) == ["1", "4"]
 
 
 RENEWAL_GATES = [
+    (
+        PRIVATE_IP_PG,
+        "didcomm_composed_delivery::run_renewal_private_ip_refusal",
+    ),
     (
         "renewal_postgres_binding_and_same_successor_recovery_are_fenced",
         "renewal_binding_postgres::run",
@@ -136,12 +389,43 @@ def assert_renewal_registration(script, source, name, owner):
     assert "canvas_published_database::PublishedDatabase::start()" in body
     assert f"{owner}(&owned.url).await;" in body
     assert "owned.close_verified().unwrap();" in body
+    if name == PRIVATE_IP_PG:
+        marker = 'println!("\\nDIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1");'
+        assert body.count(marker) == 1
+        assert body.index("owned.close_verified().unwrap();") < body.index(marker)
+
+
+def test_renewal_private_ip_pg_owner_keeps_real_adapter_and_fence_assertions() -> None:
+    support = (
+        ROOT / "rust/crates/canvas-acceptance/tests/support/didcomm_renewal_composed.rs"
+    ).read_text(encoding="utf-8")
+    graph = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/didcomm_composed_delivery.rs"
+    ).read_text(encoding="utf-8")
+    required = (
+        "PostgresCredentialRepository::new(",
+        "PostgresCredentialLifecycle::new(",
+        "NativeInitiationDidcommDelivery::new(",
+        "DidcommEndpointValidator::new(false)",
+        "fresh_initiation::services(",
+        "CredentialRenewalService::new(",
+        "NativeDidcommError::EndpointNotPublic",
+        "InitiationDidcommTransportClaimOutcome::Absent",
+        "snapshot(pool, &id).await",
+        "builder.calls.load(Ordering::SeqCst), 0",
+        "transport.attempts.load(Ordering::SeqCst), 0",
+    )
+    for token in required:
+        assert token in support
+    assert "pub(super) async fn run_renewal_private_ip_refusal" in graph
+    assert "renewal::run_private_ip_refusal(&pool).await;" in graph
 
 
 @pytest.mark.parametrize("name,owner", RENEWAL_GATES)
 def test_renewal_gates_require_real_owned_database_and_cleanup(name, owner):
     source = (
-        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     assert_renewal_registration(SCRIPT.read_text(encoding="utf-8"), source, name, owner)
 
@@ -155,7 +439,7 @@ def test_renewal_gate_registration_rejects_weakened_qualification(
 ):
     script = SCRIPT.read_text(encoding="utf-8")
     source = (
-        ROOT / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     line = next(line for line in script.splitlines() if f"'{name}: test'" in line)
     if mutation == "missing":
@@ -186,11 +470,40 @@ def shell_case(tmp_path):
     fake_bin = tmp_path / "fake-bin"
     fake_bin.mkdir()
     doubles = {
+        "python3": f'''#!/usr/bin/env bash
+if [[ "${{1:-}}" == */start-canvas-didcomm-openbao.py ]]; then
+  printf 'kms-start|%s\\n' "$1" >> "$TEST_LOG"
+  [[ "${{2:-}}" == --ca-output && -n "${{3:-}}" ]] || exit 90
+  printf '%s\\n' '-----BEGIN CERTIFICATE-----' 'synthetic-public-ca' '-----END CERTIFICATE-----' > "$3"
+  printf '%s\\n' '{{"container":"canvas-kms-aaaaaaaaaaaa","url":"https://127.0.0.1:8200","root_token":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","ca_cert_file":"'"$3"'"}}'
+  exit 0
+fi
+if [[ "${{1:-}}" == */rust_db_obligations.py ]]; then
+  # This shell fixture owns orchestration, not compiler JSON/libtest protocol.
+  # The recorder's real child and cancellation behavior have separate tests.
+  shift
+  [[ "$1" == --name && "$3" == --owner && "$5" == -- ]] || exit 90
+  if [[ "$2" == flow_acceptance || "$2" == canvas_worker_acceptance || "$2" == canvas_composition_acceptance ]]; then
+    [[ "$4" == canvas ]] || exit 90
+  elif [[ "$2" == selfhost_acceptance ]]; then
+    [[ "$4" == canvas || "$4" == selfhost ]] || exit 90
+  else
+    exit 90
+  fi
+  shift 5
+  exec "$@"
+fi
+exec "{Path(sys.executable).as_posix()}" "$@"
+''',
         "docker": r"""#!/usr/bin/env bash
 set -euo pipefail
 record=docker
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
+if [[ $# == 3 && "$1" == rm && "$2" == -f && "$3" == canvas-kms-aaaaaaaaaaaa ]]; then
+  exit 0
+fi
+if [[ $# == 3 && "$1" == image && "$2" == inspect ]]; then exit 1; fi
 [[ $# == 2 && "$1" == pull ]] || exit 90
 [[ "$TEST_FAILURE" != docker ]] || exit 13
 """,
@@ -198,6 +511,22 @@ printf '%s\n' "$record" >> "$TEST_LOG"
 set -euo pipefail
 printf 'jq|%s\n' "$1" >> "$TEST_LOG"
 if [[ "$1" == -er ]]; then
+  if [[ "$#" == 3 && "$2" == .container && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'canvas-kms-aaaaaaaaaaaa\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .url && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'https://127.0.0.1:8200\n'
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .ca_cert_file && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf '%s\n' "$RUNNER_TEMP"/canvas-kms-ca.*/ca.crt
+    exit 0
+  fi
+  if [[ "$#" == 3 && "$2" == .root_token && "$3" == "$RUNNER_TEMP"/canvas-kms.* ]]; then
+    printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+    exit 0
+  fi
   [[ "$#" == 3 && "$3" == ../contracts/canvas-worker-consumer-range-oracle.json ]] || exit 90
   [[ "$TEST_FAILURE" != images ]] || exit 17
   printf '%s\n' "$TEST_POSTGRES_IMAGE" "$TEST_PYTHON_IMAGE"
@@ -227,8 +556,16 @@ elif [[ "$#" == 6 && "$1" == -r && "$2" == --arg && "$3" == target ]]; then
 else
   [[ "$#" == 9 && "$1" == -r && "$2" == --arg && "$3" == target && "$5" == --arg && "$6" == package && "$9" == "$RUNNER_TEMP/rust-test-artifacts.json" ]] || exit 90
   [[ "$8" == *'"#" + $package + "@"'* ]] || exit 90
-  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract ]] || exit 90
-  [[ "$7" == marty-service-acceptance ]] || exit 90
+  [[ "$4" == canvas_published_schema_contract || "$4" == canvas_published_worker_contract || "$4" == flow_published_schema_contract || "$4" == selfhost_public_image_contract ]] || exit 90
+  if [[ "$4" == canvas_published_worker_contract ]]; then
+    [[ "$7" == marty-canvas-worker-acceptance ]] || exit 90
+  elif [[ "$4" == flow_published_schema_contract ]]; then
+    [[ "$7" == marty-flow-acceptance ]] || exit 90
+  elif [[ "$4" == selfhost_public_image_contract ]]; then
+    [[ "$7" == marty-selfhost-acceptance ]] || exit 90
+  else
+    [[ "$7" == marty-canvas-acceptance ]] || exit 90
+  fi
   [[ "$TEST_FAILURE" != artifacts ]] || exit 18
   if [[ "$TEST_FAILURE" == missing-executable ]]; then
     printf './does-not-exist\n'
@@ -236,6 +573,10 @@ else
     printf './contract\n./different-contract\n'
   elif [[ "$4" == canvas_published_worker_contract ]]; then
     printf './worker-contract\n'
+  elif [[ "$4" == flow_published_schema_contract ]]; then
+    printf './flow-contract\n'
+  elif [[ "$4" == selfhost_public_image_contract ]]; then
+    printf './selfhost-contract\n'
   else
     printf './contract\n'
   fi
@@ -259,11 +600,15 @@ exec /usr/bin/grep "$@"
 set -euo pipefail
 name="${0##*/}"
 [[ "$MARTY_CANVAS_WORKER_TEST_BINARY" == "$TEST_WORKER_BINARY" ]] || exit 91
-[[ "$MARTY_ISSUANCE_TEST_BINARY" == "$TEST_ISSUANCE_BINARY" ]] || exit 91
+if [[ "${TEST_WORKER_ONLY_MODE:-0}" != 1 ]]; then
+  [[ "$MARTY_ISSUANCE_TEST_BINARY" == "$TEST_ISSUANCE_BINARY" ]] || exit 91
+fi
 record="child|$name|${MARTY_CANVAS_PUBLISHED_SCHEMA_TEST:-absent}"
 for argument in "$@"; do record+="|$argument"; done
 printf '%s\n' "$record" >> "$TEST_LOG"
-if [[ "$#" == 1 && "$1" == --list ]]; then
+if [[ "$#" == 2 && "$1" == --list && "$2" == --ignored ]]; then
+  printf '%s\n' 'scoped_transit_signer_verifies_without_key_read_authority: test'
+elif [[ "$#" == 1 && "$1" == --list ]]; then
   [[ "$TEST_FAILURE" != list ]] || exit 19
   while IFS= read -r registration; do printf '%s\n' "$registration"; done < "registrations-$name"
 elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
@@ -277,26 +622,108 @@ elif [[ "$#" -ge 3 && "$1" == --list && "$2" == --skip ]]; then
   done < "registrations-$name"
 else
   [[ "$TEST_FAILURE" != execute ]] || exit 23
+  if [[ "$name" == worker-contract && "$*" == *--test-threads=4* ]]; then
+    printf 'retry-tier|%s\n' "${MARTY_CANVAS_WORKER_RETRY_AFTER_TIER:-absent}" >> "$TEST_LOG"
+    printf 'validation-tier|%s\n' "${MARTY_CANVAS_WORKER_VALIDATION_TIER:-absent}" >> "$TEST_LOG"
+  fi
   if [[ "$TEST_FAILURE" == json-serial && "$name" == contract &&
     "$1" == json_consumer_diagnostic_matches_published_boundaries ]]; then
     exit 26
   fi
-  if [[ "$*" == *--test-threads=4* ]]; then
+  if [[ "$*" == *--test-threads=4* || ( "$name" == flow-contract && "$*" == *--test-threads=1* ) ]]; then
     printf 'full target %s\n' "$name"
+    printf 'MARTY_CI_PHASE_V1 {"phase":"scenario","name":"%s","duration_ms":1,"status":"ok"}\n' "$name"
     [[ "$TEST_FAILURE" != "$name-full" ]] || exit 24
-    if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal ]]; then
-      touch "started-$name"
-      other=contract
-      [[ "$name" == contract ]] && other=worker-contract
-      for (( attempt=0; attempt<200; attempt++ )); do
-        [[ -f "started-$other" ]] && break
-        sleep 0.05
-      done
-      [[ -f "started-$other" ]] || exit 25
-      if [[ "$TEST_FAILURE" == signal ]]; then
-        [[ "$name" != contract ]] || kill -TERM "$TEST_PARENT_PID"
-        sleep 1
+    if [[ "$name" == worker-contract ]]; then
+      case "$TEST_FAST_OWNER_ROW" in
+        ok) printf 'test worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+        missing) ;;
+        duplicate) printf 'test worker_validation_repository_matches_frozen_errors ... ok\ntest worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+        ignored) printf 'test worker_validation_repository_matches_frozen_errors ... ignored\n' ;;
+        failed) printf 'test worker_validation_repository_matches_frozen_errors ... FAILED\n' ;;
+        substituted) printf 'test wrong_worker_validation_repository_matches_frozen_errors ... ok\n' ;;
+      esac
+    elif [[ "$name" == contract ]]; then
+      if [[ "$*" != *"--skip timeout_consumer_matches_published_socket_behavior"* ]]; then
+        case "$TEST_TIMEOUT_MARKER" in
+          ok) printf 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\n' ;;
+          missing) ;;
+          duplicate) printf 'PUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\nPUBLISHED_TIMEOUT_CONSUMER_COMPLETE_V1\n' ;;
+        esac
       fi
+      if [[ "$*" != *"--skip rendered_base_process::renderer_bounds_proof_is_image_free"* ]]; then
+        case "$TEST_RENDERER_BOUNDS_MARKER" in
+          ok) printf 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\n' ;;
+          prefixed) printf 'test %s ... RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\nok\n' 'renderer-bounds' ;;
+          missing) ;;
+          duplicate) printf 'RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1RENDERED_BASE_RENDERER_LIMITS_COMPLETE_V1\n' ;;
+        esac
+      fi
+      if [[ "$*" != *"--skip rendered_base_process::rendered_base_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
+      case "$TEST_RENDERED_CONFIG_MARKER" in
+        ok) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'rendered-base-config' ;;
+        missing) ;;
+        duplicate) printf 'RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1RENDERED_BASE_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+      esac
+      fi
+      case "${TEST_PRIVATE_IP_PG_MARKER:-ok}" in
+        ok) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\nok\n' 'private-ip-pg' ;;
+        missing) ;;
+        duplicate) printf 'DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1DIDCOMM_RENEWAL_PRIVATE_IP_PG_REFUSAL_COMPLETE_V1\n' ;;
+      esac
+      if [[ "$*" != *"--skip resolved_kubernetes_runtime::resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy"* ]]; then
+      case "${TEST_K8S_CONFIG_MARKER:-ok}" in
+        ok) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+        prefixed) printf 'test %s ... RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\nok\n' 'k8s-config' ;;
+        missing) ;;
+        duplicate) printf 'RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1RESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1\n' ;;
+      esac
+      fi
+    fi
+    if [[ "$TEST_FAILURE" == barrier || "$TEST_FAILURE" == signal || "$TEST_FAILURE" == signal-after-flow ]]; then
+      if [[ "$name" == flow-contract ]]; then
+        [[ -f finished-contract ]] || exit 25
+        if [[ "$TEST_FAILURE" == signal-after-flow ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          sleep 1
+          kill -TERM "$TEST_PARENT_PID"
+          while :; do sleep 0.05; done
+        fi
+      else
+        touch "started-$name"
+        for (( attempt=0; attempt<200; attempt++ )); do
+          [[ -f started-contract && -f started-worker-contract && -f started-selfhost-contract ]] && break
+          sleep 0.05
+        done
+        [[ -f started-contract && -f started-worker-contract && -f started-selfhost-contract ]] || exit 25
+        if [[ "$TEST_FAILURE" == signal ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          touch "armed-$name"
+          if [[ "$name" == contract ]]; then
+            for (( attempt=0; attempt<200; attempt++ )); do
+              [[ -f armed-contract && -f armed-worker-contract && -f armed-selfhost-contract ]] && break
+              sleep 0.05
+            done
+            [[ -f armed-contract && -f armed-worker-contract && -f armed-selfhost-contract ]] || exit 25
+            kill -TERM "$TEST_PARENT_PID"
+          fi
+          while :; do sleep 0.05; done
+        fi
+        if [[ "$TEST_FAILURE" == signal-after-flow && "$name" != contract ]]; then
+          trap 'printf "stopped|%s\n" "$name" >> "$TEST_LOG"; exit 143' TERM
+          while :; do sleep 0.05; done
+        fi
+        touch "finished-$name"
+      fi
+    fi
+  fi
+  if [[ "$*" == *--exact* ]]; then
+    if [[ "$TEST_FAILURE" == zero-serial && "$1" == worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings ]]; then
+      printf '%s\n' 'test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s'
+    else
+      printf '%s\n' 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s'
     fi
   fi
 fi
@@ -310,6 +737,14 @@ fi
         contract.read_bytes() + b"\n# distinct worker executable\n"
     )
     worker_contract.chmod(0o755)
+    selfhost_contract = tmp_path / "selfhost-contract"
+    selfhost_contract.write_bytes(
+        contract.read_bytes() + b"\n# distinct selfhost executable\n"
+    )
+    selfhost_contract.chmod(0o755)
+    flow_contract = tmp_path / "flow-contract"
+    flow_contract.write_bytes(contract.read_bytes() + b"\n# distinct Flow executable\n")
+    flow_contract.chmod(0o755)
     worker_binary = tmp_path / "worker-binary"
     worker_binary.write_bytes(worker_contract.read_bytes())
     worker_binary.chmod(0o755)
@@ -330,22 +765,57 @@ fi
         pins=PINS,
         run_id="12345",
         qualification=False,
+        fast_owner_row="ok",
+        config_marker="ok",
+        renderer_marker="ok",
+        timeout_marker="ok",
+        private_ip_pg_marker="ok",
+        k8s_config_marker="ok",
     ):
         lines = (
             registrations
             if registrations is not None
-            else [f"{name}: test" for name in required_registrations()]
+            else [
+                f"{name}: test"
+                for name in sorted(
+                    set(required_registrations())
+                    | set(MIGRATED_CASES)
+                    | set(SELFHOST_CASES)
+                    | set(FLOW_CASES)
+                )
+            ]
         )
         composition = [
             line
             for line in lines
-            if line.startswith("heartbeat_readiness_")
-            or line.startswith("json_consumer_diagnostic_")
+            if line.startswith(
+                (
+                    "heartbeat_readiness_",
+                    "json_consumer_diagnostic_",
+                    "timeout_consumer_",
+                    RENDERER_BOUNDS,
+                    RENDERED_CONFIG,
+                    PRIVATE_IP_PG,
+                    K8S_RENDERED_CONFIG,
+                )
+            )
         ]
-        worker = [line for line in lines if line not in composition]
+        selfhost = [
+            line for line in lines if line.partition(": test")[0] in SELFHOST_CASES
+        ]
+        flow = [line for line in lines if line.partition(": test")[0] in FLOW_CASES]
+        composition = [line for line in composition if line not in selfhost]
+        worker = [
+            line for line in lines if line not in composition and line not in selfhost and line not in flow
+        ]
         if duplicate_across_targets:
             composition.append(f"{TARGET}: test")
-        for name, subset in (("contract", composition), ("worker-contract", worker)):
+        for name, subset in (
+            ("contract", composition),
+            ("flow-contract", flow),
+            ("worker-contract", worker),
+            ("selfhost-contract", selfhost),
+        ):
             (tmp_path / f"registrations-{name}").write_text(
                 "\n".join(subset) + "\n", encoding="utf-8"
             )
@@ -372,7 +842,10 @@ fi
                         {
                             "reason": "compiler-artifact",
                             "package_id": "path+file:///checkout/rust/services/issuance#marty-issuance-service@0.1.0",
-                            "target": {"name": "marty-issuance-service", "kind": ["bin"]},
+                            "target": {
+                                "name": "marty-issuance-service",
+                                "kind": ["bin"],
+                            },
                             "profile": {"test": False},
                             "executable": "__ISSUANCE_BINARY__",
                         },
@@ -385,13 +858,23 @@ fi
         environment.update(
             {
                 "TEST_FAILURE": failure,
+                "TEST_FAST_OWNER_ROW": fast_owner_row,
+                "TEST_RENDERED_CONFIG_MARKER": config_marker,
+                "TEST_RENDERER_BOUNDS_MARKER": renderer_marker,
+                "TEST_TIMEOUT_MARKER": timeout_marker,
+                "TEST_PRIVATE_IP_PG_MARKER": private_ip_pg_marker,
+                "TEST_K8S_CONFIG_MARKER": k8s_config_marker,
                 "TEST_POSTGRES_IMAGE": pins[0],
                 "TEST_PYTHON_IMAGE": pins[1],
                 "TEST_REAL_WORKER_JQ": "1" if worker_artifacts is not None else "0",
+                "TEST_WORKER_ONLY_MODE": "1"
+                if arguments and arguments[0].startswith("worker-")
+                else "0",
                 "CONTRACT_SOURCE": SCRIPT.as_posix(),
                 "GITHUB_RUN_ID": run_id,
                 "GITHUB_RUN_ATTEMPT": "1",
                 "GITHUB_JOB": "test-rust-services",
+                "GITHUB_SHA": "a" * 40,
                 "MARTY_CANVAS_FULL_QUALIFICATION": "1" if qualification else "0",
                 SCHEMA_ENV: "0",
             }
@@ -411,6 +894,7 @@ source "$CONTRACT_SOURCE" "$@"
             capture_output=True,
             text=True,
             timeout=30,
+            check=False,
         )
         calls = [
             line.split("|") for line in log.read_text(encoding="utf-8").splitlines()
@@ -418,6 +902,456 @@ source "$CONTRACT_SOURCE" "$@"
         return result, calls
 
     return run
+
+
+@pytest.mark.parametrize(
+    "arguments,qualification,expected",
+    [
+        ([], False, "full"),
+        (["full"], False, "full"),
+        (["full"], True, "full"),
+        (["full-after-preflights"], False, "routine"),
+        (["full-after-preflights"], True, "full"),
+    ],
+)
+def test_nested_tiers_select_worker_and_historical_timeout_owners(
+    shell_case, tmp_path, arguments, qualification, expected
+):
+    if arguments == ["full-after-preflights"]:
+        evidence = tmp_path / "canvas-published-preflights.sha256"
+        evidence.write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + f"\n12345\n1\ntest-rust-services\n{int(qualification)}\n",
+            newline="\n",
+        )
+    result, calls = shell_case(arguments, qualification=qualification)
+    assert result.returncode == 0, result.stderr
+    assert [call for call in calls if call[0] == "retry-tier"] == [
+        ["retry-tier", expected]
+    ]
+    assert [call for call in calls if call[0] == "validation-tier"] == [
+        ["validation-tier", expected]
+    ]
+    composition = next(
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    )
+    assert ("timeout_consumer_matches_published_socket_behavior" in composition) == (
+        arguments == ["full-after-preflights"] and not qualification
+    )
+    flow = [
+        call
+        for call in calls
+        if call[:2] == ["child", "flow-contract"] and "--test-threads=4" in call
+    ]
+    assert len(flow) == 1
+    assert '"phase":"canvas_target","name":"flow"' in result.stdout
+
+
+def test_flow_target_failure_fails_complete_canvas_gate(shell_case):
+    result, calls = shell_case(["full"], failure="flow-contract-full")
+    assert result.returncode != 0
+    assert any(call[:2] == ["child", "flow-contract"] for call in calls)
+    assert '"phase":"canvas_target","name":"flow"' in result.stdout
+    assert '"status":"failed"' in result.stdout
+
+
+def test_composition_failure_still_executes_flow_owner(shell_case):
+    result, calls = shell_case(["full"], failure="contract-full")
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "flow-contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert "Canvas composition target exit: 24" in result.stdout
+    assert "Flow target exit: 0" in result.stdout
+
+
+@pytest.mark.parametrize("timeout_marker", ["missing", "duplicate"])
+def test_full_timeout_reference_requires_one_verified_completion(
+    shell_case, timeout_marker
+):
+    result, _ = shell_case(["full"], qualification=True, timeout_marker=timeout_marker)
+    assert result.returncode != 0
+    assert "Published HTTPX timeout reference did not match" in result.stderr
+
+
+def test_caller_cannot_override_native_retry_tier(shell_case, monkeypatch):
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_RETRY_AFTER_TIER", "routine")
+    result, calls = shell_case(["full"], qualification=True)
+    assert result.returncode == 2
+    assert "tier is owned by this runner" in result.stderr
+    assert not any(call[0] in {"docker", "child"} for call in calls)
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+def test_caller_cannot_override_native_validation_tier(
+    shell_case, monkeypatch, qualification
+):
+    monkeypatch.setenv("MARTY_CANVAS_WORKER_VALIDATION_TIER", "routine")
+    result, calls = shell_case(["full"], qualification=qualification)
+    assert result.returncode == 2
+    assert "tier is owned by this runner" in result.stderr
+    assert not any(call[0] in {"docker", "child"} for call in calls)
+
+
+@pytest.mark.parametrize(
+    "row", ["missing", "duplicate", "ignored", "failed", "substituted"]
+)
+@pytest.mark.parametrize("mode", ["full", "worker-full"])
+def test_canvas_fast_owner_must_actually_pass_once(shell_case, row, mode):
+    result, calls = shell_case([mode], fast_owner_row=row)
+    assert result.returncode != 0
+    assert any(call[0] == "child" and call[1] == "worker-contract" for call in calls)
+    assert "fast owner did not execute exactly once and pass" in result.stderr
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_rendered_config_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], config_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "configuration proof did not execute and complete exactly once" in result.stderr
+    )
+
+
+def test_rendered_config_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_renderer_bounds_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], renderer_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert "Renderer bounds proof did not execute and complete exactly once" in result.stderr
+
+
+def test_renderer_bounds_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], renderer_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+def _config_evidence(tmp_path, *, qualification=False):
+    record = {
+        "schema": 1,
+        "composition_sha256": hashlib.sha256(
+            (tmp_path / "contract").read_bytes()
+        ).hexdigest(),
+        "run": {
+            "GITHUB_RUN_ID": "12345",
+            "GITHUB_RUN_ATTEMPT": "1",
+            "GITHUB_JOB": "test-rust-services",
+            "GITHUB_SHA": "a" * 40,
+        },
+        "qualification": "1" if qualification else "0",
+        "cases": [RENDERER_BOUNDS, RENDERED_CONFIG, K8S_RENDERED_CONFIG],
+    }
+    (tmp_path / "canvas-config-proofs.json").write_text(
+        json.dumps(record) + "\n", encoding="ascii"
+    )
+    return record
+
+
+@pytest.mark.parametrize("qualification", [False, True])
+@pytest.mark.parametrize("mode", ["full", "full-after-preflights"])
+def test_same_run_composition_proof_skips_only_three_completed_cases(
+    shell_case, tmp_path, qualification, mode
+):
+    _config_evidence(tmp_path, qualification=qualification)
+    if mode == "full-after-preflights":
+        (tmp_path / "canvas-published-preflights.sha256").write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + f"\n12345\n1\ntest-rust-services\n{int(qualification)}\n",
+            encoding="ascii",
+            newline="\n",
+        )
+    result, calls = shell_case([mode], qualification=qualification)
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert composition[0].count(RENDERER_BOUNDS) == 1
+    assert composition[0].count(RENDERED_CONFIG) == 1
+    assert composition[0].count(K8S_RENDERED_CONFIG) == 1
+    assert composition[0].count("--skip") == (
+        5 if mode == "full-after-preflights" and not qualification else 4
+    )  # serial, three image-free cases, and routine-only historical HTTPX proof
+    assert PRIVATE_IP_PG not in composition[0]
+
+
+@pytest.mark.parametrize(
+    "mutation", ["missing", "hash", "run", "tier", "source", "cases", "malformed"]
+)
+def test_untrusted_composition_proof_falls_back_to_full_execution(
+    shell_case, tmp_path, mutation
+):
+    if mutation != "missing":
+        record = _config_evidence(tmp_path)
+        if mutation == "hash":
+            record["composition_sha256"] = "0" * 64
+        elif mutation == "run":
+            record["run"]["GITHUB_RUN_ATTEMPT"] = "other"
+        elif mutation == "tier":
+            record["qualification"] = "1"
+        elif mutation == "source":
+            record["run"]["GITHUB_SHA"] = "b" * 40
+        elif mutation == "cases":
+            record["cases"] = [RENDERED_CONFIG]
+        (tmp_path / "canvas-config-proofs.json").write_text(
+            "not-json" if mutation == "malformed" else json.dumps(record),
+            encoding="ascii",
+        )
+    result, calls = shell_case(["full"])
+    assert result.returncode == 0, result.stderr
+    composition = [
+        call
+        for call in calls
+        if call[:2] == ["child", "contract"] and "--test-threads=4" in call
+    ]
+    assert len(composition) == 1
+    assert RENDERER_BOUNDS not in composition[0]
+    assert RENDERED_CONFIG not in composition[0]
+    assert K8S_RENDERED_CONFIG not in composition[0]
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_renewal_private_ip_pg_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], private_ip_pg_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Published-SQL renewal private-IP refusal proof did not execute"
+        in result.stderr
+    )
+
+
+def test_renewal_private_ip_pg_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], private_ip_pg_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+@pytest.mark.parametrize("marker", ["missing", "duplicate"])
+def test_k8s_renewal_config_marker_must_complete_exactly_once(shell_case, marker):
+    result, calls = shell_case(["full"], k8s_config_marker=marker)
+    assert result.returncode != 0
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+    assert (
+        "Resolved Kubernetes renewal 2x2 configuration proof did not execute"
+        in result.stderr
+    )
+
+
+def test_k8s_renewal_config_marker_accepts_interleaved_harness_output(shell_case):
+    result, calls = shell_case(["full"], k8s_config_marker="prefixed")
+    assert result.returncode == 0, result.stderr
+    assert any(
+        call[:2] == ["child", "contract"] and "--test-threads=4" in call
+        for call in calls
+    )
+
+
+def test_k8s_renewal_config_owner_is_opt_in_and_completes_after_four_cases() -> None:
+    target = (
+        ROOT / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
+    ).read_text(encoding="utf-8")
+    source = (
+        ROOT
+        / "rust/crates/canvas-acceptance/tests/support/resolved_kubernetes_runtime.rs"
+    ).read_text(encoding="utf-8")
+    assert (
+        '#[path = "support/resolved_kubernetes_runtime.rs"]\nmod resolved_kubernetes_runtime;'
+        in target
+    )
+    owner = "fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy() {"
+    assert source.count(owner) == 1
+    body = source.split(owner, 1)[1]
+    assert "#[test]\n" + owner in source
+    assert 'if !cfg!(target_os = "linux")' in body
+    assert 'std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST")' in body
+    assert "let prepared = Prepared::prepare()" in body
+    assert body.count("resolve(&spec, &prepared)") == 1
+    assert "(false, false), (true, false), (false, true), (true, true)" in body
+    assert body.index("assert_eq!(seen.len(), 4);") < body.index(
+        'println!("\\nRESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1");'
+    )
+
+
+def test_worker_preflight_does_not_claim_rendered_config_completion(shell_case):
+    result, calls = shell_case(["timeout-preflight"], config_marker="missing")
+    assert result.returncode == 0, result.stderr
+    assert not any("--test-threads=4" in call for call in calls)
+
+
+def test_opt_in_worker_full_keeps_exact_worker_owner_without_composition(shell_case):
+    result, calls = shell_case(["worker-full"])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert all(call[1] == "worker-contract" for call in children)
+    assert children[0] == ["child", "worker-contract", "1", "--list"]
+    assert any("--test-threads=1" in call for call in children)
+    assert any("--test-threads=4" in call for call in children)
+    for target in HISTORICAL_SERIAL:
+        assert sum(call[3:] == [target, "--exact", "--nocapture", "--test-threads=1"] for call in children) == 1
+    parallel = next(call for call in children if "--test-threads=4" in call)
+    assert all(["--skip", target] == parallel[i : i + 2] for target in HISTORICAL_SERIAL for i in [parallel.index(target) - 1])
+    assert [call for call in calls if call[0] == "docker"] == [
+        ["docker", "image", "inspect", PINS[0]],
+        ["docker", "image", "inspect", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", PINS[1]],
+    ]
+    assert (
+        "Canvas tier inventory: exact compiled worker selection confirmed"
+        in result.stdout
+    )
+
+
+@pytest.mark.parametrize("name,target", PREFLIGHTS)
+def test_opt_in_worker_preflight_needs_only_its_owned_target(
+    shell_case, name: str, target: str
+):
+    result, calls = shell_case([f"worker-{name}"])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert children == [
+        ["child", "worker-contract", "1", "--list"],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            target,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+    ]
+    assert not any(
+        call[1:3] == ["-r", "--arg"] and "canvas_published_schema_contract" in call
+        for call in calls
+    )
+
+
+def test_opt_in_worker_reuse_requires_exact_run_bound_proof_before_image_pull(
+    shell_case, tmp_path
+):
+    evidence = tmp_path / "canvas-published-preflights.sha256"
+    result, calls = shell_case(["worker-full-after-preflights"])
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+    evidence.write_text(
+        hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+        + "\n12345\n1\ntest-rust-services\n0\n",
+        newline="\n",
+    )
+    result, calls = shell_case(["worker-full-after-preflights"])
+    assert result.returncode == 0, result.stderr
+    worker_full = next(
+        call
+        for call in calls
+        if call[:2] == ["child", "worker-contract"] and "--test-threads=4" in call
+    )
+    assert [
+        worker_full[index + 1]
+        for index, item in enumerate(worker_full[:-1])
+        if item == "--skip"
+    ] == [
+        "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        DEADLINE_TARGET,
+        *FAST_MODE_SKIPS,
+    ]
+    assert not any(call[:2] == ["child", "contract"] for call in calls)
+    mismatched, mismatched_calls = shell_case(
+        ["worker-full-after-preflights"], run_id="other-run"
+    )
+    assert mismatched.returncode != 0
+    assert not any(call[0] == "docker" for call in mismatched_calls)
+
+
+def test_opt_in_worker_failure_propagates_and_removes_owned_log(shell_case, tmp_path):
+    result, calls = shell_case(["worker-full"], failure="worker-contract-full")
+    assert result.returncode != 0
+    assert any("--test-threads=4" in call for call in calls)
+    assert not list(tmp_path.glob("canvas-worker-only.*"))
+
+
+def test_opt_in_worker_missing_case_fails_before_image_pull(shell_case):
+    cases = [
+        f"{name}: test"
+        for name in sorted(set(required_registrations()) | set(MIGRATED_CASES))
+        if name != TIMEOUT_TARGET
+    ]
+    result, calls = shell_case(["worker-full"], registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+
+
+def test_opt_in_worker_same_count_substitution_fails_before_image_pull(shell_case):
+    names = sorted(set(required_registrations()) | set(MIGRATED_CASES))
+    cases = [
+        f"{('substituted_worker_timeout' if name == TIMEOUT_TARGET else name)}: test"
+        for name in names
+    ]
+    result, calls = shell_case(["worker-full"], registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+
+
+@pytest.mark.parametrize("substitution", [False, True])
+@pytest.mark.parametrize(
+    "removed",
+    [
+        "selfhost_packaged_runtime::tests::cleanup_failure_retains_scratch_and_original_failure",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_distinguishes_missing_markers_from_secret_exposure",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_retries_only_delayed_markers_with_decreasing_read_budget",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_leaks_invalid_utf8_and_docker_errors_without_retry",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_rejects_empty_secret_and_zero_budget_before_reading",
+        "selfhost_runtime_sidecar::recovery_tests::log_boundary_does_not_accept_late_success_or_read_again_after_expiry",
+    ],
+)
+def test_selfhost_case_inventory_fails_closed_before_image_pull(
+    shell_case, substitution, removed
+):
+    names = sorted(
+        set(required_registrations()) | set(MIGRATED_CASES) | set(SELFHOST_CASES)
+    )
+    cases = [f"{name}: test" for name in names if name != removed]
+    if substitution:
+        cases.append("substituted_selfhost_cleanup_case: test")
+    result, calls = shell_case(registrations=cases)
+    assert result.returncode != 0
+    assert not any(call[0] == "docker" for call in calls)
+    assert not any("--test-threads=4" in call for call in calls)
 
 
 @pytest.mark.parametrize("arguments", [[], ["full"]])
@@ -429,21 +1363,55 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
     checks = [call[2] for call in calls if call[:2] == ["grep", "-Fx"]]
     serial = "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings"
     json_serial = "json_consumer_diagnostic_matches_published_boundaries"
-    assert checks == [f"{name}: test" for name in required_registrations()] + [
+    assert checks == [
+        f"{name}: test"
+        for name in required_registrations()
+        if name not in FLOW_HISTORICAL_ROSTER
+    ] + [
         f"{serial}: test",
+        f"{DEADLINE_TARGET}: test",
         f"{json_serial}: test",
+        *(f"{target}: test" for target in HISTORICAL_SERIAL),
+        "scoped_transit_signer_verifies_without_key_read_authority: test",
     ]
     children = [call for call in calls if call[0] == "child"]
-    assert children[:6] == [
+    serial_prefix_len = 11 + len(HISTORICAL_SERIAL)
+    assert children[:serial_prefix_len] == [
         ["child", "contract", "1", "--list"],
         ["child", "worker-contract", "1", "--list"],
+        ["child", "selfhost-contract", "1", "--list"],
+        ["child", "flow-contract", "1", "--list"],
         ["child", "contract", "1", "--list", "--skip", json_serial],
-        ["child", "worker-contract", "1", "--list", "--skip", serial],
+        ["child", "worker-contract", "1", "--list", "--skip", serial, "--skip", DEADLINE_TARGET, *[item for target in HISTORICAL_SERIAL for item in ("--skip", target)]],
         [
             "child",
             "worker-contract",
             "1",
             serial,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+        [
+            "child",
+            "worker-contract",
+            "1",
+            DEADLINE_TARGET,
+            "--exact",
+            "--nocapture",
+            "--test-threads=1",
+        ],
+        *[
+            ["child", "worker-contract", "1", target, "--exact", "--nocapture", "--test-threads=1"]
+            for target in HISTORICAL_SERIAL
+        ],
+        ["child", "contract", "1", "--list", "--ignored"],
+        [
+            "child",
+            "contract",
+            "1",
+            "scoped_transit_signer_verifies_without_key_read_authority",
+            "--ignored",
             "--exact",
             "--nocapture",
             "--test-threads=1",
@@ -458,7 +1426,7 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
             "--test-threads=1",
         ],
     ]
-    assert sorted(children[6:]) == sorted(
+    assert sorted(children[serial_prefix_len:]) == sorted(
         [
             [
                 "child",
@@ -475,14 +1443,58 @@ def test_default_and_explicit_full_keep_all_registrations_and_run_every_test(
                 "1",
                 "--skip",
                 serial,
+                "--skip",
+                DEADLINE_TARGET,
+                *[item for target in HISTORICAL_SERIAL for item in ("--skip", target)],
+                "--nocapture",
+                "--test-threads=4",
+            ],
+            [
+                "child",
+                "selfhost-contract",
+                "1",
+                "--nocapture",
+                "--test-threads=4",
+            ],
+            [
+                "child",
+                "flow-contract",
+                "1",
                 "--nocapture",
                 "--test-threads=4",
             ],
         ]
     )
     assert [call for call in calls if call[0] == "docker"] == [
-        ["docker", "pull", pin] for pin in PINS
+        ["docker", "image", "inspect", PINS[0]],
+        ["docker", "image", "inspect", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", "mirror.gcr.io/library/" + PINS[0]],
+        ["docker", "pull", PINS[1]],
+        ["docker", "rm", "-f", "canvas-kms-aaaaaaaaaaaa"],
     ]
+    assert len([call for call in calls if call[0] == "kms-start"]) == 1
+
+
+@pytest.mark.parametrize(
+    "mode", ["full-without-selfhost", "full-after-preflights-without-selfhost"]
+)
+def test_parallel_canvas_owner_preserves_non_selfhost_cases(shell_case, tmp_path, mode):
+    if "after-preflights" in mode:
+        (tmp_path / "canvas-published-preflights.sha256").write_text(
+            hashlib.sha256((tmp_path / "worker-contract").read_bytes()).hexdigest()
+            + "\n12345\n1\ntest-rust-services\n0\n",
+            newline="\n",
+        )
+    result, calls = shell_case([mode])
+    assert result.returncode == 0, result.stderr
+    children = [call for call in calls if call[0] == "child"]
+    assert not any(call[:2] == ["child", "selfhost-contract"] for call in children)
+    for owner in ("contract", "worker-contract", "flow-contract"):
+        assert any(
+            call[:2] == ["child", owner] and "--test-threads=4" in call
+            for call in children
+        )
+    assert '"phase":"canvas_target","name":"selfhost"' not in result.stdout
 
 
 def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
@@ -504,6 +1516,8 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         "1",
         "--skip",
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        "--skip",
+        DEADLINE_TARGET,
         *[item for target in skipped for item in ("--skip", target)],
         "--nocapture",
         "--test-threads=4",
@@ -531,6 +1545,8 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
         if item == "--skip"
     ] == [
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings",
+        DEADLINE_TARGET,
+        *HISTORICAL_SERIAL,
         TARGET,
         BODY_TIMEOUT_TARGET,
         TIMEOUT_TARGET,
@@ -543,7 +1559,7 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert any(
         call[:2] == ["child", "worker-contract"]
         and "--test-threads=4" in call
-        and call.count("--skip") == 1
+        and call.count("--skip") == 2 + len(HISTORICAL_SERIAL)
         for call in calls
     )
 
@@ -553,15 +1569,25 @@ def test_proven_preflights_are_skipped_only_in_explicit_reuse_mode(
     assert not any(call[0] == "docker" for call in calls)
 
 
-def test_full_targets_reach_the_barrier_concurrently(shell_case, tmp_path):
+def test_flow_starts_after_composition_and_other_targets_overlap(shell_case, tmp_path):
     result, calls = shell_case(failure="barrier")
     assert result.returncode == 0, result.stderr
     full = [call for call in calls if "--test-threads=4" in call]
-    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert {call[1] for call in full} == {
+        "contract",
+        "worker-contract",
+        "flow-contract",
+        "selfhost-contract",
+    }
+    assert (tmp_path / "finished-contract").exists()
     assert "Canvas composition target exit: 0" in result.stdout
     assert "Canvas worker target exit: 0" in result.stdout
+    assert "Flow target exit: 0" in result.stdout
+    assert "Selfhost target exit: 0" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" in result.stdout
+    assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 
 
@@ -582,32 +1608,140 @@ def test_failed_serial_json_probe_stops_before_parallel_targets(shell_case):
     assert not any("--test-threads=4" in call for call in calls)
 
 
-def test_signal_reports_both_target_logs_before_cleanup(shell_case, tmp_path):
+def test_zero_selected_serial_test_stops_before_parallel_targets(shell_case):
+    result, calls = shell_case(failure="zero-serial")
+    assert result.returncode != 0
+    assert "Rust canvas_serial test sql_logging exited successfully" in result.stderr
+    assert "test result: ok. 0 passed" in result.stdout
+    assert not any("--test-threads=4" in call for call in calls)
+
+
+def test_signal_before_flow_start_reports_owned_target_logs(shell_case, tmp_path):
     result, calls = shell_case(failure="signal")
     assert result.returncode == 143
     assert {call[1] for call in calls if "--test-threads=4" in call} == {
         "contract",
         "worker-contract",
+        "selfhost-contract",
     }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit: not-started" in result.stdout
+    assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" not in result.stdout
+    assert "full target selfhost-contract" in result.stdout
+    assert {call[1] for call in calls if call[0] == "stopped"} == {
+        "contract",
+        "worker-contract",
+        "selfhost-contract",
+    }
     assert not list(tmp_path.glob("canvas-targets.*"))
 
 
-@pytest.mark.parametrize("failed", ["contract", "worker-contract"])
+def test_signal_after_flow_start_stops_owned_targets(shell_case, tmp_path):
+    result, calls = shell_case(failure="signal-after-flow")
+    assert result.returncode == 143
+    assert {call[1] for call in calls if "--test-threads=4" in call} == {
+        "contract",
+        "worker-contract",
+        "flow-contract",
+        "selfhost-contract",
+    }
+    assert "Flow target exit: not-started" not in result.stdout
+    assert "Flow target exit:" in result.stdout
+    assert {call[1] for call in calls if call[0] == "stopped"} == {
+        "worker-contract",
+        "flow-contract",
+        "selfhost-contract",
+    }
+    assert not list(tmp_path.glob("canvas-targets.*"))
+
+
+def test_fast_targets_relay_each_marker_before_final_raw_logs(shell_case):
+    result, _ = shell_case()
+    assert result.returncode == 0, result.stderr
+    assert "tail: cannot open" not in result.stderr
+    assert "Optional Canvas target timing unavailable" not in result.stderr
+    live = result.stdout.split("Canvas composition target exit:", 1)[0]
+    assert live.count('"name":"contract"') == 1
+    assert live.count('"name":"worker-contract"') == 1
+    assert live.count('"name":"flow-contract"') == 1
+    assert live.count('"name":"selfhost-contract"') == 1
+    for target, name in (
+        ("composition", "contract"),
+        ("worker", "worker-contract"),
+        ("flow", "flow-contract"),
+        ("selfhost", "selfhost-contract"),
+    ):
+        assert result.stdout.count(
+            f'MARTY_CI_TARGET_PHASE_V1 {target} {{"phase":"scenario","name":"{name}"'
+        ) == 1
+        assert result.stdout.count(
+            f'[raw-log] MARTY_CI_PHASE_V1 {{"phase":"scenario","name":"{name}"'
+        ) == 1
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"contract"'
+        )
+        == 1
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"worker-contract"'
+        )
+        == 1
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"selfhost-contract"'
+        )
+        == 1
+    )
+    assert (
+        result.stdout.count(
+            '[raw-log] MARTY_CI_PHASE_V1 {"phase":"scenario","name":"flow-contract"'
+        )
+        == 1
+    )
+
+
+def test_explicit_database_close_cannot_emit_second_cleanup_timing():
+    source = (
+        ROOT / "rust/services/issuance/tests/support/canvas_published_database.rs"
+    ).read_text(encoding="utf-8")
+    cleanup = source.split("    fn cleanup(&mut self) -> Result<(), String> {", 1)[1]
+    cleanup = cleanup.split("    pub fn close(mut self)", 1)[0]
+    assert cleanup.index("if self.probe.is_none() && self.postgres.is_none()") < (
+        cleanup.index('PhaseTimer::start("cleanup", "published_database_removal")')
+    )
+    assert "self.probe = None;" in cleanup
+    assert "self.postgres = None;" in cleanup
+    assert "self.cleanup()" in source.split("impl Drop for PublishedDatabase {", 1)[1]
+
+
+@pytest.mark.parametrize("failed", ["contract", "worker-contract", "flow-contract", "selfhost-contract"])
 def test_full_target_failure_is_not_masked_by_other_target(
     shell_case, tmp_path, failed
 ):
     result, calls = shell_case(failure=f"{failed}-full")
     assert result.returncode != 0
     full = [call for call in calls if "--test-threads=4" in call]
-    assert {call[1] for call in full} == {"contract", "worker-contract"}
+    assert {call[1] for call in full} == {
+        "contract",
+        "worker-contract",
+        "flow-contract",
+        "selfhost-contract",
+    }
     assert "Canvas composition target exit:" in result.stdout
     assert "Canvas worker target exit:" in result.stdout
+    assert "Flow target exit:" in result.stdout
+    assert "Selfhost target exit:" in result.stdout
     assert "full target contract" in result.stdout
     assert "full target worker-contract" in result.stdout
+    assert "full target flow-contract" in result.stdout
+    assert "full target selfhost-contract" in result.stdout
     assert not list(tmp_path.glob("canvas-targets.*"))
 
 
@@ -687,7 +1821,12 @@ def test_real_jq_selects_only_the_owned_non_test_worker_binary(shell_case):
 
 
 def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
-    registrations = [f"{name}: test" for name in required_registrations()]
+    registrations = [
+        f"{name}: test"
+        for name in sorted(
+            set(required_registrations()) | set(MIGRATED_CASES) | set(SELFHOST_CASES)
+        )
+    ]
     registrations.append(
         "worker_sql_logging_preserves_debug_diagnostics_and_operational_warnings_extra: test"
     )
@@ -700,10 +1839,19 @@ def test_full_mode_rejects_a_skip_that_would_drop_another_test(shell_case):
 def test_preflight_requires_only_exact_target_and_forces_configured_serial_execution(
     shell_case, mode, target
 ):
-    result, calls = shell_case([mode], registrations=[f"{target}: test"])
+    result, calls = shell_case(
+        [mode],
+        registrations=[
+            f"{RENDERED_CONFIG}: test",
+            f"{RENDERER_BOUNDS}: test",
+            f"{target}: test",
+        ],
+    )
     assert result.returncode == 0, result.stderr
     assert [call for call in calls if call[:2] == ["grep", "-Fx"]] == [
-        ["grep", "-Fx", f"{target}: test"]
+        ["grep", "-Fx", f"{RENDERED_CONFIG}: test"],
+        ["grep", "-Fx", f"{RENDERER_BOUNDS}: test"],
+        ["grep", "-Fx", f"{target}: test"],
     ]
     assert [call for call in calls if call[0] == "child"] == [
         ["child", "contract", "1", "--list"],
@@ -717,6 +1865,17 @@ def test_preflight_requires_only_exact_target_and_forces_configured_serial_execu
             "--nocapture",
             "--test-threads=1",
         ],
+    ]
+
+
+def test_preflight_rejects_missing_compiled_config_owner(shell_case):
+    result, calls = shell_case(
+        ["timeout-preflight"], registrations=[f"{TIMEOUT_TARGET}: test"]
+    )
+    assert result.returncode != 0
+    assert [call for call in calls if call[0] == "child"] == [
+        ["child", "contract", "1", "--list"],
+        ["child", "worker-contract", "1", "--list"],
     ]
 
 
@@ -767,7 +1926,9 @@ def test_preflight_rejects_missing_or_inexact_registration_without_running_it(
         "suffix": f"{target}_suffix: test",
         "other-preflight": f"{TIMEOUT_TARGET if target == TARGET else TARGET}: test",
     }[shape]
-    result, calls = shell_case([mode], registrations=[registration])
+    result, calls = shell_case(
+        [mode], registrations=[f"{RENDERED_CONFIG}: test", registration]
+    )
     assert result.returncode != 0
     assert [call for call in calls if call[0] == "child"] == [
         ["child", "contract", "1", "--list"],
@@ -833,29 +1994,41 @@ def test_preflight_propagates_preparation_listing_and_test_failures(
         "worker_body_timeout_native_child",
         "worker_provider_recovery_first_native_child",
         "operations_gateway_candidate_preserves_review_lifecycle",
+        RENDERED_CONFIG,
+        FLOW_HISTORICAL_ROSTER[0],
     ],
 )
 def test_full_mode_still_fails_on_missing_mandatory_registration(shell_case, missing):
     names = required_registrations()
     assert missing in names
     result, calls = shell_case(
-        registrations=[f"{name}: test" for name in names if name != missing]
+        registrations=[
+            f"{name}: test"
+            for name in sorted(set(names) | set(MIGRATED_CASES) | set(SELFHOST_CASES))
+            if name != missing
+        ]
     )
     assert result.returncode != 0
     assert all(call[3:] == ["--list"] for call in calls if call[0] == "child")
 
 
-def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_full_gate():
+def test_workflow_runs_worker_preflights_before_public_image_and_keeps_full_gate():
     workflow = yaml.safe_load(
         (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["test-rust-services"]["steps"]
     names = [step.get("name") for step in steps]
-    prepare = names.index("Prepare database contract executables")
+    rendered = names.index("Prepare required rendered base executable acceptance")
     preflight = names.index("Preflight published worker parity in two isolated groups")
+    image = names.index("Build public selfhost image")
+    loader = names.index("Prepare public selfhost image loader acceptance")
+    passport = names.index("Verify local passport signing is forbidden")
+    prepare = names.index("Prepare database contract executables")
     databases = names.index("Create isolated Rust contract databases")
     full = names.index("Run isolated database contract suites concurrently")
-    assert prepare + 1 == preflight < databases < full
+    assert names.count("Preflight published worker parity in two isolated groups") == 1
+    assert rendered + 1 == preflight < image < loader < passport < full
+    assert prepare < databases < full
     assert steps[preflight]["working-directory"] == "rust"
     assert steps[preflight]["shell"] == "bash"
     assert (
@@ -864,10 +2037,47 @@ def test_workflow_runs_all_preflights_immediately_after_preparation_and_keeps_fu
     )
     assert steps[preflight]["if"] == "matrix.lane == 'canvas'"
     assert steps[full]["run"] == (
-        "python3 ../scripts/ci/run-db-contract-groups.py "
-        "${{ matrix.lane == 'canvas' && 'canvas' || 'rust-db' }}"
+        "set -euo pipefail\n"
+        'if [[ "${{ matrix.lane }}" == contracts ]]; then\n'
+        '  nonce="$(openssl rand -hex 16)"\n'
+        '  docker exec "$MARTY_RUST_CI_REDIS_ID" redis-cli -n 14 SET '
+        'marty:tests:disposable-guard "$nonce" >/dev/null\n'
+        '  export MARTY_TEST_REDIS_DISPOSABLE_NONCE="$nonce"\n'
+        '  bao_nonce="$(openssl rand -hex 16)"\n'
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        '    --data "{\\"data\\":{\\"nonce\\":\\"$bao_nonce\\"}}" \\\n'
+        "    http://127.0.0.1:8200/v1/secret/data/marty-test-disposable-guard >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        "    --data '{\"type\":\"transit\"}' \\\n"
+        "    http://127.0.0.1:8200/v1/sys/mounts/transit >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    --header 'Content-Type: application/json' --request POST \\\n"
+        "    --data '{\"type\":\"aes256-gcm96\",\"exportable\":false,\"allow_plaintext_backup\":false}' \\\n"
+        "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 >/dev/null\n"
+        "  curl --silent --show-error --fail --header 'X-Vault-Token: test-only' \\\n"
+        "    http://127.0.0.1:8200/v1/transit/keys/integration-secret-envelope-marty-aes256 \\\n"
+        "    | jq -e '.data.exportable == false' >/dev/null\n"
+        "  export MARTY_TEST_OPENBAO_URL=http://127.0.0.1:8200\n"
+        "  export MARTY_TEST_OPENBAO_TOKEN=test-only\n"
+        '  export MARTY_TEST_OPENBAO_DISPOSABLE_NONCE="$bao_nonce"\n'
+        "  export BAO_TOKEN=test-only\n"
+        "fi\n"
+        'if [[ "${{ matrix.lane }}" == worker ]]; then\n'
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-preflights\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py worker-canvas\n"
+        'elif [[ "${{ matrix.lane }}" == flow ]]; then\n'
+        "  bash ../scripts/ci/run-flow-acceptance-contracts.sh\n"
+        'elif [[ "${{ matrix.lane }}" == selfhost ]]; then\n'
+        "  python3 ../scripts/ci/run-db-contract-groups.py selfhost-canvas\n"
+        "else\n"
+        "  python3 ../scripts/ci/run-db-contract-groups.py "
+        "${{ matrix.lane == 'canvas' && 'canvas-without-selfhost' || 'rust-db' }}\n"
+        "fi\n"
     )
-    assert "if" not in steps[full]
+    assert steps[image]["if"] == "matrix.lane == 'selfhost'"
+    assert steps[full]["if"] == "matrix.lane != 'renewal-unit'"
     for index in (preflight, full):
         assert not steps[index].get("continue-on-error", False)
     images = workflow["jobs"]["test-rust-service-images"]["steps"]
@@ -921,7 +2131,7 @@ def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualifica
         json.dumps(
             {
                 "reason": "compiler-artifact",
-                "package_id": "path+file:///checkout/rust/crates/service-acceptance#marty-service-acceptance@0.1.0",
+                "package_id": "path+file:///checkout/rust/crates/canvas-worker-acceptance#marty-canvas-worker-acceptance@0.1.0",
                 "target": {"name": "canvas_published_worker_contract"},
                 "executable": str(executable),
             }
@@ -971,7 +2181,7 @@ def test_preflight_group_owner_runs_exact_modes(tmp_path, monkeypatch, qualifica
     )
 
 
-def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
+def test_preflight_digest_selects_worker_owner_not_stale_packages(
     tmp_path, monkeypatch
 ):
     module = runpy.run_path(str(ROOT / "scripts/ci/run-db-contract-groups.py"))
@@ -979,6 +2189,8 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
     acceptance.write_bytes(b"current acceptance worker contract")
     stale = tmp_path / "issuance-worker-contract"
     stale.write_bytes(b"stale issuance worker contract")
+    old_acceptance = tmp_path / "old-acceptance-worker-contract"
+    old_acceptance.write_bytes(b"stale composition-package worker contract")
 
     def artifact(owner, executable):
         return {
@@ -994,7 +2206,8 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
             json.dumps(entry)
             for entry in (
                 artifact("marty-issuance-service", stale),
-                artifact("marty-service-acceptance", acceptance),
+                artifact("marty-canvas-acceptance", old_acceptance),
+                artifact("marty-canvas-worker-acceptance", acceptance),
             )
         )
         + "\n",
@@ -1003,7 +2216,14 @@ def test_preflight_digest_selects_acceptance_owner_not_stale_issuance(
     monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
     assert module["_canvas_executable"]() == acceptance
     artifacts.write_text(
-        json.dumps(artifact("marty-issuance-service", stale)) + "\n",
+        "\n".join(
+            json.dumps(entry)
+            for entry in (
+                artifact("marty-issuance-service", stale),
+                artifact("marty-canvas-acceptance", old_acceptance),
+            )
+        )
+        + "\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="exactly one Canvas worker contract"):

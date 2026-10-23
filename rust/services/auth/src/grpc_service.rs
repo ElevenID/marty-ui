@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::Utc;
+use mmf_security::{SecurityError, ServiceTokenAuthenticator};
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -47,12 +48,30 @@ impl AuthSessionService for AuthApplication {
 #[derive(Clone)]
 pub struct AuthGrpcService {
     application: Arc<dyn AuthSessionService>,
+    authenticator: ServiceTokenAuthenticator,
 }
 
 impl AuthGrpcService {
-    #[must_use]
-    pub fn new(application: Arc<dyn AuthSessionService>) -> Self {
-        Self { application }
+    pub fn new(
+        application: Arc<dyn AuthSessionService>,
+        service_token: Option<String>,
+        required: bool,
+    ) -> Result<Self, SecurityError> {
+        Ok(Self {
+            application,
+            authenticator: ServiceTokenAuthenticator::new(service_token, required)?,
+        })
+    }
+
+    fn authenticate<T>(&self, request: &Request<T>) -> Result<(), Status> {
+        self.authenticator
+            .authenticate(
+                request
+                    .metadata()
+                    .get("x-service-token")
+                    .and_then(|value| value.to_str().ok()),
+            )
+            .map_err(|_| Status::unauthenticated("AUTH.GRPC_SERVICE_TOKEN_REQUIRED"))
     }
 }
 
@@ -62,6 +81,7 @@ impl AuthService for AuthGrpcService {
         &self,
         request: Request<ValidateSessionRequest>,
     ) -> Result<Response<ValidateSessionResponse>, Status> {
+        self.authenticate(&request)?;
         let session = self
             .application
             .validate_session(&request.get_ref().session_id)
@@ -71,11 +91,13 @@ impl AuthService for AuthGrpcService {
                 valid: false,
                 user: None,
                 expires_at: String::new(),
+                authentication_time_unix: None,
             },
             |session| ValidateSessionResponse {
                 valid: true,
                 user: Some(user_info(&session.user)),
                 expires_at: session.expires_at.to_rfc3339(),
+                authentication_time_unix: verified_authentication_time(&session),
             },
         );
         Ok(Response::new(response))
@@ -94,6 +116,7 @@ impl AuthService for AuthGrpcService {
         &self,
         request: Request<InvalidateSessionRequest>,
     ) -> Result<Response<InvalidateSessionResponse>, Status> {
+        self.authenticate(&request)?;
         let success = self
             .application
             .invalidate_session(&request.get_ref().session_id)
@@ -105,6 +128,7 @@ impl AuthService for AuthGrpcService {
         &self,
         request: Request<GetAuthStatusRequest>,
     ) -> Result<Response<AuthStatusResponse>, Status> {
+        self.authenticate(&request)?;
         let session = self
             .application
             .validate_session(&request.get_ref().session_id)
@@ -133,12 +157,19 @@ impl AuthService for AuthGrpcService {
 
     async fn health_check(
         &self,
-        _request: Request<HealthCheckRequest>,
+        request: Request<HealthCheckRequest>,
     ) -> Result<Response<HealthCheckResponse>, Status> {
+        self.authenticate(&request)?;
         Ok(Response::new(HealthCheckResponse {
             status: "serving".into(),
         }))
     }
+}
+
+fn verified_authentication_time(session: &crate::Session) -> Option<i64> {
+    let timestamp = session.oidc_claims.as_ref()?.get("auth_time")?.as_i64()?;
+    // A future claim must never make an old session appear freshly authenticated.
+    (timestamp > 0 && timestamp <= session.created_at.timestamp() + 60).then_some(timestamp)
 }
 
 fn user_info(user: &AuthenticatedUser) -> UserInfo {

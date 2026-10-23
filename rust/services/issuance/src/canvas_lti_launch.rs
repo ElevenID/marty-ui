@@ -1504,16 +1504,26 @@ pub fn public_launch_response(
     }
 }
 
+/// Use the signed Canvas course substitution before the opaque LTI context ID.
+/// The same value must identify scope, browser context and returned resources.
+pub(crate) fn canvas_course_id_from_signed_claims<'a>(
+    raw_claims: Option<&'a Value>,
+    context: Option<&'a Value>,
+) -> Option<&'a Value> {
+    raw_claims
+        .and_then(|claims| claim_object(claims, CUSTOM_CLAIM, "custom"))
+        .and_then(|custom| custom.get("canvas_course_id"))
+        .or_else(|| context.and_then(|value| value.get("id")))
+        .or_else(|| context.and_then(|value| value.get("context_id")))
+        .or_else(|| raw_claims.and_then(|claims| claims.get("context_id")))
+}
+
 #[must_use]
 pub fn launch_scope(verified: &VerifiedLtiLaunch, canvas_account_id: &str) -> Map<String, Value> {
     let custom = claim_object(&verified.raw_claims, CUSTOM_CLAIM, "custom");
     let resource_link = claim_object(&verified.raw_claims, RESOURCE_LINK_CLAIM, "resource_link");
-    let context = verified.context.as_ref().and_then(Value::as_object);
-    let course_id = custom
-        .and_then(|values| values.get("canvas_course_id"))
-        .or_else(|| context.and_then(|values| values.get("id")))
-        .or_else(|| context.and_then(|values| values.get("context_id")))
-        .or_else(|| verified.raw_claims.get("context_id"));
+    let course_id =
+        canvas_course_id_from_signed_claims(Some(&verified.raw_claims), verified.context.as_ref());
     let mut scope = Map::new();
     insert_value(
         &mut scope,
@@ -1708,12 +1718,9 @@ fn unique_strings(values: Vec<String>) -> Vec<String> {
 
 fn browser_safe_context(response: &CanvasLtiVerifiedLaunchResponse) -> BTreeMap<String, Value> {
     let context = response.context.as_ref().and_then(Value::as_object);
-    let custom = claim_object(&response.raw_claims, CUSTOM_CLAIM, "custom");
     let mut result = BTreeMap::new();
-    let course_id = custom
-        .and_then(|values| values.get("canvas_course_id"))
-        .or_else(|| context.and_then(|values| values.get("id")))
-        .or_else(|| context.and_then(|values| values.get("context_id")));
+    let course_id =
+        canvas_course_id_from_signed_claims(Some(&response.raw_claims), response.context.as_ref());
     for (name, value) in [
         ("course_id", course_id),
         ("title", context.and_then(|values| values.get("title"))),

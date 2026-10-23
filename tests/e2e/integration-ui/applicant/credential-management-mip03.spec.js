@@ -92,7 +92,7 @@ async function installReviewerMocks(page) {
     }
     if (method === 'POST' && path === `${applicantBase}/lock`) {
       actions.push({ action: 'lock', body: request.postDataJSON?.() || {} });
-      return fulfillJson(route, { locked: true, reviewer_id: REVIEWER_ID, reviewer_name: 'Marty Reviewer' });
+      return fulfillJson(route, { status: 'ACTIVE', holder_user_id: REVIEWER_ID, holder_name: 'Marty Reviewer' });
     }
     if (method === 'DELETE' && path === `${applicantBase}/lock`) return fulfillJson(route, {});
     if (method === 'POST' && path === `${applicantBase}/request-information`) {

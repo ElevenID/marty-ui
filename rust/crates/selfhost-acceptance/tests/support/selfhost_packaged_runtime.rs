@@ -1,0 +1,1058 @@
+//! Real public-image loader/PG gate. Gateway and Flow TLS are later gates.
+use serde_json::{json, Value};
+use std::{
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
+
+use super::{
+    canvas_published_database::PublishedDatabase,
+    selfhost_runtime_sidecar::{
+        LogExpectation, OwnedNative, PendingKind, PendingOperation, PublicImage, SecretCase,
+        MANAGEMENT_KEY, ORGANIZATION, TRANSACTION_ID,
+    },
+};
+
+const ERROR: &str = "Packaged selfhost qualification failed";
+const PASSWORD: &str = "SyntheticSelfhostDatabasePassword5837";
+const WRONG_PASSWORD: &str = "SyntheticDifferentDatabasePassword9014";
+const SERVICE_TOKEN: &str = "synthetic-selfhost-production-grpc-service-token";
+const HMAC: &str = "synthetic-selfhost-native-token-hmac-key";
+const KMS_CA_CERT: &str = include_str!(
+    "../../../../services/signing-keys/tests/fixtures/public_certificates/root-ca.pem"
+);
+const STAGE_PREFIX: &str = "SELFHOST_PUBLIC_LOADER_STAGE:";
+pub(super) const CHILD_TEST: &str = "selfhost_public_image_loader_child";
+
+#[derive(Clone, Copy)]
+enum ChildCase {
+    Workload,
+    TimeoutAfterDatabase,
+    ExitAfterDatabase,
+}
+impl ChildCase {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Workload => "workload",
+            Self::TimeoutAfterDatabase => "timeout-after-database",
+            Self::ExitAfterDatabase => "exit-after-database",
+        }
+    }
+}
+
+pub(super) fn after_database_checkpoint() -> Result<(), String> {
+    let scope = super::selfhost_runtime_sidecar::parent_scope()?;
+    let scratch = super::selfhost_runtime_sidecar::parent_scratch()?;
+    match std::env::var("MARTY_SELFHOST_CHILD_CASE").as_deref() {
+        Ok("workload") => Ok(()),
+        Ok("timeout-after-database") => {
+            std::fs::write(scratch.join("database-ready"), scope.to_string()).map_err(|_| ERROR)?;
+            std::thread::sleep(Duration::from_secs(300));
+            Err("Controlled timeout child unexpectedly resumed".into())
+        }
+        Ok("exit-after-database") => {
+            std::fs::write(scratch.join("database-ready"), scope.to_string()).map_err(|_| ERROR)?;
+            std::process::exit(39);
+        }
+        _ => Err(ERROR.into()),
+    }
+}
+
+/// Host child, not a container: the existing Docker owners inherit one closed
+/// endpoint without mutating the caller's global environment or Docker context.
+pub(super) fn run_isolated_child() -> Result<(), String> {
+    for case in [
+        ChildCase::ExitAfterDatabase,
+        ChildCase::TimeoutAfterDatabase,
+        ChildCase::Workload,
+    ] {
+        run_isolated_case(case)?;
+    }
+    Ok(())
+}
+
+fn run_isolated_case(case: ChildCase) -> Result<(), String> {
+    require(std::env::consts::OS == "linux")?;
+    let mut owned = tempfile::tempdir().map_err(|_| ERROR)?;
+    let scratch = owned.path().canonicalize().map_err(|_| ERROR)?;
+    let config = owned.path().join("docker-config");
+    std::fs::create_dir(&config).map_err(|_| ERROR)?;
+    let scope = uuid::Uuid::new_v4();
+    let sentinel = scope.to_string();
+    let path = std::env::var_os("PATH").ok_or(ERROR)?;
+    let image = std::env::var("MARTY_SELFHOST_TEST_IMAGE").map_err(|_| ERROR)?;
+    let executable = std::env::current_exe().map_err(|_| ERROR)?;
+    let mut command = Command::new(executable);
+    command
+        .env_clear()
+        .stdin(Stdio::null())
+        .args([CHILD_TEST, "--exact", "--nocapture", "--test-threads=1"])
+        .env("DOCKER_HOST", "unix:///var/run/docker.sock")
+        .env("DOCKER_CONFIG", &config)
+        .env("TMPDIR", &scratch)
+        .env("MARTY_SELFHOST_PARENT_SCOPE", &sentinel)
+        .env("MARTY_SELFHOST_CHILD_CASE", case.key())
+        .env("MARTY_SELFHOST_LOADER_CHILD", "1")
+        .env("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST", "1")
+        .env("MARTY_SELFHOST_CHILD_SENTINEL", &sentinel);
+    for key in [
+        "PATH",
+        "MARTY_SELFHOST_TEST_PACKAGER_BINARY",
+        "MARTY_SELFHOST_BUNDLE_TEST_COMPOSE",
+        "MARTY_SELFHOST_TEST_IMAGE",
+        "MARTY_SELFHOST_TEST_REVISION",
+    ] {
+        command.env(key, std::env::var_os(key).ok_or(ERROR)?);
+    }
+    // The outer Canvas runner selected this exact oracle digest after its
+    // mirror-first pull. Preserve that choice across the deliberately cleared
+    // child environment; PublishedDatabase validates it against the oracle.
+    if let Some(image) = std::env::var_os("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE") {
+        command.env("MARTY_CANVAS_PUBLISHED_POSTGRES_IMAGE", image);
+    }
+    // Disable automatic parent cleanup before the child can create anything.
+    // Only verified resource absence restores automatic scratch removal.
+    owned.disable_cleanup(true);
+    let output = super::bounded_fixture_command::run(
+        &mut command,
+        None,
+        Duration::from_secs(if matches!(case, ChildCase::TimeoutAfterDatabase) {
+            60
+        } else {
+            900
+        }),
+        4 * 1024 * 1024,
+    );
+    let terminated = !matches!(
+        &output,
+        Err(super::bounded_fixture_command::CommandFailure::TerminationFailed)
+    );
+    let operation = match case {
+        ChildCase::Workload => child_result(output, &sentinel),
+        ChildCase::TimeoutAfterDatabase | ChildCase::ExitAfterDatabase => {
+            let expected = match (&output, case) {
+                (
+                    Err(super::bounded_fixture_command::CommandFailure::TimedOut),
+                    ChildCase::TimeoutAfterDatabase,
+                ) => true,
+                (Ok(output), ChildCase::ExitAfterDatabase) => output.status.code() == Some(39),
+                _ => false,
+            };
+            // The fault must occur after actual PG/probe creation, not during
+            // unrelated setup. No output/secret parsing substitutes for this.
+            require(
+                expected
+                    && std::fs::read(scratch.join("database-ready"))
+                        .ok()
+                        .as_deref()
+                        == Some(sentinel.as_bytes()),
+            )
+        }
+    };
+    let execute = |arguments: &[&str]| closed_docker(&config, &path, arguments);
+    finish_parent_scope(operation, terminated, scope, &mut owned, || {
+        recover(scope, &image, &scratch, &execute)
+    })
+}
+
+fn finish_parent_scope(
+    operation: Result<(), String>,
+    terminated: bool,
+    scope: uuid::Uuid,
+    owned: &mut tempfile::TempDir,
+    cleanup: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let cleanup = if terminated {
+        super::selfhost_runtime_sidecar::require_no_pending_operation(scope, owned.path())
+            .and_then(|()| cleanup())
+    } else {
+        Err("Selfhost child was not verifiably reaped; recovery withheld".into())
+    };
+    if cleanup.is_ok() {
+        owned.disable_cleanup(false);
+    } else {
+        eprintln!(
+            "Retained synthetic selfhost scratch after unverified resource cleanup at {}",
+            owned.path().display()
+        );
+    }
+    super::owned_cleanup::retain_failure(operation, cleanup)
+}
+
+fn child_result(
+    output: Result<std::process::Output, super::bounded_fixture_command::CommandFailure>,
+    sentinel: &str,
+) -> Result<(), String> {
+    use super::bounded_fixture_command::CommandFailure;
+    let output = output.map_err(|error| match error {
+        CommandFailure::TimedOut => "Selfhost child deadline exceeded",
+        CommandFailure::TerminationFailed => "Selfhost child termination failed",
+        CommandFailure::OutputTooLarge => "Selfhost child output exceeded limit",
+        CommandFailure::Io(_) => "Selfhost child execution failed",
+    })?;
+    let stdout = String::from_utf8(output.stdout).map_err(|_| ERROR)?;
+    let complete = format!("SELFHOST_PUBLIC_LOADER_COMPLETE:{sentinel}");
+    if output.status.success() && stdout.lines().filter(|line| *line == complete).count() == 1 {
+        return Ok(());
+    }
+    if let Some(stage) = last_child_stage(&output.stderr) {
+        return Err(format!("{ERROR} after {stage}"));
+    }
+    Err(ERROR.into())
+}
+
+fn last_child_stage(stderr: &[u8]) -> Option<String> {
+    let stderr = std::str::from_utf8(stderr).ok()?;
+    stderr
+        .lines()
+        .filter_map(|line| line.strip_prefix(STAGE_PREFIX))
+        .rfind(|value| valid_stage(value))
+        .map(str::to_owned)
+}
+
+fn valid_stage(value: &str) -> bool {
+    let Some((case, stage)) = value.split_once(':') else {
+        return false;
+    };
+    let valid_case = matches!(
+        case,
+        "database"
+            | "correct"
+            | "crlf"
+            | "wrong-password"
+            | "missing-mount"
+            | "directory"
+            | "unreadable"
+            | "empty"
+            | "placeholder"
+            | "raw-and-file"
+    );
+    let common_stage = matches!(
+        stage,
+        "provision"
+            | "prepare"
+            | "write-secrets"
+            | "snapshot-before"
+            | "native-prepare"
+            | "create"
+            | "verify-baked-files"
+            | "start"
+            | "await-health"
+            | "verify-identity"
+            | "invalid-transaction"
+            | "transaction"
+            | "transaction-status-200"
+            | "transaction-status-401"
+            | "transaction-status-500-unexpected"
+            | "transaction-status-other"
+            | "verify-log-boundary"
+            | "cleanup"
+            | "snapshot-after"
+            | "input-integrity"
+    );
+    let database_stage = case == "database"
+        && matches!(
+            stage,
+            "transfer-ownership"
+                | "inspect-ownership"
+                | "verify-ownership"
+                | "grant"
+                | "authenticate"
+                | "seed"
+        );
+    valid_case && (common_stage || database_stage)
+}
+
+fn case_key(case: SecretCase) -> &'static str {
+    match case {
+        SecretCase::Correct => "correct",
+        SecretCase::CrLf => "crlf",
+        SecretCase::WrongPassword => "wrong-password",
+        SecretCase::MissingMount => "missing-mount",
+        SecretCase::Directory => "directory",
+        SecretCase::Unreadable => "unreadable",
+        SecretCase::Empty => "empty",
+        SecretCase::Placeholder => "placeholder",
+        SecretCase::RawAndFile => "raw-and-file",
+    }
+}
+
+fn expects_running_service(case: SecretCase) -> bool {
+    // Native startup applies the required OID4VCI schema migration before it
+    // binds the service. Invalid database credentials must therefore fail
+    // closed at startup instead of exposing a healthy process whose first
+    // repository request later fails.
+    matches!(case, SecretCase::Correct | SecretCase::CrLf)
+}
+
+fn expected_log(case: SecretCase) -> Option<LogExpectation<'static>> {
+    match case {
+        SecretCase::WrongPassword => Some(LogExpectation::Structured {
+            message: "issuance startup database authentication failed",
+            field: "database_sqlstate",
+            value: "28P01",
+        }),
+        SecretCase::MissingMount | SecretCase::Directory => Some(LogExpectation::Contains(
+            "Secret file for SIGNING_KEYS_INTEGRATION_SECRET_KEY is not a regular file",
+        )),
+        SecretCase::Unreadable => Some(LogExpectation::Contains(
+            "Secret file for SIGNING_KEYS_INTEGRATION_SECRET_KEY is not readable",
+        )),
+        SecretCase::RawAndFile => Some(LogExpectation::Contains(
+            "Both SIGNING_KEYS_INTEGRATION_SECRET_KEY and SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE are set",
+        )),
+        SecretCase::Empty | SecretCase::Placeholder => {
+            Some(LogExpectation::Contains("SIGNING_KEYS_INTEGRATION_SECRET_KEY"))
+        }
+        SecretCase::Correct | SecretCase::CrLf => None,
+    }
+}
+
+fn record_stage(case: SecretCase, stage: &'static str) {
+    debug_assert!(valid_stage(&format!("{}:{stage}", case_key(case))));
+    eprintln!("{STAGE_PREFIX}{}:{stage}", case_key(case));
+}
+
+pub(super) fn record_database_stage(stage: &'static str) {
+    debug_assert!(valid_stage(&format!("database:{stage}")));
+    eprintln!("{STAGE_PREFIX}database:{stage}");
+}
+
+fn closed_docker(
+    config: &Path,
+    path: &std::ffi::OsStr,
+    arguments: &[&str],
+) -> Result<String, String> {
+    let mut command = Command::new("docker");
+    command
+        .env_clear()
+        .stdin(Stdio::null())
+        .env("PATH", path)
+        .env("DOCKER_HOST", "unix:///var/run/docker.sock")
+        .env("DOCKER_CONFIG", config)
+        .args(arguments);
+    let output = super::bounded_fixture_command::run(
+        &mut command,
+        None,
+        Duration::from_secs(120),
+        1024 * 1024,
+    )
+    .map_err(|_| "Closed selfhost recovery command failed")?;
+    require(output.status.success())?;
+    String::from_utf8(output.stdout)
+        .map(|v| v.trim().to_owned())
+        .map_err(|_| ERROR.into())
+}
+
+fn recover(
+    scope: uuid::Uuid,
+    image: &str,
+    scratch: &Path,
+    execute: &impl Fn(&[&str]) -> Result<String, String>,
+) -> Result<(), String> {
+    let ids = PublishedDatabase::inspect_recovery_scope(scope, execute)?;
+    let postgres = ids.last().map(String::as_str);
+    let native = super::selfhost_runtime_sidecar::recover_parent_scope(
+        scope, image, postgres, scratch, execute,
+    )?;
+    let database = PublishedDatabase::recover_scope(scope, execute)?;
+    for id in native.iter().chain(database.iter()) {
+        eprintln!("Verified recovered selfhost resource absent: {id}");
+    }
+    Ok(())
+}
+
+fn require(value: bool) -> Result<(), String> {
+    if value {
+        Ok(())
+    } else {
+        Err(ERROR.into())
+    }
+}
+
+fn packager(repo: &Path) -> Result<Command, String> {
+    let path = PathBuf::from(std::env::var_os("MARTY_SELFHOST_TEST_PACKAGER_BINARY").ok_or(ERROR)?);
+    let metadata = std::fs::symlink_metadata(&path).map_err(|_| ERROR)?;
+    require(metadata.is_file() && !metadata.file_type().is_symlink())?;
+    let mut command = Command::new(path);
+    command.env_clear().stdin(Stdio::null()).current_dir(repo);
+    for key in ["PATH", "TMPDIR"] {
+        if let Some(value) = std::env::var_os(key) {
+            command.env(key, value);
+        }
+    }
+    command
+        .arg("--compose-executable")
+        .arg(std::env::var_os("MARTY_SELFHOST_BUNDLE_TEST_COMPOSE").ok_or(ERROR)?);
+    Ok(command)
+}
+
+async fn provision(database: &PublishedDatabase) -> Result<sqlx::PgPool, String> {
+    let mut url = url::Url::parse(&database.url).map_err(|_| ERROR)?;
+    url.set_path("/postgres");
+    let admin = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url.as_str())
+        .await
+        .map_err(|_| ERROR)?;
+    // This exact new role/database lives only in the freshly verified PG owner.
+    sqlx::query("CREATE ROLE marty LOGIN PASSWORD 'SyntheticSelfhostDatabasePassword5837'")
+        .execute(&admin)
+        .await
+        .map_err(|_| ERROR)?;
+    sqlx::query("CREATE DATABASE marty WITH TEMPLATE canvas_published_schema_test OWNER marty")
+        .execute(&admin)
+        .await
+        .map_err(|_| ERROR)?;
+    admin.close().await;
+    url.set_path("/marty");
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(2)
+        .connect(url.as_str())
+        .await
+        .map_err(|_| ERROR)?;
+    // A database cloned from the frozen oracle template retains the oracle's
+    // object ownership. Production self-host databases are owned by the
+    // service role, which must be able to apply additive startup migrations.
+    // Transfer only the service schema: REASSIGN OWNED also targets PostgreSQL
+    // system objects owned by the bootstrap superuser and is therefore refused.
+    record_database_stage("transfer-ownership");
+    sqlx::query(
+        "DO $ownership$
+         DECLARE owned_object record;
+         BEGIN
+           ALTER SCHEMA issuance_service OWNER TO marty;
+           FOR owned_object IN
+             SELECT object.relkind, object.relname
+             FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+           LOOP
+             EXECUTE format(
+               'ALTER %s %I.%I OWNER TO marty',
+               CASE WHEN owned_object.relkind = 'S' THEN 'SEQUENCE' ELSE 'TABLE' END,
+               'issuance_service',
+               owned_object.relname
+             );
+           END LOOP;
+         END
+         $ownership$",
+    )
+    .execute(&pool)
+    .await
+    .map_err(|_| "Packaged selfhost qualification failed: database:transfer-ownership")?;
+    record_database_stage("inspect-ownership");
+    let ownership: (bool, bool, bool) = sqlx::query_as(
+        "SELECT
+           (SELECT pg_get_userbyid(datdba) = 'marty'
+              FROM pg_database WHERE datname = current_database()),
+           (SELECT pg_get_userbyid(nspowner) = 'marty'
+              FROM pg_namespace WHERE nspname = 'issuance_service'),
+           NOT EXISTS (
+             SELECT 1 FROM pg_class AS object
+             JOIN pg_namespace AS namespace ON namespace.oid = object.relnamespace
+             WHERE namespace.nspname = 'issuance_service'
+               AND object.relkind IN ('r', 'p', 'S')
+               AND pg_get_userbyid(object.relowner) <> 'marty')",
+    )
+    .fetch_one(&pool)
+    .await
+    .map_err(|_| "Packaged selfhost qualification failed: database:inspect-ownership")?;
+    record_database_stage("verify-ownership");
+    if ownership != (true, true, true) {
+        return Err("Packaged selfhost qualification failed: database:ownership".into());
+    }
+    record_database_stage("grant");
+    for statement in [
+        "GRANT USAGE ON SCHEMA issuance_service TO marty",
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA issuance_service TO marty",
+        "GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA issuance_service TO marty",
+    ] {
+        sqlx::query(statement)
+            .execute(&pool)
+            .await
+            .map_err(|_| ERROR)?;
+    }
+    let mut authenticated = url.clone();
+    authenticated.set_username("marty").map_err(|_| ERROR)?;
+    authenticated
+        .set_password(Some(PASSWORD))
+        .map_err(|_| ERROR)?;
+    record_database_stage("authenticate");
+    let check = sqlx::PgPool::connect(authenticated.as_str())
+        .await
+        .map_err(|_| ERROR)?;
+    let identity: (String, String) =
+        sqlx::query_as("SELECT current_user::text,current_database()::text")
+            .fetch_one(&check)
+            .await
+            .map_err(|_| ERROR)?;
+    require(identity == ("marty".into(), "marty".into()))?;
+    // The frozen published-schema template predates the Rust OID4VCI
+    // migration. Prepare this disposable clone once, then exercise the
+    // packaged service with its production `validate` startup setting.
+    marty_issuance_service::migration::migrate(&check)
+        .await
+        .map_err(|_| "Packaged selfhost qualification failed: database:migrate-oid4vci")?;
+    record_database_stage("seed");
+    seed(&check).await?;
+    check.close().await;
+    Ok(pool)
+}
+
+async fn seed(pool: &sqlx::PgPool) -> Result<(), String> {
+    use super::renewal_reference_fixture as reference;
+    use marty_issuance_service::{
+        credential::CredentialTransactionStatus, credential_postgres::PostgresCredentialRepository,
+        initiation::InitiationRepository,
+    };
+    let corpus = reference::corpus();
+    let snapshot = reference::snapshot(&corpus, reference::case(&corpus, "missing-key"), "before");
+    let source = reference::source(snapshot).ok_or(ERROR)?;
+    let row = snapshot["transactions"]
+        .as_array()
+        .ok_or(ERROR)?
+        .iter()
+        .find(|row| row["id"] == source.transaction_id)
+        .ok_or(ERROR)?;
+    let mut transaction = reference::transaction(row);
+    transaction.id = TRANSACTION_ID.into();
+    transaction.organization_id = ORGANIZATION.into();
+    transaction.credential_template_id = "synthetic-loader-template".into();
+    transaction.applicant_id = None;
+    transaction.application_id = None;
+    transaction.subject_did = Some("did:web:holder.example".into());
+    transaction.status = CredentialTransactionStatus::Pending;
+    transaction.created_at = "2026-01-02T03:04:05Z".parse().map_err(|_| ERROR)?;
+    transaction.expires_at = "2030-01-02T03:04:05Z".parse().map_err(|_| ERROR)?;
+    transaction.pre_authorized_code = "synthetic-loader-pre-auth-code".into();
+    transaction.idempotency_key_hash = None;
+    transaction.idempotency_request_hash = None;
+    let repository = PostgresCredentialRepository::new(pool.clone(), HMAC.as_bytes());
+    require(
+        repository
+            .reserve_idempotently(&transaction)
+            .await
+            .map_err(|_| ERROR)?
+            .created,
+    )
+}
+
+async fn snapshot(pool: &sqlx::PgPool) -> Result<Value, String> {
+    sqlx::query_scalar("SELECT jsonb_build_object(
+      -- Normalize the legacy schema's absent field to JSON null. Once startup
+      -- creates it, any non-null or otherwise changed value remains visible.
+      'transactions',(SELECT COALESCE(jsonb_agg(
+        to_jsonb(t) || jsonb_build_object(
+          'access_token_expires_at',
+          COALESCE(to_jsonb(t)->'access_token_expires_at', 'null'::jsonb)
+        ) ORDER BY id),'[]') FROM issuance_service.issuance_transactions t),
+      'credentials',(SELECT COALESCE(jsonb_agg(to_jsonb(c) ORDER BY id),'[]') FROM issuance_service.issued_credentials c),
+      'deliveries',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY id),'[]') FROM issuance_service.credential_delivery_records d),
+      'events',(SELECT COALESCE(jsonb_agg(to_jsonb(e) ORDER BY id),'[]') FROM issuance_service.issuance_events e))")
+        .fetch_one(pool).await.map_err(|_| ERROR.to_owned())
+}
+
+fn write_synthetic_secrets(
+    directory: &Path,
+    case: SecretCase,
+    kms_ca_pem: &str,
+) -> Result<Vec<String>, String> {
+    require(
+        std::fs::read_dir(directory)
+            .map_err(|_| ERROR)?
+            .next()
+            .is_none(),
+    )?;
+    let mut values = vec![
+        (
+            "marty_db_password",
+            if case == SecretCase::WrongPassword {
+                WRONG_PASSWORD
+            } else {
+                PASSWORD
+            },
+        ),
+        ("issuance_api_key", MANAGEMENT_KEY),
+        (
+            "didcomm_issuance_openbao_token",
+            "synthetic-selfhost-didcomm-openbao-token",
+        ),
+        (
+            "sign_grant_mint_issuance_credential_token",
+            "synthetic-credential-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_canvas_token",
+            "synthetic-canvas-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_readiness_token",
+            "synthetic-readiness-grant-token",
+        ),
+        (
+            "sign_grant_mint_issuance_passport_token",
+            "synthetic-passport-grant-token",
+        ),
+        ("token_hmac_key", HMAC),
+        (
+            "canvas_credentials_shared_secret",
+            "synthetic-selfhost-canvas-shared-secret",
+        ),
+        ("grpc_service_token", SERVICE_TOKEN),
+        ("workload_identity_ca_cert", kms_ca_pem),
+        ("issuance_workload_server_cert", kms_ca_pem),
+        ("openbao_tls_ca_cert", kms_ca_pem),
+        (
+            "issuance_tls_kms_token",
+            "synthetic-selfhost-issuance-tls-kms-token",
+        ),
+        (
+            "signing_keys_issuer_sign_key",
+            "synthetic-selfhost-issuer-sign-key-00000001",
+        ),
+        (
+            "signing_keys_integration_secret_key",
+            super::remote_integration_secret::INTEGRATION_SECRET_KEY,
+        ),
+    ];
+    if matches!(case, SecretCase::Empty | SecretCase::Placeholder) {
+        let integration_secret_key = values
+            .iter_mut()
+            .find(|(name, _)| *name == "signing_keys_integration_secret_key")
+            .expect("synthetic integration secret key fixture");
+        integration_secret_key.1 = if case == SecretCase::Empty {
+            ""
+        } else {
+            "change-me-synthetic-placeholder-integration-key"
+        };
+    }
+    for (name, value) in &values {
+        let path = directory.join(name);
+        if case == SecretCase::Directory && *name == "signing_keys_integration_secret_key" {
+            std::fs::create_dir(&path).map_err(|_| ERROR)?;
+            continue;
+        }
+        let contents = if case == SecretCase::CrLf {
+            format!("{value}\r\n")
+        } else {
+            value.to_string()
+        };
+        std::fs::write(&path, contents).map_err(|_| ERROR)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = if case == SecretCase::Unreadable
+                && *name == "signing_keys_integration_secret_key"
+            {
+                0
+            } else {
+                0o444
+            };
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .map_err(|_| ERROR)?;
+        }
+    }
+    Ok(values
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .map(|(_, value)| value.to_owned())
+        .collect())
+}
+
+fn run_service(
+    service: &mut OwnedNative<'_>,
+    repo: &Path,
+    case: SecretCase,
+    secrets: &[String],
+) -> Result<(), String> {
+    record_stage(case, "create");
+    service.create()?;
+    record_stage(case, "verify-baked-files");
+    service.verify_baked_files(repo)?;
+    record_stage(case, "start");
+    service.start()?;
+    let healthy = expects_running_service(case);
+    let deadline = Instant::now() + Duration::from_secs(20);
+    record_stage(case, "await-health");
+    loop {
+        let state = service.state()?;
+        if state["Running"] == false {
+            require(!healthy && state["ExitCode"].as_i64().is_some_and(|code| code != 0))?;
+            break;
+        }
+        if healthy && service.health().is_ok() {
+            break;
+        }
+        require(Instant::now() < deadline)?;
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    if healthy {
+        record_stage(case, "verify-identity");
+        service.verify_running_identity()?;
+        record_stage(case, "invalid-transaction");
+        let invalid = service.transaction(false)?;
+        require(invalid == (401, json!({"detail":"Invalid API Key"})))?;
+        record_stage(case, "transaction");
+        let response = service.transaction(true)?;
+        record_stage(
+            case,
+            match (&response.0, &response.1) {
+                (200, _) => "transaction-status-200",
+                (401, _) => "transaction-status-401",
+                (500, _) => "transaction-status-500-unexpected",
+                _ => "transaction-status-other",
+            },
+        );
+        require(
+            response
+                == (
+                    200,
+                    json!({"id":TRANSACTION_ID,"organization_id":ORGANIZATION,"credential_template_id":"synthetic-loader-template","applicant_id":null,"application_id":null,"subject_did":"did:web:holder.example","status":"pending","created_at":"2026-01-02T03:04:05+00:00","expires_at":"2030-01-02T03:04:05+00:00","issued_at":null,"revoked_at":null,"revocation_reason":null}),
+                ),
+        )?;
+    }
+    let expected = expected_log(case);
+    record_stage(case, "verify-log-boundary");
+    service.verify_log_boundary(
+        &secrets.iter().map(String::as_str).collect::<Vec<_>>(),
+        expected,
+    )
+}
+
+pub(super) struct Preflight {
+    repo: PathBuf,
+    image: PublicImage,
+    extracted: super::selfhost_extracted::ExtractedBundle,
+}
+pub(super) fn preflight() -> Result<Preflight, String> {
+    require(std::env::consts::OS == "linux")?;
+    super::selfhost_runtime_sidecar::require_closed_child()?;
+    let repo = super::canvas_published_database::repository_root();
+    let image = PublicImage::inspect(
+        std::env::var("MARTY_SELFHOST_TEST_IMAGE").map_err(|_| ERROR)?,
+        &std::env::var("MARTY_SELFHOST_TEST_REVISION").map_err(|_| ERROR)?,
+    )?;
+    let pending = PendingOperation::begin(PendingKind::Packager)?;
+    let mut extracted = super::selfhost_extracted::ExtractedBundle::create_with(
+        &repo,
+        packager(&repo)?,
+        |command| {
+            super::bounded_fixture_command::run(command, None, Duration::from_secs(60), 1024 * 1024)
+                .expect("Bounded actual packager invocation")
+        },
+    );
+    extracted.retain_for_parent(&super::selfhost_runtime_sidecar::parent_scratch()?);
+    super::selfhost_prepared::qualify(&repo, &extracted.extracted);
+    require(extracted.directory().is_dir())?;
+    pending.complete()?;
+    Ok(Preflight {
+        repo: repo.to_owned(),
+        image,
+        extracted,
+    })
+}
+pub(super) async fn run(database: &PublishedDatabase, fixture: Preflight) -> Result<(), String> {
+    database.borrow_descriptor()?;
+    let Preflight {
+        repo,
+        image,
+        extracted,
+    } = fixture;
+    let repo = repo.as_path();
+    eprintln!("{STAGE_PREFIX}database:provision");
+    let pool = provision(database).await?;
+    let gateway = super::selfhost_runtime_sidecar::network_gateway(database)?;
+    let kms = super::remote_integration_secret::container_server(
+        gateway,
+        super::remote_integration_secret::INTEGRATION_SECRET_KEY,
+    )
+    .await?;
+    let result = async {
+        for case in [
+            SecretCase::Correct,
+            SecretCase::CrLf,
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            record_stage(case, "prepare");
+            let mut prepared = super::selfhost_prepared::prepare(repo, &extracted.extracted);
+            prepared.retain_for_parent(&super::selfhost_runtime_sidecar::parent_scratch()?);
+            record_stage(case, "write-secrets");
+            let secrets = write_synthetic_secrets(&prepared.secret_directory, case, &kms.ca_pem)?;
+            record_stage(case, "snapshot-before");
+            let before = snapshot(&pool).await?;
+            extracted.verify_unchanged();
+            prepared.verify_sources();
+            record_stage(case, "native-prepare");
+            let mut service =
+                OwnedNative::prepare(&prepared, database, &image, case, &kms.base_url)?;
+            let operation = run_service(&mut service, repo, case, &secrets);
+            if operation.is_ok() {
+                record_stage(case, "cleanup");
+            }
+            let cleanup = service.close_verified();
+            let cleanup_failed = cleanup.is_err();
+            let combined = super::owned_cleanup::retain_failure(operation, cleanup);
+            drop(service);
+            if cleanup_failed {
+                if let Some(path) = prepared.finish(true) {
+                    eprintln!(
+                        "Retained synthetic selfhost secret inputs for cleanup inspection at {}",
+                        path.display()
+                    );
+                }
+                return combined;
+            }
+            if combined.is_ok() {
+                record_stage(case, "snapshot-after");
+            }
+            let unchanged = snapshot(&pool).await? == before;
+            extracted.verify_unchanged();
+            prepared.verify_sources();
+            combined?;
+            require(unchanged)?;
+            record_stage(case, "input-integrity");
+            require(prepared.finish(false).is_none())?;
+        }
+        Ok(())
+    }
+    .await;
+    pool.close().await;
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_secret_inputs_cover_packaged_issuance_mounts() {
+        let directory = tempfile::tempdir().unwrap();
+        write_synthetic_secrets(directory.path(), SecretCase::Correct, KMS_CA_CERT).unwrap();
+        let actual = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<std::collections::BTreeSet<_>>();
+        let expected = super::super::selfhost_prepared::expected_secrets("issuance-native")
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        assert_eq!(actual, expected);
+        assert_eq!(
+            KMS_CA_CERT.lines().next(),
+            Some("-----BEGIN CERTIFICATE-----")
+        );
+        let dedicated_key =
+            std::fs::read_to_string(directory.path().join("signing_keys_integration_secret_key"))
+                .unwrap();
+        assert_eq!(
+            dedicated_key,
+            super::super::remote_integration_secret::INTEGRATION_SECRET_KEY
+        );
+        assert_ne!(
+            dedicated_key,
+            super::super::selfhost_runtime_sidecar::MANAGEMENT_KEY
+        );
+    }
+
+    #[test]
+    fn child_stage_diagnostic_accepts_only_closed_values() {
+        let stderr = b"ignored\nSELFHOST_PUBLIC_LOADER_STAGE:correct:create\nSELFHOST_PUBLIC_LOADER_STAGE:raw-and-file:verify-log-boundary\n";
+        assert_eq!(
+            last_child_stage(stderr).as_deref(),
+            Some("raw-and-file:verify-log-boundary")
+        );
+        assert_eq!(
+            last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:correct:C:\\private\\secret"),
+            None
+        );
+        assert_eq!(
+            last_child_stage(b"SELFHOST_PUBLIC_LOADER_STAGE:unknown:create"),
+            None
+        );
+    }
+
+    #[test]
+    fn database_authentication_failure_never_qualifies_as_healthy() {
+        assert!(expects_running_service(SecretCase::Correct));
+        assert!(expects_running_service(SecretCase::CrLf));
+        for case in [
+            SecretCase::WrongPassword,
+            SecretCase::MissingMount,
+            SecretCase::Directory,
+            SecretCase::Unreadable,
+            SecretCase::Empty,
+            SecretCase::Placeholder,
+            SecretCase::RawAndFile,
+        ] {
+            assert!(!expects_running_service(case));
+        }
+        let expected = expected_log(SecretCase::WrongPassword);
+        let message = "issuance startup database authentication failed";
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}"}}}}"#),
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            !super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                r#"{"fields":{"database_sqlstate":"28P01"}}"#,
+                &[],
+                expected,
+            )
+        );
+        assert!(
+            super::super::selfhost_runtime_sidecar::log_satisfies_boundary(
+                &format!(r#"{{"fields":{{"message":"{message}","database_sqlstate":"28P01"}}}}"#),
+                &[],
+                expected,
+            )
+        );
+    }
+
+    #[test]
+    fn process_control_child() {
+        let Ok(mode) = std::env::var("MARTY_SELFHOST_PROCESS_CONTROL") else {
+            return;
+        };
+        let scratch = PathBuf::from(std::env::var_os("MARTY_SELFHOST_CONTROL_SCRATCH").unwrap());
+        std::fs::write(scratch.join("owned-resource"), "synthetic-control").unwrap();
+        match mode.as_str() {
+            "exit" => std::process::exit(39),
+            "timeout" => std::thread::sleep(Duration::from_secs(30)),
+            _ => panic!("closed process control mode"),
+        }
+    }
+
+    #[test]
+    fn host_timeout_and_abrupt_exit_preserve_inputs_until_verified_recovery() {
+        for mode in ["exit", "timeout"] {
+            let mut owned = tempfile::tempdir().unwrap();
+            owned.disable_cleanup(true);
+            let root = owned.path().to_owned();
+            let scope = uuid::Uuid::new_v4();
+            std::fs::write(root.join("mounted-input"), "retained").unwrap();
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child
+                .env_clear()
+                .args([
+                    "selfhost_packaged_runtime::tests::process_control_child",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("MARTY_SELFHOST_PROCESS_CONTROL", mode)
+                .env("MARTY_SELFHOST_CONTROL_SCRATCH", &root);
+            let output = super::super::bounded_fixture_command::run(
+                &mut child,
+                None,
+                Duration::from_secs(2),
+                65536,
+            );
+            if mode == "exit" {
+                assert_eq!(output.as_ref().unwrap().status.code(), Some(39));
+            } else {
+                assert!(matches!(
+                    &output,
+                    Err(super::super::bounded_fixture_command::CommandFailure::TimedOut)
+                ));
+            }
+            assert!(
+                root.join("owned-resource").is_file(),
+                "control reached the owned-resource checkpoint"
+            );
+            let called = std::cell::Cell::new(false);
+            let result = finish_parent_scope(
+                child_result(output, "unused"),
+                true,
+                scope,
+                &mut owned,
+                || {
+                    called.set(true);
+                    assert_eq!(
+                        std::fs::read(root.join("mounted-input")).unwrap(),
+                        b"retained"
+                    );
+                    std::fs::remove_file(root.join("owned-resource")).unwrap();
+                    assert!(!root.join("owned-resource").exists());
+                    Ok(())
+                },
+            );
+            assert!(result.is_err() && called.get());
+            drop(owned);
+            assert!(!root.exists());
+        }
+    }
+
+    #[test]
+    fn cleanup_failure_retains_scratch_and_original_failure() {
+        for terminated in [false, true] {
+            let mut owned = tempfile::tempdir().unwrap();
+            owned.disable_cleanup(true);
+            let root = owned.path().to_owned();
+            let scope = uuid::Uuid::new_v4();
+            let called = std::cell::Cell::new(false);
+            let error = finish_parent_scope(
+                Err("original-child-failure".into()),
+                terminated,
+                scope,
+                &mut owned,
+                || {
+                    called.set(true);
+                    Err("exact-cleanup-failure".into())
+                },
+            )
+            .unwrap_err();
+            assert!(error.contains("original-child-failure"));
+            assert!(error.contains(if terminated {
+                "exact-cleanup-failure"
+            } else {
+                "not verifiably reaped"
+            }));
+            assert_eq!(called.get(), terminated);
+            drop(owned);
+            assert!(root.is_dir());
+            // Exact test-created empty directory, after proving retention.
+            std::fs::remove_dir(&root).unwrap();
+        }
+    }
+
+    #[test]
+    fn held_pending_operation_withholds_recovery_and_retains_scratch() {
+        let mut owned = tempfile::tempdir().unwrap();
+        owned.disable_cleanup(true);
+        let root = owned.path().canonicalize().unwrap();
+        let scope = uuid::Uuid::new_v4();
+        let pending = super::super::selfhost_runtime_sidecar::PendingOperation::begin_at(
+            scope,
+            &root,
+            super::super::selfhost_runtime_sidecar::PendingKind::NativeCreate,
+        )
+        .unwrap();
+        let called = std::cell::Cell::new(false);
+        let error =
+            finish_parent_scope(Err("child-failed".into()), true, scope, &mut owned, || {
+                called.set(true);
+                Ok(())
+            })
+            .unwrap_err();
+        assert!(error.contains("child-failed"));
+        assert!(error.contains("incomplete native-create operation"));
+        assert!(!called.get());
+        drop(pending);
+        drop(owned);
+        assert!(root.is_dir());
+        std::fs::remove_file(root.join(super::super::selfhost_runtime_sidecar::PENDING_OPERATION))
+            .unwrap();
+        std::fs::remove_dir(&root).unwrap();
+    }
+}

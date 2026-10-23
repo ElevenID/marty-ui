@@ -1,0 +1,1242 @@
+//! Test-only Kubernetes reference resolution over actual envsubst/composer output.
+//! No Kubernetes client, secret discovery, DNS or production input is used here.
+use super::{
+    issuance_named_peers::{API_KEY, ENVELOPE_KEY, ISSUER_SIGN_KEY, SIGNING_KEY, TOKEN},
+    resolved_runtime::{Isolation, ResolvedRuntime},
+};
+use marty_release_evidence::kubernetes_native as native;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
+
+const ERROR: &str = "Closed synthetic Kubernetes runtime input refused";
+type Result<T> = std::result::Result<T, &'static str>;
+pub(super) const SOURCE_FILES: &[&str] = &[
+    "k8s/oracle/01-configmap.yaml",
+    "k8s/oracle/07-microservices.yaml",
+    "k8s/oracle/07a-issuance-native.yaml",
+    "k8s/oracle/07b-signing-keys.yaml",
+    "rust/services/gateway/src/config.rs",
+];
+const GATEWAY_URLS: &[(&str, &str)] = &[
+    ("AUTH_SERVICE_URL", "http://auth:8001"),
+    ("ORGANIZATION_SERVICE_URL", "http://organization:8002"),
+    (
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "http://credential-template:8003",
+    ),
+    ("TRUST_PROFILE_SERVICE_URL", "http://trust-profile:8004"),
+    ("APPLICANT_SERVICE_URL", "http://applicant:8006"),
+    ("NOTIFICATION_SERVICE_URL", "http://notification:8007"),
+    (
+        "COMPLIANCE_PROFILE_SERVICE_URL",
+        "http://compliance-profile:8008",
+    ),
+    (
+        "PRESENTATION_POLICY_SERVICE_URL",
+        "http://presentation-policy:8009",
+    ),
+    (
+        "DEPLOYMENT_PROFILE_SERVICE_URL",
+        "http://deployment-profile:8010",
+    ),
+    ("FLOW_SERVICE_URL", "http://flow:8011"),
+    ("VERIFICATION_SERVICE_URL", "http://verification:8012"),
+    (
+        "REVOCATION_PROFILE_SERVICE_URL",
+        "http://revocation-profile:8013",
+    ),
+    (
+        "DEVICE_REGISTRATION_SERVICE_URL",
+        "http://device-registration:8014",
+    ),
+    ("SIGNING_KEYS_SERVICE_URL", "http://signing-keys:8017"),
+];
+const TLS_KMS_OWNERS: &[&str] = &[
+    "AUTH",
+    "AUTH_SERVER",
+    "COMPLIANCE_PROFILE",
+    "CT",
+    "DEPLOYMENT_PROFILE",
+    "ES",
+    "FLOW_CLIENT",
+    "FLOW_SERVER",
+    "GATEWAY",
+    "ISSUANCE",
+    "ORG",
+    "PP",
+    "RP",
+    "SIGNING_KEYS",
+    "VERIFICATION",
+];
+
+fn require(value: bool) -> Result<()> {
+    if value {
+        Ok(())
+    } else {
+        Err(ERROR)
+    }
+}
+fn root() -> PathBuf {
+    super::base_runtime_container::lexical_source_root().expect("fixture source root")
+}
+fn bytes(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    let mut content = Vec::new();
+    fs::File::open(path)
+        .map_err(|_| ERROR)?
+        .take(native::MAX_BYTES as u64 + 1)
+        .read_to_end(&mut content)
+        .map_err(|_| ERROR)?;
+    require(content.len() <= native::MAX_BYTES)?;
+    Ok(content)
+}
+fn digest(bytes: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(bytes))
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Prepared {
+    schema: String,
+    source_hashes: BTreeMap<String, String>,
+    inputs: BTreeMap<String, String>,
+    common: Value,
+    baseline: Vec<Value>,
+}
+
+fn synthetic_inputs() -> Result<BTreeMap<String, String>> {
+    // Discovery only, never a replacement implementation of envsubst. All
+    // variables remain explicitly synthetic; the real executable substitutes.
+    let mut inputs = BTreeMap::new();
+    for file in &SOURCE_FILES[..2] {
+        let source = String::from_utf8(bytes(&root().join(file))?).map_err(|_| ERROR)?;
+        for tail in source.split("${").skip(1) {
+            let name = tail.split_once('}').ok_or(ERROR)?.0;
+            require(
+                !name.is_empty()
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_'),
+            )?;
+            inputs.insert(name.to_owned(), String::new());
+        }
+    }
+    let mut expected:BTreeSet<_>="BAO_ADDR CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS
+        CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS CANVAS_CREDENTIALS_API_BASE_URL
+        CANVAS_CREDENTIALS_API_ORIGIN_ALLOWLIST CANVAS_CREDENTIALS_ASSERTION_NARRATIVE
+        CANVAS_CREDENTIALS_ASSERTION_SCOPE CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE
+        CANVAS_CREDENTIALS_BADGECLASS_ID CANVAS_CREDENTIALS_ISSUER_ID
+        CANVAS_CREDENTIALS_PROVENANCE_BASE_URL CANVAS_CREDENTIALS_PROVIDER CANVAS_CREDENTIALS_RECIPIENT_HASHED
+        CANVAS_LEGACY_EVENT_INGEST_ENABLED CANVAS_LTI_EXPERIENCE_BASE_URL CANVAS_LTI_TOOL_ACTIVE_KID
+        CANVAS_LTI_TOOL_ISSUER_DID CANVAS_LTI_TOOL_PUBLIC_JWKS CANVAS_LTI_TOOL_SIGNING_ORGANIZATION_ID
+        CANVAS_OAUTH_COMPLETION_REDIRECT_URL CANVAS_PILOT_ORGANIZATION_IDS CANVAS_PORTABLE_INTEGRATION_ENABLED
+        CANVAS_PRIVATE_ORIGIN_ALLOWLIST CANVAS_SELF_MANAGED_ORIGIN_ALLOWLIST COOKIE_SAMESITE CORS_ORIGINS
+        CREDENTIAL_LOGIN_POLICY_ID IMAGE_TAG KC_HOSTNAME KEYCLOAK_REALM KEYCLOAK_REMOVE_DEMO_USERS
+        MARTY_ISSUANCE_IMAGE MARTY_ISSUER_DID MARTY_KMS_BOOTSTRAP_ENABLED MARTY_MIGRATION_PROFILE
+        MARTY_ORG_ADMIN_EMAIL MARTY_ORG_ID MARTY_ORG_SLUG OCIR_REGISTRY OIDC_CLIENT_ID
+        OIDC_ISSUER_URL_EXTERNAL OIDC_POST_LOGOUT_REDIRECT_URI OIDC_REDIRECT_URI ORGANIZATION_CREATION_ENABLED
+        PUBLIC_API_URL PUBLIC_DOMAIN RATE_LIMIT_RPM SMTP_HOST SMTP_PORT UI_ADDITIONAL_BASE_URLS UI_BASE_URL
+        UNIVERSAL_RESOLVER_URL".split_whitespace().map(str::to_owned).collect();
+    // Keep the finite synthetic inventory aligned with every deployed
+    // workload TLS identity. Values are public references, never key material.
+    for owner in TLS_KMS_OWNERS {
+        for field in ["ADDR", "KEY_NAME", "KEY_VERSION"] {
+            let name = format!("{owner}_TLS_KMS_{field}");
+            expected.insert(name.clone());
+            require(inputs.contains_key(&name))?;
+            let value = match field {
+                "ADDR" => "https://vault.example.com".to_owned(),
+                "KEY_NAME" => format!("synthetic-{}-tls", owner.to_ascii_lowercase()),
+                "KEY_VERSION" => "1".to_owned(),
+                _ => unreachable!(),
+            };
+            inputs.insert(name, value);
+        }
+    }
+    for (name, value) in [
+        ("KEYCLOAK_KMS_ADDR", "https://vault.example.com"),
+        ("KEYCLOAK_KMS_KEY_VERSION", "1"),
+    ] {
+        expected.insert(name.to_owned());
+        require(inputs.contains_key(name))?;
+        inputs.insert(name.to_owned(), value.to_owned());
+    }
+    require(inputs.keys().cloned().collect::<BTreeSet<_>>() == expected)?;
+    for (name, value) in [
+        ("OCIR_REGISTRY", "synthetic.registry.invalid"),
+        ("IMAGE_TAG", "synthetic"),
+        (
+            "MARTY_ISSUANCE_IMAGE",
+            "synthetic.registry.invalid/legacy:fixture",
+        ),
+        ("PUBLIC_DOMAIN", "issuer.example"),
+        ("PUBLIC_API_URL", "https://issuer.example"),
+        ("UI_BASE_URL", "http://localhost:3000"),
+        ("CORS_ORIGINS", "http://localhost:3000"),
+        ("CANVAS_PORTABLE_INTEGRATION_ENABLED", "false"),
+        ("CANVAS_LEGACY_EVENT_INGEST_ENABLED", "false"),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
+        ("RATE_LIMIT_RPM", "120"),
+        ("BAO_ADDR", "https://vault.example.com"),
+        ("UNIVERSAL_RESOLVER_URL", "https://resolver.example"),
+    ] {
+        require(inputs.contains_key(name))?;
+        inputs.insert(name.into(), value.into());
+    }
+    Ok(inputs)
+}
+
+impl Prepared {
+    pub(super) fn prepare() -> Result<Self> {
+        let source_bytes: BTreeMap<_, _> = SOURCE_FILES
+            .iter()
+            .map(|source| Ok(((*source).to_owned(), bytes(&root().join(source))?)))
+            .collect::<Result<_>>()?;
+        let inputs = synthetic_inputs()?;
+        let mut rendered = Vec::new();
+        for source in &SOURCE_FILES[..2] {
+            let mut command = Command::new("envsubst");
+            command.env_clear().envs(&inputs);
+            // Loader/tool location only; no operator application environment.
+            for name in ["PATH", "SystemRoot", "WINDIR"] {
+                if let Some(value) = std::env::var_os(name) {
+                    command.env(name, value);
+                }
+            }
+            let output = super::bounded_fixture_command::run(
+                &mut command,
+                Some(&source_bytes[*source]),
+                Duration::from_secs(15),
+                native::MAX_BYTES as u64,
+            )
+            .map_err(|_| ERROR)?;
+            require(output.status.success() && output.stderr.is_empty())?;
+            rendered.push(native::documents(&output.stdout).map_err(|_| ERROR)?);
+        }
+        require(rendered[0].len() == 1)?;
+        let prepared = Self {
+            schema: "marty.kubernetes-prepared-synthetic/v1".into(),
+            source_hashes: source_bytes
+                .iter()
+                .map(|(name, bytes)| (name.clone(), digest(bytes)))
+                .collect(),
+            inputs,
+            common: rendered.remove(0).remove(0),
+            baseline: rendered.remove(0),
+        };
+        prepared.validate()?;
+        Ok(prepared)
+    }
+    fn validate(&self) -> Result<()> {
+        require(
+            self.schema == "marty.kubernetes-prepared-synthetic/v1"
+                && self.inputs == synthetic_inputs()?,
+        )?;
+        require(self.source_hashes.len() == SOURCE_FILES.len())?;
+        for source in SOURCE_FILES {
+            require(
+                self.source_hashes.get(*source) == Some(&digest(&bytes(&root().join(source))?)),
+            )?;
+        }
+        require(
+            self.common["kind"] == "ConfigMap"
+                && self.common["metadata"]["name"] == "marty-config"
+                && self.common["metadata"]["namespace"] == "marty-prod",
+        )?;
+        Ok(())
+    }
+    pub(super) fn write(&self, path: &Path) -> Result<String> {
+        self.validate()?;
+        let content = serde_json::to_vec(self).map_err(|_| ERROR)?;
+        require(content.len() <= native::MAX_BYTES)?;
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|_| ERROR)?;
+        if file.write_all(&content).is_err() {
+            drop(file);
+            fs::remove_file(path).map_err(|_| ERROR)?;
+            return Err(ERROR);
+        }
+        Ok(digest(&content))
+    }
+    fn from_child() -> Result<Self> {
+        require(std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() == Ok("1"))?;
+        let path = PathBuf::from(std::env::var_os("MARTY_KUBERNETES_PREPARED_MODEL").ok_or(ERROR)?);
+        let content = bytes(&path)?;
+        require(
+            std::env::var("MARTY_KUBERNETES_PREPARED_SHA256").as_deref()
+                == Ok(digest(&content).as_str()),
+        )?;
+        let prepared: Self = serde_json::from_slice(&content).map_err(|_| ERROR)?;
+        prepared.validate()?;
+        Ok(prepared)
+    }
+}
+
+pub(super) struct PreparedArtifact {
+    pub(super) path: PathBuf,
+    pub(super) hash: String,
+    parent: PathBuf,
+    present: bool,
+}
+impl PreparedArtifact {
+    pub(super) fn create() -> Result<Self> {
+        let parent = std::env::temp_dir().canonicalize().map_err(|_| ERROR)?;
+        let path = parent.join(format!(
+            "marty-kubernetes-prepared-{}.json",
+            uuid::Uuid::new_v4()
+        ));
+        let prepared = Prepared::prepare()?;
+        let hash = prepared.write(&path)?;
+        Ok(Self {
+            path,
+            hash,
+            parent,
+            present: true,
+        })
+    }
+    pub(super) fn close(&mut self) -> Result<()> {
+        if !self.present {
+            return Ok(());
+        }
+        require(self.path.parent() == Some(self.parent.as_path()))?;
+        let metadata = fs::symlink_metadata(&self.path).map_err(|_| ERROR)?;
+        require(metadata.is_file() && !metadata.file_type().is_symlink())?;
+        require(digest(&bytes(&self.path)?) == self.hash)?;
+        fs::remove_file(&self.path).map_err(|_| ERROR)?;
+        require(!self.path.try_exists().map_err(|_| ERROR)?)?;
+        self.present = false;
+        Ok(())
+    }
+}
+impl Drop for PreparedArtifact {
+    fn drop(&mut self) {
+        if self.close().is_err() {
+            eprintln!("Exact synthetic prepared-model cleanup failed");
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Spec {
+    inputs: BTreeMap<String, String>,
+    http_port: u16,
+    grpc_port: u16,
+    gateway_port: u16,
+    database_url: String,
+    redis_url: String,
+    peer_origin: String,
+    grpc_peer_origin: String,
+    grpc_ca_file: PathBuf,
+    grpc_tls_certificate_file: PathBuf,
+    grpc_tls_token_file: PathBuf,
+    grpc_tls_key_name: String,
+    legacy_origin: String,
+    ca_file: PathBuf,
+    policy_directory: PathBuf,
+    kms_url: String,
+    kms_ca_file: PathBuf,
+    kms_token_file: PathBuf,
+    integration_secret_kms_url: String,
+    integration_secret_kms_ca_file: PathBuf,
+    authcrypt: bool,
+    allow_private_ips: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Reference {
+    name: String,
+    key: String,
+    #[serde(default)]
+    optional: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ValueFrom {
+    config_map_key_ref: Option<Reference>,
+    secret_key_ref: Option<Reference>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Entry {
+    name: String,
+    value: Option<String>,
+    #[serde(rename = "valueFrom")]
+    value_from: Option<ValueFrom>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MapReference {
+    name: String,
+    #[serde(default)]
+    optional: bool,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EnvFrom {
+    config_map_ref: MapReference,
+}
+
+type Maps = BTreeMap<String, BTreeMap<String, String>>;
+fn environment(owner: &Value, maps: &Maps, secrets: &Maps) -> Result<BTreeMap<String, String>> {
+    let mut result = BTreeMap::new();
+    let sources: Vec<EnvFrom> =
+        serde_json::from_value(owner["envFrom"].clone()).map_err(|_| ERROR)?;
+    for source in sources {
+        match maps.get(&source.config_map_ref.name) {
+            Some(values) => {
+                require(values.iter().all(|(name, value)| {
+                    !name.is_empty() && !value.contains("$(") && !value.contains('\0')
+                }))?;
+                result.extend(values.clone());
+            }
+            None if source.config_map_ref.optional => {}
+            None => return Err(ERROR),
+        }
+    }
+    let entries: Vec<Entry> = serde_json::from_value(owner["env"].clone()).map_err(|_| ERROR)?;
+    let mut seen = BTreeSet::new();
+    for entry in entries {
+        require(seen.insert(entry.name.clone()) && !entry.name.is_empty())?;
+        let value = match (entry.value, entry.value_from) {
+            (Some(value), None) => Some(value),
+            (None, Some(reference)) => {
+                let (reference, store) =
+                    match (reference.config_map_key_ref, reference.secret_key_ref) {
+                        (Some(reference), None) => (reference, maps),
+                        (None, Some(reference)) => (reference, secrets),
+                        _ => return Err(ERROR),
+                    };
+                let found = store
+                    .get(&reference.name)
+                    .and_then(|v| v.get(&reference.key))
+                    .cloned();
+                require(found.is_some() || reference.optional)?;
+                found
+            }
+            _ => return Err(ERROR),
+        };
+        if let Some(value) = value {
+            // No source in this profile uses Kubernetes $(NAME) expansion;
+            // refuse it rather than approximating kubelet expansion semantics.
+            require(!value.contains("$(") && !value.contains('\0'))?;
+            result.insert(entry.name, value);
+        }
+    }
+    Ok(result)
+}
+
+fn owner<'a>(rows: &'a [Value], name: &str) -> Result<&'a Value> {
+    let selected: Vec<_> = rows
+        .iter()
+        .filter(|v| v["kind"] == "Deployment" && v["metadata"]["name"] == name)
+        .collect();
+    require(selected.len() == 1)?;
+    let containers = selected[0]
+        .pointer("/spec/template/spec/containers")
+        .and_then(Value::as_array)
+        .ok_or(ERROR)?;
+    let selected: Vec<_> = containers.iter().filter(|v| v["name"] == name).collect();
+    require(selected.len() == 1)?;
+    Ok(selected[0])
+}
+
+fn owned_url(value: &str, schemes: &[&str]) -> Result<()> {
+    let url = url::Url::parse(value).map_err(|_| ERROR)?;
+    require(
+        schemes.contains(&url.scheme())
+            && matches!(url.host_str(), Some("127.0.0.1" | "localhost"))
+            && url.port().is_some()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && (url.scheme() != "http"
+                || (url.username().is_empty() && url.password().is_none() && url.path() == "/")),
+    )
+}
+
+fn checked_spec(value: &Value) -> Result<Spec> {
+    let spec: Spec = serde_json::from_value(value.clone()).map_err(|_| ERROR)?;
+    require(
+        spec.inputs
+            == BTreeMap::from([
+                ("ISSUANCE_API_KEY".into(), API_KEY.into()),
+                ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
+                ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
+                (
+                    "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+                    ISSUER_SIGN_KEY.into(),
+                ),
+                (
+                    "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+                    ENVELOPE_KEY.into(),
+                ),
+                ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
+                ("PUBLIC_API_URL".into(), "https://issuer.example".into()),
+                ("UI_BASE_URL".into(), "http://localhost:3000".into()),
+                ("ISSUANCE_OFFER_TTL_MINUTES".into(), "10080".into()),
+                ("TOKEN_RATE_LIMIT".into(), "30".into()),
+                ("CANVAS_PORTABLE_INTEGRATION_ENABLED".into(), "false".into()),
+                ("CANVAS_PILOT_ORGANIZATION_IDS".into(), String::new()),
+            ]),
+    )?;
+    require(
+        [spec.http_port, spec.grpc_port, spec.gateway_port]
+            .into_iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            == 3
+            && spec.http_port != 0
+            && spec.grpc_port != 0
+            && spec.gateway_port != 0,
+    )?;
+    owned_url(&spec.database_url, &["postgres", "postgresql"])?;
+    owned_url(&spec.redis_url, &["redis"])?;
+    owned_url(&spec.peer_origin, &["http"])?;
+    owned_url(&spec.grpc_peer_origin, &["https"])?;
+    owned_url(&spec.legacy_origin, &["http"])?;
+    owned_url(&spec.kms_url, &["https"])?;
+    owned_url(&spec.integration_secret_kms_url, &["https"])?;
+    let secret_url = url::Url::parse(&spec.integration_secret_kms_url).map_err(|_| ERROR)?;
+    require(
+        spec.peer_origin != spec.legacy_origin
+            && secret_url.path() == "/internal"
+            && secret_url.username().is_empty()
+            && secret_url.password().is_none()
+            && spec.ca_file.is_file()
+            && spec.grpc_ca_file.is_file()
+            && spec.grpc_tls_certificate_file.is_file()
+            && fs::read_to_string(&spec.grpc_tls_certificate_file)
+                .is_ok_and(|pem| pem.contains("BEGIN CERTIFICATE") && !pem.contains("PRIVATE KEY"))
+            && spec.grpc_tls_token_file.is_file()
+            && spec.grpc_tls_key_name.starts_with("canvas_grpc_tls_")
+            && fs::read_to_string(&spec.grpc_ca_file)
+                .is_ok_and(|pem| pem.contains("BEGIN CERTIFICATE") && !pem.contains("PRIVATE KEY"))
+            && spec.kms_ca_file.is_file()
+            && spec.integration_secret_kms_ca_file.is_file()
+            && spec.policy_directory.is_dir()
+            && spec.ca_file.parent() == Some(spec.policy_directory.as_path())
+            && spec.kms_token_file.is_file()
+            && spec.kms_token_file.parent() == Some(spec.policy_directory.as_path()),
+    )?;
+    Ok(spec)
+}
+
+pub(super) fn render(value: &Value) -> Result<ResolvedRuntime> {
+    let spec = checked_spec(value)?;
+    let prepared = if std::env::var("MARTY_KUBERNETES_RUNTIME_CHILD").as_deref() == Ok("1") {
+        Prepared::from_child()?
+    } else {
+        Prepared::prepare()?
+    };
+    resolve(&spec, &prepared)
+}
+
+fn resolve(spec: &Spec, prepared: &Prepared) -> Result<ResolvedRuntime> {
+    let mut settings = native::Environment::from([
+        ("K8S_ISSUANCE_NATIVE_ENABLED".into(), "true".into()),
+        (
+            "MARTY_SERVICES_IMAGE".into(),
+            format!("ghcr.io/elevenid/services@sha256:{}", "a".repeat(64)),
+        ),
+        ("ISSUANCE_OFFER_TTL_MINUTES".into(), "10080".into()),
+        ("TOKEN_RATE_LIMIT".into(), "30".into()),
+        ("K8S_DIDCOMM_CA_SECRET".into(), "synthetic-ca".into()),
+        (
+            "DIDCOMM_DID_WEB_INTERNAL_BASE_URL".into(),
+            "http://gateway:8000".into(),
+        ),
+    ]);
+    if spec.allow_private_ips {
+        settings.insert("DIDCOMM_ALLOW_PRIVATE_IPS".into(), "true".into());
+    }
+    if spec.authcrypt {
+        settings.insert(
+            "K8S_DIDCOMM_POLICY_SECRET".into(),
+            "synthetic-policy".into(),
+        );
+    }
+    let mut templates = Vec::new();
+    for file in &SOURCE_FILES[2..4] {
+        templates.extend(native::documents(&bytes(&root().join(file))?).map_err(|_| ERROR)?);
+    }
+    let ready = native::readiness_from_source(
+        &String::from_utf8(bytes(&root().join(SOURCE_FILES[4]))?).map_err(|_| ERROR)?,
+    )
+    .map_err(|_| ERROR)?;
+    let model =
+        native::compose(&prepared.baseline, &templates, &ready, &settings).map_err(|_| ERROR)?;
+    let rows = model["items"].as_array().ok_or(ERROR)?;
+    let mut maps = Maps::new();
+    maps.insert(
+        "marty-config".into(),
+        serde_json::from_value(prepared.common["data"].clone()).map_err(|_| ERROR)?,
+    );
+    for item in rows.iter().filter(|v| v["kind"] == "ConfigMap") {
+        require(
+            maps.insert(
+                item["metadata"]["name"].as_str().ok_or(ERROR)?.into(),
+                serde_json::from_value(item["data"].clone()).map_err(|_| ERROR)?,
+            )
+            .is_none(),
+        )?;
+    }
+    let secret_values = BTreeMap::from([
+        (
+            "DATABASE_URL".into(),
+            "postgresql://oracle:synthetic-local-only@postgres:5432/canvas_published_schema_test"
+                .into(),
+        ),
+        (
+            "DATABASE_SYNC_URL".into(),
+            "postgresql://oracle:synthetic-local-only@postgres:5432/canvas_published_schema_test"
+                .into(),
+        ),
+        ("ISSUANCE_API_KEY".into(), API_KEY.into()),
+        ("GRPC_SERVICE_TOKEN".into(), TOKEN.into()),
+        (
+            "DEVICE_REGISTRATION_GATEWAY_KEY".into(),
+            "synthetic-distinct-kubernetes-device-gateway-key-32-chars".into(),
+        ),
+        (
+            "DEVICE_REGISTRATION_SIGNING_KEYS_KEY".into(),
+            "synthetic-distinct-kubernetes-device-signing-key-32-chars".into(),
+        ),
+        ("SIGNING_KEYS_INTERNAL_API_KEY".into(), SIGNING_KEY.into()),
+        (
+            "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY".into(),
+            "synthetic-kubernetes-service-sign-gateway-key-32-chars".into(),
+        ),
+        (
+            "SIGNING_KEYS_ISSUER_SIGN_KEY".into(),
+            ISSUER_SIGN_KEY.into(),
+        ),
+        (
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY".into(),
+            ENVELOPE_KEY.into(),
+        ),
+        ("TOKEN_HMAC_KEY".into(), "synthetic-fresh-main-hmac".into()),
+        (
+            "CANVAS_CREDENTIALS_SHARED_SECRET".into(),
+            "synthetic-kubernetes-canvas-shared-secret".into(),
+        ),
+        (
+            "SIGNING_KEYS_OPENBAO_TOKEN".into(),
+            "synthetic-not-an-openbao-capability".into(),
+        ),
+        (
+            "DIDCOMM_ISSUANCE_OPENBAO_TOKEN".into(),
+            "synthetic-token-mounted-as-file-only".into(),
+        ),
+    ]);
+    for name in [
+        "ISSUANCE_API_KEY",
+        "GRPC_SERVICE_TOKEN",
+        "SIGNING_KEYS_INTERNAL_API_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+        "TOKEN_HMAC_KEY",
+    ] {
+        require(spec.inputs.get(name) == secret_values.get(name))?;
+    }
+    let secrets = Maps::from([("marty-secrets".into(), secret_values)]);
+    let native = environment(owner(rows, "issuance-native")?, &maps, &secrets)?;
+    let gateway = environment(owner(rows, "gateway")?, &maps, &secrets)?;
+    let signing = environment(owner(rows, "signing-keys")?, &maps, &secrets)?;
+    let device_registration = environment(owner(rows, "device-registration")?, &maps, &secrets)?;
+    require(
+        signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            == device_registration["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+            && signing["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"]
+                != gateway["DEVICE_REGISTRATION_GATEWAY_KEY"]
+            && !gateway.contains_key("DEVICE_REGISTRATION_SIGNING_KEYS_KEY")
+            && device_registration["SIGNING_KEYS_HOLDER_ORIGIN"] == "http://signing-keys:8017",
+    )?;
+    require(
+        signing["SIGNING_KEYS_INTERNAL_API_KEY"] == native["SIGNING_KEYS_INTERNAL_API_KEY"]
+            && signing["SIGNING_KEYS_INTERNAL_API_KEY"] == gateway["SIGNING_KEYS_INTERNAL_API_KEY"],
+    )?;
+    require(
+        native["ISSUANCE_API_KEY"] == gateway["ISSUANCE_API_KEY"]
+            && native["ISSUANCE_GRPC_ENABLED"] == "true",
+    )?;
+    require(native.get("BAO_ADDR").map(String::as_str) == Some("https://vault.example.com"))?;
+    require(
+        !native
+            .keys()
+            .any(|v| (v.starts_with("BAO") && v != "BAO_ADDR") || v.starts_with("OPENBAO")),
+    )?;
+    for (name, path) in [
+        (
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "credential",
+        ),
+        ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+        ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+        ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+    ] {
+        require(
+            native.get(name).map(String::as_str)
+                == Some(format!("/run/secrets/issuance-sign-grants/{path}").as_str()),
+        )?;
+    }
+    for (name, expected) in [
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
+    ] {
+        require(native.get(name).map(String::as_str) == Some(expected))?;
+    }
+    require(
+        native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str)
+            == if spec.allow_private_ips {
+                Some("true")
+            } else {
+                None
+            },
+    )?;
+    overlay(native, gateway, spec)
+}
+
+fn overlay(
+    mut native: BTreeMap<String, String>,
+    mut gateway: BTreeMap<String, String>,
+    spec: &Spec,
+) -> Result<ResolvedRuntime> {
+    for (name, expected) in GATEWAY_URLS {
+        require(gateway.get(*name).map(String::as_str) == Some(*expected))?;
+    }
+    require(
+        gateway["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
+            && gateway["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
+            && gateway["AUTH_GRPC_TARGET"] == "https://auth:9001",
+    )?;
+    // Parse the actual gateway configuration before using its supported default
+    // organization target. No missing deployment dependency is fabricated.
+    let actual = marty_gateway::config::GatewayConfig::from_values(&gateway).map_err(|_| ERROR)?;
+    require(
+        actual.organization_grpc_target == "https://organization:9002"
+            && actual.event_stream_grpc_target == "https://event-stream:9015",
+    )?;
+    for (name, expected) in [
+        ("ORG_GRPC_TARGET", "https://organization:9002"),
+        ("CT_GRPC_TARGET", "https://credential-template:9003"),
+        ("RP_GRPC_TARGET", "https://revocation-profile:9013"),
+        (
+            "SIGNING_KEYS_INTERNAL_URL",
+            "http://gateway:8000/internal/signing-keys",
+        ),
+    ] {
+        require(native.get(name).map(String::as_str) == Some(expected))?;
+    }
+    for name in ["ORG_GRPC_TARGET", "CT_GRPC_TARGET", "RP_GRPC_TARGET"] {
+        native.insert(name.into(), spec.grpc_peer_origin.clone());
+    }
+    native.insert(
+        "GRPC_TLS_CA_CERT".into(),
+        spec.grpc_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    for name in [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ] {
+        require(native.contains_key(name))?;
+    }
+    for (name, value) in [
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            spec.grpc_tls_certificate_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CA_CERT",
+            spec.grpc_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", spec.kms_url.as_str()),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            spec.kms_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            spec.grpc_tls_token_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            spec.grpc_tls_key_name.as_str(),
+        ),
+        ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+    ] {
+        native.insert(name.into(), value.into());
+    }
+    for name in [
+        "CREDENTIAL_TEMPLATE_SERVICE_URL",
+        "REVOCATION_PROFILE_SERVICE_URL",
+        "SIGNING_KEYS_INTERNAL_URL",
+        "DIDCOMM_DID_WEB_INTERNAL_BASE_URL",
+    ] {
+        native.insert(name.into(), spec.peer_origin.clone());
+    }
+    native.insert("MARTY_ISSUANCE__SERVER__HOST".into(), "127.0.0.1".into());
+    native.insert("DATABASE_URL".into(), spec.database_url.clone());
+    native.insert("ISSUANCE_SERVICE_PORT".into(), spec.http_port.to_string());
+    native.insert("ISSUANCE_GRPC_PORT".into(), spec.grpc_port.to_string());
+    native.insert("BAO_ADDR".into(), spec.kms_url.clone());
+    native.insert(
+        "BAO_CACERT".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    require(native["DIDCOMM_KMS_ADDR"] == "https://vault.example.com")?;
+    require(native["DIDCOMM_KMS_TOKEN_FILE"] == "/run/secrets/didcomm-kms/token")?;
+    require(native["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/issuance-server-kms/ca.crt")?;
+    native.insert("DIDCOMM_KMS_ADDR".into(), spec.kms_url.clone());
+    native.insert(
+        "DIDCOMM_KMS_CA_CERT_FILE".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    native.insert(
+        "DIDCOMM_KMS_TOKEN_FILE".into(),
+        spec.kms_token_file.to_str().ok_or(ERROR)?.into(),
+    );
+    require(native["DIDCOMM_TLS_CA_FILE"] == "/run/marty-didcomm-ca/ca.pem")?;
+    native.insert(
+        "DIDCOMM_TLS_CA_FILE".into(),
+        spec.ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_URL".into(),
+        spec.integration_secret_kms_url.clone(),
+    );
+    native.insert(
+        "INTEGRATION_SECRET_KMS_CA_FILE".into(),
+        spec.integration_secret_kms_ca_file
+            .to_str()
+            .ok_or(ERROR)?
+            .into(),
+    );
+    if spec.authcrypt {
+        require(
+            native["DIDCOMM_ENCRYPTION_POLICY_FILE"] == "/run/marty-didcomm-policy/policy.json",
+        )?;
+        let policy = spec.policy_directory.join("didcomm-encryption-policy.json");
+        require(policy.is_file())?;
+        native.insert(
+            "DIDCOMM_ENCRYPTION_POLICY_FILE".into(),
+            policy.to_str().ok_or(ERROR)?.into(),
+        );
+    } else {
+        require(!native.contains_key("DIDCOMM_ENCRYPTION_POLICY_FILE"))?;
+    }
+    for (name, _) in GATEWAY_URLS {
+        gateway.insert((*name).into(), spec.peer_origin.clone());
+    }
+    for name in ["AUTH_GRPC_TARGET", "ORG_GRPC_TARGET", "ES_GRPC_TARGET"] {
+        gateway.insert(name.into(), spec.grpc_peer_origin.clone());
+    }
+    for name in ["GRPC_TLS_CA_CERT", "ORG_GRPC_CA_CERT", "ES_GRPC_CA_CERT"] {
+        gateway.insert(name.into(), spec.grpc_ca_file.to_str().ok_or(ERROR)?.into());
+    }
+    gateway.insert(
+        "GRPC_WORKLOAD_TLS_CA_CERT".into(),
+        spec.grpc_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    for (name, value) in [
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_CERT",
+            spec.grpc_tls_certificate_file.to_str().ok_or(ERROR)?,
+        ),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR", spec.kms_url.as_str()),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+            spec.kms_ca_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+            spec.grpc_tls_token_file.to_str().ok_or(ERROR)?,
+        ),
+        (
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+            spec.grpc_tls_key_name.as_str(),
+        ),
+        ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION", "1"),
+    ] {
+        gateway.insert(name.into(), value.into());
+    }
+    gateway.insert("ISSUANCE_SERVICE_URL".into(), spec.legacy_origin.clone());
+    gateway.insert(
+        "ISSUANCE_NATIVE_SERVICE_URL".into(),
+        format!("http://127.0.0.1:{}", spec.http_port),
+    );
+    gateway.insert("GATEWAY_PORT".into(), spec.gateway_port.to_string());
+    gateway.insert("BAO_ADDR".into(), spec.kms_url.clone());
+    gateway.insert(
+        "BAO_CACERT".into(),
+        spec.kms_ca_file.to_str().ok_or(ERROR)?.into(),
+    );
+    gateway.insert("REDIS_URL".into(), spec.redis_url.clone());
+    Ok(ResolvedRuntime {
+        native_environment: native,
+        gateway_environment: gateway,
+        isolation: Isolation::Kubernetes,
+    })
+}
+
+#[test]
+fn reference_resolution_preserves_precedence_empty_optional_and_fails_closed() {
+    let maps = Maps::from([
+        (
+            "marty-config".into(),
+            BTreeMap::from([
+                ("A".into(), "common".into()),
+                ("B".into(), "retained".into()),
+            ]),
+        ),
+        (
+            "selected".into(),
+            BTreeMap::from([("A".into(), "selected".into())]),
+        ),
+    ]);
+    let secrets = Maps::from([(
+        "synthetic-only".into(),
+        BTreeMap::from([("key".into(), "synthetic-value".into())]),
+    )]);
+    let fixture = json!({"envFrom":[{"configMapRef":{"name":"marty-config"}},{"configMapRef":{"name":"selected"}}],"env":[
+        {"name":"A","value":""},{"name":"B","valueFrom":{"configMapKeyRef":{"name":"absent","key":"missing","optional":true}}},
+        {"name":"S","valueFrom":{"secretKeyRef":{"name":"synthetic-only","key":"key"}}}
+    ]});
+    assert_eq!(
+        environment(&fixture, &maps, &secrets).unwrap(),
+        BTreeMap::from([
+            ("A".into(), String::new()),
+            ("B".into(), "retained".into()),
+            ("S".into(), "synthetic-value".into())
+        ])
+    );
+    for (pointer, value) in [
+        ("/envFrom/0", json!({"secretRef":{"name":"synthetic-only"}})),
+        ("/envFrom/0", json!({"configMapRef":{"name":"absent"}})),
+        (
+            "/envFrom/0",
+            json!({"configMapRef":{"name":"marty-config"},"prefix":"PREFIX_"}),
+        ),
+        ("/env/0", json!({"name":"A","value":"$(UNSUPPORTED)"})),
+        (
+            "/env/0",
+            json!({"name":"A","value":"x","valueFrom":{"secretKeyRef":{"name":"synthetic-only","key":"key"}}}),
+        ),
+        ("/env/0", json!({"name":"A","value":3})),
+        ("/env/1", json!({"name":"A","value":"duplicate"})),
+        ("/env/2/valueFrom/secretKeyRef/key", json!("missing")),
+        (
+            "/env/2/valueFrom",
+            json!({"fieldRef":{"fieldPath":"metadata.name"}}),
+        ),
+        (
+            "/env/2/valueFrom",
+            json!({"configMapKeyRef":{"name":"marty-config","key":"A"},"secretKeyRef":{"name":"synthetic-only","key":"key"}}),
+        ),
+    ] {
+        let mut changed = fixture.clone();
+        *changed.pointer_mut(pointer).unwrap() = value;
+        assert!(
+            matches!(environment(&changed, &maps, &secrets), Err(ERROR)),
+            "{pointer}"
+        );
+    }
+    let mut changed = maps.clone();
+    changed
+        .get_mut("marty-config")
+        .unwrap()
+        .insert("CANARY".into(), "$(UNSUPPORTED)".into());
+    assert!(matches!(
+        environment(&fixture, &changed, &secrets),
+        Err(ERROR)
+    ));
+}
+
+#[test]
+fn prepared_model_uses_actual_envsubst_and_rejects_identity_drift() {
+    let prepared = Prepared::prepare().unwrap();
+    assert_eq!(
+        prepared.common["data"]["PUBLIC_API_URL"],
+        "https://issuer.example"
+    );
+    assert_eq!(prepared.common["data"]["CANVAS_PILOT_ORGANIZATION_IDS"], "");
+    for (name, expected) in [
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE",
+            "https://credentials.example/assertions/{assertion_id}",
+        ),
+        (
+            "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE",
+            "Synthetic configured award narrative",
+        ),
+        (
+            "CANVAS_CREDENTIALS_PROVENANCE_BASE_URL",
+            "https://credentials.example/verify",
+        ),
+        ("CANVAS_CREDENTIALS_RECIPIENT_HASHED", "false"),
+        ("CANVAS_CREDENTIALS_ALLOW_DUPLICATE_AWARDS", "true"),
+    ] {
+        assert_eq!(prepared.common["data"][name], expected);
+    }
+    assert_eq!(
+        prepared.common["data"]["AUTH_SERVICE_URL"],
+        "http://auth:8001"
+    );
+    assert_eq!(prepared.source_hashes.len(), 5);
+    for fault in ["schema", "source", "inputs"] {
+        let mut changed: Prepared =
+            serde_json::from_value(serde_json::to_value(&prepared).unwrap()).unwrap();
+        match fault {
+            "schema" => changed.schema = "other-profile".into(),
+            "source" => {
+                changed.source_hashes.remove(SOURCE_FILES[0]);
+            }
+            "inputs" => {
+                changed
+                    .inputs
+                    .insert("PUBLIC_API_URL".into(), "https://changed.invalid".into());
+            }
+            _ => unreachable!(),
+        }
+        assert!(matches!(changed.validate(), Err(ERROR)));
+    }
+}
+
+#[test]
+fn synthetic_kubernetes_inputs_cover_remote_tls_references() {
+    let inputs = synthetic_inputs().unwrap();
+    for owner in TLS_KMS_OWNERS {
+        assert_eq!(
+            inputs[&format!("{owner}_TLS_KMS_ADDR")],
+            "https://vault.example.com"
+        );
+        assert!(!inputs[&format!("{owner}_TLS_KMS_KEY_NAME")].is_empty());
+        assert_eq!(inputs[&format!("{owner}_TLS_KMS_KEY_VERSION")], "1");
+    }
+    assert_eq!(inputs["KEYCLOAK_KMS_ADDR"], "https://vault.example.com");
+    assert_eq!(inputs["KEYCLOAK_KMS_KEY_VERSION"], "1");
+}
+
+#[test]
+fn prepared_cleanup_retains_modified_bytes_until_exact_owned_content_is_restored() {
+    let mut artifact = PreparedArtifact::create().unwrap();
+    let path = artifact.path.clone();
+    let original = bytes(&path).unwrap();
+    fs::write(&path, b"synthetic-mutated-prepared-model").unwrap();
+    assert!(matches!(artifact.close(), Err(ERROR)));
+    assert_eq!(bytes(&path).unwrap(), b"synthetic-mutated-prepared-model");
+    // Only this test's original exact bytes are restored; the cleanup owner
+    // never restores or removes contents whose recorded hash has changed.
+    fs::write(&path, &original).unwrap();
+    artifact.close().unwrap();
+    assert!(!path.try_exists().unwrap());
+    artifact.close().unwrap();
+}
+
+#[test]
+fn resolved_kubernetes_renewal_config_crosses_encryption_and_private_address_policy() {
+    if !cfg!(target_os = "linux") {
+        eprintln!("Kubernetes renderer qualification is Linux-only");
+        return;
+    }
+    if std::env::var("MARTY_CANVAS_PUBLISHED_SCHEMA_TEST").as_deref() != Ok("1") {
+        eprintln!("Kubernetes renewal configuration requires the configured Linux Canvas gate");
+        return;
+    }
+    // Render the real envsubst baseline once; this is not a deployed process.
+    let prepared = Prepared::prepare().expect("bounded real Kubernetes envsubst baseline");
+    let directory = tempfile::tempdir().expect("owned synthetic policy directory");
+    let ca = directory.path().join("ca.pem");
+    let policy = directory.path().join("didcomm-encryption-policy.json");
+    let token = directory.path().join("openbao-token");
+    fs::write(
+        &ca,
+        b"-----BEGIN CERTIFICATE-----\nsynthetic CA fixture\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    fs::write(&policy, b"{}").unwrap();
+    fs::write(&token, b"synthetic token fixture").unwrap();
+    let ca_path = ca.to_str().unwrap();
+    let policy_path = policy.to_str().unwrap();
+    let mut input = json!({
+        "inputs": {
+            "ISSUANCE_API_KEY": API_KEY,
+            "GRPC_SERVICE_TOKEN": TOKEN,
+            "SIGNING_KEYS_INTERNAL_API_KEY": SIGNING_KEY,
+            "SIGNING_KEYS_ISSUER_SIGN_KEY": ISSUER_SIGN_KEY,
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY": ENVELOPE_KEY,
+            "TOKEN_HMAC_KEY": "synthetic-fresh-main-hmac",
+            "PUBLIC_API_URL": "https://issuer.example",
+            "UI_BASE_URL": "http://localhost:3000",
+            "ISSUANCE_OFFER_TTL_MINUTES": "10080",
+            "TOKEN_RATE_LIMIT": "30",
+            "CANVAS_PORTABLE_INTEGRATION_ENABLED": "false",
+            "CANVAS_PILOT_ORGANIZATION_IDS": ""
+        },
+        "http_port": 18005,
+        "grpc_port": 19005,
+        "gateway_port": 18000,
+        "database_url": "postgresql://oracle:synthetic-local-only@127.0.0.1:15432/canvas_published_schema_test",
+        "redis_url": "redis://127.0.0.1:16379",
+        "peer_origin": "http://127.0.0.1:18001",
+        "grpc_peer_origin": "https://127.0.0.1:18003",
+        "grpc_ca_file": ca_path,
+        "grpc_tls_certificate_file": ca_path,
+        "grpc_tls_token_file": token,
+        "grpc_tls_key_name": "canvas_grpc_tls_synthetic",
+        "legacy_origin": "http://127.0.0.1:18002",
+        "ca_file": ca_path,
+        "policy_directory": directory.path(),
+        "kms_url": "https://127.0.0.1:18200",
+        "kms_ca_file": ca,
+        "kms_token_file": token,
+        "integration_secret_kms_url": "https://127.0.0.1:18201/internal",
+        "integration_secret_kms_ca_file": ca,
+        "authcrypt": false,
+        "allow_private_ips": false
+    });
+    let mut seen = BTreeSet::new();
+    for (authenticated, allow_private_ips) in
+        [(false, false), (true, false), (false, true), (true, true)]
+    {
+        assert!(seen.insert((authenticated, allow_private_ips)));
+        input["authcrypt"] = json!(authenticated);
+        input["allow_private_ips"] = json!(allow_private_ips);
+        let spec = checked_spec(&input).expect("same closed renewal test specification");
+        let resolved = resolve(&spec, &prepared).expect("actual composed Kubernetes model");
+        let native = &resolved.native_environment;
+        let gateway = &resolved.gateway_environment;
+        assert!(matches!(resolved.isolation, Isolation::Kubernetes));
+        assert_eq!(
+            native.get("DIDCOMM_KMS_CA_CERT_FILE").map(String::as_str),
+            Some(ca_path)
+        );
+        for name in ["GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT"] {
+            assert_eq!(native.get(name).map(String::as_str), Some(ca_path));
+        }
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE")
+                .map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native
+                .get("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME")
+                .map(String::as_str),
+            Some("canvas_grpc_tls_synthetic")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_ALLOW_PRIVATE_IPS").map(String::as_str),
+            if allow_private_ips {
+                Some("true")
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_ENCRYPTION_POLICY_FILE")
+                .map(String::as_str),
+            if authenticated {
+                Some(policy_path)
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            native.get("DIDCOMM_TLS_CA_FILE").map(String::as_str),
+            Some(ca_path)
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_ADDR").map(String::as_str),
+            Some("https://127.0.0.1:18200")
+        );
+        assert_eq!(
+            native.get("DIDCOMM_KMS_TOKEN_FILE").map(String::as_str),
+            Some(token.to_str().unwrap())
+        );
+        assert_eq!(
+            native.get("INTEGRATION_SECRET_KMS_URL").map(String::as_str),
+            Some("https://127.0.0.1:18201/internal")
+        );
+        assert_eq!(
+            native
+                .get("INTEGRATION_SECRET_KMS_CA_FILE")
+                .map(String::as_str),
+            Some(ca_path)
+        );
+        assert_eq!(
+            native
+                .get("DIDCOMM_DID_WEB_INTERNAL_BASE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18001")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_SERVICE_PORT").map(String::as_str),
+            Some("18005")
+        );
+        assert_eq!(
+            native.get("ISSUANCE_GRPC_PORT").map(String::as_str),
+            Some("19005")
+        );
+        assert_eq!(
+            gateway.get("ISSUANCE_SERVICE_URL").map(String::as_str),
+            Some("http://127.0.0.1:18002")
+        );
+        assert_eq!(
+            gateway
+                .get("ISSUANCE_NATIVE_SERVICE_URL")
+                .map(String::as_str),
+            Some("http://127.0.0.1:18005")
+        );
+        assert_eq!(
+            gateway.get("REDIS_URL").map(String::as_str),
+            Some("redis://127.0.0.1:16379")
+        );
+    }
+    assert_eq!(seen.len(), 4);
+    println!("\nRESOLVED_KUBERNETES_RENEWAL_CONFIG_2X2_COMPLETE_V1");
+}

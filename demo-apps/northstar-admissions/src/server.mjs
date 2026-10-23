@@ -75,6 +75,7 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
   const applicationId = String(config.applicationId || '').trim();
   const webhookId = String(config.webhookId || '').trim();
   const callbackUrl = normalizeNorthstarCallbackUrl(config.callbackUrl);
+  const transientFailureOnce = config.transientFailureOnce === true;
   if (!organizationId || !applicationId || !webhookId) {
     throw new Error('organizationId, applicationId, and webhookId are required');
   }
@@ -105,8 +106,10 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
     receiverTests: {
       invalidSignatureAttempts: 0,
       duplicateAttempts: 0,
+      transientFailures: 0,
       lastResult: null,
     },
+    transientFailureInjected: false,
   };
   const gateway = createGatewayClient({
     origin: gatewayOrigin,
@@ -194,6 +197,11 @@ export function createNorthstarApp(config, { fetchImpl = fetch } = {}) {
     if (!approvalRequestId || payload.correlation_id !== approvalRequestId) {
       state.webhookStatus = 'Rejected: approval correlation mismatch';
       return { status: 422, body: { status: 'rejected', code: 'APPROVAL_CORRELATION_MISMATCH' } };
+    }
+    if (transientFailureOnce && !state.transientFailureInjected && !state.processedEventIds.has(payload.id)) {
+      state.transientFailureInjected = true;
+      state.receiverTests.transientFailures += 1;
+      return { status: 503, body: { status: 'unavailable', code: 'TRANSIENT_RECEIVER_UNAVAILABLE' } };
     }
     state.lastVerifiedEnvelope = {
       payload: structuredClone(payload),
@@ -342,7 +350,8 @@ function json(response, status, body) {
 function responseHeaders(contentType) {
   return {
     'content-type': contentType,
-    'cache-control': 'no-store',
+    // Keep intermediaries from injecting scripts that violate this page's CSP.
+    'cache-control': contentType.startsWith('text/html') ? 'no-store, no-transform' : 'no-store',
     'content-security-policy': "default-src 'self'; base-uri 'none'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self'",
     'referrer-policy': 'no-referrer',
     'x-content-type-options': 'nosniff',
@@ -354,6 +363,11 @@ export function loadRunConfig(config = process.env) {
   let run = {};
   if (config.NORTHSTAR_RUN_SECRET_FILE) {
     run = JSON.parse(readFileSync(config.NORTHSTAR_RUN_SECRET_FILE, 'utf8'));
+  }
+  const transientFailureOnce = config.NORTHSTAR_TRANSIENT_FAILURE_ONCE === 'true';
+  if (transientFailureOnce && (config.ENVIRONMENT !== 'beta'
+      || config.NORTHSTAR_RECEIVER_TEST_CONTROLS_ENABLED !== 'true')) {
+    throw new Error('Transient receiver fault requires beta test controls');
   }
   return {
     gatewayOrigin: config.MARTY_PUBLIC_GATEWAY_ORIGIN || run.gateway_origin,
@@ -367,6 +381,7 @@ export function loadRunConfig(config = process.env) {
     webhookSecret: config.NORTHSTAR_WEBHOOK_SECRET || run.webhook_signing_secret,
     callbackUrl: config.NORTHSTAR_CALLBACK_URL || run.callback_url,
     preparationGatewayRequests: run.outbound_requests || [],
+    transientFailureOnce,
   };
 }
 

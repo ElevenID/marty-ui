@@ -18,7 +18,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Request, build_opener
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from services.passport_disposable_identity import ORGANIZATION_ID, issuer_did
+from scripts.passport_disposable_identity import ORGANIZATION_ID, issuer_did
 
 if __package__:
     from .check_passport_supported_compose_ownership import (

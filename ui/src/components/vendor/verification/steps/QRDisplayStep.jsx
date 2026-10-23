@@ -15,7 +15,7 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorIcon from '@mui/icons-material/Error';
 import HourglassTopIcon from '@mui/icons-material/HourglassTop';
 import PhoneAndroidIcon from '@mui/icons-material/PhoneAndroid';
-import { getVerificationFlowInstance } from '../../../../services/zkVerificationApi';
+import { getVerificationFlowInstance, getVerificationResult } from '../../../../services/zkVerificationApi';
 import {
   DEFAULT_DC_API_PROTOCOL,
   formatDigitalCredentialError,
@@ -45,6 +45,12 @@ function normalizeSessionStatus(status) {
   return 'pending';
 }
 
+export function isApprovedVerificationResult(result) {
+  return String(result?.status || '').toLowerCase() === 'completed'
+    && String(result?.result || '').toLowerCase() === 'passed'
+    && String(result?.decision || '').toLowerCase() === 'allow';
+}
+
 function QRDisplayStep({ session, onComplete }) {
   const [status, setStatus] = useState(normalizeSessionStatus(session?.status));
   const [result, setResult] = useState(null);
@@ -54,6 +60,16 @@ function QRDisplayStep({ session, onComplete }) {
   const pollRef = useRef(null);
   const instanceId = session?.instance_id || session?.flow_instance_id || session?.id || null;
 
+  const loadTerminalResult = async () => {
+    const verified = await getVerificationResult(instanceId);
+    if (verified?.instance_id !== instanceId) {
+      throw new Error('Verification result did not match this session.');
+    }
+    setResult(verified);
+    setStatus(isApprovedVerificationResult(verified) ? 'completed' : 'failed');
+    if (onComplete) onComplete(verified);
+  };
+
   useEffect(() => {
     if (!instanceId) return;
     if (TERMINAL_STATUSES.includes(status)) return;
@@ -62,14 +78,18 @@ function QRDisplayStep({ session, onComplete }) {
       try {
         const updated = await getVerificationFlowInstance(instanceId);
         const updatedStatus = normalizeSessionStatus(updated.status || updated.state);
-        setStatus(updatedStatus);
-        if (TERMINAL_STATUSES.includes(updatedStatus)) {
+        if (updatedStatus === 'expired') {
+          setStatus('expired');
           clearInterval(pollRef.current);
-          setResult(updated);
-          if (onComplete) onComplete(updated);
+        } else if (TERMINAL_STATUSES.includes(updatedStatus)) {
+          clearInterval(pollRef.current);
+          await loadTerminalResult();
+        } else {
+          setStatus(updatedStatus);
         }
       } catch (err) {
-        setError(err.message || 'Failed to check session status');
+        setStatus('failed');
+        setError(err.message || 'Could not load the verified result.');
         clearInterval(pollRef.current);
       }
     }, POLL_INTERVAL_MS);
@@ -101,9 +121,9 @@ function QRDisplayStep({ session, onComplete }) {
           requestUrl: dcApiRequestUrl,
           submitUrl: dcApiSubmitUrl,
         });
-        setStatus(normalizeSessionStatus(completed.status || completed.result || 'completed'));
-        setResult(completed);
-        if (onComplete) onComplete(completed);
+        if (TERMINAL_STATUSES.includes(normalizeSessionStatus(completed.status || completed.result))) {
+          await loadTerminalResult();
+        }
         return;
       }
 
@@ -124,6 +144,8 @@ function QRDisplayStep({ session, onComplete }) {
         <QrCode2Icon color="primary" />
         <Typography variant="h6">Scan to Verify</Typography>
         <Chip
+          data-testid="verification-session-status"
+          data-status={status}
           size="small"
           label={statusCfg.label}
           color={statusCfg.color}
@@ -147,6 +169,7 @@ function QRDisplayStep({ session, onComplete }) {
                 variant="contained"
                 startIcon={walletBusy ? <CircularProgress size={14} color="inherit" /> : <PhoneAndroidIcon />}
                 onClick={handleOpenWallet}
+                data-testid="verification-open-wallet"
                 disabled={walletBusy}
               >
                 {dcApiAvailable ? 'Open Wallet Chooser' : 'Open Wallet'}
@@ -208,9 +231,9 @@ function QRDisplayStep({ session, onComplete }) {
 
       {(status === 'failed' || status === 'expired') && (
         <Alert severity="error">
-          {status === 'expired'
+          {error || result?.decision_reason || (status === 'expired'
             ? 'The verification session expired before the wallet responded.'
-            : 'Verification failed. The wallet did not satisfy the policy requirements.'}
+            : 'Verification failed. The wallet did not satisfy the policy requirements.')}
         </Alert>
       )}
     </Box>

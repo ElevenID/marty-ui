@@ -8,6 +8,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import pytest
+from scripts.canvas_native_rest_contract import bind_current_capture_inputs
 
 ROOT = Path(__file__).resolve().parents[1]
 ORACLE = ROOT / "contracts/canvas-worker-body-timeout-oracle.json"
@@ -15,7 +16,7 @@ CAPTURE_SHA256 = "7bdf8673cd5dd7a85cec93f9634918fb2cb3c56b768a628935ccc36bf78030
 PREVIOUS_CAPTURE_SHA256 = "bd5a3e7312960fd005cef7c7e21fa0e7a9662c1a5bfda9a45afe54b8c1640373"
 ORIGINAL_CAPTURE_SHA256 = "e97d7fee361a11d4245876b725c8ac417045254d766693f772da53409c9b50eb"
 ORIGINAL_HTTPS_FIXTURE_SHA256 = "262e9bac321a5e7d4cb40e5bc48dfc51a12c10476c79bfc8ce024e343efad8c4"
-CURRENT_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
+CAPTURED_HTTPS_FIXTURE_SHA256 = "edf207e02a2e3a976f3a1b4cf15b7618038e60100fa51f0847797bcf92b65992"
 OLD_CAPTURE_SCRIPT_SHA256 = "fca12bc82af56d1cf6f852d9166854f92e41cbe00062ef603c6ae65b0863484a"
 NEW_CAPTURE_SCRIPT_SHA256 = "515b9f7c59180bd2613316dade8d894dfd92c06ddae650acebe9b51bc17b762f"
 TLS_HELPER_SHA256 = "27db81b0baf4c5a53ce574ff59bff2754e5f294c7d23adff339fe5e8d36c828d"
@@ -44,7 +45,7 @@ def test_current_corpus_differs_from_independent_capture_only_by_pinned_provenan
         NEW_CAPTURE_SCRIPT_SHA256.encode(), OLD_CAPTURE_SCRIPT_SHA256.encode()
     )
     assert hashlib.sha256(previous).hexdigest() == PREVIOUS_CAPTURE_SHA256
-    current = CURRENT_HTTPS_FIXTURE_SHA256.encode()
+    current = CAPTURED_HTTPS_FIXTURE_SHA256.encode()
     original = ORIGINAL_HTTPS_FIXTURE_SHA256.encode()
     assert previous.count(current) == 6
     assert original not in previous
@@ -108,17 +109,18 @@ def test_full_reports_close_six_cases_and_retain_published_identity(corpus, matr
             assert observed[key] == matrix[key]
 
 
-def test_capture_inputs_bind_actual_unchanged_sources_without_json_rewriting(corpus):
+def test_capture_inputs_bind_recorded_sources_and_reviewed_current_helper_without_json_rewriting(corpus):
     pins = observations(corpus)[0]["capture_source_sha256"]
     assert len(pins) == 17
     for observed in observations(corpus):
         assert observed["capture_source_sha256"] == pins
+    bindings = bind_current_capture_inputs(ROOT, pins)
     for name, digest in pins.items():
         assert Path(name).name == name
-        directory = "contracts" if name.endswith(".json") else "scripts"
-        # Capture provenance deliberately normalizes checkout newlines only.
-        source = (ROOT / directory / name).read_text(encoding="utf-8")
-        assert hashlib.sha256(source.encode("utf-8")).hexdigest() == digest
+        # Historical provenance and reviewed current execution remain distinct.
+        binding = bindings[name]
+        assert binding["captured_sha256"] == digest
+        assert binding["reviewed_harness_delta"] is (name == "canvas_worker_https_fixture.py")
 
 
 def unpinned_local_imports(source: Path, pins: set[str], scripts: Path) -> set[str]:

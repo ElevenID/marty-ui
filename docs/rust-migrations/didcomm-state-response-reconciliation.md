@@ -23,14 +23,13 @@ recovery, concurrent/unknown outcomes, or holder binding.
 
 ## Reproducible reference
 
-The existing capture command remains available; `--check` is additive:
+The capture generator has been retired and remains available in Git history.
+Current checks use the frozen corpus and native delivery behavior tests:
 
 ```powershell
-python scripts/capture_didcomm_direct_state_reference.py <credentials-checkout> --check
 python -m pytest tests/test_didcomm_direct_state_reference.py
 ```
 
-The checkout supplies pinned Git objects, not imported current application code.
 The existing corpus source is `87eae30788924921a42848425d315e2f33f7ae41`; the old
 dirty artifact identifies `9bd2747f040f203188529758ec38f0a5dce5ac5f`. Both revisions
 were independently checked to contain these identical relevant blobs:
@@ -41,12 +40,12 @@ were independently checked to contain these identical relevant blobs:
 | `tests/unit/test_didcomm_boundary.py` | `f373c4d1762f916b616e4b83a38101112ec78e85` |
 | `services/issuance/domain/entities.py` | `1b5e2eba90c1ec13c1a38135f4da92813f1d1073` |
 
-Capture verifies all three blobs, executes the unchanged route body and trusted
-organization helpers/request DTOs, the original `_request` fixture, and real
-entity models. Only route registration decorators are removed for direct
-invocation. It uses a controlled same-tenant repository and fail-if-called
+The historical capture verified all three blobs and executed the unchanged route
+body and trusted organization helpers/request DTOs, the original `_request` fixture, and real
+entity models. Only route registration decorators were removed for direct
+invocation. It used a controlled same-tenant repository and fail-if-called
 delivery trap, then the actual FastAPI exception renderer. Synthetic configuration
-replaces the capture environment and outbound socket operations are blocked
+replaced the capture environment and outbound socket operations were blocked
 after local event-loop creation. No live service configuration or keys are read.
 
 Python 3.12.10 / FastAPI 0.135.3 / Starlette 1.0.0 / Pydantic 2.13.0 reproduced

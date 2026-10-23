@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::Utc;
+use serde::Serialize;
 use serde_json::{Map, Value};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use tokio::sync::Mutex;
@@ -50,6 +51,7 @@ impl MemoryDeploymentRepository {
 #[async_trait]
 impl DeploymentRepository for MemoryDeploymentRepository {
     async fn save_profile(&self, profile: DeploymentProfile) -> Result<(), DeploymentError> {
+        reject_private_record(&profile)?;
         self.inner
             .lock()
             .await
@@ -85,6 +87,7 @@ impl DeploymentRepository for MemoryDeploymentRepository {
     }
 
     async fn save_lane(&self, lane: Lane) -> Result<(), DeploymentError> {
+        reject_private_record(&lane)?;
         self.inner.lock().await.lanes.insert(lane.id.clone(), lane);
         Ok(())
     }
@@ -157,6 +160,7 @@ impl PostgresDeploymentRepository {
 #[async_trait]
 impl DeploymentRepository for PostgresDeploymentRepository {
     async fn save_profile(&self, profile: DeploymentProfile) -> Result<(), DeploymentError> {
+        reject_private_record(&profile)?;
         sqlx::query(
             "INSERT INTO deployment_profile_service.deployment_profiles
              (id,organization_id,name,description,status,environment,site_id,trust_profile_id,
@@ -329,6 +333,7 @@ impl DeploymentRepository for PostgresDeploymentRepository {
 }
 
 async fn save_lane(pool: &PgPool, lane: &Lane) -> Result<(), DeploymentError> {
+    reject_private_record(lane)?;
     sqlx::query(
         "INSERT INTO deployment_profile_service.lanes
          (id,deployment_profile_id,name,description,location,device_type,default_policy_id,metadata,device_ids,created_at,updated_at)
@@ -361,7 +366,7 @@ async fn save_lane_tx(
 }
 
 fn profile_from_row(row: sqlx::postgres::PgRow) -> Result<DeploymentProfile, DeploymentError> {
-    Ok(DeploymentProfile {
+    checked_public_record(DeploymentProfile {
         id: row.try_get("id").map_err(persistence)?,
         organization_id: row.try_get("organization_id").map_err(persistence)?,
         name: row.try_get("name").map_err(persistence)?,
@@ -425,7 +430,7 @@ fn profile_from_row(row: sqlx::postgres::PgRow) -> Result<DeploymentProfile, Dep
 }
 
 fn lane_from_row(row: sqlx::postgres::PgRow) -> Result<Lane, DeploymentError> {
-    Ok(Lane {
+    checked_public_record(Lane {
         id: row.try_get("id").map_err(persistence)?,
         deployment_profile_id: row.try_get("deployment_profile_id").map_err(persistence)?,
         name: row.try_get("name").map_err(persistence)?,
@@ -446,6 +451,26 @@ fn lane_from_row(row: sqlx::postgres::PgRow) -> Result<Lane, DeploymentError> {
 fn json(value: &impl serde::Serialize) -> Result<Value, DeploymentError> {
     serde_json::to_value(value)
         .map_err(|_| DeploymentError::Persistence("Deployment Profile record is invalid".into()))
+}
+
+fn reject_private_record<T: Serialize>(record: &T) -> Result<(), DeploymentError> {
+    let value = json(record)?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(DeploymentError::BadRequest(
+            "Private key material is not allowed in deployment profile records".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn checked_public_record<T: Serialize>(record: T) -> Result<T, DeploymentError> {
+    let value = json(&record)?;
+    if marty_key_material_policy::contains_private_key(&value) {
+        return Err(DeploymentError::Persistence(
+            "Deployment Profile record contains private key material".into(),
+        ));
+    }
+    Ok(record)
 }
 
 fn from_json<T: serde::de::DeserializeOwned>(

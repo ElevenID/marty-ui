@@ -10,6 +10,7 @@ SECURITY_OVERRIDES = {
     "brace-expansion": "5.0.12",
     "browserslist": "4.28.9",
     "fast-uri": "4.1.5",
+    "follow-redirects": "1.16.1",
     "qs": "6.16.0",
 }
 
@@ -45,6 +46,17 @@ def test_security_job_rejects_a_stale_bun_lock_before_auditing() -> None:
         "bun install --frozen-lockfile --ignore-scripts && bun audit"
         in workflow
     )
+
+
+def test_e2e_http_client_uses_patched_redirect_dependency() -> None:
+    lock = json.loads(_text("tests/package-lock.json"))
+    versions = [
+        metadata["version"]
+        for path, metadata in lock["packages"].items()
+        if path.endswith("node_modules/follow-redirects")
+    ]
+    assert versions
+    assert all(tuple(map(int, version.split("."))) >= (1, 16, 1) for version in versions)
 
 
 def test_vitest_suite_excludes_redirect_mock_file_read_advisory() -> None:

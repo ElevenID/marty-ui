@@ -2,6 +2,7 @@ import json
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -31,10 +32,11 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     assert "elevenid-beta-copy-" in script
     assert "migration-rehearsal.log" in script
     assert "--verify-only" in script
-    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=true") == 2
+    assert "MARTY_KMS_BOOTSTRAP_ENABLED=true" not in script
+    assert script.count("MARTY_KMS_BOOTSTRAP_ENABLED=false") == 3
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert '"BAO_TOKEN"' in script
+    assert re.search(r'"db-migrate"\s*\)', script)
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
     assert "CANVAS_LTI_TOOL_ISSUER_DID = $canvasLtiIssuerDid" in script
     assert '"did:web:${betaHost}:orgs:marty"' in script
     assert "CANVAS_LTI_TOOL_PUBLIC_JWKS" not in script
@@ -54,7 +56,7 @@ def test_local_release_runner_is_backup_and_rehearsal_gated() -> None:
     )
     assert '-Phase "maintenance_quiesced"' in script
     assert "-WritersStopped $true" in script
-    assert "restore-local-beta-release.ps1" in script
+    assert "supervised-recovery.txt" not in script
 
 
 def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() -> None:
@@ -75,10 +77,8 @@ def test_local_release_runner_preserves_maintenance_and_provenance_boundaries() 
     assert 'Get-StackArtifact "marty-core-python" "python" "marty-core"' in script
     assert 'Get-StackArtifact "marty-api-core" "npm" "marty-cli"' in script
     assert 'Get-StackArtifact "marty-blog" "npm" "marty-blog"' in script
-    assert (
-        'Get-StackArtifact "marty-credentials-issuance" "oci" "marty-credentials"'
-        in script
-    )
+    assert 'Get-StackArtifact "marty-credentials-issuance"' not in script
+    assert "Get-BetaApplicationImageEvidence -Plan $applicationImagePlan" in script
     assert script.index("$stackLock = Get-Content") < script.index("if ($PlanOnly)")
     assert "Services runtime marker component revision set does not match" in script
     assert "bind_deployed_demo_manifest.py" in script
@@ -156,6 +156,15 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
             line.lstrip().startswith("- ./") for line in compose.splitlines()
         )
 
+    staged = set(re.findall(r'"([A-Za-z0-9_./-]+)"',
+                           deploy.split("$runtimeSources = @(", 1)[1].split("\n    )", 1)[0]))
+    for compose_path in beta_compose_paths:
+        for required in re.findall(r'\$\{MARTY_RUNTIME_CONFIG_ROOT:-\.\}/([A-Za-z0-9_./-]+)', text(compose_path)):
+            assert (ROOT / required).exists(), f"Missing source runtime input: {required}"
+            assert any(required == source or required.startswith(source + "/")
+                       or ((ROOT / required).is_dir() and source.startswith(required + "/"))
+                       for source in staged), f"Runtime input omitted from durable staging: {required}"
+
     assert "function Initialize-DurableRuntimeConfig" in deploy
     assert "rev-parse --path-format=absolute --git-common-dir" in deploy
     assert '"tests\\artifacts\\runtime-config"' in deploy
@@ -171,7 +180,10 @@ def test_beta_runtime_bind_mounts_survive_release_worktree_removal() -> None:
         "config/keycloak",
         "config/envoy/envoy.yaml",
         "docker/openbao-init.sh",
-        "docker/canvas-localhost-bridge/server.py",
+        "docker/canvas-localhost-bridge/Cargo.toml",
+        "docker/canvas-localhost-bridge/Cargo.lock",
+        "docker/canvas-localhost-bridge/Dockerfile",
+        "docker/canvas-localhost-bridge/src/main.rs",
         "docker/waltid/wallet-api/config",
         "nginx-tunnel.conf.template",
     ):
@@ -192,17 +204,15 @@ def test_keycloak_custom_theme_is_source_pinned_and_mounted_read_only() -> None:
     ).is_file()
 
 
-def test_beta_runner_reconciles_ephemeral_openbao_before_live_migrations() -> None:
+def test_beta_runner_preserves_initialized_openbao_before_live_migrations() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    step = 'Write-Step "Reconcile beta OpenBao state from release configuration"'
-    command = '-Arguments @("run", "--rm", "--no-deps", "openbao-init")'
-    migration = '"python", "/app/services/run_all_migrations.py"'
+    step = 'Write-Step "Verify preserved beta OpenBao readiness"'
+    migration = '"migration-live.log"'
 
     assert step in script
-    assert command in script
-    assert '"openbao-init-live.log"' in script
-    assert "Beta OpenBao reconciliation failed" in script
+    assert '-Arguments @("run", "--rm", "--no-deps", "openbao-init")' not in script
+    assert "Preserved beta OpenBao is not ready" in script
     step_index = script.index(step)
     assert script.index(migration, step_index) > step_index
 
@@ -339,6 +349,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert "[switch]$OfficialStackRelease" in script
     assert "[string]$RecorderRevision" in script
     assert "prepare_official_beta_release.py" in script
+    assert "--rust-only 2>&1" in script
     assert '"attestation", "verify"' in script
     assert '"--repo", "ElevenID/marty-ui"' in script
     assert (
@@ -365,7 +376,7 @@ def test_official_beta_mode_is_attestation_and_digest_gated() -> None:
     assert "ConvertTo-BetaApplicationImageLines -Plan $applicationImagePlan" in script
     assert "Get-BetaApplicationImageEvidence -Plan $applicationImagePlan" in script
     assert "[string]$officialPlan.images.services.digest" in script
-    assert "[string]$officialPlan.images.issuance.digest" in script
+    assert "[string]$officialPlan.images.issuance.digest" not in script
     assert "[string]$officialPlan.images.ui.digest" in script
     assert "Official release inputs changed during deployment preparation" in script
     assert "official_stack_manifest = if ($OfficialStackRelease)" in script
@@ -429,7 +440,7 @@ $default = New-BetaDeployArguments -ArtifactDir 'C:\synthetic'
 $passport = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative
 $didcomm = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnableDidcommAuthcrypt
 $both = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -EnablePassportNative -EnableDidcommAuthcrypt
-$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -GeneratedEnvFile 'C:\generated.env'
+$official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRelease -RecorderRevision ('a' * 40) -TunnelEnvFile 'C:\tunnel.env' -TunnelTokenEnvFile 'C:\private\connector.env' -GeneratedEnvFile 'C:\generated.env'
 @{ default=$default; passport=$passport; didcomm=$didcomm; both=$both; official=$official } | ConvertTo-Json -Compress -Depth 4
 """,
         encoding="utf-8",
@@ -456,6 +467,7 @@ $official = New-BetaDeployArguments -ArtifactDir 'C:\synthetic' -OfficialStackRe
     assert cases["official"]["OfficialStackRelease"] is True
     assert cases["official"]["RecorderRevision"] == "a" * 40
     assert cases["official"]["TunnelEnvFile"] == r"C:\tunnel.env"
+    assert cases["official"]["TunnelTokenEnvFile"] == r"C:\private\connector.env"
     assert cases["official"]["GeneratedEnvFile"] == r"C:\generated.env"
 
 
@@ -489,11 +501,14 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     script = text("scripts/restore-local-beta-release.ps1")
 
     assert "-ConfirmBetaRestore is required" in script
+    assert "Rust-only beta restore cannot replay a legacy issuance image" in script
+    assert script.index("$priorIssuance = @(") < script.index("Start-BetaMutation -ResumePending")
     assert '$project = "elevenid-beta"' in script
     assert "com.docker.compose.project" in script
     assert 'throw "Refusing container outside $project"' in script
     assert 'phase -ne "maintenance_quiesced"' in script
-    assert "elevenid-beta_redis_data" in script
+    assert "Assert-BetaStateVolumePlan -Expected $stateVolumes" in script
+    assert "type=volume,src=$redisVolumeName,dst=/data" in script
     assert '"elevenid-beta-ui"' in script
     assert "self-host production was not addressed" in script
     assert "Wait-ForServiceHealth" in script
@@ -510,16 +525,25 @@ def test_beta_restore_is_explicit_and_project_scoped() -> None:
     assert '"GRPC_INSECURE_ALLOWED", "ALLOW_PLAINTEXT_GRPC"' in script
 
 
+def test_postmutation_failure_keeps_beta_in_maintenance_for_rust_forward_repair() -> None:
+    deploy = text("scripts/deploy-local-beta-release.ps1")
+    assert "Start-ContainersBestEffort $maintenanceContainers" in deploy
+    assert "if ($maintenanceStarted -and -not $liveMutationStarted)" in deploy
+    assert "supervised-recovery.txt" not in deploy
+    assert "This local runner cannot resume or restore the mutated state; do not rerun it" in deploy
+    assert "reviewed Rust-only forward repair" in deploy
+
+
 def test_applicant_backup_and_restore_use_the_quiesced_named_volume() -> None:
     deploy = text("scripts/deploy-local-beta-release.ps1")
     restore = text("scripts/restore-local-beta-release.ps1")
 
-    assert 'Assert-BetaVolume "elevenid-beta_applicant_data"' in deploy
+    assert 'Assert-BetaStateVolumePlan -Expected $script:StateVolumePlan -SameContainers' in deploy
     assert "type=volume,src=$applicantVolume,dst=/source,readonly" in deploy
     assert "test -s /source/applicant_store.json" in deploy
     assert "${applicant}:/app/data/applicant_store.json" not in deploy
 
-    volume_restore = restore.index('Assert-BetaVolume "elevenid-beta_applicant_data"')
+    volume_restore = restore.index('Assert-BetaStateVolumePlan -Expected $stateVolumes')
     service_start = restore.index(
         'Invoke-Checked docker (Get-ComposeArgs (@("up", "--detach"'
     )
@@ -550,12 +574,16 @@ def test_beta_compose_uses_the_generated_database_password_without_source_overla
     tunnel = text("docker-compose.profile.tunnel.yml")
 
     assert "postgresql+asyncpg://marty:marty_dev_password" not in base
-    assert (
-        base.count(
-            "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
-        )
-        == 14
+    assert base.count(
+        "postgresql+asyncpg://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
+    ) == 11
+    services = yaml.safe_load(base)["services"]
+    sync_url = (
+        "postgresql://marty:${MARTY_DB_PASSWORD:-marty_dev_password}"
+        "@postgres:5432/marty"
     )
+    assert services["issuance"]["environment"]["DATABASE_URL"] == sync_url
+    assert services["issuance-migrations"]["environment"]["DATABASE_URL"] == sync_url
     assert "./services/gateway/routes/signing_keys.py" not in tunnel
 
 
@@ -594,17 +622,16 @@ def test_beta_runner_targets_only_the_beta_projects_and_rust_services() -> None:
         yaml.safe_load(beta),
         yaml.safe_load(text("docker-compose.service.issuance-native.yml")),
     )
-    assert "-TunnelEnvFile" in deploy and "-GeneratedEnvFile" in deploy
+    assert "[string]$TunnelEnvFile" in deploy
+    assert "[string]$GeneratedEnvFile" in deploy
     assert 'mip_version -ne "0.5.0"' in deploy
     assert 'mip_version = "0.5.0"' in deploy
     assert "name: elevenid-beta" in beta
     assert "name: elevenid-beta-network" in beta
     assert "container_name:" not in base
     assert "${MARTY_NETWORK_NAME:-marty-infra-network}" in base
-    assert (
-        '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.uri)@$($martyIssuance.digest)"'
-        in restore
-    )
+    assert "MARTY_ISSUANCE_IMAGE" not in restore
+    assert '$env:MARTY_SERVICES_IMAGE = [string]$priorBureau[0].image_id' in restore
     assert "com.docker.compose.service=docs" in restore
     assert 'Find-ServiceContainer "issuance-native"' in restore
 
@@ -758,38 +785,92 @@ def test_beta_flow_cutover_requires_distinct_workload_identity() -> None:
     assert '"FLOW_APPLICATION_EVENT_HMAC_KEY"' in deploy
     assert '"FLOW_WEBHOOK_SECRET"' in deploy
     assert 'Invoke-Checked -FilePath openssl -Arguments @("verify"' in deploy
-    assert "spiffe://marty.internal/service/auth" in initializer
-    assert "spiffe://marty.internal/service/applicant" in initializer
-    assert "spiffe://marty.internal/service/flow" in initializer
-    assert "private keys and certificate contents were not displayed" in initializer
+    assert "spiffe://marty.internal/service/auth" in deploy
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert "the private signer remains in KMS" in initializer
+    assert 'SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in initializer
+    assert '"${role}_TLS_KMS_KEY_VERSION"' in initializer
+    assert '"SIGNING_KEYS_TLS_KMS_TOKEN_FILE"' in deploy
+    assert "Beta workload TLS private-key files are retired" in deploy
+    assert "openssl genpkey" not in initializer
+    assert '"ENVOY_ISSUANCE_CLIENT_CERT_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE_TLS_KMS_TOKEN_FILE"' in deploy
+    assert '"ENVOY_ISSUANCE"' in initializer
+    assert "spiffe://marty.internal/service/envoy-issuance-bridge" in initializer
     assert (
         "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/flow_workload_server_cert" in beta
     )
     assert (
         "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/auth_workload_client_cert" in beta
     )
-    assert (
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT: /run/secrets/applicant_workload_client_cert"
-        in beta
-    )
+    assert "applicant_workload_client_key" not in beta
     assert "GRPC_WORKLOAD_TLS_SERVER_CERT: /run/secrets/pp_workload_server_cert" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/pp_workload_server_key" not in beta
+    assert "pp_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/pp_tls_kms_token" in beta
+    assert 'PP_WORKLOAD_SERVER_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/auth_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/auth_tls_kms_token" in beta
+    assert 'AUTH_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/verification_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE: /run/secrets/verification_tls_kms_token" in beta
+    assert 'VERIFICATION_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'DEPLOYMENT_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'COMPLIANCE_PROFILE_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert "spiffe://marty.internal/service/verification" in deploy
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KEY: /run/secrets/flow_workload_client_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY: /run/secrets/flow_workload_server_key" not in beta
+    assert "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE: /run/secrets/flow_client_tls_kms_token" in beta
+    assert "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE: /run/secrets/flow_server_tls_kms_token" in beta
+    assert "spiffe://marty.internal/service/flow" in deploy
+    assert 'Flow server certificate must contain the flow DNS SAN' in deploy
+    assert 'FLOW_WORKLOAD_CLIENT_KEY_FILE' in initializer
+    assert 'FLOW_WORKLOAD_SERVER_KEY_FILE' in initializer
 
 
-def test_beta_runner_resolves_all_required_immutable_compose_inputs() -> None:
+def test_beta_identity_helper_rejects_retired_signing_keys_file() -> None:
+    shell = shutil.which("powershell")
+    if shell is None:
+        pytest.skip("PowerShell is unavailable")
+    with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+        fixture = Path(directory) / "beta.env"
+        fixture.write_text(
+            "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE=retired.pem\n",
+            encoding="utf-8",
+        )
+        result = subprocess.run(
+            [
+                shell,
+                "-NoProfile",
+                "-File",
+                str(ROOT / "scripts/ensure-beta-workload-identity.ps1"),
+                "-GeneratedEnvFile",
+                str(fixture),
+                "-OutputDirectory",
+                directory,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode != 0
+        assert "SIGNING_KEYS_WORKLOAD_SERVER_KEY_FILE is retired" in (
+            result.stdout + result.stderr
+        )
+
+
+def test_beta_runner_uses_immutable_images_without_python_migration_inputs() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert "$env:MARTY_COMMON_URI = $martyCommon.Uri" in script
-    assert "$env:MARTY_COMMON_DIGEST = $martyCommon.Digest" in script
-    assert "$env:MARTY_RS_URI = $martyRs.Uri" in script
-    assert "$env:MARTY_RS_DIGEST = $martyRs.Digest" in script
-    assert "$env:MARTY_VERIFICATION_URI = $martyVerification.Uri" in script
-    assert "$env:MARTY_VERIFICATION_DIGEST = $martyVerification.Digest" in script
-    assert "$env:MARTY_ISO18013_URI = $martyIso18013.Uri" in script
-    assert "$env:MARTY_ISO18013_DIGEST = $martyIso18013.Digest" in script
-    assert (
-        '$env:MARTY_ISSUANCE_IMAGE = "$($martyIssuance.Uri)@$($martyIssuance.Digest)"'
-        in script
-    )
+    assert "MARTY_COMMON_URI" not in script
+    assert "MARTY_COMMON_DIGEST" not in script
+    assert "MARTY_RS_URI" not in script
+    assert "MARTY_VERIFICATION_URI" not in script
+    assert "MARTY_ISO18013_URI" not in script
+    assert "marty-migration-bootstrap" in script
+    assert "MARTY_ISSUANCE_IMAGE" not in script
+    assert '$env:MARTY_SERVICES_IMAGE = [string]$officialPlan.images.services.reference' in script
     assert "com.docker.compose.service=docs" in script
     assert "Existing beta docs image is not immutable" in script
 
@@ -808,10 +889,10 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert 'throw "Authenticated beta Redis snapshot failed"' in script
     assert '"redis-server", "--requirepass", $copyRedisPassword' in script
     assert (
-        "$redisPing = docker exec $copyRedisContainer redis-cli --no-auth-warning -a $copyRedisPassword ping"
+        "$redisProbe = Invoke-BetaDockerReadinessProbe -Arguments @('exec', $copyRedisContainer, 'redis-cli', '--no-auth-warning', '-a', $copyRedisPassword, 'ping')"
         in script
     )
-    assert '$LASTEXITCODE -eq 0 -and $redisPing -eq "PONG"' in script
+    assert "$redisProbe.exit_code -eq 0 -and $redisProbe.output -contains 'PONG'" in script
     assert (
         "$encodedCopyRedisPassword = [Uri]::EscapeDataString($copyRedisPassword)"
         in script
@@ -823,7 +904,7 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
     assert '"REDIS_URL=redis://:${encodedRedisPassword}@redis:6379"' in script
     assert '"REDIS_URL=redis://redis:6379"' not in script
     assert script.count("-RedisPassword $redisPassword") == 2
-    assert script.count('"/app/services/run_all_migrations.py"') == 3
+    assert '"/usr/local/bin/marty-migration-bootstrap", "--verify-only"' in script
     assert '"/app/run_all_migrations.py"' not in script
     assert script.count('"issuance-migrations"') == 4
     assert "issuance-migration-rehearsal.log" in script
@@ -845,34 +926,57 @@ def test_beta_runner_authenticates_backups_and_uses_the_packaged_migration_path(
 def test_beta_runner_always_isolates_required_openbao_migration_state() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
-    assert (
-        'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' in script
-    )
+    assert 'Get-DotEnvValue -Path $GeneratedEnvFile -Name "BAO_DEV_ROOT_TOKEN"' not in script
     assert (
         "$rehearsalContainers = "
         "@($copyContainer, $copyOpenBaoContainer, $copyRedisContainer)"
     ) in script
     assert '"BAO_DEV_ROOT_TOKEN_ID=$copyBaoToken"' in script
-    assert '"BAO_ADDR=http://${copyOpenBaoContainer}:8200"' in script
+    assert '"BAO_ADDR=https://localhost:8200"' in script
+    assert "Read-BetaContainerPublicCertificate -Container $copyOpenBaoContainer -Path '/tmp/bao-tls/vault-ca.pem'" in script
+    assert '-ca-cert=/tmp/bao-tls/vault-ca.pem' in script
+    assert '"--network", "container:$copyOpenBaoContainer"' in script
+    assert '"--mount", $copyCaMount' in script
+    assert '"BAO_CACERT=/bao-public-ca/ca.crt"' in script
     assert '"BAO_TOKEN=$copyBaoToken"' in script
-    assert "$env:BAO_TOKEN = $baoDevRootToken" in script
-    assert '"BAO_ADDR=http://openbao:8200"' in script
-    assert script.count('"--env", "BAO_TOKEN"') == 1
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$copyNotificationToken"' in script
+    assert '"NOTIFICATION_OPENBAO_TOKEN=$liveNotificationToken"' not in script
+    assert script.count("-policy=notification-webhook-service -no-default-policy -orphan") == 1
+    assert "$env:BAO_TOKEN = $baoDevRootToken" not in script
+    assert re.search(r'"db-migrate"\s*\)', script)
+    assert '"BAO_ADDR=http://openbao:8200"' not in script
+    assert script.count('"--env", "BAO_TOKEN"') == 0
     assert '"dev-only-token"' not in script
 
 
-def test_beta_runner_preserves_the_pinned_external_issuance_image_role() -> None:
+def test_beta_runner_uses_shared_rust_issuance_image_role() -> None:
     script = text("scripts/deploy-local-beta-release.ps1")
 
     helper = text("scripts/beta-application-image-plan.ps1")
-    assert '$externalIssuance = $service -eq "issuance"' in helper
-    assert "'${MARTY_ISSUANCE_IMAGE}'" in helper
-    assert (
-        'Invoke-Checked -FilePath docker -Arguments @("pull", $env:MARTY_ISSUANCE_IMAGE)'
-        in script
-    )
+    assert 'if ($service -eq "issuance") { "issuance_native" }' in helper
+    assert "'${MARTY_SERVICES_IMAGE}'" in helper
+    assert 'UseRustIssuance' not in script
+    assert '"pull", $env:MARTY_ISSUANCE_IMAGE' not in script
+    assert 'foreach ($image in @($env:MARTY_SERVICES_IMAGE, $migrationImage, $uiImage, $env:MARTY_KEYCLOAK_KMS_IMAGE))' in script
+    assert '"pull", $image' in script
+    assert '"    entrypoint: [/usr/local/bin/marty-issuance-service]"' in helper
     assert "$imageRef = [string]$imageEvidence.inspect_reference" in script
     assert '"elevenid-local/issuance:${releaseVersion}"' not in script
+
+
+def test_issuance_migrations_use_rust_in_both_beta_modes() -> None:
+    script = text("scripts/deploy-local-beta-release.ps1")
+    assert 'UseRustIssuance' not in script
+    assert '"postgresql://marty:$copyPassword@${copyContainer}:5432/marty"' in script
+    assert '"postgresql://marty:${martyDbPassword}@postgres:5432/marty"' in script
+    assert "manage_migrations.py" not in script
+    for prefix, verify_name in (("rehearsal", "$rehearsalIssuanceVerify"),
+                                ("live", "$liveIssuanceVerify")):
+        upgrade_log = script.index(f'"issuance-migration-{prefix}.log"')
+        verify_args = script.index(f"-Arguments {verify_name}", upgrade_log)
+        verify_log = script.index(f'"issuance-migration-{prefix}-verify.log"', verify_args)
+        assert upgrade_log < verify_args < verify_log
+    assert script.count('"issuance-migrations")') >= 4
 
 
 def test_beta_runner_proves_the_split_native_issuance_runtime() -> None:
@@ -902,3 +1006,50 @@ def test_beta_compose_requires_credential_login_issuer_identity() -> None:
         "CREDENTIAL_LOGIN_ISSUER_DID: "
         "${MARTY_ISSUER_DID:?MARTY_ISSUER_DID must be set for beta}" in beta_compose
     )
+
+
+@pytest.mark.parametrize("official,wheel_matches,npm_matches,expected", [
+    (False, False, True, True),
+    (True, False, True, False),
+    (False, False, False, False),
+    (True, True, True, True),
+])
+def test_native_local_stack_keeps_used_artifact_and_official_wheel_provenance(
+    tmp_path: Path, official: bool, wheel_matches: bool, npm_matches: bool, expected: bool,
+) -> None:
+    shell = shutil.which("pwsh") or shutil.which("powershell.exe")
+    if not shell:
+        pytest.skip("PowerShell required for executable admission check")
+    source = text("scripts/deploy-local-beta-release.ps1")
+    block = source[source.index("function Get-StackArtifact("):source.index('$backupDir =')]
+    current, archived = "3" * 40, "1" * 40
+    components = []
+    for name in ["marty-core-python", "marty-verification-python", "marty-iso18013-python"]:
+        components.append(dict(name=name, commit=current if wheel_matches else archived,
+            version="0.2.2", artifacts=[dict(type="python", uri="https://artifact.invalid/wheel.whl", digest="sha256:" + "a" * 64)]))
+    for name in ["marty-api-core", "marty-blog"]:
+        components.append(dict(name=name, commit=current if npm_matches else archived,
+            version="0.2.2", artifacts=[dict(type="npm", uri="https://artifact.invalid/package.tgz", digest="sha256:" + "b" * 64)]))
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps(dict(official=official, stack=dict(components=components),
+        revisions={name: current for name in ["marty-core", "marty-cli", "marty-blog"]})))
+    script = tmp_path / "admit.ps1"
+    script.write_text('''param([string]$Fixture)
+$ErrorActionPreference = "Stop"
+$data = Get-Content -LiteralPath $Fixture -Raw | ConvertFrom-Json
+$stackLock = $data.stack
+$OfficialStackRelease = [bool]$data.official
+$componentRevisions = [ordered]@{}
+foreach ($property in $data.revisions.PSObject.Properties) { $componentRevisions[$property.Name] = $property.Value }
+$martyRs = $null
+try {
+''' + block + '\n@{ wheelLoaded = ($null -ne $martyRs); apiCommit = $martyApiCore.Commit; blogCommit = $martyBlog.Commit } | ConvertTo-Json -Compress\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }\n', encoding="utf8")
+    result = subprocess.run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script), "-Fixture", str(fixture)],
+        capture_output=True, text=True, timeout=20)
+    if expected:
+        assert result.returncode == 0, result.stderr
+        observed = json.loads(result.stdout)
+        assert observed == dict(wheelLoaded=official, apiCommit=current, blogCommit=current)
+    else:
+        assert result.returncode != 0
+        assert "commit must match source manifest repository" in result.stderr

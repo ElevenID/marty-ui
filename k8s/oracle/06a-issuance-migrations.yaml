@@ -1,7 +1,7 @@
 ---
 # ================================================================
-# Credentials Issuance Migration Job
-# Runs after the Marty UI schema job and from the exact issuance image.
+# Native Issuance Migration Job
+# Runs after the Marty UI schema job from the exact Rust services image.
 # Re-run by deleting the Job and applying again.
 # ================================================================
 apiVersion: batch/v1
@@ -30,11 +30,13 @@ spec:
         - name: issuance-migrations
           image: ${MARTY_ISSUANCE_IMAGE}
           imagePullPolicy: Always
-          command: ['python', 'manage_migrations.py', 'upgrade']
+          command: ['/usr/local/bin/marty-issuance-service', 'migrate']
           envFrom:
             - configMapRef:
                 name: marty-config
           env:
+            - name: SERVICE_NAME
+              value: issuance_native
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

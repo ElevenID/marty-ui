@@ -1,6 +1,7 @@
 //! Mandatory workspace gate: actual CLI, actual Compose, actual ZIP extraction.
 //! Never starts services or resolves released image provenance.
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -13,6 +14,21 @@ mod resolved_selfhost_runtime;
 use extracted_bundle::{
     assert_contained_references, assert_descriptor_inventory, inventory, ExtractedBundle,
 };
+
+#[test]
+fn jointly_mutated_verified_bundle_is_refused() {
+    extracted_bundle::assert_jointly_mutated_verified_bundle_is_refused();
+}
+
+#[test]
+fn extracted_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    extracted_bundle::assert_extracted_inputs_survive_child_unwind_until_parent_removes_scratch();
+}
+
+#[test]
+fn prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
+    resolved_selfhost_runtime::assert_prepared_inputs_survive_child_unwind_until_parent_removes_scratch();
+}
 
 fn repository() -> PathBuf {
     // Explicit additional qualification can select another reviewed source
@@ -119,6 +135,55 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
     let fixture = ExtractedBundle::create(&repo, command());
     let output = fixture.output.clone();
     let extracted = fixture.extracted.clone();
+    marty_selfhost_bundle::secret_closure::validate(
+        &extracted.join("docker-compose.yml"),
+        &repo.join("deploy-config/catalog/secrets.json"),
+        &repo.join("deploy-config/stacks/selfhost-production.json"),
+        &extracted.join("docker/secrets/selfhost.example"),
+    )
+    .expect("extracted bundle declarations must retain closed secret ownership");
+    let helper = "scripts/bootstrap-selfhost-vault.sh";
+    let packaged_helper = fs::read(extracted.join(helper)).unwrap();
+    assert_eq!(packaged_helper, fs::read(repo.join(helper)).unwrap());
+    let credential_generator = "scripts/generate_selfhost_disposable_credentials.py";
+    assert_eq!(
+        fs::read(extracted.join(credential_generator)).unwrap(),
+        fs::read(repo.join(credential_generator)).unwrap()
+    );
+    for helper in [
+        "scripts/provision_selfhost_keycloak_kms.py",
+        "scripts/selfhost_openbao_client.py",
+        "scripts/passport_remote_tls.py",
+        "scripts/provision_selfhost_disposable_tls.py",
+        "scripts/start_selfhost_disposable_openbao.py",
+        "scripts/stage_selfhost_keycloak_inputs.py",
+    ] {
+        assert_eq!(
+            fs::read(extracted.join(helper)).unwrap(),
+            fs::read(repo.join(helper)).unwrap()
+        );
+    }
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    for helper in [
+        "scripts/provision_selfhost_disposable_tls.py",
+        "scripts/start_selfhost_disposable_openbao.py",
+        "scripts/stage_selfhost_keycloak_inputs.py",
+    ] {
+        let help = Command::new(python)
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .arg(extracted.join(helper))
+            .arg("--help")
+            .output()
+            .unwrap();
+        assert!(
+            help.status.success(),
+            "{helper}: {}",
+            String::from_utf8_lossy(&help.stderr)
+        );
+    }
+    assert!(String::from_utf8(packaged_helper).unwrap().contains(
+        "quay.io/openbao/openbao@sha256:6d2b93856e3fcf7b18ad855a0b51eaba474dc8b79cf554379ea32034797d2acf"
+    ));
     assert_operator_bind_paths(&repo, &extracted);
     resolved_selfhost_runtime::qualify(&repo, &extracted);
     assert_eq!(inventory(&extracted), inventory(&output));
@@ -133,6 +198,84 @@ fn actual_cli_packages_and_renders_extracted_bundle_with_contained_asset_referen
         .unwrap();
     assert!(!retry.status.success());
     assert!(output.join("docker-compose.yml").is_file());
+
+    // Exercise the optional digest-binding mode on the actual normalized
+    // Compose output, rather than a synthetic YAML fragment. Every non-image
+    // node must survive unchanged and Compose must accept the pinned bundle.
+    let original: serde_yaml::Value =
+        serde_yaml::from_slice(&fs::read(output.join("docker-compose.yml")).unwrap()).unwrap();
+    let mut expected = original.clone();
+    let references: BTreeMap<String, String> = original["services"]
+        .as_mapping()
+        .unwrap()
+        .keys()
+        .map(|service| {
+            let name = service.as_str().unwrap();
+            (
+                name.to_owned(),
+                format!("ghcr.io/elevenid/{name}@sha256:{}", "a".repeat(64)),
+            )
+        })
+        .collect();
+    for (name, service) in expected["services"].as_mapping_mut().unwrap() {
+        service.as_mapping_mut().unwrap().insert(
+            serde_yaml::Value::String("image".into()),
+            serde_yaml::Value::String(references[name.as_str().unwrap()].clone()),
+        );
+    }
+    let source_lock: serde_json::Value =
+        serde_json::from_slice(&fs::read(repo.join("release/stack-lock.json")).unwrap()).unwrap();
+    let image_lock = fixture.directory().join("qualified-images.json");
+    fs::write(
+        &image_lock,
+        serde_json::json!({
+            "schema": "marty.selfhost-image-lock/v1",
+            "release": source_lock["release"],
+            "openbao_didcomm_image": format!("ghcr.io/elevenid/marty-ui-oss/openbao-didcomm@sha256:{}", "b".repeat(64)),
+            "services": references
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let pinned_output = fixture.directory().join("pinned-bundle");
+    let pinned_result = command()
+        .arg("--repo-root")
+        .arg(&repo)
+        .arg("--output-dir")
+        .arg(&pinned_output)
+        .arg("--image-lock")
+        .arg(&image_lock)
+        .current_dir(fixture.directory())
+        .output()
+        .unwrap();
+    assert!(
+        pinned_result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pinned_result.stderr)
+    );
+    let pinned: serde_yaml::Value =
+        serde_yaml::from_slice(&fs::read(pinned_output.join("docker-compose.yml")).unwrap())
+            .unwrap();
+    assert_eq!(pinned, expected);
+    let rendered = marty_selfhost_bundle::process::compose(
+        &pinned_output,
+        &[
+            "--env-file".into(),
+            ".env.selfhost.production.example".into(),
+            "-f".into(),
+            "docker-compose.yml".into(),
+            "config".into(),
+            "--no-interpolate".into(),
+            "--format".into(),
+            "json".into(),
+        ],
+        std::env::var_os("MARTY_SELFHOST_BUNDLE_TEST_COMPOSE").as_ref(),
+    )
+    .unwrap();
+    let validated: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+    for (name, reference) in &references {
+        assert_eq!(validated["services"][name]["image"], *reference);
+    }
     fixture.verify_unchanged();
 }
 
@@ -166,9 +309,9 @@ fn actual_cli_keeps_archive_optional_and_rejects_unknown_arguments() {
         .all(|path| path.extension().is_none_or(|extension| extension != "zip")));
     let result = command().arg("--help").output().unwrap();
     assert!(result.status.success());
-    assert!(String::from_utf8(result.stdout)
-        .unwrap()
-        .contains("--archive ZIP_BASENAME"));
+    let help = String::from_utf8(result.stdout).unwrap();
+    assert!(help.contains("--archive ZIP_BASENAME"));
+    assert!(help.contains("--image-lock JSON"));
     let result = command().arg("--unknown-option").output().unwrap();
     assert!(!result.status.success());
 }

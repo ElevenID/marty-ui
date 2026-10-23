@@ -71,8 +71,6 @@ def safe_model(root: Path) -> dict:
         "PERSONALIZATION_BUREAU_API_KEY_FILE": "/run/secrets/grpc_service_token",
         "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "passport-beta-bureau",
         "TOKEN_HMAC_KEY_FILE": "/run/secrets/token_hmac_key",
-        "INTEGRATION_SECRET_MASTER_KEY_FILE":
-            "/run/secrets/integration_secret_master_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "RP_GRPC_TARGET": "revocation-profile:9013",
     })
@@ -96,6 +94,8 @@ def safe_model(root: Path) -> dict:
         "ORG_GRPC_TARGET": "organization:9002",
         "ES_GRPC_TARGET": "event-stream:9015",
         "GRPC_SERVICE_TOKEN_FILE": "/run/secrets/grpc_service_token",
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE":
+            "/run/secrets/device_registration_gateway_key",
         "REVOCATION_PROFILE_SERVICE_URL": "http://revocation-profile:8013",
         "CREDENTIAL_TEMPLATE_SERVICE_URL": "http://credential-template:8003",
         "COMPLIANCE_PROFILE_SERVICE_URL": "http://compliance-profile:8008",
@@ -104,14 +104,25 @@ def safe_model(root: Path) -> dict:
         "DEPLOYMENT_PROFILE_SERVICE_URL": "http://deployment-profile:8010",
     })
     services["edge"] = {
-        "image": qualified_images(verify_registry=False)["edge"],
+        "image": IMAGE,
         "networks": ["private", "ingress"],
         "ports": [{"host_ip": "127.0.0.1", "published": "29876", "target": 8443}],
-        "depends_on": {"gateway": {"condition": "service_started"}},
-        "configs": [{"source": "passport_supported_edge",
-                     "target": "/etc/nginx/conf.d/default.conf"}],
+        "depends_on": {"gateway": {"condition": "service_started"},
+                       "openbao": {"condition": "service_healthy"}},
+        "entrypoint": ["/usr/local/bin/marty-passport-keyless-edge"],
+        "environment": {
+            "PASSPORT_EDGE_BIND": "0.0.0.0:8443",
+            "PASSPORT_EDGE_TLS_CERT_FILE": "/run/secrets/passport_edge_tls_cert",
+            "PASSPORT_EDGE_TLS_KMS_ADDR": "https://openbao:8200",
+            "PASSPORT_EDGE_TLS_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
+            "PASSPORT_EDGE_TLS_KMS_TOKEN_FILE": "/run/secrets/passport_edge_tls_kms_token",
+            "PASSPORT_EDGE_TLS_KMS_KEY_NAME": f"{PROJECT}-passport-edge",
+            "PASSPORT_EDGE_TLS_KMS_KEY_VERSION": "1",
+        },
+        "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                     "target": "/bao/public-ca", "read_only": True}],
         "secrets": [{"source": "passport_edge_tls_cert"},
-                    {"source": "passport_edge_tls_key"}],
+                    {"source": "passport_edge_tls_kms_token"}],
     }
     services["gateway"]["depends_on"] = {
         "organization": {"condition": "service_healthy"},
@@ -139,11 +150,12 @@ def safe_model(root: Path) -> dict:
             {"source": "issuance_api_key"},
             {"source": "signing_keys_internal_api_key"},
         ]
+    services["gateway"]["secrets"].append(
+        {"source": "device_registration_gateway_key"})
     services["flow"]["secrets"].append(
         {"source": "flow_application_event_hmac_key"})
     services["issuance-native"]["secrets"].extend([
         {"source": "token_hmac_key"},
-        {"source": "integration_secret_master_key"},
         {"source": "passport_beta_reconciliation_operator_token"},
     ])
     services["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
@@ -161,6 +173,7 @@ def safe_model(root: Path) -> dict:
             {"type": "volume", "source": "openbao_data", "target": "/bao/data"},
             {"type": "volume", "source": "openbao_file", "target": "/openbao/file"},
             {"type": "volume", "source": "openbao_logs", "target": "/openbao/logs"},
+            {"type": "volume", "source": "openbao_public_ca", "target": "/bao/public-ca"},
         ],
         "entrypoint": ["/bin/sh", "/usr/local/bin/passport-supported-openbao-start"],
         "configs": [{"source": "passport_supported_openbao_start",
@@ -274,7 +287,7 @@ def safe_model(root: Path) -> dict:
         }
     services["credential-template"]["environment"].update({
         "CT_GRPC_PORT": "9003", "RP_GRPC_TARGET": "revocation-profile:9013",
-        "SIGNING_KEYS_INTERNAL_URL": "http://signing-keys:8017/internal",
+        "SIGNING_KEYS_INTERNAL_URL": "http://gateway:8000/internal/signing-keys",
         "SIGNING_KEYS_INTERNAL_API_KEY_FILE": "/run/secrets/signing_keys_internal_api_key",
         "TRUST_PROFILE_SERVICE_URL": "http://trust-profile:8004",
         "PUBLIC_API_URL": "https://localhost:29876",
@@ -332,6 +345,15 @@ def safe_model(root: Path) -> dict:
             "deployment-profile", "issuance-native", "signing-keys")}
     services["issuance-native"]["healthcheck"] = {
         "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"]}
+    services["issuance-native"]["environment"].update({
+        "INTEGRATION_SECRET_KMS_URL": "https://signing-keys:8018/internal",
+        "INTEGRATION_SECRET_KMS_CA_FILE": "/run/secrets/workload_identity_ca_cert",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE": "/run/secrets/signing_keys_integration_secret_key",
+    })
+    services["issuance-native"]["secrets"].append({
+        "source": "workload_identity_ca_cert"})
+    services["issuance-native"]["secrets"].append({
+        "source": "signing_keys_integration_secret_key"})
     services["signing-keys"] = {
         "image": IMAGE,
         "networks": ["private"],
@@ -344,11 +366,28 @@ def safe_model(root: Path) -> dict:
                             "/run/secrets/csca_issue_gateway_key",
                         "PUBLIC_DOMAIN": "localhost:29876",
                         "SIGNING_KEYS_INTERNAL_API_KEY_FILE":
-                            "/run/secrets/signing_keys_internal_api_key"},
-        "secrets": [{"source": "signing_keys_internal_api_key"}],
+                            "/run/secrets/signing_keys_internal_api_key",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE":
+                            "/run/secrets/signing_keys_integration_secret_key",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE":
+                            "/run/secrets/signing_keys_workload_server_cert",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_ADDR": "https://openbao:8200",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": "/bao/public-ca/ca.crt",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE":
+                            "/run/secrets/signing_keys_workload_server_kms_token",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME":
+                            f"{PROJECT}-signing-keys-server",
+                        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_VERSION": "1"},
+        "secrets": [{"source": "signing_keys_internal_api_key"},
+                    {"source": "signing_keys_integration_secret_key"},
+                    {"source": "signing_keys_workload_server_cert"},
+                    {"source": "signing_keys_workload_server_kms_token"},
+                    {"source": "workload_identity_ca_cert"}],
         "depends_on": {"redis": {"condition": "service_healthy"}},
-        "healthcheck": {"test": ["CMD", "curl", "--fail",
-                                 "http://localhost:8017/health"]},
+        "healthcheck": {"test": ["CMD-SHELL",
+                                 "curl --fail http://localhost:8017/health && "
+                                 "curl --fail --cacert /run/secrets/workload_identity_ca_cert "
+                                 "https://signing-keys:8018/health"]},
     }
     services["db-migrate"] = {
         "image": "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64,
@@ -374,11 +413,18 @@ def safe_model(root: Path) -> dict:
         "secrets": [{"source": "bao_token"}],
     }
     services["issuance-migrations"] = {
-        "image": "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64,
+        "image": IMAGE,
         "networks": ["private"],
-        "command": ["/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"],
-        "configs": [{"source": "passport_supported_issuance_migrate",
-                     "target": "/usr/local/bin/passport-supported-issuance-migrate"}],
+        "entrypoint": ["/bin/sh", "-c"],
+        "command": [
+            ". /app/load-secrets-env.sh\n"
+            "exec /usr/local/bin/marty-issuance-service migrate\n",
+        ],
+        "environment": {
+            "SERVICE_NAME": "issuance_native",
+            "DATABASE_URL_TEMPLATE": "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty",
+            "MARTY_DB_PASSWORD_FILE": "/run/secrets/marty_db_password",
+        },
         "secrets": [{"source": "marty_db_password"}],
         "depends_on": {
             "db-migrate": {"condition": "service_completed_successfully"},
@@ -394,6 +440,108 @@ def safe_model(root: Path) -> dict:
         ])
     for service in services.values():
         service["labels"] = LABELS
+    for name in preflight.PASSPORT_OPENBAO_CONSUMERS:
+        service = services[name]
+        service.setdefault("environment", {})["BAO_ADDR"] = "https://openbao:8200"
+        service["environment"]["BAO_CACERT"] = "/bao/public-ca/ca.crt"
+        service["volumes"] = [{
+            "type": "volume", "source": "openbao_public_ca",
+            "target": "/bao/public-ca", "read_only": True,
+        }]
+    for name, (prefix, _) in preflight.PASSPORT_REMOTE_GRPC_SERVERS.items():
+        service = services[name]
+        service["environment"].update(
+            preflight.remote_grpc_server_environment(name, PROJECT))
+        service.setdefault("secrets", []).extend([
+            {"source": f"{prefix}_cert"}, {"source": f"{prefix}_kms_token"},
+        ])
+        if name in {"organization", "revocation-profile", "credential-template"}:
+            service["secrets"].append({"source": "workload_identity_ca_cert"})
+        service.setdefault("volumes", [{
+            "type": "volume", "source": "openbao_public_ca",
+            "target": "/bao/public-ca", "read_only": True,
+        }])
+    services["organization"]["environment"].update({
+        "ES_GRPC_TARGET": "https://event-stream:9015",
+        "ES_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["revocation-profile"]["environment"].update({
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["credential-template"]["environment"].update({
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+        "RP_GRPC_TARGET": "https://revocation-profile:9013",
+        "RP_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["issuance-native"]["environment"].update({
+        "CT_GRPC_TARGET": "https://credential-template:9003",
+        "RP_GRPC_TARGET": "https://revocation-profile:9013",
+    })
+    services["flow"]["environment"].update({
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "CT_GRPC_TARGET": "https://credential-template:9003",
+        "PP_GRPC_TARGET": "https://presentation-policy:9009",
+        "ISSUANCE_GRPC_TARGET": "https://issuance-native:9005",
+    })
+    for name, (prefix, _) in preflight.PASSPORT_REMOTE_GRPC_CLIENTS.items():
+        service = services[name]
+        service["environment"].update(
+            preflight.remote_grpc_client_environment(name, PROJECT))
+        service["environment"]["ORG_GRPC_TARGET"] = "https://organization:9002"
+        service["secrets"].extend({"source": source} for source in (
+            f"{prefix}_cert", f"{prefix}_kms_token", "workload_identity_ca_cert"))
+        service["volumes"] = [{"type": "volume", "source": "openbao_public_ca",
+                               "target": "/bao/public-ca", "read_only": True}]
+    services["trust-profile"]["environment"].update({
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["trust-profile"]["secrets"].append(
+        {"source": "workload_identity_ca_cert"})
+    for name in ("flow", "presentation-policy"):
+        services[name]["volumes"] = [{
+            "type": "volume", "source": "openbao_public_ca",
+            "target": "/bao/public-ca", "read_only": True,
+        }]
+    services["presentation-policy"]["environment"].update({
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/pp_workload_server_cert",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE":
+            "/run/secrets/pp_workload_server_kms_token",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{PROJECT}-pp-server",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
+        "ORG_GRPC_TARGET": "https://organization:9002",
+        "ORG_GRPC_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["presentation-policy"]["secrets"].extend(
+        {"source": source} for source in (
+            "pp_workload_server_cert", "pp_workload_server_kms_token",
+            "workload_identity_ca_cert"))
+    services["flow"]["environment"].update({
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT": "/run/secrets/flow_workload_client_cert",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR": "https://openbao:8200",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE":
+            "/run/secrets/flow_workload_client_kms_token",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME": f"{PROJECT}-flow-client",
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION": "1",
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/flow_workload_server_cert",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR": "https://openbao:8200",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/bao/public-ca/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE":
+            "/run/secrets/flow_workload_server_kms_token",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME": f"{PROJECT}-flow-server",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION": "1",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/workload_identity_ca_cert",
+    })
+    services["flow"]["secrets"].extend({"source": source} for source in (
+        "flow_workload_client_cert", "flow_workload_client_kms_token",
+        "flow_workload_server_cert", "flow_workload_server_kms_token",
+        "workload_identity_ca_cert"))
     return {"name": PROJECT, "services": services,
             "networks": {
                 "private": {"name": PROJECT + "_private",
@@ -405,11 +553,13 @@ def safe_model(root: Path) -> dict:
             },
             "volumes": {name: {"name": PROJECT + "_" + name, "labels": LABELS}
                         for name in ("postgres_data", "redis_data", "openbao_data",
-                                     "openbao_file", "openbao_logs")},
+                                     "openbao_file", "openbao_logs", "openbao_public_ca")},
             "secrets": {
                 "db": {"file": str(root / "secrets/db")},
                 "marty_db_password": {"file": str(root / "secrets/marty_db_password")},
                 "grpc_service_token": {"file": str(root / "secrets/grpc_service_token")},
+                "device_registration_gateway_key": {
+                    "file": str(root / "secrets/device_registration_gateway_key")},
                 "passport_beta_reconciliation_operator_token": {
                     "file": str(root / "secrets/passport_beta_reconciliation_operator_token")},
                 "bao_root_token": {"file": str(root / "secrets/bao_root_token")},
@@ -417,26 +567,36 @@ def safe_model(root: Path) -> dict:
                 "issuance_api_key": {"file": str(root / "secrets/issuance_api_key")},
                 "signing_keys_internal_api_key": {
                     "file": str(root / "secrets/signing_keys_internal_api_key")},
+                "signing_keys_integration_secret_key": {
+                    "file": str(root / "secrets/signing_keys_integration_secret_key")},
                 "dsc_issue_gateway_key": {
                     "file": str(root / "secrets/dsc_issue_gateway_key")},
                 "csca_issue_gateway_key": {
                     "file": str(root / "secrets/csca_issue_gateway_key")},
                 "token_hmac_key": {"file": str(root / "secrets/token_hmac_key")},
-                "integration_secret_master_key": {
-                    "file": str(root / "secrets/integration_secret_master_key")},
                 "flow_application_event_hmac_key": {
                     "file": str(root / "secrets/flow_application_event_hmac_key")},
                 "passport_edge_tls_cert": {
                     "file": str(root / "secrets/passport_edge_tls_cert")},
-                "passport_edge_tls_key": {
-                    "file": str(root / "secrets/passport_edge_tls_key")},
+                "passport_edge_tls_kms_token": {
+                    "file": str(root / "secrets/passport_edge_tls_kms_token")},
+                "workload_identity_ca_cert": {
+                    "file": str(root / "secrets/workload_identity_ca_cert")},
+                "signing_keys_workload_server_cert": {
+                    "file": str(root / "secrets/signing_keys_workload_server_cert")},
+                "signing_keys_workload_server_kms_token": {
+                    "file": str(root / "secrets/signing_keys_workload_server_kms_token")},
+                **{f"{prefix}_{suffix}": {
+                    "file": str(root / "secrets" / f"{prefix}_{suffix}")}
+                   for prefix, _ in (*preflight.PASSPORT_REMOTE_GRPC_SERVERS.values(),
+                                     *preflight.PASSPORT_REMOTE_GRPC_CLIENTS.values(),
+                                     ("flow_workload_client", "flow-client"),
+                                     ("flow_workload_server", "flow-server"),
+                                     ("pp_workload_server", "pp-server"))
+                   for suffix in ("cert", "kms_token")},
             },
             "configs": {"passport_supported_openbao_start": {
-                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")},
-                "passport_supported_issuance_migrate": {
-                    "file": str(preflight.ROOT / "scripts/passport_supported_issuance_migrate.sh")},
-                "passport_supported_edge": {
-                    "file": str(preflight.ROOT / "scripts/passport_supported_edge.conf")}},
+                "file": str(preflight.ROOT / "scripts/passport_supported_openbao_start.sh")}},
             }
 
 
@@ -594,7 +754,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "status": "blocked", "surface": "base", "project": PROJECT,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "source_commit": "a" * 40,
         "expires_at": "2026-09-27T12:55:00+00:00",
@@ -658,8 +817,6 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         file="/etc/marty-selfhost-prod/secrets/db"), "secret"),
     (lambda model, root: model["secrets"]["token_hmac_key"].update(
         file=str(root / "secrets/bao_root_token")), "secret"),
-    (lambda model, root: model["secrets"]["integration_secret_master_key"].update(
-        file=str(root / "secrets/bao_root_token")), "secret"),
     (lambda model, root: next(secret for secret in
         model["services"]["issuance-native"]["secrets"]
         if secret["source"] == "token_hmac_key").update(
@@ -694,6 +851,8 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED="true"), "external provider"),
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
         PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID="unbound-provider"), "external provider"),
+    (lambda model, root: model["services"]["issuance-native"]["environment"].update(
+        GRPC_INSECURE_ALLOWED="true"), "surface environment selectors"),
     (lambda model, root: model["services"]["passport-callback-signer"]["environment"].update(
         BAO_TOKEN="raw-secret"), "isolated beta KMS"),
     (lambda model, root: model["services"]["passport-beta-bureau"]["environment"].update(
@@ -750,8 +909,12 @@ def test_attested_plan_binds_all_disposable_images(tmp_path: Path) -> None:
         "TOKEN_HMAC_KEY_FILE"), "native issuance startup secrets"),
     (lambda model, root: model["services"]["issuance-native"]["environment"].update(
         INTEGRATION_SECRET_MASTER_KEY="raw-secret"), "native issuance startup secrets"),
-    (lambda model, root: model["services"]["issuance-native"]["secrets"].pop(),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].remove(
+        {"source": "token_hmac_key"}),
      "native issuance startup secrets"),
+    (lambda model, root: model["services"]["issuance-native"]["secrets"].remove(
+        {"source": "signing_keys_integration_secret_key"}),
+     "integration-secret credential escaped"),
     (lambda model, root: model["services"]["organization"]["environment"].update(
         ES_GRPC_TARGET="production-events:9015"), "endpoint"),
     (lambda model, root: model["services"]["organization"]["environment"].update(
@@ -862,7 +1025,6 @@ def test_executable_planned_preflight_rejects_unsigned_and_mutated_images(
         "source_commit": "a" * 40,
         "services_reference": IMAGE,
         "migrations_reference": model["services"]["db-migrate"]["image"],
-        "issuance_reference": model["services"]["issuance-migrations"]["image"],
         "infra_images": qualified_images(verify_registry=False),
         "run_id": "123456", "owner_labels": LABELS,
         "created_at": (now - timedelta(minutes=5)).isoformat(),

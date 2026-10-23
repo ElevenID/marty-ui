@@ -20,6 +20,8 @@ import sys
 import tempfile
 import time
 
+from canvas_native_rest_contract import native_path, native_requests
+
 from canvas_worker_deadline_https_fixture import DeadlineHttpsFixture
 from canvas_worker_output_capture import owned_log_streams
 from canvas_worker_owned_process import OwnedProcess
@@ -143,7 +145,7 @@ def assert_requests(fixture, reference, count=3):
     # Explicit errors also remain payload-free under pytest assertion rewriting.
     if fixture.failures:
         raise AssertionError("Owned native deadline HTTPS handler failed")
-    if fixture.requests != reference["requests"][:count]:
+    if fixture.requests != native_requests(reference["requests"][:count]):
         raise AssertionError(
             "Native deadline request transcript differs from the frozen reference"
         )
@@ -173,7 +175,10 @@ def run_case(executable, matrix, case, reference, responses):
         stdout_writer, stdout = owned_log_streams(owner, owned_root)
         stderr_writer, stderr = owned_log_streams(owner, owned_root)
         fixture = owner.enter_context(
-            DeadlineHttpsFixture(matrix["request_paths"], responses)
+            DeadlineHttpsFixture(
+                [native_path(path) for path in matrix["request_paths"]],
+                {native_path(path): response for path, response in responses.items()},
+            )
         )
         environment = dict(os.environ)
         environment.update(

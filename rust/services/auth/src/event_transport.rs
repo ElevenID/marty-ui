@@ -7,7 +7,7 @@ use mmf_messaging::{
     MessagingPattern, PostgresOutboxStore, Subscription, TransportCapabilities, TransportFeature,
 };
 use tokio::sync::RwLock;
-use tonic::{transport::Channel, Request};
+use tonic::{metadata::AsciiMetadataValue, transport::Channel, Request};
 
 use crate::{
     auth_event_message,
@@ -47,15 +47,26 @@ impl AuthEventPublisher for MmfAuthOutboxPublisher {
 pub struct GrpcEventStreamTransport {
     client: EventStreamServiceClient<Channel>,
     connected: Arc<RwLock<bool>>,
+    service_token: String,
 }
 
 impl GrpcEventStreamTransport {
     #[must_use]
-    pub fn new(client: EventStreamServiceClient<Channel>) -> Self {
+    pub fn new(client: EventStreamServiceClient<Channel>, service_token: String) -> Self {
         Self {
             client,
             connected: Arc::new(RwLock::new(false)),
+            service_token,
         }
+    }
+
+    fn request<T>(&self, body: T) -> Result<Request<T>, MessagingError> {
+        let mut request = Request::new(body);
+        let token = AsciiMetadataValue::try_from(self.service_token.as_str()).map_err(|_| {
+            MessagingError::InvalidConfiguration("event-stream service token is invalid".into())
+        })?;
+        request.metadata_mut().insert("x-service-token", token);
+        Ok(request)
     }
 }
 
@@ -64,7 +75,7 @@ impl MessageTransport for GrpcEventStreamTransport {
     async fn connect(&self) -> Result<(), MessagingError> {
         let mut client = self.client.clone();
         let response = client
-            .health_check(Request::new(HealthCheckRequest {}))
+            .health_check(self.request(HealthCheckRequest {})?)
             .await
             .map_err(unavailable)?
             .into_inner();
@@ -91,7 +102,7 @@ impl MessageTransport for GrpcEventStreamTransport {
         let event = domain_event(message)?;
         let mut client = self.client.clone();
         let response = client
-            .publish(Request::new(PublishEventRequest { event: Some(event) }))
+            .publish(self.request(PublishEventRequest { event: Some(event) })?)
             .await
             .map_err(unavailable)?
             .into_inner();

@@ -1,7 +1,9 @@
-"""Independent pre-change self-host model comparison; no service startup."""
+"""Reviewed current self-host model and synthetic binding gate; no startup."""
 
 from copy import deepcopy
+import difflib
 import hashlib
+import json
 from pathlib import Path
 import runpy
 import re
@@ -13,14 +15,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 GATE = runpy.run_path(str(ROOT / "scripts/test_canvas_worker_compose_render.py"))
 BIND = runpy.run_path(str(ROOT / "scripts/test_beta_application_image_compose.py"))
-FROZEN = "tests/fixtures/selfhost-before-native-owner.yml"
-LEGACY_ONLY = {
-    "BAO_ADDR",
-    "BAO_TOKEN_FILE",
-    "CANVAS_CREDENTIAL_ISSUER_PROFILE_IDS",
-    "CANVAS_LTI_TOOL_ACTIVE_KID",
-    "CANVAS_LTI_TOOL_PUBLIC_JWKS",
-}
+APPROVED = "selfhost-kms-only-model.keyless-tls.snapshot.yml"
 PUBLICATION_SETTINGS = {
     "CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE": "${CANVAS_CREDENTIALS_ASSERTION_URL_TEMPLATE:-}",
     "CANVAS_CREDENTIALS_ASSERTION_NARRATIVE": "${CANVAS_CREDENTIALS_ASSERTION_NARRATIVE:-}",
@@ -48,13 +43,8 @@ NATIVE_ADDITIVE = {
     "PASSPORT_KMS_CALLBACKS_ENABLED": "${PASSPORT_KMS_CALLBACKS_ENABLED:-false}",
     "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
     "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
-    "ICAO_DOCUMENT_SIGNER_URL": "${ICAO_DOCUMENT_SIGNER_URL:-}",
-    "ICAO_DOCUMENT_SIGNER_API_KEY": "${ICAO_DOCUMENT_SIGNER_API_KEY:-}",
-    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "${PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED:-false}",
-    "PHYSICAL_DOCUMENT_ARTIFACT_KEY": "${PHYSICAL_DOCUMENT_ARTIFACT_KEY:-}",
     "PERSONALIZATION_BUREAU_URL": "${PERSONALIZATION_BUREAU_URL:-}",
     "PERSONALIZATION_BUREAU_API_KEY": "${PERSONALIZATION_BUREAU_API_KEY:-}",
-    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET": "${PERSONALIZATION_BUREAU_WEBHOOK_SECRET:-}",
     "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID": "${PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID:-}",
 }
 PASSPORT_CONSUMER_ADDITIVE = {
@@ -66,7 +56,7 @@ PASSPORT_CONSUMER_ADDITIVE = {
         "PASSPORT_TENANT_API_KEYS_FILE": "${PASSPORT_TENANT_API_KEYS_FILE:-}",
     },
     "flow": {
-        "ISSUANCE_NATIVE_SERVICE_URL": "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}",
+        "ISSUANCE_NATIVE_SERVICE_URL": "http://issuance-native:8005",
         "PASSPORT_NATIVE_FLOW_ENABLED": "${PASSPORT_NATIVE_FLOW_ENABLED:-false}",
         "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "${PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED:-false}",
         "PASSPORT_TENANT_API_KEYS": "${PASSPORT_TENANT_API_KEYS:-}",
@@ -79,14 +69,26 @@ LOADED_INPUTS = {
     "DATABASE_URL",
     "CANVAS_CREDENTIALS_SHARED_SECRET",
     "GRPC_SERVICE_TOKEN",
-    "INTEGRATION_SECRET_MASTER_KEY",
     "ISSUANCE_API_KEY",
     "SIGNING_KEYS_INTERNAL_API_KEY",
+    "SIGNING_KEYS_ISSUER_SIGN_KEY",
+    "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
     "TOKEN_HMAC_KEY",
 }
+REJECTED_MASTER_KEY_INPUTS = {
+    "INTEGRATION_SECRET_MASTER_KEY",
+    "INTEGRATION_SECRET_MASTER_KEY_FILE",
+}
 EXPLICIT_POLICY = {"DIDCOMM_ENCRYPTION_POLICY_FILE", "DIDCOMM_TLS_CA_FILE"}
-PASSPORT_BETA_ONLY_FILE_ALIASES = {
+FORBIDDEN_LOCAL_CUSTODY_INPUTS = {
+    "GRPC_WORKLOAD_TLS_SERVER_KEY",
+    "ICAO_DOCUMENT_SIGNER_URL",
+    "ICAO_DOCUMENT_SIGNER_API_KEY",
+    "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
+    "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
+    "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
+    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET",
     "PERSONALIZATION_BUREAU_WEBHOOK_SECRET_FILE",
 }
 PASSPORT_BETA_OVERLAY_ONLY = {
@@ -112,17 +114,14 @@ SHARED_SETTINGS = {
 def rendered_additions(templates, values):
     rendered = {}
     for key, template in templates.items():
+        if key == "ISSUANCE_NATIVE_SERVICE_URL":
+            assert template == "http://issuance-native:8005"
+            rendered[key] = template
+            continue
         match = re.fullmatch(rf"\$\{{{key}:-([^}}]*)\}}", template)
         assert match, f"Unsupported closed interpolation for {key}"
         rendered[key] = values.get(key) or match.group(1)
     return rendered
-
-
-def rendered_passport_consumer_additions(values):
-    return {
-        owner: rendered_additions(additions, values)
-        for owner, additions in PASSPORT_CONSUMER_ADDITIVE.items()
-    }
 
 
 UNFORWARDED = set(
@@ -163,14 +162,18 @@ def assert_input_inventory():
     )
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(native)
     assert not PASSPORT_BETA_OVERLAY_ONLY & set(legacy)
+    assert not FORBIDDEN_LOCAL_CUSTODY_INPUTS & (
+        set(native) | set(legacy) | set(beta_native)
+    )
     assert {
         key: model["x-issuance-application-env"].get(key) for key in SHARED_SETTINGS
     } == SHARED_SETTINGS
     assert {key: native.get(key) for key in NATIVE_ADDITIVE} == NATIVE_ADDITIVE
     expected_omitted = (
         LOADED_INPUTS
+        | REJECTED_MASTER_KEY_INPUTS
         | EXPLICIT_POLICY
-        | PASSPORT_BETA_ONLY_FILE_ALIASES
+        | FORBIDDEN_LOCAL_CUSTODY_INPUTS
         | PASSPORT_BETA_OVERLAY_ONLY
         | CONFIG_META
         | UNFORWARDED
@@ -218,127 +221,161 @@ def assert_signing_binding(model):
     assert target != defaults[0], "Separate container must not use loopback fallback"
 
 
-def assert_models(
-    before,
-    after,
-    *,
-    shared_additions=SHARED_ADDITIONS,
-    native_additive=NATIVE_ADDITIVE,
-    passport_consumer_additive=PASSPORT_CONSUMER_ADDITIVE,
-):
-    preserved = deepcopy(after)
-    native = GATE["native_dispatcher_model"](
-        preserved["services"].pop("issuance-native")
+def assert_models(approved, actual):
+    """Check the complete current KMS-only model against its reviewed snapshot."""
+    expected = deepcopy(approved)
+    issuance = expected["services"]["issuance"]
+    envelope = "signing_keys_integration_secret_key"
+    envelope_path = f"/run/secrets/{envelope}"
+    assert issuance["environment"]["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
+    assert [item["source"] for item in issuance["secrets"]].count(envelope) == 1
+    assert expected == actual, "Unreviewed self-host model change:\n" + "".join(
+        difflib.unified_diff(
+            json.dumps(expected, sort_keys=True, indent=2).splitlines(keepends=True),
+            json.dumps(actual, sort_keys=True, indent=2).splitlines(keepends=True),
+            fromfile="approved keyless-TLS KMS model",
+            tofile="current self-host model",
+        )
     )
-    shared = preserved.pop("x-issuance-application-env")
-    assert {key: shared[key] for key in SHARED_ADDITIONS} == shared_additions
-    legacy_after = preserved["services"]["issuance"]["environment"]
-    assert {key: legacy_after.pop(key) for key in SHARED_ADDITIONS} == shared_additions
-    gateway = preserved["services"]["gateway"]
-    # Governed repair: the native signer and readiness need the separate owner,
-    # whereas the unchanged frozen model omitted it and fell back to localhost.
-    assert (
-        gateway["environment"].pop("SIGNING_KEYS_SERVICE_URL")
-        == "http://signing-keys:8017"
-    )
-    assert (
-        gateway["environment"].pop("ISSUANCE_NATIVE_SERVICE_URL")
-        == "http://issuance-native:8005"
-    )
-    assert gateway["environment"].pop("GATEWAY_REQUIRED_READY_SERVICES") == READY
-    for owner in ("gateway", "flow"):
-        environment = preserved["services"][owner]["environment"]
-        expected = passport_consumer_additive[owner]
-        assert {key: environment.pop(key) for key in expected} == expected
-    assert gateway["depends_on"].pop("issuance-native") == {
-        "condition": "service_healthy",
-        "required": True,
+    retired_tls_settings = {
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE",
     }
-    flow = preserved["services"]["flow"]
-    assert flow["environment"]["ISSUANCE_GRPC_TARGET"] == "issuance-native:9005"
-    flow["environment"]["ISSUANCE_GRPC_TARGET"] = "issuance:9005"
-    for key in ("ISSUANCE_API_KEY_FILE", "SIGNING_KEYS_INTERNAL_API_KEY_FILE"):
-        assert flow["environment"].pop(key) == "/run/secrets/issuance_api_key"
-    assert flow["secrets"].pop() == {
-        "source": "issuance_api_key",
-        "target": "/run/secrets/issuance_api_key",
+    for name, service in actual["services"].items():
+        assert not retired_tls_settings & set(service.get("environment", {})), (
+            f"{name} still accepts a workload TLS private-key file"
+        )
+        assert not any(
+            re.fullmatch(r".*_workload_(?:client|server)_key", secret["source"])
+            for secret in service.get("secrets", [])
+        ), f"{name} still mounts a workload TLS private-key file"
+    assert not any(
+        re.fullmatch(r".*_workload_(?:client|server)_key", name)
+        for name in actual["secrets"]
+    ), "Self-host still declares a workload TLS private-key secret"
+    assert "INTEGRATION_SECRET_MASTER_KEY" not in json.dumps(actual)
+    assert "integration_secret_master_key" not in actual.get("secrets", {})
+    assert actual["secrets"][envelope]["file"].endswith(f"/{envelope}")
+    envelope_owners = {
+        "signing-keys",
+        "issuance",
+        "issuance-native",
+        "canvas-sync-worker",
     }
-    assert preserved == before, "Unowned self-host model change"
-    legacy = before["services"]["issuance"]
-    environment = {
-        key: value
-        for key, value in legacy["environment"].items()
-        if key not in LEGACY_ONLY
-    }
-    environment.update(shared_additions)
-    assert shared == environment
-    environment.update(
-        SERVICE_NAME="issuance_native",
-        ISSUANCE_GRPC_ENABLED="true",
-        RP_GRPC_TARGET="revocation-profile:9013",
-        **native_additive,
-    )
-    expected = {
-        "build": {
-            "context": ".",
-            "dockerfile": "services/Dockerfile",
-            "args": {"SERVICE_NAME": "issuance-native"},
-        },
-        "entrypoint": ["/app/services/entrypoint.sh"],
-        "command": [],
-        "environment": environment,
-        "secrets": [
-            item
-            for item in legacy["secrets"]
-            if item["source"] != "openbao_service_token"
-        ],
-        "depends_on": {
-            name: {"condition": condition, "required": True}
-            for name, condition in {
-                "db-migrate": "service_completed_successfully",
-                "issuance-migrations": "service_completed_successfully",
-                "postgres": "service_healthy",
-                "signing-keys": "service_healthy",
-                "revocation-profile": "service_healthy",
-            }.items()
-        },
-        "healthcheck": {
-            "test": ["CMD", "curl", "--fail", "http://localhost:8005/health"],
-            "interval": "10s",
-            "timeout": "5s",
-            "retries": 3,
-        },
-        "restart": "unless-stopped",
-        "networks": {"default": None},
-    }
-    assert native == expected, "Native self-host model differs from closed additions"
+    for name, service in actual["services"].items():
+        environment = service.get("environment", {})
+        mounts = [item["source"] for item in service.get("secrets", [])]
+        if name in envelope_owners:
+            assert (
+                environment["SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE"] == envelope_path
+            )
+            assert mounts.count(envelope) == 1
+        else:
+            assert "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" not in environment
+            assert envelope not in mounts
+    grant_roles = [
+        (
+            {"gateway"},
+            "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_gateway_service_token",
+        ),
+        (
+            {"gateway"},
+            "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_gateway_issuer_did_token",
+        ),
+        (
+            {"flow"},
+            "FLOW_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_flow_wallet_token",
+        ),
+        (
+            {"signing-keys"},
+            "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "sign_grant_verify_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_credential_token",
+        ),
+        (
+            {"issuance", "issuance-native", "canvas-sync-worker"},
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_canvas_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_readiness_token",
+        ),
+        (
+            {"issuance", "issuance-native"},
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            "sign_grant_mint_issuance_passport_token",
+        ),
+    ]
+    for owner, setting, secret in grant_roles:
+        assert actual["secrets"][secret]["file"].endswith(f"/{secret}")
+        for name, service in actual["services"].items():
+            environment = service.get("environment", {})
+            mounts = [item["source"] for item in service.get("secrets", [])]
+            if name in owner:
+                assert environment[setting] == f"/run/secrets/{secret}"
+                assert mounts.count(secret) == 1
+            else:
+                assert setting not in environment
+                assert secret not in mounts
+    assert "BAO_TOKEN_FILE" not in actual["services"]["gateway"]["environment"]
+    assert "openbao_service_token" not in [
+        item["source"] for item in actual["services"]["gateway"]["secrets"]
+    ]
+    tls_url = "https://signing-keys:8018/internal"
+    ca_path = "/run/secrets/workload_identity_ca_cert"
+    for name in ("issuance", "issuance-native", "canvas-sync-worker"):
+        service = actual["services"][name]
+        assert service["environment"]["INTEGRATION_SECRET_KMS_URL"] == tls_url
+        assert service["environment"]["INTEGRATION_SECRET_KMS_CA_FILE"] == ca_path
+        assert [item["source"] for item in service["secrets"]].count(
+            "workload_identity_ca_cert"
+        ) == 1
+    GATE["native_dispatcher_model"](actual["services"]["issuance-native"])
+    assert_signing_binding(actual)
 
 
 def interpolated_models():
-    original = (ROOT / FROZEN).read_text(encoding="utf-8")
+    approved = (ROOT / APPROVED).read_text(encoding="utf-8")
     current = (ROOT / GATE["BASE"]).read_text(encoding="utf-8")
-    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", original))
+    required = set(re.findall(r"\$\{([A-Z0-9_]+):\?", approved))
     assert required == set(re.findall(r"\$\{([A-Z0-9_]+):\?", current))
-    environment = yaml.safe_load(original)["services"]["issuance"]["environment"]
+    assert "MARTY_ISSUANCE_IMAGE" not in required
+    assert "BAO_ADDR" in required
+    environment = yaml.safe_load(approved)["services"]["issuance"]["environment"]
     variables = (
-        set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
-        | set(SHARED_ADDITIONS)
-        | set(NATIVE_ADDITIVE)
-        | {
-            key
-            for additions in PASSPORT_CONSUMER_ADDITIVE.values()
-            for key in additions
-        }
-    ) - required
+        (
+            set(re.findall(r"\$\{([A-Z0-9_]+):-", str(environment)))
+            | set(SHARED_ADDITIONS)
+            | set(NATIVE_ADDITIVE)
+            | {
+                key
+                for additions in PASSPORT_CONSUMER_ADDITIVE.values()
+                for key in additions
+            }
+        )
+        - required
+        - {"BAO_ADDR"}
+    )
 
     with tempfile.TemporaryDirectory(prefix="selfhost-native-config-") as temporary:
         directory = Path(temporary)
         inputs = dict.fromkeys(required, "https://synthetic.example")
         inputs.update(
+            BAO_ADDR="http://synthetic-bao:8200",
+            PUBLIC_DOMAIN="synthetic.example",
             SELFHOST_STATE_DIR=(directory / "state").as_posix(),
             SELFHOST_SECRET_DIR=(directory / "secrets").as_posix(),
             KEYCLOAK_SOCIAL_LOGIN_ENABLED="false",
-            MARTY_ISSUANCE_IMAGE="synthetic.invalid/issuance@sha256:" + "a" * 64,
         )
 
         def render(file, values):
@@ -366,6 +403,11 @@ def interpolated_models():
         ):
             values = {**inputs, **overrides}
             after = render(GATE["BASE"], values)
+            slug = values.get("MARTY_ORG_SLUG") or "marty"
+            issuer_did = f"did:web:synthetic.example:orgs:{slug}"
+            assert after["services"]["auth"]["environment"]["CREDENTIAL_LOGIN_ISSUER_DID"] == issuer_did
+            assert after["services"]["flow"]["environment"]["OID4VP_ISSUER_DID"] == issuer_did
+            assert after["services"]["trust-profile"]["environment"]["MARTY_ORG_SLUG"] == slug
             expected_publication = rendered_additions(PUBLICATION_SETTINGS, values)
             for owner in ("issuance", "issuance-native"):
                 actual_publication = {
@@ -375,14 +417,7 @@ def interpolated_models():
                 assert actual_publication == expected_publication
             if mode == "custom":
                 assert set(expected_publication.values()) == {"synthetic-custom"}
-            assert_models(
-                render(FROZEN, values),
-                after,
-                shared_additions=rendered_additions(SHARED_ADDITIONS, values),
-                native_additive=rendered_additions(NATIVE_ADDITIVE, values),
-                passport_consumer_additive=rendered_passport_consumer_additions(values),
-            )
-            assert_signing_binding(after)
+            assert_models(render(APPROVED, values), after)
             print(f"PASS: self-host {mode} interpolated whole model")
         for name in sorted(required):
             for value in (None, ""):
@@ -391,7 +426,7 @@ def interpolated_models():
                     values.pop(name)
                 else:
                     values[name] = value
-                for file in (FROZEN, GATE["BASE"]):
+                for file in (APPROVED, GATE["BASE"]):
                     try:
                         render(file, values)
                     except subprocess.CalledProcessError as error:
@@ -400,23 +435,25 @@ def interpolated_models():
                         raise AssertionError(
                             f"Required self-host input accepted: {name}"
                         )
-        print(f"PASS: {len(required)} required inputs, missing/empty in both models")
+        print(
+            f"PASS: {len(required)} current required inputs reject missing/empty; "
+            "retired Python image input is absent"
+        )
 
 
 def run():
     assert_input_inventory()
-    data = (ROOT / FROZEN).read_text(encoding="utf-8").encode()
+    data = (ROOT / APPROVED).read_text(encoding="utf-8").encode()
     assert (
         hashlib.sha256(data).hexdigest()
-        == "5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8"
+        == "55a38bd1cb1ef8d49fec40c0cdde9d313066c76e40c3ce5ede54ea9258488d86"
     )
-    before = GATE["render"](FROZEN)
+    before = GATE["render"](APPROVED)
     after = GATE["render"](GATE["BASE"])
     assert_models(before, after)
-    assert_signing_binding(after)
     interpolated_models()
     print(
-        "PASS: frozen full self-host model and closed native additions (configuration only)"
+        "PASS: approved KMS-only self-host model and synthetic bindings (configuration only)"
     )
 
 

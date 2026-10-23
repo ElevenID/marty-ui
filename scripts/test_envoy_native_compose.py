@@ -51,7 +51,10 @@ def run(command):
         candidate = directory / "synthetic-candidate.yaml"
         candidate.write_text("static_resources: {}\n", encoding="utf-8")
         required = dict.fromkeys(
-            re.findall(r"\$\{([A-Z0-9_]+):\?", BASE.read_text(encoding="utf-8")),
+            re.findall(
+                r"\$\{([A-Z0-9_]+):\?",
+                BASE.read_text(encoding="utf-8") + NATIVE.read_text(encoding="utf-8"),
+            ),
             "synthetic-required-artifact",
         )
         for token in (None, "", "synthetic-envoy-custom-service-token"):

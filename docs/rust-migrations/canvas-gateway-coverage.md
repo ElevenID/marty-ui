@@ -107,7 +107,7 @@ Accordingly, **13 full lifecycle cases remain**:
 
 | Corpus | Observations | Existing direct gate |
 | --- | ---: | --- |
-| [Operations input](../../contracts/canvas-operations-input-oracle.json) | 75 | `operations_inputs_match_frozen_published_python` |
+| [Operations input](../../contracts/canvas-operations-input-oracle.json) | 75 | `frozen_operations_input_rejections_do_not_require_postgres` checks 36 pre-SQL errors; `operations_inputs_match_frozen_published_python` retains 39 real-database successes. Both use the same frozen corpus and HTTP request recipe; the pinned historical producer remains separate. |
 | [Review input](../../contracts/canvas-review-input-oracle.json) | 45 | `review_inputs_match_published_python` |
 | [Enqueue input](../../contracts/canvas-enqueue-input-oracle.json) | 28 | `enqueue_inputs_match_frozen_published_python` |
 

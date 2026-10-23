@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
 const { chromium } = require('@playwright/test');
 const {
   collectBetaOffer,
@@ -37,6 +38,57 @@ const MEMBERSHIP_BADGE_CONFIGURATION_ID = process.env.EXPECTED_LOGIN_BADGE_CONFI
 const HEADLESS = process.env.HEADED !== '1';
 const RECORD_VIDEO = process.env.RECORD_VIDEO === '1';
 const LOCAL_BETA_PROXY = process.env.BETA_LOCAL_PROXY === '1';
+const CONTROL_IMPLEMENTATION = 'marty-core/marty-test-wallet';
+const WALLET_ID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+
+function controlCredentialReceived(badge) {
+  return badge?.status === 201 && badge.accepted === true
+    && badge.storedExpectedCredential === true && badge.nativeExpectedCredential === true
+    && WALLET_ID.test(badge.credentialId || '')
+    && ['jwt_vc_json', 'dc+sd-jwt'].includes(badge.credentialFormat);
+}
+
+function firstPartyControlAssertions(report) {
+  const membership = membershipLoginBehaviorAssertions(report);
+  const scope = report.controlScope?.classification === 'FIRST_PARTY_CONTROL'
+    && report.controlScope?.implementation === CONTROL_IMPLEMENTATION
+    && report.controlScope?.publicWalletProduct === false;
+  const session = report.walletSession;
+  const closed = report.closedWalletSession;
+  return {
+    governed_claim: scope && membership.governed_claim,
+    expected_credential_received_and_stored: scope && controlCredentialReceived(report.badge),
+    presentation_authenticated: scope && membership.same_device_passwordless_login
+      && report.presentation?.status === 200 && report.completion?.authStatus === 200,
+    closed_wallet_session_rejected: Boolean(scope
+      && session?.implementation === CONTROL_IMPLEMENTATION
+      && session?.protocol === 'isolated_sessions_v1' && session.closed === true
+      && WALLET_ID.test(session.instanceId || '') && WALLET_ID.test(session.sessionId || '')
+      && typeof session.runId === 'string' && session.runId.length > 0
+      && closed?.scope === 'CLOSED_SESSION_REJECTION' && closed.status === 410
+      && closed.instanceId === session.instanceId && closed.sessionId === session.sessionId
+      && closed.runId === session.runId),
+  };
+}
+
+async function closeControlSession(walletSession, context) {
+  await walletSession.close();
+  if (walletSession.evidence.closed !== true) throw new Error('Owned control wallet session closure is unconfirmed');
+  // Rust rejects a closed run instead of selecting the legacy interactive
+  // wallet. This is an API observation of closure, not a TTL-expiry claim.
+  const url = `${walletSession.origin}/api/credentials`;
+  const response = await context.request.get(url, {
+    headers: { 'x-marty-wallet-run-id': walletSession.evidence.runId },
+    timeout: 15000, maxRedirects: 0,
+  });
+  if (response.url() !== url || response.status() !== 410) {
+    throw new Error('Closed control wallet session was not rejected with HTTP 410');
+  }
+  return { scope: 'CLOSED_SESSION_REJECTION', status: 410,
+    instanceId: walletSession.evidence.instanceId, sessionId: walletSession.evidence.sessionId,
+    runId: walletSession.evidence.runId, observedAt: new Date().toISOString() };
+}
+
 async function showStep(page, title, detail) {
   return showRecordingStep(page, title, detail, {
     enabled: RECORD_VIDEO,
@@ -48,8 +100,8 @@ async function maskProtocolField(page, label) {
   return maskRecordingProtocolField(page, label, RECORD_VIDEO);
 }
 
-async function receiveBadge(walletPage, offerUri) {
-  await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+async function receiveBadge(walletPage, offerUri, { retainSummary = false } = {}) {
+  await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await maskProtocolField(walletPage, 'Credential offer URI');
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
   const responsePromise = walletPage.waitForResponse((response) => (
@@ -68,6 +120,14 @@ async function receiveBadge(walletPage, offerUri) {
     status: response.status(),
     accepted: response.ok(),
     ...inventoryEvidence,
+    ...(retainSummary ? {
+      credentialId: body?.id || null,
+      credentialFormat: body?.format || null,
+      credentialConfigurationId: body?.credential_configuration_id || null,
+      credentialVct: body?.vct || null,
+      nativeExpectedCredential: body?.credential_configuration_id === MEMBERSHIP_BADGE_CONFIGURATION_ID
+        || body?.vct === MEMBERSHIP_BADGE_VCT,
+    } : {}),
     error: response.ok() ? null : redact(body?.error || 'Credential receipt failed'),
   };
 }
@@ -89,12 +149,20 @@ async function presentBadge(walletPage, requestUri) {
   };
 }
 
-async function main() {
+async function main({ retainedFirstParty = false } = {}) {
   loadEnvFile(path.join(ROOT, '.env.tunnel.beta.local'));
   loadEnvFile(path.join(ROOT, '.env'));
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..+/, '');
   const artifactDir = createArtifactDir(ROOT, `beta-credential-login-${stamp}`);
   const uiCandidate = resolveUiCandidateDist(ROOT);
+  if (retainedFirstParty && (!RECORD_VIDEO || LOCAL_BETA_PROXY || uiCandidate
+    || process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' || new URL(BETA_ORIGIN).protocol !== 'https:')) {
+    throw new Error('Retained first-party control requires fresh recordings and authenticated deployed HTTPS');
+  }
+  const explain = retainedFirstParty
+    ? (page, title, detail) => showRecordingStep(page, title, detail, {
+      enabled: RECORD_VIDEO, eyebrow: 'First-party browser wallet control',
+    }) : showStep;
 
   const browser = await chromium.launch({
     headless: HEADLESS,
@@ -110,6 +178,16 @@ async function main() {
     pageErrors: [],
     badResponses: [],
     consoleErrors: [],
+    ...(retainedFirstParty ? {
+      scenario: 'first-party-browser-wallet',
+      controlScope: { classification: 'FIRST_PARTY_CONTROL', implementation: CONTROL_IMPLEMENTATION,
+        productPath: 'GOVERNED_MEMBERSHIP_CLAIM_AND_CREDENTIAL_LOGIN', publicWalletProduct: false },
+      limitations: [
+        'This fresh run reuses the governed membership product path with the internal Rust wallet control.',
+        'Closed-session rejection is observed through the Rust wallet API; it does not qualify TTL expiry, public-device isolation or a public wallet product.',
+        'An approved synthetic membership application is a preprovisioned dependency. Closing the control session is not server credential revocation.',
+      ],
+    } : {}),
     uiCandidate: uiCandidate ? {
       mode: 'LOCAL_DIST_ENGINEERING_ONLY',
       sourceRevision: uiCandidate.sourceRevision,
@@ -121,28 +199,28 @@ async function main() {
     },
   };
 
+  let walletSession;
   try {
-    const ready = await fetch(`${TEST_WALLET_ORIGIN}/ready`).then((response) => response.ok).catch(() => false);
-    if (!ready) throw new Error(`Marty browser wallet is not ready at ${TEST_WALLET_ORIGIN}`);
-    await fetch(`${TEST_WALLET_ORIGIN}/api/reset`, { method: 'POST' });
+    const walletContext = await browser.newContext({
+      viewport: VIDEO_SIZE,
+      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
+      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
+    });
+    walletSession = await acquireWalletSession(walletContext, { origin: TEST_WALLET_ORIGIN });
+    report.walletSession = walletSession.evidence;
 
     const offerResult = await collectBetaOffer(browser, {
       walletId: 'wr-default',
       logoutAfterOffer: true,
       keepContext: RECORD_VIDEO,
       contextOptions: RECORD_VIDEO ? { viewport: VIDEO_SIZE, recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {},
-      onStep: showStep,
+      onStep: explain,
       setupContext: (context) => installUiCandidateRoute(context, uiCandidate, BETA_ORIGIN),
     });
     const { context: holderContext = null, page: holderPage = null, ...offer } = offerResult;
     report.badResponses.push(...(offer.badResponses || []));
     report.consoleErrors.push(...(offer.consoleErrors || []));
     const holderVideo = holderPage?.video() || null;
-    const walletContext = await browser.newContext({
-      viewport: VIDEO_SIZE,
-      ignoreHTTPSErrors: LOCAL_BETA_PROXY,
-      ...(RECORD_VIDEO ? { recordVideo: { dir: artifactDir, size: VIDEO_SIZE } } : {}),
-    });
     await installUiCandidateRoute(walletContext, uiCandidate, BETA_ORIGIN);
     const walletPage = await walletContext.newPage();
     walletPage.on('pageerror', (error) => report.pageErrors.push(redact(error.message)));
@@ -150,7 +228,7 @@ async function main() {
       if (message.type() === 'error') report.consoleErrors.push(redact(message.text()).slice(0, 400));
     });
     const walletVideo = walletPage.video();
-    await showStep(
+    await explain(
       walletPage,
       'Browser wallet opened',
       'This local browser wallet exercises the same OpenID4VCI and OpenID4VP handoffs without exposing protocol secrets.',
@@ -158,9 +236,12 @@ async function main() {
     report.badge = {
       offerSource: offer.offerSource,
       loggedOut: offer.loggedOut === true,
-      ...await receiveBadge(walletPage, offer.offerUri),
+      ...await receiveBadge(walletPage, offer.offerUri, { retainSummary: retainedFirstParty }),
     };
-    await showStep(
+    if (retainedFirstParty && !controlCredentialReceived(report.badge)) {
+      throw new Error('The control wallet did not receive and store the exact expected credential');
+    }
+    await explain(
       walletPage,
       'Membership badge received',
       'The wallet now contains the Marty Verified Member Open Badge issued by the canonical claim endpoint.',
@@ -208,7 +289,7 @@ async function main() {
     if (!loginRequest.nonce || !loginRequest.href) {
       throw new Error('Credential login did not provide a nonce and signed presentation link');
     }
-    await showStep(
+    await explain(
       loginPage,
       'Credential login request ready',
       'The signed presentation request asks the wallet for the membership badge and required email disclosure.',
@@ -218,10 +299,10 @@ async function main() {
       walletOptions: loginRequest.walletOptions,
     };
     report.presentation = await presentBadge(walletPage, loginRequest.href);
-    if (!report.presentation.accepted) {
+    if (!report.presentation.accepted || (retainedFirstParty && report.presentation.status !== 200)) {
       throw new Error(`Browser wallet presentation failed: ${report.presentation.error || 'unknown error'}`);
     }
-    await showStep(
+    await explain(
       walletPage,
       'Membership badge presented',
       'The browser wallet submitted the selected badge to the signed credential-login callback.',
@@ -262,7 +343,10 @@ async function main() {
       authStatus: auth.status,
       authenticatedEmail: auth.body?.authenticated ? auth.body?.user?.email : null,
     };
-    await showStep(
+    if (retainedFirstParty && !firstPartyControlAssertions(report).presentation_authenticated) {
+      throw new Error('The control presentation did not establish an authenticated HTTP 200 session');
+    }
+    await explain(
       loginPage,
       'Credential login complete',
       'The badge presentation resolved the existing user and created a new authenticated ElevenID session.',
@@ -276,6 +360,16 @@ async function main() {
     );
     report.releaseReady = report.engineeringReady && !uiCandidate;
     report.finishedAt = new Date().toISOString();
+    if (retainedFirstParty) {
+      report.closedWalletSession = await closeControlSession(walletSession, walletContext);
+      report.firstPartyControlAssertions = firstPartyControlAssertions(report);
+      if (!Object.values(report.firstPartyControlAssertions).every(value => value === true)) {
+        throw new Error('The retained first-party control contract did not pass');
+      }
+      await explain(walletPage, 'Run-owned wallet session closed',
+        'The Rust control closed this run’s session. A fresh credential-list API request for that run is rejected with HTTP 410.');
+      report.finishedAt = new Date().toISOString();
+    } else await walletSession.close();
     await loginContext.close();
     await walletContext.close();
     if (RECORD_VIDEO) {
@@ -284,22 +378,34 @@ async function main() {
         wallet: path.relative(ROOT, await finalizeVideo(walletVideo, artifactDir, 'open-badge-browser-wallet.webm')),
       };
     }
-    fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
-    console.log(JSON.stringify(report, null, 2));
-    if (!report.engineeringReady) process.exitCode = 1;
   } catch (error) {
     report.finishedAt = new Date().toISOString();
     report.releaseReady = false;
+    report.engineeringReady = false;
     report.error = redact(error.stack || error.message || String(error));
+  } finally {
+    for (const [operation, close] of [
+      ['wallet', () => walletSession?.close()], ['browser', () => browser.close()],
+    ]) {
+      try { await close(); }
+      catch (error) {
+        report.cleanupErrors ||= [];
+        report.cleanupErrors.push({ operation, error: redact(error.message || String(error)) });
+        report.engineeringReady = false;
+        report.releaseReady = false;
+      }
+    }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
-    process.exitCode = 1;
-  } finally {
-    await browser.close();
+    if (!report.engineeringReady) process.exitCode = 1;
   }
 }
 
-main().catch((error) => {
-  console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
-  process.exitCode = 1;
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.log(JSON.stringify({ error: redact(error.stack || error.message || String(error)) }, null, 2));
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { closeControlSession, controlCredentialReceived, firstPartyControlAssertions, main };

@@ -604,6 +604,7 @@ def manifest_file(tmp_path: Path) -> Path:
                                 ("ui", "d"),
                                 ("services", "b"),
                                 ("migrations", "e"),
+                                ("openbao-didcomm", "f"),
                             )
                         ],
                     }

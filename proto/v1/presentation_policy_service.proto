@@ -163,6 +163,19 @@ message EvaluatePresentationRequest {
   string audience = 4;
   string trust_profile_id = 5;     // optional override
   string context_json = 6;        // JSON-encoded extra context
+  Oid4vpEvaluationTransport oid4vp_transport = 7; // optional, unverified metadata
+}
+
+// Producer-owned query plus structure-preserving untrusted wallet submission. Presence and
+// structural validity do not grant presentation, credential, or holder proof.
+message Oid4vpEvaluationTransport {
+  string query_kind = 1; // "dcql" or "presentation_exchange"
+  string query_document_json = 2;
+  string query_digest = 3;
+  optional string presentation_submission_json = 4;
+  string vp_token_raw = 5; // exact wallet token field, not verified evidence
+  string verifier_client_id = 6; // exact producer-owned client_id
+  string request_nonce = 7; // exact producer-owned nonce
 }
 
 message PolicyEvaluationResponse {

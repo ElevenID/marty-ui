@@ -239,7 +239,6 @@ export const Loading: Story = {
 ## Need Help?
 
 - 📖 Full docs: [TESTING.md](./TESTING.md)
-- 📊 Implementation summary: [TEST_IMPLEMENTATION_SUMMARY.md](./TEST_IMPLEMENTATION_SUMMARY.md)
 - 💡 Examples: Look at `__tests__/` folders for patterns
 - 🐛 Issues: Check Vitest UI for detailed error messages
 

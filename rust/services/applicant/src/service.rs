@@ -1,7 +1,7 @@
 use crate::{
     issuance::{
-        apply_offer, mark_no_active_flow, reconcile_transaction, reserve_attempt, IssuanceError,
-        IssuanceOffer,
+        apply_offer, mark_no_active_flow, matches_active_attempt, matches_completed_offer,
+        reconcile_transaction, reserve_attempt, IssuanceError, IssuanceOffer,
     },
     store::StoreDocument,
     validate_form_data, Applicant, ApplicantError, Application, Biometric, CheckStatus, CheckType,
@@ -109,7 +109,11 @@ pub struct ReviewRequestContext<'a> {
 
 #[async_trait]
 pub trait TemplateProvider: Send + Sync {
-    async fn get(&self, id: &str) -> Result<ApplicationTemplate, ProviderError>;
+    async fn get(
+        &self,
+        organization_id: &str,
+        id: &str,
+    ) -> Result<ApplicationTemplate, ProviderError>;
 }
 
 #[async_trait]
@@ -244,6 +248,12 @@ pub struct ApplicantService {
     events: Arc<dyn EventPublisher>,
     event_delivery: Mutex<()>,
     persistence: Arc<dyn StorePersistence>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WithdrawalAuthority {
+    Applicant,
+    Organization,
 }
 
 impl ApplicantService {
@@ -571,13 +581,9 @@ impl ApplicantService {
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
         identity.validate()?;
-        let template = self.templates.get(application_template_id).await?;
-        if template.organization_id != issuer_organization_id {
-            return Err(ServiceError::TemplateTenant);
-        }
-        if !template.status.eq_ignore_ascii_case("ACTIVE") {
-            return Err(ServiceError::InactiveTemplate);
-        }
+        let template = self
+            .active_template(issuer_organization_id, application_template_id)
+            .await?;
         if template.credential_template_id.trim().is_empty() {
             return Err(ServiceError::MissingCredentialTemplate);
         }
@@ -652,15 +658,17 @@ impl ApplicantService {
         application_id: &str,
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
-        let template_id = {
+        let (template_id, organization_id) = {
             let store = self.store.read().await;
-            store
+            let application = store
                 .application(application_id)
-                .ok_or(ServiceError::ApplicationNotFound)?
-                .application_template_id
-                .clone()
+                .ok_or(ServiceError::ApplicationNotFound)?;
+            (
+                application.application_template_id.clone(),
+                application.organization_id.clone(),
+            )
         };
-        let template = self.templates.get(&template_id).await?;
+        let template = self.templates.get(&organization_id, &template_id).await?;
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
@@ -852,20 +860,54 @@ impl ApplicantService {
         reason: Option<String>,
         now: DateTime<Utc>,
     ) -> Result<Application, ServiceError> {
+        self.withdraw_application(application_id, reason, now, WithdrawalAuthority::Applicant)
+            .await
+    }
+
+    pub async fn withdraw_by_organization(
+        &self,
+        application_id: &str,
+        reason: Option<String>,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        self.withdraw_application(
+            application_id,
+            reason,
+            now,
+            WithdrawalAuthority::Organization,
+        )
+        .await
+    }
+
+    async fn withdraw_application(
+        &self,
+        application_id: &str,
+        reason: Option<String>,
+        now: DateTime<Utc>,
+        authority: WithdrawalAuthority,
+    ) -> Result<Application, ServiceError> {
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
-        application.status = application.status.transition(LifecycleStatus::Withdrawn)?;
+        // Keep this check under the same store lock as issuance reservation and
+        // withdrawal. A later withdrawal must not hide a live or uncertain
+        // issuance; application:review does not authorize credential revocation.
+        require_unissued_withdrawal(&application)?;
+        application.status = if authority == WithdrawalAuthority::Organization {
+            // Preserve organization withdrawal from unissued review/rejected
+            // states while self-service keeps its stricter domain transitions.
+            LifecycleStatus::Withdrawn
+        } else {
+            application.status.transition(LifecycleStatus::Withdrawn)?
+        };
         application.updated_at = now;
         application.system_data.insert(
             "withdrawal_reason".into(),
             reason.map(Value::String).unwrap_or(Value::Null),
         );
-        if let Some(applicant) = store
-            .applicants
-            .iter_mut()
-            .find(|applicant| applicant.id == application.applicant_id)
-        {
+        if let Some(applicant) = store.applicants.iter_mut().find(|applicant| {
+            authority == WithdrawalAuthority::Applicant && applicant.id == application.applicant_id
+        }) {
             if applicant
                 .status
                 .transition(LifecycleStatus::Withdrawn)
@@ -880,29 +922,10 @@ impl ApplicantService {
         Ok(application)
     }
 
-    pub async fn withdraw_by_organization(
-        &self,
-        application_id: &str,
-        reason: Option<String>,
-        now: DateTime<Utc>,
-    ) -> Result<Application, ServiceError> {
-        let mut store = self.store.write().await;
-        let index = application_index(&store, application_id)?;
-        let mut application = store.applications[index].clone();
-        application.status = LifecycleStatus::Withdrawn;
-        application.updated_at = now;
-        application.system_data.insert(
-            "withdrawal_reason".into(),
-            reason.map(Value::String).unwrap_or(Value::Null),
-        );
-        store.applications[index] = application.clone();
-        self.persistence.persist(&store)?;
-        Ok(application)
-    }
-
     pub async fn reconcile_issuance(
         &self,
         application_id: &str,
+        expected_transaction_id: Option<&str>,
         transaction_status: Option<&str>,
         issued_at: Option<DateTime<Utc>>,
         now: DateTime<Utc>,
@@ -910,6 +933,17 @@ impl ApplicantService {
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
+        // A transaction read can finish after another request replaced the
+        // offer. Its status and expiry observation belong only to that read's
+        // transaction binding, never to the application's replacement offer.
+        if application
+            .system_data
+            .get("issuance_transaction_id")
+            .and_then(Value::as_str)
+            != expected_transaction_id
+        {
+            return Ok(application);
+        }
         let mut changed = false;
         if application.claim_state == ClaimState::OfferReady
             && application
@@ -1179,6 +1213,62 @@ impl ApplicantService {
         Ok(application)
     }
 
+    async fn active_template(
+        &self,
+        organization_id: &str,
+        template_id: &str,
+    ) -> Result<ApplicationTemplate, ServiceError> {
+        let template = self.templates.get(organization_id, template_id).await?;
+        if template.organization_id != organization_id {
+            return Err(ServiceError::TemplateTenant);
+        }
+        if !template.status.eq_ignore_ascii_case("ACTIVE") {
+            return Err(ServiceError::InactiveTemplate);
+        }
+        Ok(template)
+    }
+
+    /// Reusing an existing offer is issuance authority too: retired templates
+    /// must be rejected before either returning that offer or reserving a retry.
+    pub async fn claim(
+        &self,
+        application_id: &str,
+        now: DateTime<Utc>,
+    ) -> Result<Application, ServiceError> {
+        let application = self
+            .store
+            .read()
+            .await
+            .application(application_id)
+            .cloned()
+            .ok_or(ServiceError::ApplicationNotFound)?;
+        self.active_template(
+            &application.organization_id,
+            &application.application_template_id,
+        )
+        .await?;
+        let has_offer = application
+            .system_data
+            .get("credential_offer_uri")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+            || application
+                .system_data
+                .get("credential_offer_uris")
+                .and_then(Value::as_object)
+                .is_some_and(|value| !value.is_empty());
+        let valid_expiry = application
+            .system_data
+            .get("offer_expires_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+            .is_some_and(|expiry| expiry > now);
+        if application.claim_state == ClaimState::OfferReady && has_offer && valid_expiry {
+            return Ok(application);
+        }
+        self.issue(application_id, now).await
+    }
+
     pub async fn issue(
         &self,
         application_id: &str,
@@ -1197,8 +1287,10 @@ impl ApplicantService {
             (application, applicant)
         };
         let template = self
-            .templates
-            .get(&application_snapshot.application_template_id)
+            .active_template(
+                &application_snapshot.organization_id,
+                &application_snapshot.application_template_id,
+            )
             .await?;
         let claims = build_claims(&application_snapshot, &applicant_snapshot, &template, now);
 
@@ -1238,6 +1330,9 @@ impl ApplicantService {
             Err(ProviderError::NoActiveFlow) => {
                 let mut store = self.store.write().await;
                 let index = application_index(&store, application_id)?;
+                if !matches_active_attempt(&store.applications[index], attempt_id) {
+                    return Err(ServiceError::ConcurrentModification);
+                }
                 mark_no_active_flow(&mut store.applications[index], now);
                 self.persistence.persist(&store)?;
                 return Err(ServiceError::NoActiveFlow);
@@ -1248,6 +1343,9 @@ impl ApplicantService {
         let mut store = self.store.write().await;
         let index = application_index(&store, application_id)?;
         let mut application = store.applications[index].clone();
+        if matches_completed_offer(&application, attempt_id, &offer) {
+            return Ok(application);
+        }
         let applicant_index = store
             .applicants
             .iter()
@@ -1327,6 +1425,48 @@ fn application_index(store: &StoreDocument, id: &str) -> Result<usize, ServiceEr
         .iter()
         .position(|item| item.id == id)
         .ok_or(ServiceError::ApplicationNotFound)
+}
+
+fn require_unissued_withdrawal(application: &Application) -> Result<(), ServiceError> {
+    // Approval is committed with an application.approved event, so a missing
+    // returned offer is not proof that an issuance has not started. Historical
+    // or malformed bindings also require reconciliation: this operation cannot
+    // prove that their credentials/tokens were retired by the issuance service.
+    let issuance_state = matches!(
+        application.status,
+        LifecycleStatus::Approved
+            | LifecycleStatus::Offered
+            | LifecycleStatus::Credentialed
+            | LifecycleStatus::Suspended
+    ) || matches!(
+        application.claim_state,
+        ClaimState::OfferReady | ClaimState::Claimed | ClaimState::Expired
+    ) || application.issued_at.is_some();
+    let issuance_binding = application
+        .system_data
+        .contains_key("active_issuance_attempt")
+        || [
+            "issuance_transaction_id",
+            "last_issuance_attempt_id",
+            "flow_instance_id",
+            "issuance_status",
+            "offer_generated_at",
+            "offer_expires_at",
+            "credential_offer_uri",
+            "credential_offer_uris",
+        ]
+        .into_iter()
+        .any(|key| match application.system_data.get(key) {
+            None | Some(Value::Null) => false,
+            Some(Value::String(value)) => !value.is_empty(),
+            Some(Value::Object(value)) if key == "credential_offer_uris" => !value.is_empty(),
+            _ => true,
+        });
+    if issuance_state || issuance_binding {
+        Err(ServiceError::WithdrawalRequiresIssuanceReconciliation)
+    } else {
+        Ok(())
+    }
 }
 
 fn advance_applicant_projection(
@@ -1467,96 +1607,22 @@ fn build_claims(
             claims.insert(field.field_id.clone(), value.clone());
         }
     }
-    let system_values: Map<String, Value> = [
-        (
-            "applicant.user_id",
-            applicant.user_id.clone().map(Value::String),
-        ),
-        (
-            "applicant.email",
-            Some(Value::String(applicant.email.clone())),
-        ),
-        (
-            "applicant.given_name",
-            applicant.given_name.clone().map(Value::String),
-        ),
-        (
-            "applicant.family_name",
-            applicant.family_name.clone().map(Value::String),
-        ),
-        (
-            "application.id",
-            Some(Value::String(application.id.clone())),
-        ),
-        (
-            "application.reference_number",
-            application.reference_number.clone().map(Value::String),
-        ),
-        (
-            "application.organization_id",
-            Some(Value::String(application.organization_id.clone())),
-        ),
-        (
-            "current.date",
-            Some(Value::String(now.date_naive().to_string())),
-        ),
-        ("current.datetime", Some(Value::String(now.to_rfc3339()))),
-        (
-            "validity.expiry_date",
-            Some(Value::String(
-                (now + chrono::Duration::days(template.application_validity_days))
-                    .date_naive()
-                    .to_string(),
-            )),
-        ),
-        ("template.name", template.name.clone().map(Value::String)),
-        (
-            "template.description",
-            template.description.clone().map(Value::String),
-        ),
-    ]
-    .into_iter()
-    .filter_map(|(key, value)| value.map(|value| (key.into(), value)))
-    .collect();
-
-    for rule in &template.claim_collection_rules {
-        let claim_name = rule
-            .get("claim_name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let source = rule
-            .get("source")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let config = rule.get("source_config").and_then(Value::as_object);
-        if claim_name.is_empty() {
-            continue;
-        }
-        if source == "FORM_FIELD" {
-            if let Some(field_id) = config
-                .and_then(|value| value.get("field_id"))
-                .and_then(Value::as_str)
-            {
-                if let Some(value) = application.form_data.get(field_id) {
-                    claims.insert(claim_name.into(), value.clone());
-                }
-            }
-        } else if source == "SYSTEM" {
-            if let Some(system_field) = config
-                .and_then(|value| value.get("system_field"))
-                .and_then(Value::as_str)
-            {
-                let value = if system_field == "constant" {
-                    config.and_then(|value| value.get("value")).cloned()
-                } else {
-                    system_values.get(system_field).cloned()
-                };
-                if let Some(value) = value {
-                    claims.insert(claim_name.into(), value);
-                }
-            }
-        }
-    }
+    let system = marty_claim_collection::system_values(
+        &serde_json::json!({"user_id":applicant.user_id,"email":applicant.email,
+            "given_name":applicant.given_name,"family_name":applicant.family_name}),
+        &serde_json::json!({"id":application.id,"reference_number":application.reference_number,
+            "organization_id":application.organization_id}),
+        &serde_json::json!({"name":template.name,"description":template.description}),
+        now,
+        template.application_validity_days,
+    );
+    marty_claim_collection::apply_rules(
+        &mut claims,
+        &application.form_data,
+        &template.claim_collection_rules,
+        &system,
+        &[],
+    );
     claims
 }
 
@@ -1622,6 +1688,8 @@ pub enum ServiceError {
     MalformedSystemState,
     #[error("invalid application state: {0:?}")]
     InvalidApplicationState(LifecycleStatus),
+    #[error("Issuance must be reconciled before withdrawing this application")]
+    WithdrawalRequiresIssuanceReconciliation,
     #[error("no active issuance flow")]
     NoActiveFlow,
     #[error(transparent)]

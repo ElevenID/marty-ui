@@ -3,6 +3,71 @@ const path = require('path');
 
 const VIDEO_SIZE = Object.freeze({ width: 1920, height: 1080 });
 
+// These are driver landmarks, not video timestamps or captured OS mouse events.
+// Editors must bind every crop and added cursor to the actual source frames.
+function createActionRecording({
+  enabled = false,
+  scenario,
+  eyebrow = 'Synthetic business scenario - ElevenID admin portal',
+  pageName = 'application',
+  now = () => performance.now(),
+  onEvent = () => {},
+} = {}) {
+  if (!scenario || typeof scenario !== 'string') throw new TypeError('Recording scenario is required');
+  const origin = now();
+  const evidence = {
+    schemaVersion: 1,
+    scenario,
+    pageName,
+    clock: 'MONOTONIC_DRIVER_ELAPSED_FROM_PAGE_READY',
+    videoFrameAlignmentEstablished: false,
+    editorMustAlignToSourceFrames: true,
+    pointerTimingBasis: 'DRIVER_LANDMARKS_NOT_OS_CLICK_TELEMETRY',
+    events: [],
+  };
+  const recording = {
+    enabled,
+    evidence,
+    events: evidence.events,
+    mark(action, phase, detail = {}) {
+      if (!enabled) return;
+      evidence.events.push({
+        ...detail,
+        action,
+        phase,
+        elapsedSeconds: (now() - origin) / 1000,
+        observedAt: new Date().toISOString(),
+      });
+      onEvent(evidence);
+    },
+    async hold(page, locator, milliseconds = 2200, { action = 'inspect', phase = 'control' } = {}) {
+      // Functional runs still require the real target. Only editorial dwell is optional.
+      await locator.waitFor({ state: 'visible', timeout: 30000 });
+      await locator.scrollIntoViewIfNeeded();
+      if (!enabled) return;
+      const bounds = typeof locator.boundingBox === 'function' ? await locator.boundingBox() : null;
+      recording.mark(action, `${phase}-visible`, bounds ? { bounds } : {});
+      await page.waitForTimeout(milliseconds);
+      recording.mark(action, `${phase}-hold-end`);
+    },
+    async click(page, locator, { action, phase = 'control', durationMs = 2200 } = {}) {
+      if (!action) throw new TypeError('Recording action is required');
+      await recording.hold(page, locator, durationMs, { action, phase });
+      // Bounds are measured again after the hold in case layout changed.
+      const bounds = enabled && typeof locator.boundingBox === 'function' ? await locator.boundingBox() : null;
+      recording.mark(action, `${phase}-click-dispatched`, bounds ? { bounds } : {});
+      await locator.click();
+      recording.mark(action, `${phase}-click-completed`);
+    },
+    async explain(page, action, reason, { title = `Admin action: ${action}`, durationMs = 3200 } = {}) {
+      if (!enabled) return;
+      recording.mark(action, 'scenario-context', { reason });
+      await showStep(page, title, reason, { enabled, eyebrow, durationMs });
+    },
+  };
+  return recording;
+}
+
 function createArtifactDir(root, defaultName, env = process.env) {
   const configured = String(env.DEMO_ARTIFACT_DIR || '').trim();
   const artifactDir = configured
@@ -105,7 +170,7 @@ async function showVerificationResult(page, result, options = {}) {
       pointerEvents: 'none',
     });
     const eyebrow = document.createElement('div');
-    eyebrow.textContent = 'STATUS-AWARE VERIFICATION';
+    eyebrow.textContent = 'TEST EVIDENCE - STATUS-AWARE VERIFICATION';
     Object.assign(eyebrow.style, {
       fontSize: '14px',
       fontWeight: '700',
@@ -188,6 +253,7 @@ async function finalizeVideo(video, artifactDir, filename) {
 module.exports = {
   VIDEO_SIZE,
   buildVerificationDisplay,
+  createActionRecording,
   createArtifactDir,
   finalizeVideo,
   maskProtocolField,

@@ -10,7 +10,7 @@ use marty_auth::{
     AuthGrpcService, AuthSessionService, AuthenticatedUser, Session, SessionSpec, UserType,
     AUTH_GRPC_METHODS,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tonic::{Code, Request, Status};
 
 struct SessionStub {
@@ -73,7 +73,53 @@ fn session() -> Session {
 }
 
 fn service(session: Option<Session>) -> AuthGrpcService {
-    AuthGrpcService::new(Arc::new(SessionStub { session }))
+    AuthGrpcService::new(Arc::new(SessionStub { session }), None, false).unwrap()
+}
+
+#[tokio::test]
+async fn deployed_auth_grpc_rejects_missing_or_invalid_service_tokens() {
+    let token = "s".repeat(32);
+    let service = AuthGrpcService::new(
+        Arc::new(SessionStub {
+            session: Some(session()),
+        }),
+        Some(token.clone()),
+        true,
+    )
+    .unwrap();
+    let request = || {
+        Request::new(ValidateSessionRequest {
+            session_id: "session-1".into(),
+        })
+    };
+    assert_eq!(
+        service
+            .validate_session(request())
+            .await
+            .unwrap_err()
+            .code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut wrong = request();
+    wrong
+        .metadata_mut()
+        .insert("x-service-token", "wrong".parse().unwrap());
+    assert_eq!(
+        service.validate_session(wrong).await.unwrap_err().code(),
+        tonic::Code::Unauthenticated
+    );
+    let mut valid = request();
+    valid
+        .metadata_mut()
+        .insert("x-service-token", token.parse().unwrap());
+    assert!(
+        service
+            .validate_session(valid)
+            .await
+            .unwrap()
+            .into_inner()
+            .valid
+    );
 }
 
 #[test]
@@ -140,6 +186,40 @@ async fn validation_status_and_invalidation_preserve_the_session_contract() {
         .into_inner();
     assert!(!missing.valid);
     assert!(missing.user.is_none());
+    assert_eq!(missing.authentication_time_unix, None);
+}
+
+#[tokio::test]
+async fn session_validation_exposes_only_plausible_verified_oidc_auth_time() {
+    let mut authenticated = session();
+    let verified_at = authenticated.created_at.timestamp() - 30;
+    authenticated.oidc_claims = Some(json!({"auth_time": verified_at}));
+    let validated = service(Some(authenticated.clone()))
+        .validate_session(Request::new(ValidateSessionRequest {
+            session_id: authenticated.session_id.clone(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(validated.authentication_time_unix, Some(verified_at));
+
+    for claim in [
+        json!({"auth_time": "9999999999"}),
+        json!({"auth_time": -1}),
+        json!({"auth_time": authenticated.created_at.timestamp() + 61}),
+        json!({"iat": authenticated.created_at.timestamp()}),
+    ] {
+        authenticated.oidc_claims = Some(claim);
+        let validated = service(Some(authenticated.clone()))
+            .validate_session(Request::new(ValidateSessionRequest {
+                session_id: authenticated.session_id.clone(),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(validated.valid);
+        assert_eq!(validated.authentication_time_unix, None);
+    }
 }
 
 #[tokio::test]

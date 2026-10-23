@@ -149,7 +149,6 @@ src/components/
 
 ### Related Documentation
 - [Component Quick Reference](../../COMPONENT_QUICK_REFERENCE.md)
-- [Dashboard Implementation Summary](../../DASHBOARD_IMPLEMENTATION.md)
 - [Testing Philosophy](../../docs/TESTING.md) (if exists)
 
 ### External Standards

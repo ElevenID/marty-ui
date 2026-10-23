@@ -44,12 +44,13 @@ def fixture(tmp_path: Path, monkeypatch):
     signed = {
         "release": "marty-ui@1.1.999", "manifest_sha256": digest(tmp_path / "stack-manifest.json"),
         "services_image": SERVICES_IMAGE,
-        "issuance_image": "ghcr.io/elevenid/marty-credentials/issuance@sha256:" + "d" * 64,
+        "issuance_image": SERVICES_IMAGE,
         "oci_digests": {"ghcr.io/elevenid/marty-ui-oss/ui": UI_DIGEST,
                         "ghcr.io/elevenid/marty-ui-oss/services": SERVICES_DIGEST},
     }
     seen = []
-    def manifest_source(path, source, attest, attest_issuance):
+    def manifest_source(path, source, attest, attest_issuance, *, rust_only=False):
+        assert rust_only is True
         seen.append((path, source, attest("probe", {}, source)))
         return signed
     monkeypatch.setattr(aggregate, "manifest_source", manifest_source)
@@ -96,6 +97,7 @@ def fixture(tmp_path: Path, monkeypatch):
         "production_snapshot_sha256": "f" * 64,
         "production_attachments_sha256": "6" * 64,
         "target_services": sorted(ALL_APPS),
+        "old_container_ids_by_service": {"openbao": "7" * 64},
         "expected_networks_by_service": {
             name: [NETWORK] for name in (*sorted(ALL_APPS), "postgres")},
         "recreate_applications": sorted(ALL_APPS - INGRESS),
@@ -108,12 +110,20 @@ def fixture(tmp_path: Path, monkeypatch):
     plan_path = tmp_path / "aggregate-deployment.json.plan.json"
     plan["native_receipt_sha256"] = digest(native_path)
     write(plan_path, plan)
+    migration_path = tmp_path / "aggregate-deployment.json.issuance-migration.json"
+    write(migration_path, {
+        "schema": "marty.passport-beta-issuance-migration/v1",
+        "source_commit": COMMIT,
+        "services_image": SERVICES_IMAGE,
+        "postgres_container_id": postgres_id,
+        "versions": aggregate.ISSUANCE_MIGRATION_VERSIONS,
+    })
+    dependency_path = tmp_path / "aggregate-deployment.json.issuance-dependency.json"
     identities = {}
     live = {}
     for index, name in enumerate((*sorted(ALL_APPS), "postgres"), 1):
         container_id = format(index, "x").rjust(64, "0")
-        image = ("postgres:15" if name == "postgres" else
-                 signed["issuance_image"] if name == "issuance" else SERVICES_IMAGE)
+        image = "postgres:15" if name == "postgres" else SERVICES_IMAGE
         identity = {"container_id": container_id,
                     "image_id": "sha256:" + "3" * 64,
                     "configured_image": image,
@@ -132,6 +142,12 @@ def fixture(tmp_path: Path, monkeypatch):
                       "StartedAt": identity["started_at"]},
             "NetworkSettings": {"Networks": {NETWORK: {}}},
         }
+    write(dependency_path, {
+        "schema": "marty.passport-beta-issuance-dependency/v1",
+        "source_commit": COMMIT, "services_image": SERVICES_IMAGE,
+        "issuance_container_id": identities["issuance"]["container_id"],
+        "postgres_container_id": postgres_id, "verified": True,
+    })
     ui_id = "9" * 64
     ui_identity = {"container_id": ui_id,
                    "image_id": "sha256:" + "4" * 64,
@@ -150,14 +166,58 @@ def fixture(tmp_path: Path, monkeypatch):
                   "StartedAt": ui_identity["started_at"]},
         "NetworkSettings": {"Networks": {NETWORK: {}}},
     }
+    ceremony_intent_path = tmp_path / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    ceremony_intent = {
+        "schema": "marty.passport-beta-aggregate-ceremony-intent/v1",
+        "source_commit": COMMIT,
+        "gateway_container_id": identities["gateway"]["container_id"],
+        "application_file_sha256": "1" * 64,
+        "issuer_chain_file_sha256": "2" * 64,
+        "ceremony_file_sha256": "5" * 64,
+    }
+    write(ceremony_intent_path, ceremony_intent)
+    ceremony_path = tmp_path / "aggregate-deployment.json.issuer-ceremony.json"
+    ceremony = {
+        **ceremony_intent,
+        "schema": "marty.passport-beta-aggregate-ceremony/v1",
+        "verified": True,
+        "intent_file_sha256": digest(ceremony_intent_path),
+        "csca_certificate_sha256": "3" * 64,
+        "dsc_certificate_sha256": "4" * 64,
+        "gateway_request_traces_verified": True,
+        "profile_creation_verified": True,
+        "certificate_chain_verified": True,
+    }
+    write(ceremony_path, ceremony)
+    kms_path = tmp_path / "aggregate-deployment.json.kms-pretransition.json"
+    kms = {
+        "schema": "marty.passport-beta-aggregate-kms-pretransition/v1",
+        "verified": True, "source_commit": COMMIT,
+        "application_file_sha256": "1" * 64,
+        "issuer_chain_file_sha256": "2" * 64,
+        "signing_keys_container_id": identities["signing-keys"]["container_id"],
+        "openbao_container_id": plan["old_container_ids_by_service"]["openbao"],
+        "csca_certificate_sha256": "3" * 64,
+        "dsc_certificate_sha256": "4" * 64,
+        "key_versions": {"csca": 1, "dsc": 2},
+        "managed_kms_custody_verified": True, "chain_verified": True,
+        "private_key_exported": False,
+    }
+    write(kms_path, kms)
     receipt = {
         "schema": "marty.passport-beta-aggregate-deployment/v1",
         "beta_origin": "https://beta.elevenidllc.com",
         "source_commit": COMMIT, "plan_sha256": digest(plan_path),
         "native_receipt_sha256": plan["native_receipt_sha256"],
+        "issuance_migration_receipt_sha256": digest(migration_path),
+        "issuance_dependency_receipt_sha256": digest(dependency_path),
         "production_snapshot_sha256": plan["production_snapshot_sha256"],
         "beta_services": sorted(identities), "beta_runtime": identities,
         "ui_container_id": ui_id, "ui_runtime": ui_identity,
+        "issuer_ceremony_receipt_sha256": digest(ceremony_path),
+        "issuer_ceremony": ceremony,
+        "kms_pretransition_receipt_sha256": digest(kms_path),
+        "kms_pretransition": kms,
         "acceptance_pending": True,
     }
     write(tmp_path / "aggregate-deployment.json", receipt)
@@ -192,6 +252,55 @@ def test_collects_exact_aggregate_generation_without_old_manifests(tmp_path, mon
     assert set(report["runtime_images"]) == set(SERVICES)
     assert "SECRET_TOKEN" not in json.dumps(report)
     assert seen == [(tmp_path / "stack-manifest.json", COMMIT, True)]
+
+
+@pytest.mark.parametrize("change", ["missing", "exported", "rotated"])
+def test_rejects_missing_or_changed_pretransition_kms_proof(tmp_path, monkeypatch, change):
+    _, receipt, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    kms_path = tmp_path / "aggregate-deployment.json.kms-pretransition.json"
+    if change == "missing":
+        kms_path.unlink()
+    elif change == "exported":
+        kms = json.loads(kms_path.read_text(encoding="utf-8"))
+        kms["private_key_exported"] = True
+        write(kms_path, kms)
+        receipt["kms_pretransition_receipt_sha256"] = digest(kms_path)
+        receipt["kms_pretransition"] = kms
+        write(tmp_path / "aggregate-deployment.json", receipt)
+    else:
+        kms = json.loads(kms_path.read_text(encoding="utf-8"))
+        kms["key_versions"]["dsc"] = 3
+        write(kms_path, kms)
+    with pytest.raises(EvidenceError, match="managed issuer|Invalid evidence file"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+@pytest.mark.parametrize("change", ["missing", "changed_chain", "changed_intent"])
+def test_rejects_missing_or_changed_gateway_ceremony(tmp_path, monkeypatch, change):
+    _, receipt, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    ceremony_path = tmp_path / "aggregate-deployment.json.issuer-ceremony.json"
+    intent_path = tmp_path / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    if change == "missing":
+        ceremony_path.unlink()
+    elif change == "changed_chain":
+        ceremony = json.loads(ceremony_path.read_text(encoding="utf-8"))
+        ceremony["dsc_certificate_sha256"] = "6" * 64
+        write(ceremony_path, ceremony)
+        receipt["issuer_ceremony_receipt_sha256"] = digest(ceremony_path)
+        receipt["issuer_ceremony"] = ceremony
+        write(tmp_path / "aggregate-deployment.json", receipt)
+    else:
+        intent = json.loads(intent_path.read_text(encoding="utf-8"))
+        intent["gateway_container_id"] = "9" * 64
+        write(intent_path, intent)
+    with pytest.raises(EvidenceError, match="governed issuer|managed issuer|Invalid evidence file"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
 
 
 def test_rejects_recreated_service_after_aggregate_receipt(tmp_path, monkeypatch):
@@ -250,6 +359,61 @@ def test_rejects_missing_native_receipt_even_with_matching_plan(tmp_path, monkey
                 probe=probe, attest=lambda *_: True,
                 list_ids=lambda project: listed(live, project),
                 probe_native=lambda *_: None)
+
+
+def test_rejects_changed_issuance_migration_receipt(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    path = tmp_path / "aggregate-deployment.json.issuance-migration.json"
+    migration = json.loads(path.read_text(encoding="utf-8"))
+    migration["versions"].pop()
+    write(path, migration)
+    with pytest.raises(EvidenceError, match="Rust issuance migration receipt differs"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_changed_issuance_dependency_receipt(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    path = tmp_path / "aggregate-deployment.json.issuance-dependency.json"
+    dependency = json.loads(path.read_text(encoding="utf-8"))
+    dependency["verified"] = False
+    write(path, dependency)
+    with pytest.raises(EvidenceError, match="Rust issuance dependency receipt differs"):
+        collect(tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+                probe=probe, attest=lambda *_: True,
+                list_ids=lambda project: listed(live, project),
+                probe_native=lambda *_: None)
+
+
+def test_rejects_live_issuance_migration_ledger_drift(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    calls = iter([
+        "7|" + COMMIT + "|" + "5" * 64 + "|true|false",
+        "issuance_service_baseline_v1",
+    ])
+    monkeypatch.setattr(aggregate, "beta_psql", lambda *_: next(calls))
+    with pytest.raises(EvidenceError, match="Rust issuance migration ledger differs"):
+        aggregate.collect_aggregate(
+            tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+            probe=probe, attest=lambda *_: True,
+            list_ids=lambda project: listed(live, project))
+
+
+def test_rejects_live_private_key_storage(tmp_path, monkeypatch):
+    _, _, _, live, probe, _ = fixture(tmp_path, monkeypatch)
+    calls = iter([
+        "7|" + COMMIT + "|" + "5" * 64 + "|true|false",
+        ",".join(aggregate.ISSUANCE_MIGRATION_VERSIONS),
+        "column:issuance_service.issuer_signing_keys.encrypted_jwk_json",
+    ])
+    monkeypatch.setattr(aggregate, "beta_psql", lambda *_: next(calls))
+    with pytest.raises(EvidenceError, match="database contains private-key storage"):
+        aggregate.collect_aggregate(
+            tmp_path, api_key="k" * 32, inspect=live.__getitem__,
+            probe=probe, attest=lambda *_: True,
+            list_ids=lambda project: listed(live, project))
 
 
 def test_rejects_live_native_marker_drift(tmp_path, monkeypatch):

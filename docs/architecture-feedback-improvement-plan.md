@@ -1,7 +1,376 @@
 # Architecture and development-feedback improvement tracker
 
-Created: 2026-10-02 (America/Denver; baseline CI completed 2026-10-03 UTC).
-Status: active implementation (2026-10-04 checkpoint). A2 and several A0/A3/A4/A5 safeguards are merged, including strict planned-skip gate #1064, embedded-input classifier correction #1070, Canvas target split #1058, scenario-input inventory #1079, inventory-only PR selector #1080, parallel Canvas targets #1081, and worker acceptance-owner move #1083. The #1081 protected run confirms shorter database-step elapsed time with unchanged test totals, while cache/load variance limits whole-job attribution. The inventory-only follow-up #1082 exercised the selective PR path; composition-owner work is tracked in #1086. A0 inventory and remaining A1/A3–A6 work continue.
+Status: active requirements and queue, 2026-10-20.
+
+October 21 maintenance reconciliation: Adam Burdett's integration writer is
+resuming the existing `selfhost-log-boundary-20261004` checkout on
+`reconcile/selfhost-log-boundary-20261021`, based on published main
+`e02276e92775c330a0c52280b6eca91d34358dca`. The useful portion of local
+`ec53f05348ee70f59cde87c82780071eead599da` is a delayed-startup-log marker
+retry, ported to the maintained self-host acceptance owner. Reads and polling
+share a five-second budget, while the existing owned-command runner retains
+its separate bounded shutdown. Secret exposure, empty secrets, invalid UTF-8
+and Docker failures are not retried; late success is rejected. This changes
+no production runtime or CI selector. The exact self-host test roster grows
+from twelve to seventeen without dropping any existing case; function-scoped
+connectivity and mutation checks preserve the fail-closed source guard.
+Exact-candidate
+checks, independent review and protected merge remain the next action; remove
+this sole integration checkout after accepted merge and verified consumer cleanup.
+
+October 20 release-path checkpoint: exact-main full CI
+[39425370404](https://github.com/ElevenID/marty-ui/actions/runs/39425370404)
+passed at `d74f0133d2b6f0056b79a9f145842791bc1f04f8`; its Canvas job took
+34m54s. This validates that the current full tier still executes, not a
+before/after speedup. The separate `v1.1.260-selfhost-preview.1` handoff is
+public but remains an unsupported, unqualified manual-install preview; its
+archive verification is not installed-product qualification.
+
+October 18 checkpoint: #1393 and #1394 are merged after protected CI. The
+unfiltered Issuance-library diagnostic in #1397 passed its PR run with 594
+passed cases, including all 23 required renewal cases, plus fourteen
+fixture-owned ignored cases; its protected queue run remains the merge
+authority. This
+improves obligation visibility, not selective admission or measured full-CI
+turnaround. The Canvas seed-to-migration runtime edge is captured by #1398 in
+shadow-only planning; its scoped PR checks passed, while protected merge and
+complete non-Cargo closure remain open. No existing real-database, process,
+historical-oracle, security or release gate is removed.
+
+Handoff work is separate from A0-A7 completion: the public v1.1.255 preview
+remains unsupported. #1399's exact sixteen-role, pinned-version diagnostic
+must pass the live contracts and protected queue. Its reviewed follow-on emits
+only KMS name/version environment assignments, not a runnable installation.
+Native-Linux Docker reachability, operator-supplied domain/identity/secrets,
+and an outside tester's clean install remain open.
+
+## Current delivery and maintenance-batch checkpoint
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously verified assets. Its unchanged bundle passed
+all fifteen local installed-journey phases in 169.812 seconds. The descriptor
+remains unqualified: no supported installer, hardware minimum or independent
+native Linux consumer installation is established. Outside testing can proceed
+under the approved unsupported-preview policy; do not wait for all A0-A7 work.
+
+[PR #1390](https://github.com/ElevenID/marty-ui/pull/1390) merged as
+`6daf4232cd110656652dec28fd57794693078fce` after successful protected run
+`39081635419`. It supplies early operator-password validation/generation and
+two executed virtual-clock timeout matrices; it does not modify v1.1.255 assets.
+
+The independent renewal-write overlap [PR #1391](https://github.com/ElevenID/marty-ui/pull/1391)
+passed all PR checks and protected validation and merged on October 18 at
+00:48 UTC. Hosted contracts
+artifact `12119516080` records write boundaries at 10.803 seconds, versus
+30.292/30.254 seconds in two earlier observations. This roughly 19.5-second
+targeted reduction is not a controlled paired or overall-pipeline speedup.
+The worker inventory records eleven passed tests and three unchanged ignored
+diagnostics, not sixty individual nested outcome lines. A separately reviewed
+local tmpfs probe directly observed all sixty outcomes and owned cleanup;
+its reused worker had unproven producer provenance, so it is not installed
+qualification, physical-durability evidence or a hardware support claim.
+
+This maintenance batch starts from the verified #1390 main and does not depend
+on #1391. It combines Flow case/input evidence and owned cancellation, nineteen
+paused actual-handler port tests, and a 21-input mixed-roster producer drift
+guard. Component worker reviews cleared the changes. The Flow shell suite
+passed 232 tests (one skip), independent POSIX TERM/INT/spawn-race probes passed,
+and combined focused Python checks passed 168 tests (five platform skips).
+PR CI `39084339386` compiled and executed all nineteen new Rust cases and four
+existing retry cases successfully. Its Flow evidence records nine selected and
+executed cases with same-run compiler-artifact identity. Independent review
+verified the named outcomes. Protected queue run `39085856892` passed and
+#1393 merged as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` on October 18
+at 01:39 UTC. The next maintenance batch starts from that actual main.
+The first batch CI release-contract run passed 6,938 tests but found one stale
+verified-leaf count after the new guarded test leaf was added. The correction
+retains the strict count and adds explicit new-leaf membership; its local
+selection regression passed and independent review cleared it. The detailed
+19-handler/60-SQL obligation map is included without authorizing SQL removal.
+No unique real-DB case, historical corpus, production behavior, required gate
+or connection limit is removed or weakened. Current-input drift evidence does
+not establish original-capture provenance or authorize qualification reuse.
+
+## Next reviewed maintenance batch (local; hosted validation pending)
+
+- A0: both self-host acceptance callers reuse the owned obligation recorder.
+  The twelve outer case outcomes, configured image/revision and bounded
+  packager/Compose byte identities do not prove nested assertion reachability,
+  upstream image provenance or installed-product cleanup.
+- Compilation visibility: the existing eight recovery preparation commands
+  emit flushed, fixed-label timings. Preparation-only mode reuses that owner
+  without Docker/TLS provisioning. Optional sanitized cache evidence and its
+  seven-day upload cannot weaken or block the required recovery qualification.
+- Profile consistency: host Rust test/lint and trusted-main warming explicitly
+  use zero dev/test debug info. This reduces CI debug information, not checks;
+  local debugging and production profiles remain unchanged. Package feature
+  graphs remain separate, and cache write failures remain undiagnosed.
+- A6: an opt-in PR diagnostic compiles the Issuance library and requires all
+  23 retry/renewal cases without Docker fixtures. Existing PR and protected
+  suites remain required, including existing optional worker diagnostics.
+  The classifier is unchanged. Narrow-feature hosted qualification must precede
+  any separately reviewed selective admission or speedup claim. Put the label
+  on the PR before its next synchronize event; label changes do not start CI.
+
+Independent integration review confirmed component identity and preserved gates.
+The combined local run passed 263 tests with five platform skips and exposed
+an obsolete container-only profile assertion. Its reviewed update preserves all
+container/compile-scope guards; 53 focused checks then passed. The batch is
+rebuilt on merged main `b90e0bf46201837d5e53d2cd4c8bc2e363db8567` and
+independent review confirmed the reviewed code and main changes are preserved.
+Hosted validation remains required before merge.
+
+The first hosted batch exposed an exact protocol-owner guard that still
+recognized only the old diagnostic matrix. Its correction pins the new additive
+branches while retaining full-workspace and protected-matrix requirements;
+27 gateway tests passed, including new negative controls, and the complete
+public contract CLI passed against pinned protocol source
+`76c37dc229b328afe002b911a26624543f814a64`. Independent review cleared it.
+An additional reviewed ownership guard rejects symlink/non-regular Git-index
+Issuance test leaves before emitting verified ownership; all 35 ownership tests
+passed. Neither correction enables selective skipping.
+
+The same batch includes an opt-in staging flag that reuses the existing secure
+operator-password generator before provisioning. It validates the selected
+source checkout's realm, keeps the value out of reports/arguments/errors, and
+retains default staging and owned-root rollback. Existing released previews
+without the flag keep their separate helper; no v1.1.255 asset is changed.
+Independent review and 12 host tests passed; 15 POSIX cases still require
+Linux CI. This is setup assistance, not turnkey or installed qualification.
+
+The hosted fixture-free diagnostic executed all 23 exact cases successfully in
+run `39087827050`, job `117558108996`, artifact `12121287706`. Independent
+review verified the separate unit inventory, same-run compiler identity and
+that Docker, image and database steps were skipped only on this diagnostic.
+This does not authorize selective admission or prove overall feedback savings.
+The broader local six-module run recorded 496 passed, six platform skips and
+one stale assertion expecting the database step to be unconditional even on
+the new unit-only lane. Its reviewed one-line correction now requires exactly
+`matrix.lane != 'renewal-unit'`; all five focused ownership checks passed while
+retaining full shell/order/gate assertions. Complete hosted validation of the
+corrected head remains required. The previous full release lane recorded
+6,968 passes, 40 skips and 534 subtests, but three stale copies of this guard
+failed. The other two copies in pilot-workflow and dependency-order tests are
+corrected to the same exact condition, retaining their remaining assertions;
+all 26 checks in those two modules passed. The previous Linux stage/generator
+cases executed successfully, including opt-in private mode and owned cleanup.
+
+## Prior handoff checkpoint (superseded delivery state)
+
+The [v1.1.255 experimental tester preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.255-selfhost-preview.1)
+is public with seven anonymously downloadable files. Use this preview rather
+than v1.1.250. Exact protected-main source is
+`76a7fb4ef6e2ad594dc431da511686a1664979ab`, produced by successful
+[Stack run #39077407940](https://github.com/ElevenID/marty-ui/actions/runs/39077407940).
+Two independent anonymous download checks passed checksums, archive, receipt,
+descriptor, original preparation transaction and source/run binding. The preview
+tag resolves to that source; the attachments remain separately unsigned and the
+descriptor remains **unqualified**.
+
+A fresh unchanged-artifact local replay passed all 15 diagnostic phases in
+169.812 seconds: startup/readiness, public credential journey, live KMS custody,
+Keycloak refresh, both database custody checks and main-stack cleanup. Independent
+review matched all 28 expected local services and the source, fixture, transaction
+and artifact digests. Both attempts' separate disposable OpenBao projects were
+subsequently removed; private bind state and reports were retained under
+`/home/canvasrunner/kms-qualification/v1.1.255/private`.
+
+This enables the approved **unsupported experimental** external testing, not
+supported installer qualification. The shared Windows/WSL Docker VM exposed
+15.1 GiB RAM and used warm caches. Resource capture had errors; the Windows
+backing disk was below the qualification target, regardless of Linux-visible
+virtual free space. Do not infer a supported memory/disk minimum or native Linux
+qualification. Setup remains manual and requires the source and pinned harness.
+Next handoff evidence is an outside tester's independent install and feedback;
+qualified signed installer assets and a reviewed hardware envelope remain open.
+Do not delay experimental testing for unrelated A0-A7 completion.
+
+The first local attempt had a definite invalid fixture input: its generated
+operator password lacked a required special character. Exact HTTP failure
+details were not recovered. The fresh replay used a policy-compliant password
+and passed without changing any immutable artifact or realm policy. The preview
+guide documents those requirements. Reviewed [PR #1390](https://github.com/ElevenID/marty-ui/pull/1390)
+adds early validation/generation and virtual-clock Canvas timeout matrices;
+it is not included in v1.1.255 and still requires hosted Rust execution evidence.
+
+[PR #1389](https://github.com/ElevenID/marty-ui/pull/1389) merged as
+`7693e6ebd098be240a068525f3df710f2c2948bf` after full PR and protected merge-group
+checks. Its effective DB-obligation inventory does not complete A0's transitive
+input graph. The next test-only draft overlaps three isolated renewal-write
+scenarios while retaining all SQL/cancellation assertions and actual 10-second
+intervals. Static review, pinned Rust compilation and a pure settlement test
+passed locally; real DB validation, connection observations and comparable
+before/after timing remain open because the disk guard refused local provisioning.
+No CI speedup is claimed. Existing gates and connection limits remain unchanged.
+
+## Prior handoff checkpoints (superseded delivery state)
+
+The snapshots below retain earlier evidence and failures; they do not override
+the current checkpoint or imply that the older preview is suitable for handoff.
+
+Current handoff checkpoint (2026-10-17): the published v1.1.250 preview below
+predates known fresh-install repairs and should not be the next tester handoff.
+Stack v1.1.254 published its standard signed assets and an unqualified prepared
+bundle in [run #39068340445](https://github.com/ElevenID/marty-ui/actions/runs/39068340445).
+Its fresh installed journey completed the public issue/present/verify/revoke
+flow and live OpenBao custody verification, but failed when diagnostics rejected
+later custody phase names. Reviewed [PR #1388](https://github.com/ElevenID/marty-ui/pull/1388)
+repairs that reporting contract on protected main
+`76a7fb4ef6e2ad594dc431da511686a1664979ab` and selects v1.1.255.
+A fresh local rehearsal with the candidate diagnostics module passed the public
+journey, Keycloak refresh, both database custody checks and owned teardown;
+that overlay run does not qualify an immutable release.
+Its redacted local diagnostic report recorded 173.885 seconds overall:
+113.953 seconds startup, 1.986 seconds public journey and 33.516 seconds cleanup.
+The Linux-visible VM had 16,265,674,752 bytes RAM; sampled host used memory
+reached 7,913,373,696 bytes and swap use reached 2,653,372,416 bytes. These are
+shared-host observations, not stack-specific requirements. Container peak
+memory and OOM evidence were not collected, so this run cannot establish a
+supported memory minimum. Reports remain local at
+`/home/canvasrunner/kms-qualification/v1.1.254/private/install-39068340445-b/installed-diagnostic.json`
+and the sibling `installed-journey.json`.
+The subsequent cleanup audit found nine older disposable OpenBao services still
+running. Each was matched to its stage marker, exact Compose path and owned state
+mount before being stopped; containers, state and reports were retained. The
+existing stack was left running. Future evidence must include separate OpenBao
+cleanup as well as the main runner's teardown, and distinguish remaining shared
+host workloads from the new installation's own container measurements.
+
+Current-main CI evidence: the completed contracts lane of full qualification
+[run #39074993676](https://github.com/ElevenID/marty-ui/actions/runs/39074993676)
+recorded a 113.029-second ordinary DB group, including 98.520 seconds in
+`canvas_sync_worker_postgres_contract`. Its nested phase timings included
+50.947 seconds renewal job outcomes, 30.301 seconds renewal write failures and
+10.085 seconds renewal generation; these overlap the parent timing and must
+not be added to it. Full qualification subsequently passed. The separate
+published Canvas group recorded 1,105.244 seconds (18m25s), including a
+611.035-second worker target and a 347.953-second composition target. These
+target timings are included in that group; they are distinct from the ordinary
+DB worker above. The contracts-lane host compile cache report showed
+645 Rust hits and four Rust misses, with four cache-write errors. These are
+single-run observations, not before/after speedup measurements; preserve real
+renewal semantics and investigate the write errors before drawing conclusions
+about cache capacity or changing cache configuration.
+
+Next handoff work, in order:
+
+1. Produce the signed v1.1.255 Stack release and its exact prepared bundle.
+2. Replay a fresh installation from those unchanged artifacts, retaining the
+   original qualified preparation transaction and source/run/digest binding.
+   Record the complete journey, custody checks, cleanup and hardware measurements.
+3. Publish a separate explicitly unsupported experimental preview with the ZIP,
+   image lock, receipt, descriptor, original preparation transaction, tester
+   guide and checksums. Verify anonymous downloads independently and hand that
+   version to outside testers. Existing approval permits this experimental
+   distribution before supported qualification; retain accurate limitations.
+4. Finish independent installed replay and review the measured hardware envelope
+   before publishing qualified self-host assets or making support claims.
+
+Enable outside testers to anonymously download and try a disposable self-host
+bundle. The [v1.1.250 experimental preview](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.250-selfhost-preview.1)
+is published from protected-main source
+`5a89b3915f19e35c3f77bf9f278c212663e1150f`, with seven anonymously
+downloadable assets. An independent anonymous download passed checksum,
+archive, receipt, descriptor, source and run-lineage checks. Local Docker/Compose
+preflight passed all 31 locked services and confirmed that two project names
+produce separate default networks and Redis socket volumes. The
+[Stack release run](https://github.com/ElevenID/marty-ui/actions/runs/39007886412)
+passed image, security, integration, anonymous-pull and prepared-consumer gates.
+These are preparation checks, **not** installed acceptance; the preview remains
+unsupported and unqualified.
+
+The preview release notes now clarify the external tester's public seven-asset
+path: it supersedes the immutable v1.1.250 source-tag runbook's older Actions
+artifact acquisition step. Staging must not be repeated against the same
+private root. Main-line bundle/runbook guidance points to the current preview;
+neither clarification changes preview assets or installation qualification.
+
+The disposable staging, isolated locked-image OpenBao startup, Keycloak inputs,
+workload TLS and custody helpers are on protected main after reviewed
+[PR #1375](https://github.com/ElevenID/marty-ui/pull/1375) and its prerequisites.
+The fresh-install KMS/startup repair from reviewed
+[PR #1379](https://github.com/ElevenID/marty-ui/pull/1379) is also on protected
+main. The published preview predates that repair; a new exact-source
+experimental candidate is needed before installed replay. Neither merge
+constitutes installed acceptance.
+The preview guide uses the original preparation transaction and a clean exact
+source checkout; it requires a non-root Linux operator and disposable private
+state. [Issue #1350](https://github.com/ElevenID/marty-ui/issues/1350)
+tracks the next evidence: an external tester's fresh installed journey with
+KMS custody, measured RAM/CPU/disk/swap/OOM and owned cleanup. Before a
+**supported** handoff, also establish a reviewed 16 GiB operating envelope or
+document the actual minimum, complete Linux qualification on suitable hardware,
+signed qualified self-host assets and independent anonymous install replay.
+The 15.1 GiB local Docker VM has completed a candidate-overlay rehearsal;
+fresh immutable-release acceptance and a reviewed measured hardware envelope
+remain pending. Defer unrelated A0-A7 optimization behind this handoff.
+
+The [v1.1.248 Stack release](https://github.com/ElevenID/marty-ui/releases/tag/v1.1.248)
+published signed standard assets, but its [self-host preparation
+job](https://github.com/ElevenID/marty-ui/actions/runs/38959969195) failed before
+producing a customer ZIP. The receipt verifier expected two OpenBao services
+after the packager added `openbao-tls-init`. PR #1370 repaired the exact
+three-service image check on main. `v1.1.249` published signed assets and a
+prepared ZIP, but its rendered Compose pinned the production default network,
+so the fresh isolated installation was unqualified.
+[PR #1377](https://github.com/ElevenID/marty-ui/pull/1377) fixed project
+network/Redis isolation. `v1.1.250` published the signed standard Stack assets,
+but that qualification does **not** qualify its separate self-host preview or
+either earlier bundle.
+
+## Installed setup requirements
+
+The workload TLS and Keycloak disposable provisioners are now on protected
+main. Preserve their remote-only contract: workload private keys stay in Transit,
+public certificates bind to the selected remote keys, and per-key/realm/purpose
+policies reject foreign-key and cross-realm use. Provisioning and TLS-oracle
+success do not establish installed Compose or supported release acceptance.
+
+- The exact v1.1.250 DIDComm-plugin image passed its release image gate for the
+  Keycloak JWE path; the older cached published image did not support it.
+  Current disposable JWE policies cover the initial key version only and
+  require scoped-token reprovisioning after rotation. Installed rotation
+  readiness remains unqualified.
+- The complete local journey inventory closes all 76 secret names:
+  17 scalar credentials,
+  31 workload TLS files, seven Keycloak files, 15 OpenBao outputs and six
+  disabled-optional placeholders. Independent customer-installed acceptance and
+  supported persistent operation remain unqualified; the local disposable
+  component replay above does not satisfy them. The HAIP token retains its narrow KMS policy.
+- For generated text credentials, preserve the private POSIX directory (`0700`)
+  and container-readable final files (`0444`), with initial `0600` creation and
+  rollback on a failed mode transition. Six optional integration files may be empty only when those
+  integrations are disabled. The local journey does not use a Cloudflare token.
+- Installed hooks require loopback HTTPS OpenBao at the selected signing-keys
+  port and must verify the staged public CA. Wrong-host and foreign-CA
+  rejection remain required.
+
+Disposable setup helpers enforce the POSIX private-root/mode contract and reject
+non-POSIX hosts. The seven Keycloak remote-key inputs share that private root,
+use container-readable final modes and must not overwrite existing files. The
+extracted bundle includes the small shared HTTPS OpenBao client and provisioner;
+focused Linux/Windows tests are not installed-journey acceptance.
+
+The exact services digest pinned by preview .2 lacks
+`/usr/local/bin/marty-passport-tls-bootstrap`; newer source does not repair
+that immutable older image. The v1.1.250 release gate passed the executable
+check on its exact services digest after native-schema qualification. This does
+not prove extracted-image startup or installed acceptance. A healthy
+source-built stack with existing state on a 15.1 GiB VM is not a fresh install
+or measured 16 GiB customer envelope.
+
+The Linux-only disposable TLS helper verifies the extracted image lock and the
+running OpenBao Compose owner, image and state mount. It stages only the 31
+verified self-host public certificates/scoped tokens into the existing private
+root, including the Verification client and exact Rust/catalog filenames; it
+stages neither a root token nor a private workload key. Preserve shared binding
+validation and chmod/chown/Docker-timeout cleanup failure handling. Fresh signed
+image installation and preview qualification remain open.
+
+Release-operator Cargo checks on both Linux architectures must report positive
+executed test counts before building/validating binaries. Preserve the unfiltered
+package, target builds, attestations and protected release gates; current-head
+hosted validation remains required.
 
 ## Objective and scope
 
@@ -9,249 +378,279 @@ Reduce the amount of unrelated code and infrastructure needed to validate a chan
 
 The user authorized implementation of the investigated improvements, requires self-review and regression prevention, and prefers reuse of Rust code following DRY. All repositories are eligible for a justified change; the evidence currently prioritizes `marty-ui`, with a smaller selector/preflight follow-up in `marty-core`. Repository creation, service deployment splits, and broad framework replacements are not prerequisites.
 
+The October 7 product-packaging and integration plan is now part of this active
+work, not a competing CI plan. Its product-level work IDs remain the source of
+truth for distribution, integration, consumer, and commercial acceptance; this
+tracker coordinates their implementation with A0-A8. The consumer audit was
+made against release v1.1.230 and source revisions older than current main, so
+each defect and dependency must be rechecked against the implementation base.
+Private business sources and unapproved pricing/marketing claims are not
+copied into this repository or turned into engineering decisions.
+
 This document coordinates the new architecture work. [The original build audit](rust-build-audit.md) and [its evidence](rust-build-audit-evidence.md) remain historical records of earlier optimizations. Those completed changes must not be reimplemented.
-
-## Evidence baseline
-
-The investigation inspected UI main `8ad6c73f2b44d1a23feecc7754f1284d64655e66`, Core main `73f6d5898b2147d0ab4f7cca318c76006a2fa3d6`, and MMF main `c55d323e6aa64cad4f49308792f1d21eaab0ebc8`. Refresh these revisions before implementing each PR; this evidence baseline is not an implementation base.
-
-| Observation | Evidence and consequence |
-| --- | --- |
-| Canvas acceptance took 61m40s; other Rust contracts took 12m29s | [Protected UI run 37077519687](https://github.com/ElevenID/marty-ui/actions/runs/37077519687). Passport image: 9m59s; release contracts: 8m06s; Rust lint/packaging: 7m26s. These parallel jobs must not be added together. |
-| The Canvas lane combines multiple sequential responsibilities | Compilation 6m25s; Bookworm compilation 9m43s; public image 12m06s; preflights 8m09s; main database-backed group 23m20s. Separating test execution alone does not eliminate its build prerequisites. |
-| A nominal Canvas executable also owns system acceptance | [`canvas_published_schema_contract.rs`](https://github.com/ElevenID/marty-ui/blob/8ad6c73/rust/services/issuance/tests/canvas_published_schema_contract.rs) includes self-host, Kubernetes, Envoy, DIDComm, renewal, and Flow composition. |
-| Issuance is a broad compilation boundary | Approximately 124,000 lines under `rust/services/issuance/src`, including embedded tests; approximately 55,000 in Canvas-prefixed modules and 12,500 in passport-prefixed modules. Its manifest has 60 normal and 20 development dependencies. Size is supporting evidence, not a timing measurement. |
-| Tests couple neighboring service implementations | Gateway and issuance have mutual development dependencies; issuance tests also depend on Flow, signing keys, and packaging crates. These are test edges, not proof of a production dependency cycle. |
-| UI selection is coarse | [`ci.yml`](https://github.com/ElevenID/marty-ui/blob/8ad6c73/.github/workflows/ci.yml) enables both Rust lanes for all Rust/proto/contract changes and sets `all=true` for merge groups. Both lanes compile the workspace. |
-| Declared Cargo dependencies permit narrower candidates | Local manifest analysis found notification's reverse dependency closure contains only notification, out of 23 packages. Runtime/API/deployment consumers must also be mapped before omitting acceptance checks. |
-| Core's selector is not sufficient as a sole gate | [`ci_affected_packages.py`](https://github.com/ElevenID/marty-core/blob/73f6d58/scripts/ci_affected_packages.py) follows package dependencies, but a local fixture-path probe selected nothing for JSON changes; its Git diff excludes deletions. Full gates still provide broader coverage. |
-| Historical and native verification are distinct | Timeout tests separately reproduce frozen Python observations and run native worker scenarios against the recorded corpus. Their input closures differ and should be tracked independently. |
-| Other repositories are not established priorities for restructuring | Latest sampled successful MMF CI was about five minutes and integration-repository hermetic CI about 90 seconds. Core PR CI was about 17.5 minutes, including a 14m23s preflight. These are different runs/workloads, not comparative benchmarks. |
-
-No speedup is promised from crate size or static graph inspection. Preserve before/after evidence from normal validation; use a small local experiment when it resolves a specific design uncertainty.
 
 ## Implementation queue
 
-Statuses: `planned`, `investigating`, `implementing`, `review`, `CI`, `merged`, `deferred`. A deferred item needs an evidence-backed reason, a retained safety guarantee, and an explicit disposition; it must not silently disappear from the goal.
-
-| ID | Work and intended result | Dependencies | Status | Owner / PR / evidence |
+| ID | Work | Dependencies | Status | Remaining boundary |
 | --- | --- | --- | --- | --- |
-| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | Initial group and passport-chain inventory is documented; [UI #1073](https://github.com/ElevenID/marty-ui/pull/1073) Canvas producer inventory, Rust embedded-input guard [#1075](https://github.com/ElevenID/marty-ui/pull/1075), scenario-ownership inventory [#1076](https://github.com/ElevenID/marty-ui/pull/1076), and scenario-input inventory [#1079](https://github.com/ElevenID/marty-ui/pull/1079) are merged. Remaining runtime/selector and acceptance obligations need mapping. |
-| A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | First slice [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044) merged as `48c77c9fc`; direct issuance/signing-keys development edge removed. Worker/composition target split [#1058](https://github.com/ElevenID/marty-ui/pull/1058) and parallel execution [#1081](https://github.com/ElevenID/marty-ui/pull/1081) merged after protected CI. Worker target acceptance ownership [#1083](https://github.com/ElevenID/marty-ui/pull/1083) merged as `fcb2cd74a`; full Canvas composition ownership [#1086](https://github.com/ElevenID/marty-ui/pull/1086) passed protected [run 37331342522](https://github.com/ElevenID/marty-ui/actions/runs/37331342522) and merged as `cf8785147`. Other deployment/Flow boundaries need a separate obligation audit. |
-| A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | [UI #1045](https://github.com/ElevenID/marty-ui/pull/1045), `7502053e9`; protected queue run passed and merged as `d9947b312` |
-| A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | Core first slice [#348](https://github.com/ElevenID/marty-core/pull/348) merged as `466278aa`; UI shadow planner [#1046](https://github.com/ElevenID/marty-ui/pull/1046) merged as `cafdd4a7`; classifier hardening [#1047](https://github.com/ElevenID/marty-ui/pull/1047) merged as `e333dc243`; shared entrypoint selection [#1051](https://github.com/ElevenID/marty-ui/pull/1051) merged as `69e6b0e51`; runtime-edge fail-closed follow-up [#1052](https://github.com/ElevenID/marty-ui/pull/1052) merged as `6259cd5b5`; non-Cargo group mapping remains planned |
-| A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Pure Python-value compatibility extraction [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060) merged as `6aa6c3391`. Frozen Canvas mixed-roster unit coverage [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and expanded roster/body-reader tests [#1102](https://github.com/ElevenID/marty-ui/pull/1102) merged after independent review and protected CI. Real adapter and process guarantees retain their owners. |
-| A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Provenance closure [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), import-closure/lease diagnostics [#1055](https://github.com/ElevenID/marty-ui/pull/1055), producer inventory [#1073](https://github.com/ElevenID/marty-ui/pull/1073), scenario ownership [#1076](https://github.com/ElevenID/marty-ui/pull/1076), inventory documentation [#1077](https://github.com/ElevenID/marty-ui/pull/1077)–[#1078](https://github.com/ElevenID/marty-ui/pull/1078), scenario-input inventory [#1079](https://github.com/ElevenID/marty-ui/pull/1079), and bounded harness path-syntax inventory [#1082](https://github.com/ElevenID/marty-ui/pull/1082) merged. [#1102](https://github.com/ElevenID/marty-ui/pull/1102) moved 33 pinned historical replays to weekly/manual full qualification while retaining native regression. This branch proposes an exact-main full-run gate before stable tagging; other historical reference closures remain under review. |
-| A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | Fail-closed planned-skip aggregate [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) merged with full protected CI; merge groups still require every lane to succeed. Inventory-only PR selection pilot [#1080](https://github.com/ElevenID/marty-ui/pull/1080) passed full PR/protected CI and merged as `38e74114d`. Follow-up [#1082](https://github.com/ElevenID/marty-ui/pull/1082) also merged; no broad saving is claimed from its path alone. |
-| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | deferred | Latest Core #348: preflight 11m43s, affected Rust tests 13m56s, CodeQL Rust 12m25s; splitting preflight is not shown to shorten the current critical path and would add runner work. Revisit if normal runs change the bottleneck. |
-| A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Separate immutable nightly prerelease tag selected by the user. The release-owner inventory and fail-closed tag grammar are in the current bundled branch; stable tag preparation also requires full historical Canvas qualification on the exact main commit. This does not yet create a nightly release pipeline or relax official E2E gates. |
-
-Begin with A0 and a small A1 PR. Avoid a single PR that simultaneously moves tests, changes their assertions, and reduces their triggers.
-
-2026-10-05 checkpoint: [#1100](https://github.com/ElevenID/marty-ui/pull/1100) and [#1102](https://github.com/ElevenID/marty-ui/pull/1102) added owned mixed-roster/body-reader tests, retained native timeout/lease checks on routine CI, and moved 33 pinned historical process replays to weekly/manual full qualification. This branch proposes making stable tag preparation require a successful full qualification on the exact main SHA; a new main commit would require a new full run. The nightly release path is not yet implemented, and no nightly speedup is claimed.
-
-### A0: obligation and dependency inventory
-
-Record each test group, its behavior/security obligations, owner, fixtures, environment switches, executable/image inputs, and required gate. Account for helper/child tests, ignored tests explicitly invoked elsewhere, and tests that return early without configured services. A matching test count alone does not prove matching execution.
-
-The current Canvas runner (`scripts/ci/run-published-canvas-contracts.sh`) explicitly checks 165 named tests in its single `canvas_published_schema_contract` executable before the full run; 92 names begin `worker_`, and the rest span operations, DIDComm, renewal, Flow, status, self-host, Kubernetes, Envoy, and helper/child protocols. This list is a mandatory discovery/coverage guard, not merely documentation. A future split must move the relevant names and exact child invocations together; replacing it with a total test count would lose that guarantee. Repeated `--list` process launches are a small mechanical inefficiency, but do not dominate the measured ~60-minute lane, so keep the architectural split ahead of that micro-optimization.
-
-Top-level CI gate census (2026-10-03): `.github/workflows/ci.yml` defines `changes` plus unconditional Python lint, UI fast feedback/crawler-build/crawler-Nginx/four test shards/lifecycle browser, Python services, passport-fence PostgreSQL, Rust feature probe/passport image/Canvas and contracts service matrix/lint and packaging/service images/supply chain, public protocol, release contracts, and security. `ci-gate` depends on 18 preceding job IDs on current main; the earlier 16-job count predates the feature-probe and passport-image additions. On PRs it accepts each result only as `success` or `skipped`; on merge groups it requires `success` for every dependency. This topology means a selective rollout cannot simply omit a job or infer success from a skipped lane: it must preserve the required aggregate's explicit treatment of planned skips versus unexpected absence and retain merge-group full validation. The current `changes` outputs are only broad UI/Python/Rust/release/verification/security classes, not obligation-complete per-group inputs. The Rust planner is shadow-only and cannot authorize a change to this gate.
-
-Aggregate-skip baseline caveat (2026-10-03, before #1064): the PR branch of `ci-gate` looped over `needs.*.result` and accepted every `skipped` result, without proving that the skip matched `changes` outputs or a documented obligation map. It checked result vocabulary, not planned-versus-unexpected skip identity. #1064 subsequently added the exact expected-result checks while retaining merge-group all-success behavior; future selection changes must keep those guarantees.
-
-A6 gate-safety follow-up [UI #1064](https://github.com/ElevenID/marty-ui/pull/1064) maps all 18 existing `ci-gate` dependencies to their PR classifier selectors and fails when a selected lane skips, an unselected lane runs unexpectedly, an unconditional lane fails, or a selector is missing. Protected merge groups still require every lane to succeed. Synthetic tests exercise all flag classes, both event modes, missing selectors, unexpected skips/failures, and dependency-count drift. An independent reviewer cleared the corrected head. Full PR and protected combined-head CI passed, including live Canvas and the final gate; despite an earlier manual queue removal, #1064 subsequently merged as `1904801e0`. This safety prerequisite does not itself enable any new skip or demonstrate a speedup.
-
-Security-lane input check (2026-10-03): `security` is selected by the broad security classifier and runs Python dependency audit, Bun and npm UI/test audits, plus report-producing Bandit and Semgrep; `rust-supply-chain` is selected by the Rust classifier and checks advisories, bans, licenses, and sources through `cargo-deny`. The merge-group classifier sets `all=true`, and the aggregate gate requires every dependency to succeed there. This is an owner/trigger inventory, not proof that either lane can be narrowed on PRs; their lockfile, scanner configuration, and cross-language input closure still need mapping before A6 selection changes.
-
-Public-protocol A0 inventory (2026-10-03): the `public-protocol-contract` job checks the pinned Marty-Protocol revision, installs Python contract dependencies, and runs `check_gateway_public_protocol_contract.py`. Its direct inputs include the pinned protocol schemas/metadata, gateway DTO and discovery/trust/issued-credential contract JSON, generated bindings, public-boundary documentation, two trust-configuration UI files, and Rust service source. The check compares protocol version and DTO fields, rejects named private-field leaks, and checks generated/documented boundaries. Its behavior-vector guard only searches all service `.rs` source text for each JSON filename; it does **not** itself prove that a Rust test executed the vector. Actual Rust test ownership and any path-selective trigger therefore require separate evidence. The job runs for UI/Python/Rust/release changes and remains a required `ci-gate` dependency; do not narrow those triggers from the filename search alone.
-
-Release-contract A0 inventory (2026-10-03): `test-release-contracts` runs on release, verification, or Rust changes. It verifies digest-pinned released Core/Verification/ISO18013/Common wheels and a fixed Credentials v0.1.76 source/image, exercises released mdoc binding behavior and OSS commerce policy, replays the Canvas mirror reference in that exact image, runs `python -m pytest tests -v --tb=short`, then proves the pinned OCI archive/backend and DIDComm/retention release compatibility. On UI #1061 the repository-test step took 405 seconds of the 7m58s job. The separate `test-services` job runs `pytest` with `working-directory: services`, not the root `tests` tree, so these two steps are not duplicate collection of the same files. The release job is not the current Rust critical path (Canvas remains longer), and its released-artifact/environment obligations are distinct. Do not split or remove its broad test step until exact case ownership and Rust-change trigger coverage are mapped.
-
-Browser-lifecycle A0 inventory (2026-10-03): `test-credential-lifecycle-browser` runs for UI changes and is a required `ci-gate` dependency. It installs pinned API Core/Blog tarballs by digest, UI and Playwright dependencies, and pinned Chromium; verifies production CSP restrictions, runs the public-demo browser gate, then runs `playwright.applicant-wallet.config.js`. That focused config selects the applicant wallet-selection and MIP03 specs, launches the real Vite console app, and mocks backend calls at the browser network boundary. It excludes the neighboring `application-flow.spec.js` by `testMatch`; the gate is therefore browser UX/CSP evidence, not a full-stack service/process acceptance substitute. Any future selective trigger must account for UI source, test/config scripts, dependency locks, tarball digests, and browser/runtime inputs as well as the two selected specs.
-
-Crawler/UI A0 inventory (2026-10-03): all three UI job families are selected by the broad `ui` classifier, but carry different obligations. `test-ui-crawler-artifacts` bootstraps digest-verified released API Core/Blog tarballs, checks crawler configuration and validator unit tests, then builds and validates both the normal prerendered public site and the `DISABLE_PRERENDER=1` production-image mode; it compares their crawler URL sets. `test-ui-crawler-nginx` exercises both configurations against the pinned production Nginx image. The four `test-ui` shards instead run Vitest and upload per-file timing artifacts. A code-only shard result cannot replace build-output or Nginx routing evidence. A future narrower trigger needs to cover UI source, package and lock inputs, crawler scripts/config, Docker/Nginx configuration and pinned image, the released tarball digests, and the workflow itself; merely matching `.test.*` files would be incomplete. These lanes are required through `ci-gate`, so retain them until that input closure and the planned-skip gate are proven.
-
-Python-service A0 inventory (2026-10-03): `test-services` selects on `python`, installs digest-verified released Common/Core/Verification/ISO18013 wheels plus `requirements-services.txt`, verifies the released native trust-registry capability, and runs the retained `services` pytest tree against fake storage and its loopback mTLS fixture. Its inputs include the release stack lock, package requirements, service/test source, and TLS fixture; this is not the real PostgreSQL/Redis Rust integration obligation. `test-passport-fence-postgres` selects on `rust` and runs three named Python tests against disposable PostgreSQL to prove the atomic beta passport fence, probe target, and authority check. That database group is separately required even though its test code is Python. A language-extension-only planner could therefore skip a required runtime-boundary check; record obligation ownership and classifier inputs before narrowing either lane.
-
-Feature-probe and passport-image A0 inventory (2026-10-03, current `main`): both are separate Rust-selected `ci-gate` dependencies. `test-rust-feature-probe` builds the standalone frozen `.github/feature-regression/rust-probe` manifest/lock and Rust subject against the issuance crate, runs the subject twice, requires byte-identical canonical output, validates expected behavior and safe diagnostics with `tests/test_feature_regression_rust_probe.py`, and enforces the manifest's target-size budget. Its inputs include the probe manifest/lock/source, validator, issuance source/features, patched third-party sources, Rust toolchain, and transitive Cargo graph; it is not a substitute for the service integration matrix. `test-rust-passport-image` builds `services/Dockerfile` with the opt-in passport self-signed feature and verifies that the resulting image refuses native HTTP startup without tenant API keys. Its closure includes the Dockerfile, build scripts, Rust/proto/contracts/assets copied into the image, pinned base images, feature selection, and runtime startup policy. A package-only or `.rs`-only path selector cannot safely skip either lane; retain the current Rust selection until these inputs and their cross-repository dependencies are represented in the shared obligation map.
-
-Rust lint/image A0 inventory (2026-10-03, current `main`): `rust-lint-policy` is Rust-selected and checks workspace formatting, workspace all-target Clippy, the frozen feature probe's Clippy, MMF security feature policy, and rendered service packaging/migration ordering across base, beta, tunnel, and GHCR Compose files. Its affected-package planner is shadow-only. `test-rust-service-images` is also Rust-selected but separately verifies Canvas/self-host/DIDComm/native Compose ownership, builds the multi-target `rust/services/Dockerfile.ci` images, and smoke-tests real Gateway, issuance, verification, Canvas worker, organization, and credential-template image/runtime boundaries; the organization smoke uses disposable PostgreSQL and Redis, and the credential-template smoke uses disposable PostgreSQL. Both are direct `ci-gate` dependencies. Their inputs extend beyond Cargo packages to probe policy, CI scripts, Dockerfiles/build context, Compose/configuration, pinned images, runtime entrypoints, and relevant source/fixtures. Retain their current selection until each behavior and its transitive input closure has an explicit owner in the shared obligation map; neither job is replaceable by a package-scoped `cargo check` result.
-
-Security/supply-chain A0 inventory (2026-10-03): `security` runs when the broad classifier marks security inputs; it concurrently executes Python dependency audit, UI Bun/npm audit, test npm audit, Bandit, and Semgrep. The job currently blocks on the three dependency-audit processes, while its Bandit/Semgrep shell commands use `|| true` and produce reports/timing artifacts even on scanner failure. This is the existing policy, not a newly proved blocking guarantee. `rust-supply-chain` runs on Rust-classified changes and executes `cargo deny check advisories bans licenses sources` against the workspace manifest. Both are `ci-gate` dependencies. Any selective planner must carry requirements/lockfiles, scanner configuration, source trees, Cargo manifests/lock, and relevant workflow inputs; a Cargo package-only map cannot represent these obligations.
-
-Capture dependencies not represented in Cargo: HTTP/gRPC consumers, protobuf generation, embedded JSON/Markdown, schemas/migrations, scripts, compiler features, Dockerfiles, Compose/Kubernetes configuration, and pinned cross-repository artifacts. Prefer one machine-readable group/input manifest reused by planning, execution, and coverage checks over duplicated lists.
-
-Cross-package Rust test-source edge (2026-10-04): `rust/services/issuance/tests/canvas_published_schema_contract.rs` imports `crates/selfhost-bundle/tests/support/extracted_bundle.rs` and `resolved_selfhost_runtime.rs` with `#[path]`. Those external source files call the `marty_selfhost_bundle` library, so issuance's `marty-selfhost-bundle` dev-dependency is required even though a search confined to the issuance tree finds no crate reference. A local removal experiment was discarded after independent review identified this consumer; no test or CI gate changed. The current shadow planner maps changes to that support directory through the bundle package and its declared reverse Cargo dependency to issuance, then conservatively selects all Rust packages because issuance is a service. A future composition-target move must relocate the source inclusion and crate dependency together before removing the issuance edge.
-
-Canvas worker A0 inventory (2026-10-03, #1058 target): `canvas_published_worker_contract` has 134 discovered tests, of which 132 run by default and two capture-only tests (`capture_worker_body_timeout_published_process`, `capture_worker_lease_expiry_published_process`) remain ignored for explicit capture invocation. The default local run can pass quickly because hosted cases require `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`; that result is not evidence of the live obligation. The Canvas CI runner sets the opt-in, takes the worker and composition executables from the reusable Cargo artifact list, pulls both digest-pinned historical images from `canvas-worker-consumer-range-oracle.json`, runs four exact worker preflights, checks their run/executable-digest evidence before any skip, verifies mandatory names and no cross-target duplicates, and runs both full targets. The Python harness passes case-specific native origins to Rust test children; Rust fixtures create owned test databases and launch the actual worker with guarded database URLs. The required gate remains the Canvas matrix lane plus aggregate `ci-gate` on PR and protected merge-group validation. This inventory is one group, not an assertion that all A0 groups or non-Cargo inputs are mapped.
-
-### A1: acceptance ownership
-
-Keep service behavior and adapter tests with their service. Move tests that compose several implementations into an acceptance package that depends on them. Remove service-to-service development edges only when their consumers have moved and standalone package validation confirms the boundary.
-
-Share exact-owned fixture and process-management Rust helpers. Preserve resource isolation, bounded cleanup, child-process protocols, provenance checks, and preflight coverage accounting. Investigate `CARGO_BIN_EXE_*`, `CARGO_MANIFEST_DIR`, relative fixtures, and artifact-discovery assumptions before moving tests: an acceptance package does not automatically receive dependency binary paths.
-
-The larger `canvas_published_schema_contract` target is not a simple file move. Its source embeds many `contracts/*` corpora with paths relative to the issuance test directory, uses `CARGO_MANIFEST_DIR` for three runtime roots, and the runner resolves the compiled artifact by both issuance package ID and target name. The shell runner requires named child/helper tests as well as top-level scenarios. A later split must update these inputs together, preserve every explicit name check, and validate actual binary/image startup; changing Cargo ownership alone would silently break its execution contract.
-
-Next cross-service boundary evidence (2026-10-03): after #1044 merged, issuance still has `marty-flow` and `marty-gateway` as development dependencies. A repository-wide search of the merged issuance integration tests confirms their actual Rust imports remain in `tests/support/*` modules for flow, DIDComm, renewal, Kubernetes, and Canvas operations; those modules are assembled by the large `canvas_published_schema_contract` target. This target also imports selfhost-bundle support and published-image/database fixtures. Moving an isolated unrelated test would not remove these remaining service-to-service compile edges. A coherent next A1 slice must split the target's cross-service composition owner (or the complete target) while retaining the runner's named-test, artifact-ID, and relative-corpus contracts. No further service dependency has been removed on the strength of this inspection alone.
-
-Dependency search caution: `marty-selfhost-bundle` appears only in issuance's dev-dependency declaration when searching the issuance directory, but the Canvas target imports `rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs` and `resolved_selfhost_runtime.rs` with `#[path]`; those external support files call `marty_selfhost_bundle::...`. The dev dependency is used and must not be removed merely because a package-local text search reports no import. A future A1 move must follow external `#[path]` modules as part of the compile-input closure.
-
-Relocation feasibility check: the deployment/Flow composition support closure references `env!("CARGO_BIN_EXE_marty-issuance-service")` and `env!("CARGO_BIN_EXE_marty-canvas-sync-worker")` in multiple helpers, plus twelve `CARGO_MANIFEST_DIR` assumptions across the target/support set. A new acceptance package would not receive dependency binaries through those compile-time Cargo variables. Moving the first 300 lines as a nominal standalone test would therefore break compilation or silently change fixture roots. The next slice needs an explicit owned-binary/artifact handoff and package-independent root strategy, with the existing CI named-test guard updated in lockstep; do not remove Flow/Gateway/selfhost dev edges until that target actually compiles and executes under its new owner.
-
-Protected queue stage timing after #1044 (run 37112907655, Canvas job `111174201293`): the same job serialized reusable Rust test compilation (6.50 minutes), Bookworm-compatible base runtime compilation (9.48), public self-host image build (13.82), worker parity preflights (8.13), and isolated database contract suites (22.42). These five measured steps total about 60.35 minutes of wall time before small setup/other steps. The image and base-runtime prerequisites are entangled with acceptance cases in the issuance-owned target, while the database suite remains the largest single step. A coherent ownership split could permit some independent work to overlap, but the current run does not prove which stages can run concurrently or a resulting speedup; map the exact artifact and case dependencies first.
-
-Canvas runner topology check (2026-10-03): the workflow's `Run isolated database contract suites concurrently` step invokes `run-db-contract-groups.py canvas`. In that mode its command map contains only `published-canvas`; the two-worker executor therefore has one active group. The four historical preflights use the separate `preflights` mode and can overlap two at a time, but the 22-minute published Canvas full target is currently serialized behind image and Bookworm preparation in one job. The step name's “concurrently” describes the generic helper, not Canvas full-suite parallelism. A1's worker/composition ownership split is a prerequisite for evaluating independent runtime groups; this observation alone does not authorize splitting an executable without preserving its fixture/image handoffs and named-test obligations.
-
-Post-#1058 parallelism candidate: the split runner still executes the full composition binary and then the full worker binary serially after the SQL-logging positive control. `canvas_published_database` gives each owned test database a UUID scope, a disposable labeled container, and a Docker-assigned loopback port, which is evidence that these two binaries need not share a fixed database endpoint. It is not proof of full independence: composition also consumes the Bookworm executable, public image, Envoy/Compose artifacts, and process fixtures. Before parallel execution, check those process/port/cleanup resources, retain the exact mandatory-name and preflight-digest guards, and run both complete binaries with distinct logs and fail-closed combined status under hosted opt-in CI. Measure the actual Canvas step and job wall times; resource contention may offset overlap.
-
-Parallel-target candidate `codex/canvas-parallel-targets-20261003` was rebased onto merged #1058 main. It preserves the serial SQL-logging positive control, then starts both complete target binaries with separate logs, waits for both, reports both exit statuses/logs, and fails if either fails. The exact mandatory-name, test-count, and preflight-digest checks precede launch unchanged. A synthetic barrier proves real overlap; separate failure cases prove neither status is masked and logs are cleaned after normal completion. The full runner/policy/database-group suite passed 257 tests locally before the rebase, plus Bash/Ruff/diff checks; independent review of the combined branch found no blocker. Forced CI cancellation retains the pre-existing limitation that SIGTERM cannot guarantee Rust fixture `Drop` cleanup; normal completion waits for both owners. Re-run focused checks on the rebased head and require actual hosted opt-in Canvas and protected queue validation before claiming a speedup.
-
-Three completed protected Canvas runs provide a fresh comparison range, not a causal speed measurement: detached #1058 [run 37123397984](https://github.com/ElevenID/marty-ui/actions/runs/37123397984) took 54.4m overall / 19.9m in the full database group; #1060 [run 37129440091](https://github.com/ElevenID/marty-ui/actions/runs/37129440091) took 51.1m / 18.5m; #1061 [run 37129988486](https://github.com/ElevenID/marty-ui/actions/runs/37129988486) took 44.4m / 16.0m. In all three, public-image build (8.4–11.3m), historical preflights (7.9–8.1m), and the full database group remained serial stages. The observed spread can reflect cache/load variance and different combined heads; it does not prove an optimization. Measure the future parallel-target candidate against multiple comparable protected runs and check both test totals before attributing saved wall time.
-
-Final protected #1058 baseline [run 37177395334](https://github.com/ElevenID/marty-ui/actions/runs/37177395334) passed and merged as `16fb0331a`. Its Canvas job ran 04:35:05–05:37:36 UTC (62m31s): reusable test compilation 5m53s, Bookworm acceptance compilation 9m44s, public image build 12m55s, worker preflight 8m08s, and full database group 24m15s. These remain serialized on merged main; the target split alone did not make them parallel. Compare #1081's actual database-step and whole-job times against this and the preceding range, while checking full test totals and accounting for cache/load variance.
-
-First hosted parallel-target result [UI #1081 PR run 37180687909](https://github.com/ElevenID/marty-ui/actions/runs/37180687909) passed on the reviewed head: the database group took 14m15s (06:11:24–06:25:39 UTC), 10m less than the final protected #1058 baseline. Both full binaries retained the same totals as #1058: 145 composition tests passed, 125 worker tests passed, and two capture-only worker tests remained ignored; the separate SQL-logging positive control passed. The whole Canvas job took 43m05s versus #1058's 62m31s, but differences in compile/image-cache stages and runner load prevent attributing all 19m26s to target parallelism.
-
-Protected [#1081 merge-group run 37182891790](https://github.com/ElevenID/marty-ui/actions/runs/37182891790) also passed and merged as `7b3b84989`: its database group ran 06:56:13–07:10:03 UTC (13m50s) and its Canvas job 06:28:22–07:10:36 UTC (42m14s). Relative to the final protected #1058 baseline, the measured step elapsed time was 10m25s shorter and whole Canvas elapsed time 20m17s shorter. Parallel execution explains overlap of the two complete test binaries; the additional whole-job difference includes build/cache/load variance and is not assigned to the change. The two successful #1081 runs support a repeatable database-step improvement, not a guarantee for every runner or change.
-
-Artifact dependency check: the Bookworm step explicitly builds the issuance and Gateway binaries *and recompiles the entire* `canvas_published_schema_contract` target, then passes that target as `MARTY_BASE_RUNTIME_COMPAT_TEST_EXECUTABLE`; `base_runtime_container.rs` consumes it for rendered base-runtime acceptance. The public-image build loads a local Docker image, records its immutable image ID, and passes that ID plus the packager executable/revision to `selfhost_packaged_runtime.rs`. The same issuance-owned Canvas target contains both self-host child/coordinator tests and the database/worker suites. Moving only a GitHub Actions step to a separate runner would lose these local artifacts or duplicate the giant target build. The next A1 split must give each resulting test owner a proven binary/image handoff and update the named-test/artifact selectors before parallel jobs can be justified.
-
-Local owner-feasibility experiment (2026-10-03): a temporary `[[test]]` entry in `marty-service-acceptance` pointed at the existing issuance Canvas source without copying it, and locked Cargo metadata accepted the path. A scoped `cargo +1.95.0 check --locked -p marty-service-acceptance --test canvas_published_schema_contract` then reported 854 compile diagnostics: the dependent package does not receive issuance's `CARGO_BIN_EXE_*` values, and the giant target's direct support-module imports require many dependencies absent from the narrow acceptance crate. The temporary registration was removed and the experiment worktree is clean. This rules out a manifest-only whole-target move; it does not prove a cohesive group split impossible. Keep the acceptance crate narrow and map a smaller support-module/test-name closure before moving code or adding broad dependencies.
-
-Candidate narrower A1 boundary: the worker replay/preflight section is mostly contiguous in `canvas_published_schema_contract.rs` (lines 569–2267 on #1044 main), with one SQL-logging worker test later in the file. It contains the four exact historical preflights and their native child/reference helpers; the current runner guards 92 `worker_`-prefixed names and binds skip evidence to the compiled executable digest. A worker-target extraction must include that later logging case, shared `canvas_published_database` helpers, the complete explicit-name guard, and the exact executable digest/child invocations. This is a candidate for a coherent split from deployment/Flow composition, not a proven independent package yet; map cross-references and compile it before changing any trigger.
-
-Worker-closure reconnaissance: within lines 569–2267, source references no `base_runtime_*`, `didcomm_*`, or `selfhost_*` module, and the four `renewal_` occurrences are scenario labels, not Rust module calls. The worker support files chiefly refer to each other, `canvas_published_database`, and a `worker_database_url` helper in the same region; `canvas_published_database` itself uses `bounded_fixture_command`. This suggests a test-target split might avoid carrying deployment/Flow composition into the worker executable. It is only a textual dependency probe: nested macro imports, `include_*` corpora, the later SQL-logging case, and exact CI test discovery still need compilation and parity checks before a PR can claim the closure is complete.
-
-Worker-target split [UI #1058](https://github.com/ElevenID/marty-ui/pull/1058) (2026-10-03): isolated worktree `codex/canvas-acceptance-owner` moved the contiguous worker section and later SQL-logging case into a registered `canvas_published_worker_contract` target without changing their bodies. Both targets pass package-scoped Rust 1.95 `cargo check`, `cargo test --no-run`, formatting, and strict targeted Clippy; all 178 original top-level function names remain across the two files. The shared-helper diagnostic tests were extracted and included only in the composition target: actual test discovery finds 143 composition plus 132 worker tests, no duplicate names, all 165 mandatory runner names, and the eight helper tests pass once. The runner preserves exact worker preflights and binds reuse evidence to the worker executable digest. The synthetic harness and static policy checks were updated without dropping missing/duplicate/ignored/child/preflight mutations; 331 focused runner/policy tests plus 96 related ownership tests passed locally, and an independent reviewer cleared the corrected split. After an earlier manual queue removal, a corrected head passed renewed full PR and protected combined-head CI, including live Canvas, then merged as `16fb0331a`. The split is not evidence of a CI speedup; both binaries remain in the same lane and Bookworm compatibility still compiles composition.
-
-Completion evidence: before/after obligation mapping, focused package checks, relocated scenario execution, packaging/Bookworm acceptance at a meaningful milestone, and no lost mandatory checks. Test moves must initially retain current triggers and assertions.
-
-Post-split ownership check (2026-10-03): the new worker target still compiles under the issuance package. Its source uses three `CARGO_MANIFEST_DIR` runtime roots, `canvas_published_database` uses two more, and its `canvas_worker_process_signals` support calls `env!("CARGO_BIN_EXE_marty-canvas-sync-worker")`. These are concrete relocation inputs, not test behavior to drop. An acceptance-package move needs an explicit worker-binary handoff and a package-independent fixture-root contract, then package-scoped compilation and the existing live preflight/child-process checks. Merely changing its Cargo target owner would not satisfy A1.
-
-Preparatory handoff branch `codex/canvas-worker-handoff-20261003` at `1608985a7` is stacked locally after #1058. It replaces hard-coded three-level fixture-root ancestry with a checkout-marker search shared by worker and database support, and lets the worker process fixture use an explicit absolute binary path while retaining Cargo's current default. Two focused tests cover both package depths and path selection; the target passes Rust 1.95 `cargo check`, `cargo test --no-run`, strict Clippy, and all 132 non-ignored default local tests. The latter return early where hosted opt-in services are required and do **not** substitute for live CI. An independent reviewer found no blocker but requires the eventual acceptance runner to source the override from the exact verified issuance compiler artifact; an arbitrary absolute file is not enough. Keep this branch unpublished until #1058 merges, then rebase and submit it as a separate maintenance PR with full protected validation.
-
-The same local handoff branch now has runner commit `05a57f90e`: `run-published-canvas-contracts.sh` selects exactly one normal (`profile.test == false`) `marty-canvas-sync-worker` compiler artifact from the issuance package and exports that verified path to the worker tests. A local Cargo JSON probe showed the normal binary under `target/debug` and a distinct `--test` harness under `target/debug/deps`; selecting only by target name would be unsafe. The synthetic preflight suite passes 141 cases locally with one real-jq case skipped on Windows Git Bash; the latter is configured to exercise the runner's actual jq predicate against normal, harness, wrong-package/kind, missing, and duplicate artifacts when mandatory Linux CI runs. Bash syntax and diff checks pass. The independent reviewer cleared the runner change and its fail-closed identity checks. This remains an unpublished stacked branch pending #1058 merge and full CI; it does not yet relocate the target into the acceptance package.
-
-Acceptance-owner candidate `d249a7944` is stacked locally after the two handoff commits. It registers the worker contract once under `marty-service-acceptance`, removes its issuance test registration, and keeps 22 shared fixture modules in one issuance support location rather than copying them. Both artifact selectors now require the acceptance owner, while the real worker binary still must come from the issuance compiler artifact. Locked offline metadata confirms a single worker target; the moved executable discovers 134 tests and its local default run passes 132 with the same two explicit capture-only ignores. The composition target still compiles and discovers 143 tests. Strict Clippy, formatting, Bash syntax, Ruff, and 156 focused Python tests passed before a new stale-issuance-artifact rejection test was added; that new test also passes. An independent reviewer cleared the final diff and found no coverage/gate break. Hosted opt-in Canvas execution and full protected CI remain necessary. The current workspace still compiles both targets, and acceptance dev-depends on issuance and shared support, so this is boundary ownership groundwork, not a measured speedup or a reason to narrow gates yet. Publish it as a separate maintenance PR after #1058 and its handoff predecessor merge.
-
-### A2: one narrow Rust extraction
-
-Choose the smallest coherent candidate after dependency inspection: response text/JSON compatibility or a Canvas domain/projection group. Reuse the existing code and corpus. Keep HTTP, SQLx, runtime composition, and passport cryptography out of the new package when they are not intrinsic to its responsibility.
-
-For later worker-domain extraction, separate lease identity from PostgreSQL operations without weakening transaction fencing or the database-clock check after acquiring a lock. Do not move database guarantees into an unverified mock.
-
-Completion evidence: the new package builds/tests independently, consumers retain behavior, its dependency graph excludes unnecessary runtime implementations, and measured feedback supports or limits further extraction. Temporary re-exports may preserve callers; duplicate implementations may not become permanent.
-
-### A3: affected-check planning
-
-Reuse useful existing selection logic after correcting its gaps. Handle additions, modifications, deletions, renames, fixtures, build inputs, dependency consumers, and merge-group base/head semantics. Include dev/build dependencies and relevant feature configurations. Missing history, unknown paths, incomplete mappings, or invalid evidence must broaden selection.
-
-Run the planner in shadow mode while current full gates remain authoritative. Log why each group was selected. Exercise representative changes and compare the planned obligations with full results. Use small deliberate fault probes where necessary to show a relevant failure would be selected; ordinary green runs alone are insufficient.
-
-The initial local UI shadow planner computes package ownership and reverse Cargo consumers, but does not select test groups or skip any check. Reviewer worker confirmed deleted and moved path handling, alias/dev/build edges, and broad fallback. It logs `all: true` with a `*` package sentinel when diff or metadata cannot be proven. The planned lint-job placement only observes PRs the existing classifier already labels Rust; it does not audit classifier false negatives. Before promoting selection, independently cover the classifier's negative path, map non-Cargo group inputs, compare shadow decisions with full runs, and measure the added fetch/metadata time. No selector output is a gate yet.
-
-Compiler-input audit (2026-10-03): `rust/services/auth/tests/executable_smoke.rs` embeds `services/entrypoint.sh` with `include_str!`, but the classifier previously sent that path only to Python/security. Merged [UI #1051](https://github.com/ElevenID/marty-ui/pull/1051) adds Rust selection for this exact path and executes the actual Bash classifier in a regression case; all 93 local workflow-policy tests passed, an independent reviewer found no blocker, and protected queue CI passed. This corrects a real false negative without omitting any existing lane. Other inspected external includes (`services/auth/assets/*`, `services/Dockerfile`, `scripts/build-rust-service-binaries.sh`, `config/envoy/*`) already select Rust or full validation.
-
-Service runtime-edge audit (2026-10-03): Notification has Applicant HTTP event publishing, Gateway routing, and self-host wiring without Cargo edges. An independent reviewer found a second counterexample: Presentation Policy consumes Trust Profile over configured HTTP, but Cargo does not link those service packages. Therefore a single-service exception is insufficient. [UI #1052](https://github.com/ElevenID/marty-ui/pull/1052) makes the shadow Rust planner report all Rust workspace packages whenever the Cargo reverse closure reaches any `rust/services/*` package, while retaining narrow results for crate-only closures; eight planner tests pass and the reviewer cleared the corrected change. This is a fail-closed observation, not a test skip or measured speedup. It does not classify Python/UI/deployment obligations. Hold selective-gate promotion until the complete runtime edge and group-input manifest is proven.
-
-Locked-metadata probe on the reviewed #1052 branch (before #1044 adds the acceptance package): 24 workspace packages were tested as direct owners; only `marty-oid4vp-contract` yielded a narrow one-package shadow result. The other 23 reached a service through Cargo or were service packages, so the fail-closed rule selected all. This is a deliberately safe planner result, but it shows that simply turning it into a gate would have almost no Rust-lane payoff. Prioritize proving the non-Cargo consumer graph and acceptance-group inputs before A6 selection; do not weaken the full gate to manufacture a speedup.
-
-Runtime-edge reconnaissance shows this is not just two exceptional services: `rust/services/gateway/src/config.rs` declares service URL routes for Auth, Organization, Credential Template, Trust Profile, Issuance, Applicant, Notification, Compliance Profile, Presentation Policy, Deployment Profile, Flow, Verification, Revocation Profile, Device Registration, and Signing Keys. `rust/services/flow/src/config.rs` configures Organization/Credential Template/Presentation Policy/Issuance gRPC targets and Credential Template/Trust Profile/Deployment Profile/Issuance HTTP URLs; Auth and Applicant also configure cross-service targets. These declarations are candidate input edges, not yet a complete exercised-test map. Before narrowing A6, trace each configured edge through actual client behavior and the relevant acceptance tests, then include deployment-rendered and schema/proto inputs. A Cargo-only service map is demonstrably incomplete.
-
-Two runtime edges have source-level client proof beyond configuration: Applicant's `GrpcEventPublisher::publish` sends a token-authenticated HTTP POST to the configured Notification ingest URL before publishing to Event Stream gRPC (`rust/services/applicant/src/providers.rs`), and Presentation Policy's `NativePresentationControlPlane::load_profile` performs an HTTP GET against the configured Trust Profile internal route (`rust/services/presentation-policy/src/control_plane.rs`). Flow's `connections.rs` also constructs an HTTP reference provider with Trust Profile, Credential Template, Deployment Profile, and Issuance URLs. Existing Presentation Policy `control_plane_behavior` uses a local Trust Profile responder, but a test double is not proof that all cross-service compatibility cases are covered. These edges must be reflected in group ownership before a Trust Profile or Notification change may omit consumer validation.
-
-Auth adds another concrete consumer cluster: `rust/services/auth/src/service_transports.rs` sends Flow `StartVerification` and Organization `AddMember` gRPC requests and PATCHes Applicant profiles; `canvas_transport.rs` issues an HTTP GET to the Issuance Canvas LTI session service. `connections.rs` also connects both gRPC clients and probes Applicant and Issuance HTTP health before readiness. `service_transports_behavior` exercises the Applicant adapter with a test HTTP client, and `canvas_transport_behavior` exercises Canvas transport behavior, but those tests alone do not prove real cross-service protocol compatibility. A future affected-group map must include Auth consumers when Flow, Organization, Applicant, or Issuance contracts change, plus the relevant live acceptance obligation; treating Auth only as a Cargo reverse edge would miss runtime coupling.
-
-Flow's runtime edge is active, not just a configuration string: `connect_providers` constructs Organization, Credential Template, Presentation Policy, and Issuance gRPC providers, then checks Signing Keys and physical-Issuance HTTP providers and the reference catalog before marking readiness. `HttpFlowReferenceProvider::resolve` performs organization/principal-scoped GETs for Issuance application templates, Credential Template delivery destinations, Trust Profile entries, and Deployment Profile entries. Its source-local provider tests exercise controlled HTTP responses, but those do not by themselves prove cross-service wire compatibility. A change to any of these provider routes may require Flow consumer and composed acceptance coverage even when Cargo reverse dependencies omit Flow; maintain fail-closed selection until these obligations are explicitly grouped.
-
-Completion evidence: selector regression tests, representative dependency cases, shadow results, and reviewer agreement on every newly omitted group. No GitHub gate may treat an unexpectedly missing required group as success.
-
-Current-main embedded-Markdown check (2026-10-03): a same-line search of Rust `include_str!`/`include_bytes!` call sites surfaced `rust/services/issuance/src/canvas_sync_worker.rs` embedding `canvas_sync_processor_contract.md`, and the classifier already has a dedicated Rust case for that path. This addresses that known documentation false negative, not the broader non-Cargo runtime edge inventory; multiline macros, generated inputs, and indirect reads need a stronger input map before selective validation.
-
-Direct-literal compiler-input check (2026-10-03, #1073 base): a multiline scan of literal `include_str!`/`include_bytes!` calls found external inputs under `contracts/*`, `config/envoy/*`, `services/auth/assets/*`, `services/Dockerfile`, `services/entrypoint.sh`, `scripts/build-rust-service-binaries.sh`, and `tests/vectors/*`. The classifier selects Rust for contracts, auth assets, Dockerfile, and entrypoint; it selects the full suite for config, scripts, and test vectors. The embedded issuance Markdown is already handled. The then-known `SELFHOST_BUNDLE.md` package-asset false negative was corrected by merged [UI #1070](https://github.com/ElevenID/marty-ui/pull/1070). This scan does not resolve `concat!`/environment-derived macro paths, generated files, runtime reads, or cross-service consumers; do not narrow any check from it.
-
-A bounded `include_str!`/`include_bytes!` `concat!(env!("CARGO_MANIFEST_DIR"), "...")` scan found 37 calls on the same base: their suffixes resolve either to `contracts/*` (Rust-selected) or to the owning crate's Rust source/migrations. It did not reveal another classifier exception. This covers that common literal-concat form, not arbitrary macro expansion or generated/runtime inputs; the fail-closed shadow planner and broad gates remain necessary.
-
-Embedded-input regression follow-up [UI #1075](https://github.com/ElevenID/marty-ui/pull/1075), reviewed head `938f4d455`, scans tracked Rust sources for `include!`, `include_str!`, and `include_bytes!`, resolves direct literals and the common `CARGO_MANIFEST_DIR` concat form, and requires every resulting external input to select Rust through the actual Bash classifier. Unsupported include syntax fails for review rather than being silently omitted. The shared synthetic classifier harness runs all inputs in one Bash process; 98 workflow-policy tests pass in about five seconds, plus Ruff and diff checks. An independent reviewer found no blocker. Full PR [run 37159145064](https://github.com/ElevenID/marty-ui/actions/runs/37159145064) and protected combined-head [run 37161991344](https://github.com/ElevenID/marty-ui/actions/runs/37161991344) passed, including Canvas and final gate; the PR merged into main as `52b6dd7d3` at 2026-10-04 00:33:11 UTC. The protected Canvas job took 58m30s, including 22m19s in the database group. This guards direct static input forms only; it does not prove generated or runtime input closure, and no CI lane selection or attributable speedup is claimed.
-
-### A4: lower-level behavioral coverage
-
-Use table-driven tests and shared Rust scenario data for pure decoding, projections, validation, and scheduling decisions. Reuse existing repository/provider ports; share contract tests between test doubles and real adapters where practical. Tests should assert externally meaningful outcomes, not mirror implementation steps.
-
-The first response-compat extraction already relocates 16 pure parser/owner tests. Inspection of nearby Canvas JSON tests shows the apparently similar cases have different obligations: `json_consumer_diagnostic_matches_published_boundaries` and `json_depth_diagnostic_matches_published_boundaries` run the pinned published application/database and compare frozen observations; `status_provider_matches_json_consumer_reference` and the status-runtime JSON cases exercise native provider and real route persistence. These are not duplicates of in-memory parser tests and should remain until a narrower real adapter proof replaces each named obligation. No A4 integration test has been removed yet.
-
-The Canvas `body_timeout_reference_rejects_invalid_scenario_closure` mutation matrix is pure, but its `body_timeout_reference_cases` helper is also used by the live historical capture in the same target. Moving only the test would duplicate validation logic; making the acceptance crate its owner would create a development cycle with issuance; a new contract crate for one small helper is not justified without further consumers. Keep this control intact for now. The DIDComm CA-rotation test uses real loopback TLS, OpenSSL process ownership, and shared service fixtures, so it is not a mock-only behavioral matrix to relocate casually.
-
-Test-inclusion audit (2026-10-03): `canvas_observation_values.rs` is source-included by the issuance behavior, Canvas management HTTP, and published Canvas targets, so its one diagnostic `#[test]` was compiled three times. `canvas_json_depth_replay.rs` is included by the latter two targets, so its one typed-token diagnostic test was compiled twice. These are genuine repeated pure assertions, unlike their surrounding HTTP/published-process cases. Local dedup commit `d4837f77b`, stacked on #1058 and not published, moves both unchanged assertion bodies into the already-required Canvas management HTTP test target. Both exact Rust tests pass; published composition and worker targets compile with no duplicate moved names. The focused runner/workflow-policy suite passes 231 tests, strict targeted Clippy and formatting pass, and an independent reviewer cleared the corrected diff. To avoid a separate full-CI cycle for two tiny tests, reviewed local integration branch `codex/canvas-acceptance-plus-dedup-20261003` at `8b453a5e4` combines this commit with the acceptance-owner follow-up: on that exact branch, the composition and acceptance-owned worker binaries compile and discover 141 and 134 tests. The independent combined review found no blocker; the mandatory-name roster remains dynamic and unchanged. Hosted Cargo artifact handoff, live Canvas, and protected queue CI are still required after #1058 merges.
-
-First A4 slice: [UI #1060](https://github.com/ElevenID/marty-ui/pull/1060) moves the pure `python_value` module from issuance into the existing lightweight `marty-response-compat` crate, re-exporting the same implementation for current issuance callers. Its four unchanged unit tests now run in that crate; the separate signing diagnostic integration target uses the shared module instead of source-including it and rerunning those four tests. The target's own 12 frozen diagnostic tests remain, as do issuance's real HTTP signing-response tests. Locked offline checks passed for both crates; response-compat 20, signing contract 12, nearby issuance format 5, response-text 17, signing HTTP 7, and credentials protocol 3 tests passed. Strict targeted Clippy, rustfmt, and diff checks passed. An independent reviewer found and verified corrections to a stale documentation link and unused import, then cleared the exact head. Full PR and protected combined-head CI passed, including the live Canvas lane and aggregate gate; #1060 merged as `6aa6c3391`. This is one DRY ownership/test-level improvement; neither CI speed nor safety-gate reduction is yet measured or claimed.
-
-CI incident on #1060: the first `Rust Lint and Packaging` job failed before invoking Clippy because `sccache` could not start its GitHub cache backend after a transient DNS lookup failure for the storage host. The job reported zero compiler requests; this was not a source lint failure or a passed lint gate. Once the workflow was terminal, a failed-job rerun on the unchanged head passed the mandatory full Clippy and packaging checks. Preserve the strict lint command and other gates. #1061's reviewed fallback subsequently passed protected queue validation and merged; its healthy-cache PR path and synthetic failure path pass, but a live backend outage was not induced.
-
-Retain real PostgreSQL coverage for atomicity, locking, tenant isolation, recovery, and expiry after lock waits. Retain real TLS, signals, shutdown, and packaged-runtime coverage where those are the obligation. Controlled Tokio time applies to isolated Tokio scheduling, not database clocks or separate processes.
-
-Replace an expensive assertion only after documenting its lower-level equivalent and the remaining integration proof. Preserve all unique cases and negative/security expectations. Keep independent expected observations independent: DRY must not make a test calculate its expected answer with the production implementation under test.
-
-### A5: historical reference qualification
-
-Identify the complete reference closure: historical image digest, capture code and helpers, scenarios, schema/migrations, expected corpus, and relevant execution environment. Native comparisons remain responsive to native changes.
-
-Initial source audit: `contracts/canvas-worker-consumer-range-oracle.json` records the historical issuance and PostgreSQL image digests, source and repository hashes, migration revision, and observation digest. Individual worker oracles also record capture-source hashes. The historical tests in `canvas_published_schema_contract.rs` start a pinned image/database through `support/canvas_published_database.rs`, check the migration report and worker source hash, then compare the live observation with embedded corpora. They return early without `MARTY_CANVAS_PUBLISHED_SCHEMA_TEST=1`; the CI runner sets this and requires explicit named tests. `scripts/ci/run-published-canvas-contracts.sh` pulls both pinned images before its full group. These provenance checks are useful, but the complete capture helper/scenario/schema closure has not yet been proven from one manifest. Do not reuse old qualification evidence or reduce reference frequency until that closure is complete and checked for staleness.
-
-Lease-expiry case audit (2026-10-03): `run_canvas_worker_lease_expiry_oracle.py` validates its scenario's source hashes, environment, two cases, and scheduled body offsets. Its `capture_source_sha256` includes the lease script and scenario plus the body-timeout oracle's helper/script/contract list; `prepare_canvas_published_schema.py` additionally validates historical worker and migration inputs. The failing #1044 observation occurred *after* the reference worker reached idle and the delayed response handlers joined. The source closure is spread across Python, the Rust database harness, mounted helpers, pinned images, migrations, and runtime dependency versions. A single provenance field or unchanged lease script therefore cannot authorize skipping this qualification; the observed failure must be understood independently of A5 optimization.
-
-Capture-closure breadth check (2026-10-03): of 39 committed `canvas-worker-*-oracle.json` corpora, only body-timeout and lease-expiry expose `capture_source_sha256` maps. A read-only AST traversal of their pinned local Python scripts found no unpinned static local import after #1055's guard; this is evidence only for those two captures. Other corpora expose differing provenance fields, often `source_sha256` for installed worker code rather than a complete capture-helper closure. Do not generalize historical-qualification reuse to the entire worker suite from the two guarded corpora. Inventory each remaining capture's scenario, helper, runtime, image, and schema inputs before proposing narrower triggers.
-
-Field census on the current acceptance-owner base: 37 of those 39 corpus files contain a `source_sha256` field somewhere in their JSON, but only two contain `capture_source_sha256`; `canvas-worker-configuration-oracle.json` and `canvas-worker-result-oracle.json` lack the former field. The common `worker_source_sha256()` helper in `run_canvas_worker_startup_oracle.py` hashes installed `issuance.canvas_worker` and `issuance.infrastructure.api.canvas_routes` modules, not the capture script or its transitive helpers. Therefore the common source hash is evidence for published implementation identity, not sufficient evidence for capture-code reuse. This is a field-presence audit, not a complete provenance classification of all 39 corpora.
-
-Shared-capture dependency check (2026-10-03): 17 `run_canvas_worker_*oracle.py` scripts statically import `run_canvas_worker_startup_oracle.py`. The startup script reads `canvas-worker-startup-scenarios.json` and supplies process/database helpers as well as `worker_source_sha256()`, but `canvas-worker-startup-oracle.json` records only the two installed-module hashes and the Python version, not hashes of that script or its scenario input. This is a concrete shared input that an eventual qualification-reuse key must include or conservatively invalidate; it does not authorize a narrower current CI trigger.
-
-Producer-mapping census (2026-10-03, current main): 39 `canvas-worker-*-oracle.json` corpora coexist with 26 `run_canvas_worker_*oracle.py` scripts and 37 `canvas-worker-*-scenarios.json` files. Only 26 corpus basenames map directly to a same-named runner; the others include metadata/reference corpora and multiple OAuth-revocation variants emitted by one runner. The OAuth producer also recursively loads `base_scenario`, then `reference_scenario` and `shared_seed` JSON from the selected matrix. A qualification-input manifest therefore needs explicit corpus-to-producer and transitive scenario edges rather than deriving them from names. This count is an inventory, not proof that all transitive helpers, images, or runtime inputs have been found; live historical qualification remains required.
-
-Producer-inventory implementation (2026-10-03): UI [#1073](https://github.com/ElevenID/marty-ui/pull/1073), head `df4232a09`, records the 26 direct runner corpora, nine additional variants of the shared OAuth runner, and four copied upstream Credentials fixtures with provenance-document links. A focused test fails on unowned corpora or runner scripts and checks the OAuth runner's declared ten-kind dispatch set. An independent reviewer traced all ten variants through the Rust published-process launcher and Python dispatcher and found no mapping mismatch; one local test and Ruff pass. Full PR CI and protected combined-head [run 37158251847](https://github.com/ElevenID/marty-ui/actions/runs/37158251847) passed, including Canvas and final gate, and the PR merged into main as `f023168ca` at 2026-10-03 23:24:09 UTC. The protected Canvas job took 59m18s, including 22m34s in the database group; this inventory-only change has no attributable speedup. The manifest explicitly disclaims complete capture-input closure or permission to reuse qualification; no check frequency changes.
-
-Scenario-closure follow-up [UI #1076](https://github.com/ElevenID/marty-ui/pull/1076), reviewed head `61cb23258`, adds explicit owners for the two scenario files without same-named corpora (final-completion race and image startup), so all 37 `canvas-worker-*-scenarios.json` files have an inventory owner. Its test recursively validates JSON filenames and JSON-pointer targets, detects scenario cycles, and covers references such as `base_scenario`, `reference_scenario`, `shared_seed`, and the final-completion-race pointers. A reviewer caught an initial pointer-discovery gap before the rebase; the corrected implementation passes its three focused inventory tests and Ruff on the new main. Independent exact-head review found no blocker; full PR [run 37161785874](https://github.com/ElevenID/marty-ui/actions/runs/37161785874) passed, including Canvas and final gate, and the head entered the protected merge queue at 2026-10-04 00:27:47 UTC. At that observation point, protected combined-head validation and merge had not completed; the linked PR is authoritative for its later outcome. This still does not prove capture-script, image, migration, runtime, or environment closure, nor authorize a qualification skip.
-
-CI gate telemetry incident (2026-10-03): #1071's protected combined-head run passed mandatory lanes, including Canvas, but `CI Gate` failed when its later performance-summary call to the GitHub Actions API returned HTTP 503. The queue entry was removed and its next candidate required another full run. UI [#1074](https://github.com/ElevenID/marty-ui/pull/1074), reviewed head `7692dc933`, retries only transient 502/503/504 responses for the two telemetry API calls and makes only the reporting step non-fatal. The preceding `Require every CI lane` assertion, required gate job, and merge-group all-success policy remain strict. All 98 workflow-policy tests, Ruff, and diff checks pass locally; an independent reviewer found no blocker. Full PR CI and protected combined-head [run 37161534388](https://github.com/ElevenID/marty-ui/actions/runs/37161534388) passed, including Canvas and final gate; the PR merged into main as `246ec57e2` at 2026-10-04 00:17:49 UTC. Protected Canvas took 54m14s, including 19m00s for database contracts. The new reporting fallback was not exercised by a live API outage, and no turnaround saving is measured yet.
-
-At the #1044 failure, the post-join assertion combined `assert_schedule(...) == chunks` and `observe() == outcome` under one failure message. That failure could not identify whether the HTTPS write ledger or durable snapshot changed. The later #1055 diagnostic split retained both equality requirements and updated the capture-source provenance because the oracle script participates in the historical closure.
-
-The diagnostic follow-up merged in [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055). Sequential `require` calls preserve the original short-circuit order and both equality checks while naming body-schedule versus durable-observation drift. Only two lease-script source-hash values changed in the frozen lease corpus; an exact reverse-migration test reconstructs the pre-diagnostic corpus hash and earlier independent A/B capture. Native replay pin and documentation were updated. Focused local tests, independent review, and hosted published-process regeneration passed. This diagnostic does not explain the earlier intermittent observation by itself.
-
-An additional closure gap is concrete: `canvas_worker_https_fixture.py` imports `create_loopback_certificate` from `test_canvas_lti_https.py`, but `run_canvas_worker_body_timeout_oracle.verify_sources` enumerates the fixture and other helpers without `test_canvas_lti_https.py`. Lease-expiry provenance inherits that list through `body.verify_sources`. The pinned image makes current live comparisons meaningful, but a future evidence cache keyed only by `capture_source_sha256` would not invalidate when this TLS helper changed. Include its normalized source hash in both body and lease capture provenance and update the frozen corpus as a reviewed qualification change before any reuse; do not silently rewrite expected observations or skip the current live oracle.
-
-Merged [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050) implements that first closure repair. The two frozen corpora change only by the helper pin and updated capture-script hash; exact reverse-migration tests reconstruct both prior byte hashes and the earlier independent A/B hashes. Native replay pins and input counts were updated. A reviewer worker identified and verified fixes to those consumers and stale documentation; 479 focused local tests passed (504 in the independent review run). Protected CI, including live published-process regeneration, passed. This does not yet justify reusing or skipping historical qualification.
-
-Merged regression-prevention follow-up [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055) walks every pinned Python script in both body and lease corpora and checks statically imported flat `scripts/*.py` helpers are also pinned. Relative/local-package imports and common dynamic-import calls fail closed for manual review. Synthetic tests cover direct, transitive, relative, dotted-package, and dynamic cases; 771 focused body/lease tests passed and an independent exact-head reviewer cleared the change. Full PR and protected combined-head CI passed, including live published-process qualification. This is not proof of every possible dynamic Python import mechanism or full image/environment validity; preserve live qualification until the broader closure is established.
-
-Separate reference qualification first without skipping it. Reduce its frequency only after evidence is bound to the complete closure and stale/missing evidence forces verification. Reference input changes trigger requalification; preserve periodic full comparison to detect environment drift. A version label alone is not evidence validity.
-
-### A6-A7: rollout and fast feedback
-
-During rollout, keep broad merge validation while proving selection. The intended steady state is affected package tests and contracts during development, broad checks for shared/unknown inputs, and qualification of actual release artifacts. Periodic exhaustive compatibility runs supplement required change-specific checks. Full validation must not wait for a major version increment.
-
-Concrete broad-classifier cost (2026-10-03): [UI #1065](https://github.com/ElevenID/marty-ui/pull/1065) changes only runner-registration PowerShell, its focused policy helper/tests, and runner documentation, but the current `tests/*|scripts/*` rule sets `all=true`; its PR therefore runs the entire Rust, UI, Python, release, browser, and security matrix. The repository release-check step actually executed all eight new PowerShell cases and 5,405 tests, while the Rust Canvas lane set the PR critical path at 58m56s. This is a plausible later A6 path-selection candidate, not permission to omit lanes now: first prove every transitive consumer of these scripts/tests, keep unknown/shared inputs broad, land the planned-versus-unexpected skip gate, and retain all-success protected merge-group validation. The present full run proves the baseline cost, not a speed gain from selection.
-
-Ensure cheap failures can be reported promptly. Additional lanes must justify their compilation/setup cost and retain every required obligation. For Core, examine the 14m23s preflight before separating work; preserve its feature/security matrix and avoid merely duplicating builds.
-
-Current Core evidence supports deferring a preflight split. In protected #348, preflight completed in 11m43s while affected Rust tests took 13m56s and Rust CodeQL took 12m25s. Its cheap Python/release, advisory, and formatting checks already precede compilation. Within preflight, exact KMS graphs took 369s, trusted-list client 136s, clippy 104s, and WASM serial fallback 63s. Parallelizing these into another runner would duplicate setup/compilation without reducing this run's 13m56s test critical path. Revisit A7 if repeated normal runs place preflight on the critical path or if evidence shows an independently cacheable setup; keep the full feature/security matrix.
-
-### A8: release-tier E2E and demo strategy
-
-Classify release authority from an authenticated claim/manifest and exact version/tag, not from a mutable dispatch input or a guessed substring. The tag parser in this branch validates syntax only; it does not authorize deployment or publication. Unknown, missing, or inconsistent classifications fail closed. Keep routine PR/unit/integration/security checks and deployment preflights independent of this tier decision.
-
-- Nightly releases use a distinct immutable SemVer prerelease tag with a date and unique run component, such as `v1.2.1-nightly.20261005.123456789`. Run representative, owned happy-path E2E/demo assertions against the exact released stack on one Linux target, retaining machine-readable results and artifact lineage. Do not dispatch release-bound recording or YouTube staging/publication. This is not complete product evidence.
-- Official production releases retain the complete applicable E2E inventory: happy, denial/error/recovery, external-device/provider, and release-bound evidence checks on the exact release artifacts before promotion. Only this tier may create, approve, or publish release-bound YouTube recordings. Beta, RC, and other prerelease identities are not silently reclassified as official or nightly.
-- Map scenario and evidence owners across `marty-ui`, `marty-integration-tests`, and `marty-demo-recorder`; keep justified OS-specific unit, packaging, and portability checks even though nightly E2E uses one Linux target. Separate lower-level owned assertions, nightly happy journeys, and official full journeys without using video as an assertion substitute.
-- Test manual, scheduled, retry/resume, and repository-dispatch routes so nightlies cannot invoke official-only error/full-suite or YouTube paths and official releases cannot accept a partial nightly result. Bind each path to verified release identity and fail closed on missing evidence.
-
-Bundle related code, policy, tests, and documentation into reviewed PRs to limit redundant CI runs. First establish exact release identity and release-time qualification; then implement authenticated nightly claim/dispatch and assertion-only intake; finally route the full scenario and YouTube jobs. Do not relabel a partial or failed result as qualified. Measure real nightly/official runs before claiming speedup.
-
-Repeat check (2026-10-03): in two successful Core PR runs, preflight took 11.7m versus affected tests 13.9m ([37098640425](https://github.com/ElevenID/marty-core/actions/runs/37098640425)) and 16.9m versus affected tests 18.5m ([37101783100](https://github.com/ElevenID/marty-core/actions/runs/37101783100)). The successful protected run [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) took 14.5m in preflight versus 19.2m in the Windows platform lane. These three distinct runs again place another required lane on the critical path; a preflight split is not yet an evidence-backed wall-time improvement. The preflight may still be worth reorganizing for earlier diagnostic output, but that requires per-step failure timing and cannot drop the existing KMS/security/feature checks.
-
-A6 first selective-PR observation (2026-10-04): after inventory-only selector [#1080](https://github.com/ElevenID/marty-ui/pull/1080) merged, its follow-up [#1082](https://github.com/ElevenID/marty-ui/pull/1082) completed [PR CI](https://github.com/ElevenID/marty-ui/actions/runs/37185053263) in 8m37s (07:11:50–07:20:27 UTC). Release Contract Tests and the final CI Gate passed; the Rust Canvas lane was not scheduled for those exact inventory inputs. Protected combined-head validation remained full, and #1082 merged. This is observed turnaround for that scoped PR, not a whole-repository average or a claim that the Canvas lane itself became faster.
+| A0 | Inventory test obligations and their inputs; identify effective execution, owning package, runtime dependencies, and current gate | None | investigating | DB-contract executables resolve from this run's Cargo artifacts. The normal DB runner now records selected/executed libtest cases, ignored/filter semantics and declared runtime input names/owners in run-bound JSONL. The separate acceptance runners, assertion reachability and complete transitive dependency/obligation graph remain incomplete; no selective skip is authorized. |
+| A1 | Move cross-service/system tests into a dedicated workspace acceptance package; separate deployment/packaging, DIDComm/renewal, and Canvas groups | A0 | implementing | Dedicated acceptance owners and the zero service-to-service dev-edge guard have landed. Preserve all moved obligations; installed system acceptance remains distinct from component tests. |
+| A2 | Extract one small domain/compatibility boundary from issuance, preserving public behavior and reusing existing Rust implementations | A0; coordinate moves with A1 | merged | The narrow shared Rust extraction is landed. Keep one implementation and public/error/resource-limit compatibility across consumers. |
+| A3 | Harden Core selection and implement conservative UI affected-check planning in shadow mode | A0; map A1/A2 changes | implementing | UI planning remains shadow-only until the complete non-Cargo graph and conservative fallback are qualified; preserve Core feature/security owners. |
+| A4 | Assign overlapping case matrices to the lowest adequate test level, retaining real adapter and process guarantees | A0; use A2 where appropriate | implementing | Retain old/new case-ID, fixture, assertion and required-lane parity; keep real database, adapter, process and cancellation obligations at their actual boundary. |
+| A5 | Separate historical oracle qualification from native regression testing; define complete reference inputs and evidence validity | A0, A1 | implementing | Historical reference closure remains incomplete. No additional qualification skips or weakened current-input/source/producer checks are authorized. |
+| A6 | Enable proven selective validation and earlier failure reporting; validate the assembled result on protected main/release paths | A1-A5 review and evidence | implementing | Unknown and mixed inputs remain broad. Preserve fail-closed planned-skip policy, required protected-main/full release gates and same-run evidence validity. |
+| A7 | Evaluate and, where justified, separate Core's cheap preflight feedback from extensive feature/security validation | A3; independent scoped follow-up | merged | Cheap Core preflight separation is landed. Preserve the complete KMS, lint, compatibility, feature and security checks; do not extrapolate timings. |
+| A8 | Split release E2E by verified release tier: nightly prerelease happy paths on one Linux target; stable official releases keep complete happy/error evidence; YouTube recording/publication only for official releases | A0, A4, A5 | implementing | Nightly qualification remains open: one Linux happy-path tier with no YouTube activity. Official releases retain complete happy/error E2E and official-only YouTube. Unknown tier or missing evidence fails closed. |
+
+October 18 A0 follow-up: the run-bound Flow record observes the
+first non-Cargo renderer hop from the Rust acceptance case to the Python
+renderer and its two direct Compose-owner helpers, with exact source markers
+and hashes. Deeper Python imports, rendered Compose profiles, generated loader
+files, child assertion reachability and fixture provenance remain unclosed.
+This is input visibility only; mixed or unknown diffs and protected/release
+paths remain broad, with no claimed timing improvement.
+
+October 18 A0 extension ([#1424](https://github.com/ElevenID/marty-ui/pull/1424),
+merged as `35dc7400b3f9dccbe1a8b2d55101a545ca030beb` after successful PR
+run `39164079935` and protected merge-group run `39165724387`): record exact
+path/SHA evidence for the statically observed 11-script `runpy` graph, the six
+selected/extended Compose source models, the loader script, public CA fixture,
+and three config/source reads. Reject changed helper edges, renderer model
+selections, and Compose `extends.file` paths. This deliberately inventories
+conditional imports conservatively; it does not prove which branches ran or
+close generated secrets, external tools/packages, Cargo inputs, and child
+assertion reachability. Retain `transitive_source_closure=incomplete` and all
+existing broad/protected gates. The renderer checkout-root provenance check
+and negative tests address the review finding without asserting full closure.
+
+The next A0 renderer slice [#1426](https://github.com/ElevenID/marty-ui/pull/1426)
+merged as `58e92ace7` after protected CI. It records eleven helpers' static
+Python import names and rejects relative, direct dynamic-loader,
+non-stdlib/non-PyYAML and checkout-shadowed imports. It does not pin
+third-party package bytes or prove conditional execution, generated outputs,
+external tools or assertion reachability; retain
+`transitive_source_closure=incomplete` and the unchanged protected gates.
+
+October 20 A0 Canvas follow-up (local review): the last successful main full
+run `39231230045` lasted 41m18s; Canvas was 40.8m, with 22.57m database
+contracts, 8.17m four-case preflight and 7.45m compilation. Routine #1428 PR
+run `39225063739` had a 22.4m Canvas job: 10.15m database contracts, 2.05m
+two-case preflight and 7.42m compilation. These are different revisions and
+qualification tiers, not a controlled speedup comparison. The full tier's
+367.4s published mixed-roster reference and 366.6s current preflight are
+distinct; the reference's 365.3s probe timer is nested, not extra work. The
+reference is serial to protect its 10s child-interrupt bound. Routine PR CI
+already omits the long historical tier, so reference reuse would not shorten
+its feedback. The next reviewed A0 change records the exact pinned published
+image refs and selected PostgreSQL registry in each Canvas acceptance record;
+it does not skip tests or establish historical evidence reuse.
+
+The next A0 Canvas inventory slice observes each acceptance target's direct
+Rust `#[path]` and `include!` modules plus literal `include_str!`/`include_bytes!`
+fixtures, recording checkout-relative paths and exact hashes (95 composition,
+50 worker inputs in the reviewed tree). Bounded count checks reject the tested
+non-literal `#[path]`/`include!`/embedded-file forms; missing files and
+out-of-checkout paths fail the evidence recorder before test execution. This is
+observed first-hop visibility, not a complete Rust parser: other module forms,
+nested imports, generated/runtime files,
+external images, assertion reachability and full source closure remain open.
+No Canvas test or qualification tier is skipped.
+
+The follow-up reuses that bounded Rust first-hop collector for the Flow and
+self-host acceptance targets (9 and 10 source inputs in the reviewed tree).
+Their run-bound records now name direct `#[path]`/`include!` Rust modules and
+literal embedded fixtures alongside the existing renderer/runner evidence.
+This does not establish nested-module or runtime-input closure, nor prove that
+all future Rust module syntaxes are recognized. It does not change acceptance
+selection or the required CI lanes.
+
+The Canvas first-hop inventory landed in
+[#1439](https://github.com/ElevenID/marty-ui/pull/1439) as
+`c084fc0fe4c06da59fad5e3261290482d1301c19`; the Flow/self-host extension
+landed in [#1440](https://github.com/ElevenID/marty-ui/pull/1440) as
+`537884a37e2387a85a72caa08d611318fe234732`. Both are diagnostic input
+visibility, not evidence of complete source closure, changed CI selection, or
+a measured turnaround reduction.
+
+The next A0 slice records the Rust compiler depfile adjacent to each of the
+four acceptance test executables in the fresh same-run Cargo target directory, hashing its in-checkout source and embedded
+file inputs without relying on a second hand-maintained module list. A local
+Rust 1.95 package-scoped compile of `marty-platform-clock` confirmed that the
+actual Cargo depfile names both `src/lib.rs` and its embedded public JSON
+fixture; the recorder also parsed that actual depfile. The compiler record is
+target-scoped diagnostic evidence, not authenticated provenance or complete
+closure: it does not enumerate source in dependent crates, cannot guarantee
+coverage of generated files, and does not cover runtime inputs or reached
+assertions. `transitive_source_closure`
+remains incomplete, and no test selection or qualification gate changes.
+
+October 20 A5 diagnostic gap: the first exact-main full run
+[39408962399](https://github.com/ElevenID/marty-ui/actions/runs/39408962399)
+had one substantive test failure,
+`worker_lease_expiry_reference_matches_published_process`, in its 33m55s
+Canvas job; 125 worker cases passed and two were ignored. The aggregate CI
+gate failed consequentially. The frozen
+published-process oracle rejected a PostgreSQL waiter in `assert_blocker` at
+line 494 during `renewal_lock_early_release`. Its safe failure report contains
+only the exception class and frames, so it cannot distinguish the count,
+worker-query match, and PID conditions in that composite assertion. Identical
+source passed the independent full rerun
+[39413856660](https://github.com/ElevenID/marty-ui/actions/runs/39413856660)
+(Canvas 34m54s); the later current-main full run above also passed. The
+intermittent cause is therefore unproven. Do not relax the real-time lock,
+expiry, or process assertions, rewrite the pinned historical capture source,
+or claim successful reuse. A separate current-input diagnostic should classify
+only bounded, non-secret blocker states before any future oracle change; keep
+the frozen corpus and its source hashes independent.
+
+October 18 A6 evidence: [UI #1413](https://github.com/ElevenID/marty-ui/pull/1413)
+landed sanitized per-phase sccache telemetry and identified 355 Rust misses in
+the OpenBao recovery preparation. The trusted-main workspace warmer hit its own
+feature graph but did not warm those exact package graphs. Reviewed
+[UI #1414](https://github.com/ElevenID/marty-ui/pull/1414) reuses the existing
+eight-command Rust-only preparation in the main-only warmer; full PR and
+protected combined-head CI passed before merge. The first
+[main warmer](https://github.com/ElevenID/marty-ui/actions/runs/39148458877)
+passed in 19m42s, with zero cache-write errors. A later read-only
+[#1416 recovery job](https://github.com/ElevenID/marty-ui/actions/runs/39150263162)
+recorded six Rust misses versus 355 pre-warmer; unchanged Flow live signing
+went from 104 misses to zero. Preparation and job time were 6m07s and 5m58s
+shorter respectively across these two runs, but Signing Keys/Issuance source
+and hosted conditions also changed. This demonstrates cache reuse, not a
+guaranteed time saving. Cache occupancy approached the included 10 GiB limit;
+retention and later-run performance need watching. A0 input closure, A3 shadow
+coverage and the remaining A4-A6 obligations stay open; no check or release
+gate was removed.
+
+A3 shadow audit also identified Issuance's separate grant-authorized
+issuer-DID signing dependency on Signing Keys. The planner records that edge
+without narrowing any gate. Source inspection found a runtime contract mismatch:
+the former direct `/internal` base yielded a GET `/internal/resolve-issuer-did`
+and POST `/internal/issuer-dids/sign`, whereas Signing Keys registers POST
+`/internal/compat/resolve-issuer-did` and POST
+`/internal/compat/issuer-dids/sign`. The standard Compose profiles now route
+Issuance through Gateway's supported GET resolve and POST sign endpoints,
+with scoped API keys and the one-use KMS grant. This is source and local HTTP
+test evidence; an installed recovery remains required for the external handoff.
+
+The follow-on shadow inventory also records conditional managed-passport
+issuer-DID signing with its separate passport-origin one-use grant, plus CSCA
+trust-anchor lookup. Both reuse existing Rust signing clients: Issuance calls
+Gateway, which forwards authenticated signing and organization-scoped trust GET
+requests to Signing Keys. Both standard Compose profiles point the relevant
+Issuance role at Gateway; production keeps managed passport signing off unless
+explicitly enabled. The source-backed planner tests check the routes, grant
+origin and production key bindings. This changes no live selector, and A3
+non-Cargo closure remains open.
+
+The October 20 shadow-planner audit found a packaged runtime edge absent from
+Cargo's reverse dependency graph: changing `marty-canvas-sandbox` source or
+embedded pages previously returned only that crate, although the binary is
+built and shipped by the sandbox image, service images, and Canvas profile.
+The planner now records six source-backed packaging/use witnesses and keeps
+these inputs broad even if a witness disappears. This corrects shadow evidence
+only; live CI selection and its required checks are unchanged. No speedup is
+claimed until the full non-Cargo graph is qualified.
+
+The October 20 packaged-runtime audit also found that Cargo reverse edges
+alone returned narrow results for the `marty-keyless-grpc-bridge` and
+`marty-passport-keyless-edge` crates. The service-image build copies their
+executables, while Compose runs the Envoy-to-Issuance bridge and the Passport
+and OIDF keyless edges. The shadow planner now records the source-backed
+build, image and runtime witnesses, including the packaged passport TLS
+bootstrap binary, and keeps these changes broad if a witness disappears.
+This is input evidence, not a live CI selector change or measured speedup.
+
+The next A3 shadow audit records the direct `marty-demo-vendor-seed` binary
+consumer as well as its Cargo-dependent Canvas seed: the migrations image builds
+and copies the binary, and the explicit `seed-demo-vendor-fixtures` Make target
+invokes it through `db-migrate`. The existing full fallback remains in place
+even if a packaging witness disappears; no live check is skipped.
+
+A6 narrow PR pilot: a change containing only the two verified Issuance
+`canvas_sync_worker_{retry,renewal}_tests.rs` leaves selects the existing
+full-library `renewal-unit` lane on pull requests. The checked-out leaf-owner
+and Docker-context proof must pass first. That lane discovers and executes the
+entire Issuance library roster, requires all 23 retry/renewal cases and the
+exact separately owned ignored cases, and retains run-bound artifact evidence.
+Mixed, missing, or unproved inputs keep the broader PR plan. Protected merge
+groups, main, and official releases retain their full required qualification;
+the 60 real-PostgreSQL renewal cases are not removed. Treat this as a selective
+feedback candidate, not a measured speedup until comparable hosted runs exist.
+
+The next A6 extension adds the other eight verified, non-ignored Issuance
+library test leaves to that same PR-only route. These cover Canvas operation,
+provider and processor, DIDComm renewal, Python formatting, signing HTTP
+projection/response and token-rate middleware. Each is a direct `cfg(test)`
+module with one proved library owner and no separately owned database fixture.
+The passport reconciliation leaf is excluded because five cases require its
+PostgreSQL owner and are ignored in the ordinary library run. The lane still
+executes and records the complete Issuance library; mixed or unproved diffs,
+merge groups and releases remain broad. No production source or case is removed.
+
+## Product packaging and integration gates
+
+The coordinating workspace product plan
+`artifacts/consumer-audit-2026-10-07/marty-product-packaging-and-integration-plan.md`
+retains the detailed PKG01-09, INT01-06, TST01-05, CICD01-04, BUS01-02,
+MKT01-02 and QA01-02 criteria. Preserve these identifiers when reconciling work.
+
+- TST/CICD: map old/new case IDs, fixtures, assertions and required lanes;
+  establish run-bound parity and conservative selection. Nightly discovery
+  cannot replace required merge or release checks.
+- INT01/PKG01-02: use anonymously accessible, digest-bound artifacts and fresh
+  installation evidence. Default Canvas worker behavior remains unchanged;
+  no-Canvas is opt-in. Any default switch requires pre-upgrade detection,
+  existing-customer rehearsal and rollback. Do not narrow Canvas CI without
+  dependency closure and affected-case parity.
+- PKG03-07/INT02-04: prove independent verification/issuance artifact and adapter
+  closures, tenant/security/transaction boundaries, migrations and ownership.
+  A smaller image alone does not establish an independent verifier.
+- INT05-06/PKG08-09: qualify installed capability authorization, supported
+  existing-customer migration/recovery, public SDK/install paths, exact-artifact
+  journeys and digest-preserving promotion. Keep official-release E2E and
+  critical negative/security coverage.
+- BUS/MKT/QA: retain license, source/notices and demonstrable public artifact
+  facts. Commercial/legal owners decide pricing, license routes, hosted
+  availability and public claims. Engineering does not invent those claims.
+
+## Coverage and evidence safeguards
+
+### A4 renewal-handler port matrix
+
+The merged `canvas_sync_worker_renewal_tests.rs` unit owner reuses the existing
+`SpyRepository`, `NoOAuth` and retry job fixture. Its optional scripted boundary
+leaves existing short-test fail-fast behavior unchanged. Fifteen separately
+discoverable paused-clock cases execute the actual `process_job`: three renewal
+write failures crossed with the five canonical processor outcomes from
+`canvas-worker-renewal-job-outcomes.json`. Three secondary-persistence failures
+preserve the original renewal error; one real `run_cycle` case checks accounting.
+The tests assert exact port identities, ordering, cleanup acknowledgement and
+20-second renewal/30-second deadline behavior without waiting in real time.
+
+This is additive handler coverage, not SQL or durable-fence emulation. All 60
+real PostgreSQL cases, pinned references, process guarantees and required lanes
+remain unchanged; `cutover_authorized` remains false. Future removal requires
+reviewed old/new case/assertion/input/lane mapping and preserved adapter evidence.
+The new leaf is omitted from release Docker contexts through the existing
+exact-file, direct-`cfg(test)` ownership guard. PR #1393's hosted contracts
+job executed all 19 new cases and its protected merge-group run passed before
+merge as `b90e0bf46201837d5e53d2cd4c8bc2e363db8567`. No SQL case was
+removed and no overall speedup is claimed.
+
+[The obligation inventory](architecture-test-obligations.md) retains assertion,
+input and execution owners. An assertion move is not a new independent oracle.
+Keep tests and source/dependency ownership aligned; an ignored, conditional,
+undiscovered or empty test does not satisfy a gate. Reuse evidence only when
+its source, inputs, producer, environment and scope remain valid. Require full
+qualification on the exact protected-main source before stable preparation;
+a changed source requires a new applicable qualification run.
+
+Batch related changes by owner and validation path. Moving tests, changing
+assertions and reducing triggers together requires independent coverage proof.
+Report measured setup, compilation, execution, queue and approval times
+separately, with comparable warm/cold conditions; file size is not a speedup.
 
 ## Review, validation, and coordination
 
@@ -265,86 +664,6 @@ A6 first selective-PR observation (2026-10-04): after inventory-only selector [#
 
 Self-review specifically checks error paths, tenant/security boundaries, feature combinations, ownership/cleanup, public interfaces, dependency changes, and whether a test really executed its intended scenario. For selection changes, it also checks negative cases and conservative fallback behavior.
 
-## Progress and decisions
-
-| Date | Item | Decision / result | Evidence |
-| --- | --- | --- | --- |
-| 2026-10-02 | Plan | User requested a coordination document and active implementation goal, with self-review, regression prevention, and Rust reuse/DRY | Conversation authorization |
-| 2026-10-02 | Baseline | Architecture investigation complete; implementation and speed estimates remain unverified | Baseline above |
-| 2026-10-03 UTC | A1 first slice | 100 policy checks; selected Rust compile/list; Docker chef filtered planner; real disposable Redis/OpenBao/OpenSSL acceptance passed locally. Reviewer worker found no blocking issue. | UI #1044, source blob unchanged; full CI pending |
-| 2026-10-03 UTC | A3 Core first slice | 104 script tests passed, including actual Git deletion/rename and Unicode-path checks; actual locked Cargo metadata probes select fixture/native-code consumers. Reviewer found no blocking issue; full gates retained. | Core #348, `e877f8c`; Git/metadata failures still fail closed, non-Cargo relationships remain future work |
-| 2026-10-03 UTC | A2 first slice | Six existing lossless text/JSON modules moved to an independently testable crate with an optional PostgreSQL adapter and issuance module re-exports. Existing 16 unit tests pass under default features; issuance library check with PostgreSQL and three focused protocol tests pass. First CI run exposed the separate feature-probe lock; corrected with a minimal lock update and locked offline resolution. Reviewer found no blocking issue on either slice. Fresh PR checks passed, including the Canvas lane. The reviewed head entered the required merge queue at position 1; combined-head validation is running. | [UI #1045](https://github.com/ElevenID/marty-ui/pull/1045), `7502053e9`; [queue CI](https://github.com/ElevenID/marty-ui/actions/runs/37102861640); no timing claim yet |
-| 2026-10-03 UTC | A2 merged | #1045's protected merge-queue CI passed, including the Canvas lane (60m37s) and final CI gate, then merged into main as `d9947b312`. This is a maintainability boundary; no compile-time saving is yet measured. | [UI #1045](https://github.com/ElevenID/marty-ui/pull/1045), [queue run](https://github.com/ElevenID/marty-ui/actions/runs/37102861640) |
-| 2026-10-03 UTC | A1 integration review | Merged current UI main into #1044 and resolved the sole workspace-member conflict by retaining both `response-compat` and `service-acceptance`. Locked offline metadata recognized both; main and feature-probe locks include the response-compat edge; 125 workflow/release policy tests passed. Independent reviewer found no integration defect. The Windows host defaults to Rust 1.93 while the workspace requires 1.95; a 1.95 targeted test compile was stopped during a cold dependency rebuild. Full protected CI is pending on updated head `45faa5219`. | [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044), `45faa5219` |
-| 2026-10-03 UTC | A3 Core first slice merged | Required PR checks and merge-queue checks passed; main contains the hardened selector and bounded OB2 extension. The merge-queue critical path was the Windows platform job (19m10s); fast Rust preflight took 14m29s. | [Core #348](https://github.com/ElevenID/marty-core/pull/348), merge `466278aa`; [queue run](https://github.com/ElevenID/marty-core/actions/runs/37099476951) |
-| 2026-10-03 UTC | A3 UI shadow observation | The planner ran in ordinary CI and conservatively selected all 23 Rust packages for its own workflow change, reporting `external or unknown input: .github/workflows/ci.yml`. This demonstrates the fallback, not selective-gate agreement; full gates remain active. | [UI #1046](https://github.com/ElevenID/marty-ui/pull/1046), [lint job](https://github.com/ElevenID/marty-ui/actions/runs/37100105547/job/111137825084) |
-| 2026-10-03 UTC | A3 UI shadow queue | The reviewed #1046 head passed all PR checks, including Canvas, and entered the required merge queue at position 2 behind #1045. Combined-head validation and main merge remain pending. | [UI #1046](https://github.com/ElevenID/marty-ui/pull/1046), `fec8b0848` |
-| 2026-10-03 UTC | A3 UI shadow merged | #1046's protected merge-queue CI passed, including Canvas (64m11s), and the final CI gate; main contains the conservative shadow planner. It reports candidate affected packages but cannot omit a check. Non-Cargo closure and observed decision agreement remain prerequisites to promotion. | [UI #1046](https://github.com/ElevenID/marty-ui/pull/1046), merge `cafdd4a7`; [queue run](https://github.com/ElevenID/marty-ui/actions/runs/37103393732) |
-| 2026-10-03 UTC | A1 CI investigation | UI #1044's Canvas group failed 269 passed / 1 failed in unchanged `worker_lease_expiry_reference_matches_published_process`: the historical oracle reported that its post-join observation changed. The relevant Rust/Python oracle files are unchanged by #1044. The failed jobs were rerun as attempt 2; independently running UI #1045 will exercise the same group. Keep #1044 unmergeable until a green validation and cause assessment; do not relax the historical assertion. | [UI #1044 run](https://github.com/ElevenID/marty-ui/actions/runs/37097869187), first failed Canvas job `111131416212` |
-| 2026-10-03 UTC | A1 Canvas retry | The unchanged lease-expiry historical oracle passed on attempt 2; the Canvas group finished 270 passed / 0 failed / 2 ignored. This establishes a non-deterministic observation, not a cause. Keep the oracle assertion and the full gate; investigate its post-join timing and independently validate the assembled PR before merge. | [UI #1044 rerun](https://github.com/ElevenID/marty-ui/actions/runs/37097869187), Canvas job `111141165631` |
-| 2026-10-03 UTC | A4 candidate check | `canvas_legacy_ingest_behavior.rs` already runs its feature/tenant/template/status failure matrix against a mock repository and asserts no commit. This is a fast behavioral level *within* the large issuance test target; moving or deleting it without a narrower production boundary would not remove a duplicate system obligation. Keep it intact while evaluating a justified crate split. | `marty-ui/rust/services/issuance/tests/canvas_legacy_ingest_behavior.rs`, `runtime_binding_feature_tenant_template_status_and_requirement_failures_are_exact` |
-| 2026-10-03 UTC | A3 classifier gap and fix | UI's top-level PR classifier used line-delimited `git diff --name-only` in process substitution. Rename detection could hide the old endpoint, newline-bearing names were not preserved, and process-substitution failures might not propagate to `mapfile`. [UI #1047](https://github.com/ElevenID/marty-ui/pull/1047) now uses a checked NUL-delimited `--no-renames` diff; 92 workflow-policy tests passed locally, including newline, real rename, and diff-failure cases. Reviewer worker found no blockers. Protected CI and merge pending; full existing gates remain active. | UI #1047, `5c3f3e8a4` |
-| 2026-10-03 UTC | A3 classifier protected validation | UI #1047's full PR CI passed, including the Canvas lane, required CI gate, CodeQL, and workflow policy. The independently reviewed head entered the protected merge queue at position 3. Combined-head validation and merge remain pending. | [UI #1047](https://github.com/ElevenID/marty-ui/pull/1047), `5c3f3e8a4` |
-| 2026-10-03 UTC | UI integration preview | `git merge-tree --write-tree` found one content conflict between #1044 and #1045: the workspace member line in `rust/Cargo.toml` must contain both `service-acceptance` and `response-compat`. The lockfile and issuance manifest auto-merge in this preview. #1044+#1046 and #1046+#1047 preview without conflicts. Do not push a base update while #1044's failed-job rerun is live; resolve and revalidate after #1045's queue result. | Reviewed heads `d05d5f0b6`, `7502053e9`, `fec8b0848`, `5c3f3e8a4` |
-| 2026-10-03 UTC | A4 duplicate-run triage | Issuance has 49 integration-test targets, one being `canvas_published_schema_contract`. The contracts lane's existing workspace+database step completed in 1m22s on #1045 (05:26:28–05:27:50 UTC), while the separate Canvas lane dominated that PR's feedback. Excluding the Canvas target from the default workspace run would require target enumeration and execution parity proof but has no demonstrated critical-path payoff; keep the tests and prioritize the larger boundary. | [UI #1045 contracts job](https://github.com/ElevenID/marty-ui/actions/runs/37099418344/job/111135952854), local locked Cargo metadata |
-| 2026-10-03 UTC | A0/A3 non-Cargo dependency probe | Cargo reverse closure labels `marty-notification` a leaf, but Applicant sends notification events over HTTP (`NOTIFICATION_EVENT_INGEST_URL` / `NOTIFICATION_SERVICE_URL`), Gateway routes `/notifications` to the service, and rendered self-host/Kubernetes profiles wire its URL. A notification change cannot safely select only its Cargo package; map and prove the HTTP/deployment consumers before narrowing any gate. | `rust/services/applicant/src/main.rs`, `providers.rs`; `rust/services/gateway/src/config.rs`; `rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs` |
-| 2026-10-03 UTC | Free-tier cache pressure | UI had 10.73 GB of active Actions caches across 4,877 entries, near the repository's 10 GiB default allowance. PR-scoped uv and Playwright caches occupied about 3.0 GiB, with no corresponding main-branch entries. [UI #1049](https://github.com/ElevenID/marty-ui/pull/1049) makes PR/queue cache use restore-only and warms shared Python/Chromium entries on trusted main; Python runtime variants remain distinct, and the warmer only triggers on dependency/runtime/CI input changes. No build/test/security gate is skipped. Local workflow-policy and release-contract tests passed (124). Independent reviewer found and verified fixes for Python cache-key parity, runtime-path invalidation, and unrelated Rust-push runner overhead. Full PR and protected merge-queue CI passed, including Canvas and final gate; queue Canvas took 59m58s. The PR merged into main as `5a46fc966`. The new dependency-cache warmer passed, and three main-scoped entries appeared: two ~58 MB uv variants and ~108 MB Chromium. This confirms reuse is available, not an observed time saving; the API snapshot totaled 10.114 GiB, slightly above the nominal 10 GiB allowance, so eviction and normal-run impact still need observation. | [UI #1049](https://github.com/ElevenID/marty-ui/pull/1049), [queue run](https://github.com/ElevenID/marty-ui/actions/runs/37108875689), [dependency warmer](https://github.com/ElevenID/marty-ui/actions/runs/37112295005); [GitHub cache scopes](https://docs.github.com/en/actions/reference/workflows-and-actions/dependency-caching) |
-| 2026-10-03 UTC | Main cache persistence | A later cache API snapshot showed all three new main-scoped uv/Chromium entries still present while aggregate cache occupancy had fallen to 9.856 GiB. This is evidence that shared restore candidates survived the first eviction cycle, but it is not yet a measured hit rate or PR duration saving. | GitHub Actions cache API snapshot at 09:43 UTC; [dependency warmer](https://github.com/ElevenID/marty-ui/actions/runs/37112295005) |
-| 2026-10-03 UTC | Shared cache first reuse | In #1050's protected merge-queue run, completed Service Tests logs show a hit and successful restore for the main-warmed Python 3.12 cache, and the completed lifecycle browser gate logs show a hit and successful restore for pinned Chromium. Both jobs passed. This proves the new shared entries are usable by a subsequent queue run; comparable before/after duration evidence is still needed before claiming speed. | [#1050 queue run](https://github.com/ElevenID/marty-ui/actions/runs/37112551126), jobs `111173150386` and `111173150469` |
-| 2026-10-03 UTC | A3 classifier merged | UI #1047 passed its protected combined-head checks, including Canvas, and merged into main. The selector still runs in shadow mode; no existing test or security gate was skipped. | [UI #1047](https://github.com/ElevenID/marty-ui/pull/1047), merge `e333dc243` |
-| 2026-10-03 UTC | A1 first slice queued | The updated #1044 head passed all PR checks, including its 270-test Canvas lane, after the earlier unchanged lease-oracle flake had passed on rerun. Independent worker review cleared the integration. The PR entered the protected merge queue; main merge still pending. | [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044), `45faa5219` |
-| 2026-10-03 UTC | A1 tracker reconciliation | A docs-only tracker update changed #1044's head to `ca9dbb909`, removing it from the queue and restarting PR checks. Independent reviewer verified the delta contains no code/test/workflow/manifest/gate change and found no blocking documentation defect. Renewed full PR checks, including Canvas and final CI gate, passed; the reviewed head re-entered the protected queue at position 2 behind #1050. A second combined-head queue run started at 09:23 UTC while #1050's run remained active; it is in the published-worker preflight. Merge remains pending. | [UI #1044](https://github.com/ElevenID/marty-ui/pull/1044), `ca9dbb909`; [queue CI](https://github.com/ElevenID/marty-ui/actions/runs/37112907655) |
-| 2026-10-03 UTC | A5 provenance closure merged | Added the imported loopback TLS helper to body and lease capture-source pins without altering behavioral observations. Exact reverse-migration tests prove both previous corpus hashes and original A/B hashes. Reviewer found and verified corrections to native replay pins, expected input count, and five historical docs. 479 focused tests passed locally; reviewer ran 504. Full PR and protected merge-queue CI passed, including published-process Canvas regeneration and final gate. #1050 merged into main as `c93b9205f`. | [UI #1050](https://github.com/ElevenID/marty-ui/pull/1050), [queue CI](https://github.com/ElevenID/marty-ui/actions/runs/37112551126) |
-| 2026-10-03 UTC | A3 classifier false negative | Auth's Rust executable test embeds `services/entrypoint.sh`, but a path-only PR previously skipped Rust checks. Updated the classifier to select Rust along with existing Python/security lanes and added actual-Bash execution coverage. 93 workflow-policy tests pass; reviewer worker cleared. Full PR CI, including Canvas and final gate, passed; the reviewed head entered the protected queue at position 3. Combined-head validation and merge remain pending. | [UI #1051](https://github.com/ElevenID/marty-ui/pull/1051), `e24181829` |
-| 2026-10-03 UTC | A3 service runtime-edge guard | Notification and Trust Profile reveal service consumers outside Cargo. A reviewed shadow-planner change broadens any affected service-package closure to all Rust packages until runtime mappings are complete; no checks are skipped. Rebasing onto current main preserved the narrow diff; eight focused tests and locked-metadata Notification/Trust Profile probes pass. Independent PR reviewer confirmed the planner remains observational and found no defect. Full PR CI passed, including Canvas and final gate; the reviewed head entered the protected queue at position 4. Combined-head validation and merge remain pending. | [UI #1052](https://github.com/ElevenID/marty-ui/pull/1052), `6e709ac71` |
-| 2026-10-03 UTC | A5 static import-closure guard | Both frozen corpora's pinned scripts are checked for statically imported local helpers, with conservative review failures on relative/package/common dynamic imports. A subsequent reviewer commit covers aliased `import_module` calls. This remains a static/common-form guard, not complete dynamic/environment provenance. The branch is rebased on #1050's merge; 771 focused body/lease tests, Ruff, and diff checks pass. The independent exact-head reviewer found no regression, and protected auto-merge is enabled while full PR CI continues. | [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055), `2cfe1264d` |
-| 2026-10-03 UTC | A5 lease diagnostic split | On the same #1055 branch, split the post-join lease check into separate body-schedule and durable-observation messages without changing order or pass criteria. Updated only the lease-script provenance pin in the frozen corpus and its native replay/documentation hash; exact reverse-migration test preserves prior corpus bytes. Earlier reviewer cleared the split; live published-process regeneration on the final PR head remains pending. | [UI #1055](https://github.com/ElevenID/marty-ui/pull/1055), `2cfe1264d` |
-| 2026-10-05 UTC | A4/A5 fast Canvas milestone | #1100 and #1102 merged after independent review and full protected queue checks. #1102 retains owned native PostgreSQL, HTTPS, worker, timeout, and lease checks; two long native matrices and 33 pinned historical replays moved to weekly/manual full qualification. On the observed protected runs, Canvas elapsed fell from 57m08s (#1100) to 31m34s (#1102), preflight from 8m08s to 2m01s, and the database group from 20m52s to 7m26s. These are different combined-head runs with cache/load variance, not a controlled benchmark or guaranteed saving. The full-run requirement is documented but not yet enforced on main; this branch adds an exact-main release claim gate. | [#1100 queue](https://github.com/ElevenID/marty-ui/actions/runs/37267226716), [#1102 queue](https://github.com/ElevenID/marty-ui/actions/runs/37276040281), merge `63431f3f7` |
-| 2026-10-03 UTC | Contracts-lane test isolation | #1055's PR contracts lane failed an unchanged revocation-profile process test with `AddrInUse` while the real service started gRPC. The test chose HTTP and gRPC ephemeral ports through two successive bind-and-drop calls, which can return the same port; the failed log did not record the numbers, so this is a plausible cause, not proven. Reviewed [UI #1056](https://github.com/ElevenID/marty-ui/pull/1056) holds both reservations while choosing the pair and adds an unignored distinct-port test; its PR checks passed, but it was removed from the merge queue before queue validation. Draft [#1057](https://github.com/ElevenID/marty-ui/pull/1057) consolidates that fix with a bounded retry only on child bind collisions, plus an unignored retry-decision test; its exact-head CI is running. These are overlapping alternatives, not two independent obligations to merge. #1056 was closed as superseded after independent comparison; #1057 remains draft outside the merge queue until its exact-head CI passes and the passport release proof is recorded. Neither patch makes socket ownership race-free. | [#1055 failed contracts job](https://github.com/ElevenID/marty-ui/actions/runs/37116108681/job/111183168100); #1056 `076e4af36`; #1057 `fa71199ac` |
-
-For each subsequent PR append: item ID, owner, PR link, reviewed SHA, findings/fixes, targeted checks, full-CI evidence when applicable, changed obligation mapping, merge SHA, observed timing, and next dependency unblocked.
-
-### Protected merge outcomes (2026-10-03)
-
-The independently reviewed audit/tracker update [UI #1054](https://github.com/ElevenID/marty-ui/pull/1054) merged as `4674895cb`. Earlier ledger rows retain their contemporaneous observations and should not be read as the current PR state.
-
-The later tracker reconciliation [UI #1067](https://github.com/ElevenID/marty-ui/pull/1067) passed protected combined-head [run 37142613739](https://github.com/ElevenID/marty-ui/actions/runs/37142613739) and merged as `388cdb678`. This follow-up starts from that merged commit and records subsequent A0 input mapping and queue evidence without changing check selection.
-
-The reviewed A0 tracker follow-up [UI #1069](https://github.com/ElevenID/marty-ui/pull/1069) passed protected [run 37147793271](https://github.com/ElevenID/marty-ui/actions/runs/37147793271) and merged as `5b8b3dc90`. Its input inventory does not select or skip checks.
-
-UI #1055's exact reviewed import-closure and lease-diagnostic head passed its PR checks and protected combined-head queue CI, including the live Canvas qualification lane, then merged as `1a3578bc2790537abd8832a9bdccbd0f760c472b`. UI #1058's exact reviewed worker/composition split passed all required PR checks, including its live Canvas lane, and entered the protected merge queue. Neither result is permission to reduce qualification frequency: #1055 proves only the two guarded capture-source maps, and #1058 still runs both targets in the same lane.
-
-Queue reconciliation (2026-10-03): the #1058 timeline records addition at 12:34:44 UTC and a manual removal at 12:37:54 UTC by the authenticated account. Its already-started [combined-head CI run 37123397984](https://github.com/ElevenID/marty-ui/actions/runs/37123397984) later passed, but the PR remains open because its queue entry is absent. No review comment or failed PR check explains the removal in the inspected PR state. Confirm intent before re-enqueueing; the local acceptance-owner follow-up remains unpublished to avoid launching overlapping full runs.
-
-### Core OB2 lifecycle unblock
-
-Core #348's first preflight failed because the existing temporary OB2 policy expired October 1, not because of the affected-test selector. The owner approved extending retirement. The bounded extension sets review to October 15, 2026 and retirement to November 1, 2026; OB2 remains temporary/non-default, with all existing restrictions and coverage obligations intact. Expiry enforcement is unchanged. All 105 script tests, release-contract validation, and verification-feature-boundary validation pass locally, including support on November 1 and rejection on November 2. Reviewer worker found no blockers and independently passed 75 release-contract tests. The extension merged in Core #348 after protected CI and merge-queue validation.
-
-At `188b368`, all applicable PR checks passed, including affected Rust tests, preflight, security, CodeQL, and the final CI gate. The PR entered the required merge queue at position 1 on 2026-10-03 05:19:34 UTC. Merge-queue run [37099476951](https://github.com/ElevenID/marty-core/actions/runs/37099476951) passed and #348 merged as `466278aa01ae6e5c2b13b573265fa77c58758455`. Its Windows platform job ran 19m10s (05:22:11–05:41:21 UTC), longer than the 14m29s preflight; avoid assuming a preflight split is the next critical-path fix.
-
-### Optional Rust compiler-cache incident
-
-UI #1060's Rust Lint and Packaging job failed before compilation because the GitHub-backed `sccache` backend could not resolve its storage host; the unchanged mandatory lint command did not run. This is an infrastructure/cache dependency, not a source failure or evidence that lint should be optional. UI [#1061](https://github.com/ElevenID/marty-ui/pull/1061) adds a pinned-toolchain compiler probe and clears `RUSTC_WRAPPER` only if that probe fails, then retains formatting, metadata, full-workspace Clippy, and packaging checks. All 97 workflow-policy tests and Ruff pass locally; an independent reviewer found no blocker. A backend failure after a successful probe is a known limitation.
-UI #1061's exact reviewed head `bd3338d14` passed full PR CI, including mandatory Rust lint/packaging, contracts, a 59m06s Canvas lane, and aggregate `CI Gate`. Its protected combined-head [run 37129988486](https://github.com/ElevenID/marty-ui/actions/runs/37129988486) also passed, including live Canvas, and it merged into main as `424d27dba` on 2026-10-03 15:18:49 UTC. This validates the workflow on a healthy cache backend; the synthetic failure branch is tested locally, but a live backend outage was not induced. No speed improvement is claimed from fallback behavior.
-
-After #1060's Canvas and contracts lanes passed, its terminal first attempt failed only because lint never reached compilation. A failed-job rerun on the unchanged head passed full Clippy, packaging, and the aggregate CI gate; the exact head `63f6fa171` entered the protected merge queue on 2026-10-03 14:23:29 UTC. This proves the source change passed normal PR validation, not that #1061's outage fallback has been exercised during a live backend failure.
-
-Rust service-lane reliability follow-up [UI #1063](https://github.com/ElevenID/marty-ui/pull/1063), reviewed head `ea7c98e3a`, extends the same pinned-toolchain cache probe before the mandatory workspace test compilation in both Canvas and contracts lanes. Lint and service lanes call one shared shell script; a failed probe clears only `RUSTC_WRAPPER` for subsequent steps. Independent review caught that optional `sccache --show-stats` could still fail a successful uncached job; both statistics steps now warn without failing mandatory validation, and partial sanitized evidence is removed. The full 98 workflow-policy, 146 Canvas runner/database-policy, and 2 stats-sanitizer tests pass locally, plus Ruff/Bash syntax/diff checks. Synthetic healthy/failure branches pass; a live backend outage and failures after a successful startup probe are not proven. Exact-head full PR [run 37133358874](https://github.com/ElevenID/marty-ui/actions/runs/37133358874) passed, including the 16m36s Canvas database suite and final gate. The reviewed head entered the protected merge queue at position 2 behind #1062, but account `burdettadam` removed it at 16:39:10 UTC. The detached combined-head [run 37136234398](https://github.com/ElevenID/marty-ui/actions/runs/37136234398) later completed successfully, including Canvas and final gate. The PR remains open and out of queue; do not requeue without clarifying the manual removal. This reliability guard has no measured time improvement and is not merged.
-
-Protected runner routing incident (2026-10-03): the standalone passport producer [run 37139093870](https://github.com/ElevenID/marty-ui/actions/runs/37139093870) on merged main dispatched to `canvas-oss-wsl2-*` despite requiring the `passport-beta-wsl2` label. The in-job host preflight rejected that runner before loading plan or release artifacts, and the downstream attestation record skipped; this is not qualification evidence. The predecessor producer runs had failed for other reasons, so the passport release-proof hold remains in force. Independently reviewed [UI #1065](https://github.com/ElevenID/marty-ui/pull/1065), head `71a8303c9`, adds a fail-closed inventory of existing repository-runner labels, exact-purpose validation of new registrations, and rejected-registration cleanup without weakening the in-job guard. Fifty-eight focused local tests pass, including eight executed PowerShell policy cases. Exact-head full PR [run 37140351129](https://github.com/ElevenID/marty-ui/actions/runs/37140351129) passed, including all eight hosted PowerShell cases (not skipped), 5,405 repository tests, the live Canvas lane, and final gate; the Canvas job took 58m56s. At 19:04 UTC, protected combined-head [run 37144033946](https://github.com/ElevenID/marty-ui/actions/runs/37144033946) was running from queue position 1; this is a contemporaneous observation, not a final result. An already-routed job or independently mislabelled runner still requires operator cleanup; the code cannot retroactively correct it or qualify the failed producer run.
-
-Subsequent protected outcomes (2026-10-03): runner-routing [UI #1065](https://github.com/ElevenID/marty-ui/pull/1065) passed [combined-head run 37144033946](https://github.com/ElevenID/marty-ui/actions/runs/37144033946) and merged as `9c91089d1`. Passport reference provisioning [UI #1066](https://github.com/ElevenID/marty-ui/pull/1066) passed [combined-head run 37146366367](https://github.com/ElevenID/marty-ui/actions/runs/37146366367) and merged as `b5966ae20`; its Canvas job took 59m16s, including 22m00s in the database-contract group. The earlier misrouted producer remains invalid; a fresh plan, correctly isolated producer, and attested record have not yet been proven. These are two distinct protected runs, not a before/after speed comparison.
-
-A3 shipped-asset classifier follow-up [UI #1070](https://github.com/ElevenID/marty-ui/pull/1070), reviewed head `044cf110c`, corrects an A0-discovered false negative: `SELFHOST_BUNDLE.md` is in the self-host bundle manifest but the broad Markdown skip previously selected no Rust/packaging suite lanes for it. The change selects Rust/packaging lanes for that one asset and adds manifest-membership plus actual-Bash classifier regression coverage; 99 workflow-policy tests and Ruff pass locally, and an independent reviewer found no blocker. Full PR [run 37149825124](https://github.com/ElevenID/marty-ui/actions/runs/37149825124) passed, including Canvas (62m13s; database group 23m03s) and the final gate. GitHub records two manual auto-merge disables; the PR remains open and out of the queue pending direction. No speedup or merge is claimed. Merge-group full validation remains unchanged.
-
-A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072), reviewed head `a535dc7a59`, passed protected combined-head [run 37157087655](https://github.com/ElevenID/marty-ui/actions/runs/37157087655), including Canvas and final gate, then merged into main as `c840464e5` on 2026-10-03 22:48:54 UTC. Its Canvas job took 45m50s: reusable test compilation 4m06s, Bookworm acceptance build 6m36s, public image 9m17s, worker preflight 7m55s, and database contract suite 16m21s. A prior combined-head run on the same PR also passed but ceased to be authoritative when a preceding queue entry changed; this recorded result is the run matching the final queue head. The change is documentation-only, so this faster run is variance evidence, not an attributed speed improvement.
-
-### A1 Canvas acceptance-owner follow-up (2026-10-04)
-
-[UI #1083](https://github.com/ElevenID/marty-ui/pull/1083) moved the worker published-process target to `marty-service-acceptance` while retaining both full targets, exact preflight proof, and mandatory names. A 2+2 test-thread pilot made the hosted database group slower (1,602 seconds versus 871 seconds in the 4+4 comparison), so it was reverted before merge. Reviewed head `82f067e08` kept the 4+4 budget. Its first PR run failed one unchanged historical JSON-consumer probe at its 120-second timeout; the unchanged rerun passed all required checks, including Canvas and the final CI gate. Protected [combined-head run 37205221707](https://github.com/ElevenID/marty-ui/actions/runs/37205221707) passed and merged as `fcb2cd74a` on 2026-10-04. The protected Canvas job took 44m47s; cache/load variance and the failed first attempt prevent attributing that whole-job difference to the ownership move.
-
-[UI #1086](https://github.com/ElevenID/marty-ui/pull/1086) moved the remaining 141-test Canvas composition target into the same acceptance package, with one new package-root regression test. The runner resolves the real issuance binary and both test executables from Cargo artifacts; Bookworm compatibility compiles the new target owner. Issuance no longer directly or transitively depends on Flow, Gateway, selfhost-bundle, or release-evidence for its normal/dev test closure, as confirmed by locked `cargo tree`; `cargo check --tests` for issuance passed. The first hosted attempt found three packaged-runtime child failures caused by a sparse-container root assumption and missing issuance-binary handoff. Those were fixed without dropping tests, and [exact-head PR run 37199826605](https://github.com/ElevenID/marty-ui/actions/runs/37199826605) passed all required checks: Canvas composition 144 passed, worker 127 passed with two ignored, and the formerly failing children passed. After #1083 merged, the composition commits rebased onto main and passed acceptance-target Cargo check, 411 focused Python tests with one skip, formatting, and independent exact-head review. The final protected [run 37331342522](https://github.com/ElevenID/marty-ui/actions/runs/37331342522) passed, and #1086 merged as `cf8785147` on 2026-10-05. No whole-job speedup is attributed to the ownership move.
-
 ## Goal completion criteria
 
 - Accepted changes are reviewed, validated, and merged; each queue item has a documented final disposition.
@@ -355,11 +674,18 @@ A0 tracker follow-up [UI #1072](https://github.com/ElevenID/marty-ui/pull/1072),
 - Historical reference and native validation responsibilities are explicit, with any evidence reuse checked for validity.
 - Normal GitHub runs demonstrate the resulting feedback behavior. Record actual savings or absence of savings without extrapolating from code size.
 - Release-tier tests prove nightly single-Linux happy-path qualification and no YouTube activity, while official production releases run the complete happy/error E2E inventory with release-bound evidence and official-only YouTube publication; unknown tier and missing evidence fail closed.
+- The test inventory demonstrates a genuine pyramid across unit, integration/contract, and E2E layers, with explicit tier/trigger ownership and no lost unique assertion; nightly executes only its declared happy-path cases at each layer, major-version qualification executes the complete mapped matrices, and every official stable release retains complete E2E qualification.
 
-## Design references
+## Historical checkpoints
 
-- [Cargo workspaces and package selection](https://doc.rust-lang.org/cargo/reference/workspaces.html): use package boundaries within the current workspace for independent validation.
-- [The practical test pyramid](https://martinfowler.com/articles/practical-test-pyramid.html): place detailed behavior at fast levels while retaining focused integration proof.
-- [Contract versus functional tests](https://docs.pact.io/consumer/contract_tests_not_functional_tests): message compatibility does not establish durable side effects.
-- [Tokio testing](https://tokio.rs/tokio/topics/testing): controlled time and I/O doubles for appropriate isolated tests.
-- [Semantic Versioning](https://semver.org/): version numbers express intended compatibility, not the impact of implementation changes.
+Chronological implementation, PR, run and timing snapshots are recoverable at
+Git commit `c86b2f8c6b34ba7ec1bac5461ded03b28adb7745`. They were removed from this active queue.
+Keep current requirements and unresolved acceptance here; store per-run output
+in CI artifacts or ignored local directories. Historical branch/recorder reports
+do not authorize removal of local unmerged work or imply current workspace state.
+
+Additional October 16 setup checkpoint history is recoverable from protected
+main commit `4f2b6d83922f0c8e5d6b26dddd903ef928566c59`; its active constraints are retained above.
+
+The installed-setup requirements also incorporate protected-main checkpoint
+`dd0d8d17a556696d6d287b785f40c3fc61f72b66`; source/package checks do not qualify the preview.

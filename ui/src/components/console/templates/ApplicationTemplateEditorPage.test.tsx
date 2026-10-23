@@ -133,4 +133,40 @@ describe('ApplicationTemplateEditorPage', () => {
       expect(screen.getByRole('combobox', { name: /^type/i })).toHaveTextContent('TEXT')
     })
   })
+
+  it.each([true, false])('saves evidence selectors and removes an unused date format (date=%s)', async (date) => {
+    vi.mocked(getApplicationTemplate).mockResolvedValueOnce({
+      id: 'application-template-1', name: 'Canvas achievement', status: 'DRAFT',
+      credential_template_id: 'credential-1',
+      form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL' }],
+      evidence_requirements: [], required_checks: [], approval_strategy: 'MANUAL',
+      claim_collection_rules: [{ claim_name: 'member_id', source: 'EVIDENCE_EXTRACTION',
+        source_config: { requirement_id: 'old-requirement', json_pointer: '/effective_at', format: 'date' } }],
+      notification_config: {}, ui_config: {},
+    })
+    vi.mocked(updateApplicationTemplate).mockResolvedValueOnce({ id: 'application-template-1' })
+    const { user } = renderWithRouter(
+      <Routes><Route path="/console/org/templates/applications/:templateId/edit" element={<ApplicationTemplateEditorPage />} /></Routes>,
+      { initialEntries: ['/console/org/templates/applications/application-template-1/edit?mode=advanced'] },
+    )
+    const requirement = await screen.findByRole('textbox', { name: 'Evidence requirement ID' })
+    await user.clear(requirement)
+    await user.type(screen.getByRole('textbox', { name: 'Evidence fact type' }), 'canvas.quiz_score')
+    const path = screen.getByRole('textbox', { name: 'Evidence value path' })
+    await user.clear(path)
+    await user.type(path, date ? '/effective_at' : '/assertion/score')
+    if (!date) {
+      await user.click(screen.getByRole('combobox', { name: 'Evidence format' }))
+      await user.click(await screen.findByRole('option', { name: 'Original value' }))
+    }
+    await user.click(screen.getByRole('button', { name: /save draft/i }))
+    await waitFor(() => expect(updateApplicationTemplate).toHaveBeenCalledWith(
+      'application-template-1', expect.objectContaining({ claim_collection_rules: [{
+        claim_name: 'member_id', source: 'EVIDENCE_EXTRACTION', source_config: {
+          fact_type: 'canvas.quiz_score', json_pointer: date ? '/effective_at' : '/assertion/score',
+          ...(date ? { format: 'date' } : {}),
+        },
+      }] }),
+    ))
+  })
 })

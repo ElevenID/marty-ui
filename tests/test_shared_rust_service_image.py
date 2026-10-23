@@ -21,6 +21,7 @@ RUST_SERVICES = {
     "gateway": "marty-gateway",
     "issuance_native": "marty-issuance-service",
     "notification": "marty-notification",
+    "oidf_keyless_edge": "marty-oidf-keyless-edge",
     "organization": "marty-organization",
     "passport_beta_bureau": "marty-passport-beta-bureau",
     "passport_provider_ingress": "marty-passport-provider-ingress",
@@ -36,7 +37,13 @@ UNROUTED_RUST_BINARIES = {
     "marty-verifier-positive-gate",
     "marty-passport-acceptance-api-key",
 }
-ALL_RUST_BINARIES = set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES
+PROFILE_RUST_BINARIES = {
+    "marty-canvas-sandbox", "marty-passport-keyless-edge",
+    "marty-passport-tls-bootstrap", "marty-keyless-grpc-bridge",
+}
+ALL_RUST_BINARIES = (
+    set(RUST_SERVICES.values()) | UNROUTED_RUST_BINARIES | PROFILE_RUST_BINARIES
+)
 
 
 def test_shared_service_image_builds_all_rust_binaries_once() -> None:
@@ -51,17 +58,7 @@ def test_shared_service_image_builds_all_rust_binaries_once() -> None:
         dockerfile.count("run-public-rust-build build-rust-service-binaries default")
         == 1
     )
-    assert dockerfile.index("ARG PASSPORT_SELF_SIGNED_TEST=false") < dockerfile.index(
-        "run-public-rust-build build-rust-service-binaries default"
-    )
-    assert (
-        "false) run-public-rust-build build-rust-service-binaries default ;;"
-        in dockerfile
-    )
-    assert (
-        "true) run-public-rust-build build-rust-service-binaries passport-self-signed-test"
-        in dockerfile
-    )
+    assert "PASSPORT_SELF_SIGNED_TEST" not in dockerfile
     assert dockerfile.count("COPY --from=rust-service-builder") == len(
         ALL_RUST_BINARIES
     )
@@ -90,14 +87,17 @@ def test_public_builder_cooks_dependencies_before_copying_all_source() -> None:
         "cargo chef cook --locked --release --workspace"
     ) < dependencies.index("FROM rust-service-dependencies AS rust-service-builder")
     assert builder.index("COPY rust /build/rust") < builder.index(
-        "ARG PASSPORT_SELF_SIGNED_TEST=false"
+        "run-public-rust-build build-rust-service-binaries default"
     )
     assert (
         builder.count("run-public-rust-build build-rust-service-binaries default") == 1
     )
     assert builder.count("RUN --mount=type=cache,id=marty-public-cargo-registry") == 1
     assert dependencies.count("--mount=type=secret,id=sccache_token") == 2
-    assert "RUSTFLAGS" not in dockerfile
+    assert (
+        'ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"'
+        in dockerfile.split("FROM rust-service-base AS rust-service-planner", 1)[0]
+    )
     assert "ENV SCCACHE" not in dockerfile
     wrapper = (ROOT / "scripts/ci/run-public-rust-build.sh").read_text(encoding="utf-8")
     assert "export RUSTC_WRAPPER=sccache" in wrapper
@@ -146,6 +146,31 @@ def test_public_builder_preserves_supported_amd64_and_arm64_registry_builds() ->
     assert '"services/Dockerfile"' in registry
 
 
+def test_public_builder_pins_build_only_mold_for_both_architectures() -> None:
+    dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
+    base, remainder = dockerfile.split(
+        "FROM rust-service-base AS rust-service-planner", 1
+    )
+    runtime = dockerfile.split("FROM debian:bookworm-slim@sha256:", 1)[1]
+    assert "mold-2.41.0-${target}-linux.tar.gz" in base
+    assert (
+        "checksum=a3696680d99e692970590a178bc3a33d78d60d1c6dc9db7a11b557b02b751f5d"
+        in base
+    )
+    assert (
+        "checksum=946de2774b06a71346bd59b55fddba610b65b8d93c3a4a1559cc84e103472710"
+        in base
+    )
+    assert "amd64) target=x86_64" in base
+    assert "arm64) target=aarch64" in base
+    assert "sha256sum --check --status" in base
+    assert "ln -s mold /usr/local/bin/ld.mold" in base
+    assert 'ENV RUSTFLAGS="-C link-arg=-fuse-ld=mold"' in base
+    assert "FROM rust-service-cache AS rust-service-dependencies" in remainder
+    assert "COPY --from=rust-service-builder" in runtime
+    assert "COPY --from=rust-service-base /usr/local/bin/mold" not in runtime
+
+
 def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release() -> (
     None
 ):
@@ -155,14 +180,12 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         (ROOT / ".github/workflows/warm-ci-caches.yml").read_text(encoding="utf-8")
     )
     ci_steps = ci["jobs"]["test-rust-services"]["steps"]
-    passport_steps = ci["jobs"]["test-rust-passport-image"]["steps"]
     public = [
         step
-        for step in ci_steps + passport_steps
-        if step.get("name")
-        in ("Build public selfhost image", "Build opt-in passport test-mode image")
+        for step in ci_steps
+        if step.get("name") == "Build public selfhost image"
     ]
-    assert len(public) == 2
+    assert len(public) == 1
     for step in public:
         config = step["with"]
         assert config["file"] == "services/Dockerfile"
@@ -179,12 +202,6 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         if step.get("name") == "Expose public image compiler cache credentials"
     )
     assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in ci_credential["with"]["script"]
-    passport_credential = next(
-        step
-        for step in passport_steps
-        if step.get("name") == "Expose public image compiler cache credentials"
-    )
-    assert "'SCCACHE_GHA_RW_MODE', 'READ_ONLY'" in passport_credential["with"]["script"]
     release = cd["jobs"]["build-services"]
     release_steps = release["steps"]
     release_credential = next(
@@ -212,6 +229,21 @@ def test_public_build_cache_is_read_only_in_ci_and_written_only_by_main_release(
         warm_build["with"]["cache-to"]
         == "type=gha,mode=max,scope=marty-ui-public-services,ignore-error=true"
     )
+    release_warm = next(
+        step
+        for step in warmer["steps"]
+        if step.get("name") == "Warm public service release-binary compiler outputs"
+    )
+    assert warmer["steps"].index(warm_build) < warmer["steps"].index(release_warm)
+    assert release_warm["uses"] == warm_build["uses"]
+    release_config = release_warm["with"]
+    assert release_config["file"] == "services/Dockerfile"
+    assert release_config["target"] == "rust-service-builder"
+    assert release_config["cache-from"] == "type=gha,scope=marty-ui-public-services"
+    assert release_config["secret-envs"] == warm_build["with"]["secret-envs"]
+    assert release_config["push"] is False
+    assert release_config["provenance"] is False
+    assert "cache-to" not in release_config
 
 
 def assert_closed_rust_dispatch(script: str) -> None:
@@ -278,10 +310,10 @@ def test_deleted_python_service_directories_do_not_return() -> None:
             assert not list(service_dir.rglob("*.py"))
 
 
-def test_registry_builder_separates_rust_services_from_python_migrations() -> None:
+def test_registry_builder_has_no_python_wheel_inputs_for_rust_migrations() -> None:
     script = (ROOT / "scripts" / "build-push-registry.sh").read_text(encoding="utf-8")
     service_args = script.split('"services/Dockerfile"', maxsplit=1)[1].split(
-        "done < <(catalog_services app)", maxsplit=1
+        'done <<< "$catalog_app_services"', maxsplit=1
     )[0]
     migration_args = script.split('"services/Dockerfile.migrations"', maxsplit=1)[
         1
@@ -296,7 +328,5 @@ def test_registry_builder_separates_rust_services_from_python_migrations() -> No
         "MARTY_VERIFICATION_DIGEST",
         "MARTY_ISO18013_URI",
         "MARTY_ISO18013_DIGEST",
-        "MARTY_COMMON_URI",
-        "MARTY_COMMON_DIGEST",
     ):
-        assert marker in migration_args
+        assert marker not in migration_args

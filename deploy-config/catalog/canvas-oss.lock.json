@@ -12,8 +12,8 @@
   },
   "image": {
     "repository": "ghcr.io/elevenid/canvas-oss-portability",
-    "digest": null,
-    "digest_state": "pending_source_build",
+    "digest": "sha256:70745c55755d3b7f013837e8d3bce749bedcfaebdd332c2747841adc0abe466b",
+    "digest_state": "published",
     "publication_workflow": ".github/workflows/canvas-oss-image.yml",
     "base_image": {
       "reference": "instructure/ruby-passenger:3.4-jammy",
@@ -42,7 +42,7 @@
     "package_manifest": "tests/canvas-oss-contract/package.json",
     "package_lock": "tests/canvas-oss-contract/package-lock.json",
     "audit_level": "high",
-    "base_image": "mcr.microsoft.com/playwright:v1.56.0-jammy@sha256:8901203e4be3245885e0c0c58a3098d21a0892e17525bb32ce66ae37033434af",
+    "base_image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
     "compose_service": "canvas-contract",
     "monitor_service": "canvas-continuity-monitor",
     "execution_boundary": "docker_compose_one_shot",
@@ -52,10 +52,22 @@
   "bootstrap": {
     "phase": "pre_start_only",
     "allowed_commands": [
-      ["bin/rails", "db:create"],
-      ["bin/rails", "db:migrate"],
-      ["bin/rails", "db:initial_setup"],
-      ["bin/rails", "brand_configs:generate_and_upload_all"]
+      [
+        "bin/rails",
+        "db:create"
+      ],
+      [
+        "bin/rails",
+        "db:migrate"
+      ],
+      [
+        "bin/rails",
+        "db:initial_setup"
+      ],
+      [
+        "bin/rails",
+        "brand_configs:generate_and_upload_all"
+      ]
     ],
     "forbidden_after_start": [
       "rails_runner",
@@ -72,8 +84,13 @@
     "canvas_origin": "https://canvas-test.elevenidllc.com",
     "timezone": "America/Denver",
     "overnight_window": "02:00-06:00",
-    "runner_labels": ["self-hosted", "linux", "x64", "canvas-oss-wsl2"],
-    "docker_network": "marty-infra-network",
+    "runner_labels": [
+      "self-hosted",
+      "linux",
+      "x64",
+      "canvas-oss-wsl2"
+    ],
+    "docker_network": "elevenid-beta-network",
     "tunnel_owner": "existing_beta_stack",
     "contract_service": "canvas-contract",
     "continuity_monitor_service": "canvas-continuity-monitor",

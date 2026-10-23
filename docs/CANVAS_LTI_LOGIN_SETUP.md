@@ -4,11 +4,11 @@
 
 Canvas is configured through the platform + program-binding model. Older pre-platform Canvas configuration APIs and direct Canvas credential events are no longer exposed.
 
-The active demo path is:
+The beta demo path is:
 
 ```text
 Canvas LTI launch -> CanvasPlatform -> CanvasProgramBinding -> application flow
-Canvas AGS/evidence event -> MIP EvidenceFact -> policy approval -> issuance -> wallet + Canvas mirror
+authoritative Canvas assignment/submission sync -> MIP EvidenceFact -> policy approval -> issuance -> wallet claim + verification
 ```
 
 ## What Is Working
@@ -16,7 +16,7 @@ Canvas AGS/evidence event -> MIP EvidenceFact -> policy approval -> issuance -> 
 - ElevenID issuance service exposes Canvas platform and program-binding APIs.
 - Canvas LMS can launch ElevenID through LTI 1.3 OIDC.
 - LTI launch state is tied to the Canvas platform and resolved to an enabled program binding.
-- Canvas evidence is accepted through `/evidence-events`, `/ags/score-events`, and `/nrps/membership-events`.
+- Beta uses authoritative Canvas LTI evidence sync. Synthetic AGS score events are limited to an isolated disposable fixture with legacy event ingest enabled.
 - Direct credential-event issuance is no longer supported.
 - The real Canvas seeder creates or updates the Canvas developer key, external tool, test course, learner, quiz, platform, and program binding.
 - The demo can auto-approve and issue after policy accepts the Canvas evidence fact.
@@ -62,7 +62,7 @@ curl -s -H "X-API-Key: ${MARTY_API_KEY}" \
 
 Check:
 
-- `canvas_platform_id` matches the platform from Feature 1.
+- `platform_id` matches the platform from Feature 1.
 - `application_template_id` and `credential_template_id` are present.
 - `evidence_requirements` describe the Canvas completion/score requirement.
 - `auto_approve_on_evidence` is `true` for the demo.
@@ -114,19 +114,16 @@ Expected:
 - The learner does not receive org-console access.
 - Re-launching resumes or resolves the existing application instead of creating a broken duplicate.
 
-### Feature 7: Canvas Evidence Event
+### Feature 7: Canvas Evidence Sync
 
-The preferred demo evidence path is the seeder's signed AGS quiz score event. The
-legacy ingest endpoint is disabled by default; enable it only for the demo and let
-the seeder construct the timestamp, nonce, and HMAC signature without printing the
-shared secret.
-
-```bash
-cd marty-ui
-CANVAS_LEGACY_EVENT_INGEST_ENABLED=true \
-CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true \
-PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file .env.tunnel.beta.local
-```
+For beta, keep `CANVAS_LEGACY_EVENT_INGEST_ENABLED=false`. Configure an
+assignment-scoped evidence requirement and matching application policy, complete
+the instructor Deep Linking placement and resource launch, then activate the
+binding. Grade a real Canvas submission and run the authoritative LTI evidence
+sync used by the [hosted Canvas acceptance contract](CANVAS_OSS_PORTABILITY_PIPELINE.md).
+The recorder consumes the resulting assignment evidence; it does not create
+the course, binding, or submission. The Rust seeder's signed AGS quiz score
+event is only for the isolated disposable fixture and is rejected on beta.
 
 Check:
 
@@ -135,22 +132,25 @@ Check:
 - The approval policy permits the application when scope and score match.
 - Issuance transaction is created or reused.
 
-### Feature 8: Wallet Claim + Canvas Mirror
+### Feature 8: Wallet Claim + Optional Canvas Mirror
 
 After the application is approved:
 
 1. Claim the credential through the wallet flow.
 2. Confirm the issuer DID is the Marty remote-key DID.
 3. Confirm the revocation registry is set.
-4. Confirm the Canvas mirror delivery record is queued/published.
+4. If testing the optional Canvas Credentials mirror, confirm its delivery record is queued/published. The beta portability recorder does not qualify this projection.
 
 ## Seeder
 
-Run the real Canvas seeder:
+Run the Rust seeder in an isolated disposable Compose project after creating
+`.env.canvas-disposable.local` from `config/canvas/disposable-seed.env.example`
+and starting that project as described in the
+[disposable qualification guide](rust-migrations/canvas-demo-seed-disposable-qualification.md):
 
 ```bash
 cd marty-ui
-PYTHONIOENCODING=utf-8 python scripts/seed_canvas_real.py --env-file .env.tunnel.beta.local
+bash scripts/qualify-canvas-seed-disposable.sh seed .env.canvas-disposable.local
 ```
 
 The seeder is idempotent and now creates:
@@ -161,7 +161,11 @@ The seeder is idempotent and now creates:
 - Canvas external tool
 - Canvas test course/learner/quiz/assignment
 - Open Badge credential template and application template
-- demo application/evidence/claim/mirror steps when enabled
+- demo application/evidence/claim/mirror steps when enabled in the disposable fixture
+
+The beta recording requires a separate assignment-scoped setup with
+authoritative evidence sync. Do not enable legacy event ingest on beta to run
+the seeder's synthetic score event.
 
 ## Quick Reference: ElevenID Canvas Endpoints
 
@@ -171,13 +175,15 @@ The seeder is idempotent and now creates:
 | `/v1/integrations/canvas/platforms/{id}` | GET/PUT/DELETE | Manage one Canvas platform |
 | `/v1/integrations/canvas/platforms/{id}/sandbox-probe` | POST | Probe Canvas metadata |
 | `/v1/integrations/canvas/platforms/{id}/jwks-refresh` | POST | Refresh OIDC/JWKS metadata |
-| `/v1/integrations/canvas/program-bindings` | GET/POST | List or create Canvas program bindings |
+| `/v1/integrations/canvas/program-bindings` | GET | List Canvas program bindings |
+| `/v1/integrations/canvas/platforms/{id}/program-bindings` | POST | Create a binding for a platform |
 | `/v1/integrations/canvas/program-bindings/{id}` | GET/PUT/DELETE | Manage one binding |
 | `/v1/integrations/canvas/lti/platforms/{id}/experience-login` | POST | Initiate Canvas LTI experience login |
 | `/v1/integrations/canvas/lti/platforms/{id}/experience` | POST | Complete Canvas LTI launch |
-| `/v1/integrations/canvas/evidence-events` | POST | Process generic signed Canvas evidence |
-| `/v1/integrations/canvas/ags/score-events` | POST | Process Canvas AGS score evidence |
-| `/v1/integrations/canvas/nrps/membership-events` | POST | Process Canvas NRPS membership evidence |
+| `/v1/integrations/canvas/evidence-events` | POST | Legacy signed evidence ingest; disabled on beta |
+| `/v1/integrations/canvas/ags/score-events` | POST | Legacy AGS score ingest; disposable fixture only |
+| `/v1/integrations/canvas/nrps/membership-events` | POST | Legacy NRPS ingest; disabled on beta |
+
 ## Environment Variables
 
 Minimum ElevenID values:
@@ -193,8 +199,9 @@ Minimum ElevenID values:
 - `CANVAS_LTI_CLIENT_ID`
 - `CANVAS_LTI_DEPLOYMENT_ID`
 
-Demo values:
+Disposable fixture demo values (do not use these synthetic evidence settings on beta):
 
+- `CANVAS_LEGACY_EVENT_INGEST_ENABLED=true`
 - `CANVAS_OPEN_BADGE_SCENARIO_ENABLED=true`
 - `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`
 - `CANVAS_PROGRAM_BINDING_EVIDENCE_TYPE=canvas.quiz_score`
@@ -203,6 +210,11 @@ Demo values:
 - `CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=true`
 - `CANVAS_DEMO_WALLET_CLAIM_ENABLED=true`
 - `CANVAS_DEMO_MIRROR_PUBLISH_ENABLED=true`
+
+For beta, leave `CANVAS_DEMO_EVIDENCE_EVENT_ENABLED=false` and
+`CANVAS_LEGACY_EVENT_INGEST_ENABLED=false`. The assignment-scoped binding,
+matching application policy, instructor placement, real submission, and
+authoritative sync described in Feature 7 are separate release gates.
 
 Canvas LMS values:
 

@@ -1,0 +1,9 @@
+
+ RUN  v5.0.0 /workspace/scratch/d8b5d3d3b0dd/marty-ui-runtime-integrity/ui
+
+
+ Test Files  1 passed (1)
+      Tests  12 passed (12)
+   Start at  03:45:54
+   Duration  3.47s (tests 35%, import 29%, environment 20%, transform 9%, setup 7%)
+

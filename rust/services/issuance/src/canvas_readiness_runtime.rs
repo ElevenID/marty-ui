@@ -9,10 +9,12 @@ use std::{collections::BTreeSet, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
+use marty_key_material_policy::private_jwk_members;
 use marty_oid4vci::{
     jose::{verify_compact_jwt_with_public_jwk, verify_detached_signature_with_public_jwk},
     lti::canvas_lti_trust_profile,
 };
+use marty_signing_grant::{minter::GrantMinter, SigningOrigin};
 use rand::RngCore;
 use reqwest::{Client, StatusCode, Url};
 use serde_json::{json, Map, Value};
@@ -22,7 +24,7 @@ use thiserror::Error;
 use crate::{
     canvas_binding_domain::CanvasProgramBindingRecord,
     canvas_lti_experience::portable_canvas_pilot_enabled,
-    canvas_lti_tool_signing::CanvasLtiToolJwtSigner,
+    canvas_lti_tool_signing::{CanvasLtiSigningKind, CanvasLtiToolJwtSigner},
     canvas_management_domain::CanvasPlatformRecord,
     canvas_management_service::CanvasReadinessInputProvider,
     canvas_readiness::{
@@ -35,7 +37,6 @@ use crate::{
 
 const MAX_DOCUMENT_BYTES: usize = 1_048_576;
 const READINESS_AUDIENCE: &str = "marty:canvas-readiness";
-const PRIVATE_JWK_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
 
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 #[error("Canvas readiness dependency is unavailable")]
@@ -102,6 +103,8 @@ pub(crate) trait CanvasReadinessDidSigner: Send + Sync {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError>;
 }
@@ -134,16 +137,21 @@ impl CanvasReadinessDidSigner for HttpDidSigner {
         organization_id: &str,
         configuration: &CanvasReadinessIssuerConfiguration,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         challenge: &[u8],
     ) -> Result<String, CanvasReadinessDependencyError> {
         self.sign_did(SignRequest {
             organization_id: organization_id.to_owned(),
+            operation_id: operation_id.to_owned(),
             issuer_did: configuration.issuer_did.clone(),
             credential_format: configuration.credential_format.to_owned(),
             key_purpose: configuration.key_purpose.to_owned(),
             payload: challenge.to_vec(),
             algorithm: configuration.algorithm.clone(),
             verification_method_id: verification_method_id.to_owned(),
+            expected_public_jwk: None,
+            signing_key_reference: signing_key_reference.to_owned(),
         })
         .await
         .map(|response| response.signature_b64)
@@ -171,7 +179,44 @@ impl LiveCanvasReadinessChallengeProvider {
         lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
         signing_service_url: Url,
         signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
         timeout: Duration,
+    ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            None,
+        )
+    }
+
+    pub fn new_with_grant(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: GrantMinter,
+    ) -> Result<Self, String> {
+        Self::configure(
+            lti_signer,
+            signing_service_url,
+            signing_service_api_key,
+            issuer_sign_key,
+            timeout,
+            Some(minter),
+        )
+    }
+
+    fn configure(
+        lti_signer: Arc<dyn CanvasLtiToolJwtSigner>,
+        signing_service_url: Url,
+        signing_service_api_key: Option<&str>,
+        issuer_sign_key: Option<&str>,
+        timeout: Duration,
+        minter: Option<GrantMinter>,
     ) -> Result<Self, String> {
         let issuer_resolver = HttpIssuerContextResolver::new(
             signing_service_url.clone(),
@@ -179,8 +224,11 @@ impl LiveCanvasReadinessChallengeProvider {
             timeout,
         )
         .map_err(|_| "Canvas readiness issuer resolver could not be configured".to_owned())?;
-        let did_signer = HttpDidSigner::new(signing_service_url, signing_service_api_key, timeout)
+        let mut did_signer = HttpDidSigner::new(signing_service_url, issuer_sign_key, timeout)
             .map_err(|_| "Canvas readiness DID signer could not be configured".to_owned())?;
+        if let Some(minter) = minter {
+            did_signer = did_signer.with_grant_minter(SigningOrigin::IssuanceReadiness, minter);
+        }
         Ok(Self::with_ports(
             lti_signer,
             Arc::new(issuer_resolver),
@@ -209,7 +257,15 @@ impl LiveCanvasReadinessChallengeProvider {
             "iat": evaluated_at.timestamp(),
             "jti": URL_SAFE_NO_PAD.encode(nonce),
         });
-        let token = self.lti_signer.sign_jwt(&payload).await.ok()?;
+        let token = self
+            .lti_signer
+            .sign_jwt(
+                &payload,
+                CanvasLtiSigningKind::Readiness,
+                payload.get("jti")?.as_str()?,
+            )
+            .await
+            .ok()?;
         let segments = token.split('.').collect::<Vec<_>>();
         let [encoded_header, encoded_payload, _] = segments.as_slice() else {
             return None;
@@ -237,7 +293,7 @@ impl LiveCanvasReadinessChallengeProvider {
         let [public_jwk] = matching.as_slice() else {
             return None;
         };
-        if contains_private_jwk_material(public_jwk)
+        if private_jwk_members(public_jwk).next().is_some()
             || public_jwk.get("kty").and_then(Value::as_str) != Some("RSA")
             || !optional_string_matches(public_jwk.get("alg"), "RS256")
             || !optional_string_matches(public_jwk.get("use"), "sig")
@@ -262,6 +318,7 @@ impl LiveCanvasReadinessChallengeProvider {
             .await
             .ok()?;
         let verification_method_id = validate_issuer_resolution(&resolution, &configuration)?;
+        let signing_key_reference = crate::credential::resolved_signing_key_reference(&resolution)?;
         let public_jwk = resolution.get("public_jwk")?.as_object()?;
         let mut nonce = [0_u8; 32];
         rand::rng().fill_bytes(&mut nonce);
@@ -269,12 +326,15 @@ impl LiveCanvasReadinessChallengeProvider {
         challenge.extend_from_slice(organization_id.as_bytes());
         challenge.push(0);
         challenge.extend_from_slice(&nonce);
+        let operation_id = URL_SAFE_NO_PAD.encode(nonce);
         let signature = self
             .did_signer
             .sign_challenge(
                 organization_id,
                 &configuration,
                 verification_method_id,
+                signing_key_reference,
+                &operation_id,
                 &challenge,
             )
             .await
@@ -352,7 +412,7 @@ fn validate_issuer_resolution<'a>(
     }
     let public_jwk = resolution.get("public_jwk")?.as_object()?;
     if public_jwk.get("kid").and_then(Value::as_str) != Some(verification_method_id)
-        || contains_private_jwk_material(public_jwk)
+        || private_jwk_members(public_jwk).next().is_some()
     {
         return None;
     }
@@ -390,12 +450,6 @@ fn did_publishes_verification_method(
 
 fn optional_string_matches(value: Option<&Value>, expected: &str) -> bool {
     matches!(value, None | Some(Value::Null)) || value.and_then(Value::as_str) == Some(expected)
-}
-
-fn contains_private_jwk_material(jwk: &Map<String, Value>) -> bool {
-    PRIVATE_JWK_MEMBERS
-        .iter()
-        .any(|member| jwk.contains_key(*member))
 }
 
 #[derive(Clone)]
@@ -654,6 +708,7 @@ pub struct HttpCanvasReadinessDocumentProvider {
     client: Client,
     credential_template_base_url: Url,
     status_profile_base_url: Url,
+    status_profile_service_token: Option<String>,
 }
 
 impl std::fmt::Debug for HttpCanvasReadinessDocumentProvider {
@@ -673,6 +728,7 @@ impl HttpCanvasReadinessDocumentProvider {
     pub fn new(
         credential_template_base_url: &str,
         status_profile_base_url: Url,
+        status_profile_service_token: Option<&str>,
         timeout: Duration,
     ) -> Result<Self, String> {
         let credential_template_base_url = Url::parse(credential_template_base_url)
@@ -686,14 +742,23 @@ impl HttpCanvasReadinessDocumentProvider {
             client,
             credential_template_base_url,
             status_profile_base_url,
+            status_profile_service_token: status_profile_service_token.map(str::to_owned),
         })
     }
 
-    async fn object(&self, endpoint: Option<Url>) -> Map<String, Value> {
+    async fn object(
+        &self,
+        endpoint: Option<Url>,
+        service_token: Option<&str>,
+    ) -> Map<String, Value> {
         let Some(endpoint) = endpoint else {
             return Map::new();
         };
-        let Ok(mut response) = self.client.get(endpoint).send().await else {
+        let mut request = self.client.get(endpoint);
+        if let Some(token) = service_token {
+            request = request.header("x-service-token", token);
+        }
+        let Ok(mut response) = request.send().await else {
             return Map::new();
         };
         if response.status() != StatusCode::OK
@@ -724,15 +789,18 @@ impl HttpCanvasReadinessDocumentProvider {
 impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {
     async fn documents(&self, credential_template_id: &str) -> CanvasReadinessDocuments {
         let credential_template = self
-            .object(append_segments(
-                &self.credential_template_base_url,
-                &[
-                    "internal",
-                    "credential-templates",
-                    credential_template_id,
-                    "issuance-context",
-                ],
-            ))
+            .object(
+                append_segments(
+                    &self.credential_template_base_url,
+                    &[
+                        "internal",
+                        "credential-templates",
+                        credential_template_id,
+                        "issuance-context",
+                    ],
+                ),
+                None,
+            )
             .await;
         let profile_id = credential_template
             .get("revocation_profile_id")
@@ -741,10 +809,18 @@ impl CanvasReadinessDocumentProvider for HttpCanvasReadinessDocumentProvider {
             .filter(|value| !value.is_empty());
         let credential_status_profile = match profile_id {
             Some(profile_id) => {
-                self.object(append_segments(
-                    &self.status_profile_base_url,
-                    &["v1", "revocation-profiles", profile_id],
-                ))
+                self.object(
+                    append_segments(
+                        &self.status_profile_base_url,
+                        &[
+                            "internal",
+                            "revocation-profiles",
+                            profile_id,
+                            "issuance-context",
+                        ],
+                    ),
+                    self.status_profile_service_token.as_deref(),
+                )
                 .await
             }
             None => Map::new(),
@@ -844,16 +920,12 @@ fn https_url(value: &str) -> bool {
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use axum::{http::HeaderMap, response::IntoResponse, routing::get, Json, Router};
+    use base64::engine::general_purpose::STANDARD;
     use chrono::TimeZone;
-    use rand08::rngs::OsRng;
-    use rsa::{
-        pkcs1v15::SigningKey,
-        signature::{SignatureEncoding, Signer},
-        traits::PublicKeyParts,
-        RsaPrivateKey,
-    };
+    use marty_crypto::jwk::public_key_pem_to_jwk;
     use serde_json::json;
-    use sha2::Sha256;
+    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{
@@ -861,35 +933,183 @@ mod tests {
         canvas_lti_tool_signing::CanvasLtiToolSigningError,
     };
 
+    #[tokio::test]
+    async fn readiness_profile_uses_only_the_service_authenticated_internal_read() {
+        let app = Router::new()
+            .route(
+                "/internal/credential-templates/{template_id}/issuance-context",
+                get(|headers: HeaderMap| async move {
+                    if headers.contains_key("x-service-token") {
+                        return StatusCode::BAD_REQUEST.into_response();
+                    }
+                    Json(json!({"revocation_profile_id": "profile-1"})).into_response()
+                }),
+            )
+            .route(
+                "/internal/revocation-profiles/{profile_id}/issuance-context",
+                get(|headers: HeaderMap| async move {
+                    if headers
+                        .get("x-service-token")
+                        .and_then(|value| value.to_str().ok())
+                        != Some("service-secret")
+                    {
+                        return StatusCode::UNAUTHORIZED.into_response();
+                    }
+                    Json(json!({"id": "profile-1", "organization_id": "org-1", "status": "ACTIVE"}))
+                        .into_response()
+                }),
+            )
+            .route(
+                "/v1/revocation-profiles/{profile_id}",
+                get(|| async { StatusCode::GONE }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let authenticated = HttpCanvasReadinessDocumentProvider::new(
+            &base_url,
+            Url::parse(&base_url).unwrap(),
+            Some("service-secret"),
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        let documents = authenticated.documents("template-1").await;
+        assert_eq!(
+            documents.credential_template["revocation_profile_id"],
+            "profile-1"
+        );
+        assert_eq!(documents.credential_status_profile["id"], "profile-1");
+        assert_eq!(
+            documents.credential_status_profile["organization_id"],
+            "org-1"
+        );
+        assert_eq!(documents.credential_status_profile["status"], "ACTIVE");
+
+        let unauthenticated = HttpCanvasReadinessDocumentProvider::new(
+            &base_url,
+            Url::parse(&base_url).unwrap(),
+            None,
+            Duration::from_secs(2),
+        )
+        .unwrap();
+        assert!(unauthenticated
+            .documents("template-1")
+            .await
+            .credential_status_profile
+            .is_empty());
+        server.abort();
+    }
+
     #[derive(Clone)]
     struct RsaFixture {
-        private: Arc<RsaPrivateKey>,
+        client: reqwest::Client,
+        base_url: reqwest::Url,
+        token: String,
+        key_name: String,
         key_id: String,
         public_jwk: Value,
     }
 
     impl RsaFixture {
-        fn new(key_id: &str) -> Self {
-            let private =
-                Arc::new(RsaPrivateKey::new(&mut OsRng, 2_048).expect("readiness RSA private key"));
-            let public = private.to_public_key();
+        async fn new(key_id: &str, key_prefix: &str) -> Self {
+            assert_eq!(
+                std::env::var("MARTY_KMS_DISPOSABLE_PROBE").as_deref(),
+                Ok("1"),
+                "run only inside the disposable KMS probe"
+            );
+            assert!(matches!(key_prefix, "lti-tool" | "cred-issuer"));
+            let endpoint = std::env::var("MARTY_TEST_OPENBAO_URL").expect("disposable OpenBao URL");
+            let base_url = reqwest::Url::parse(&endpoint).expect("valid disposable OpenBao URL");
+            assert_eq!(base_url.scheme(), "https");
+            assert!(matches!(
+                base_url.host_str(),
+                Some("127.0.0.1" | "localhost")
+            ));
+            let token = std::env::var("MARTY_TEST_OPENBAO_TOKEN").expect("scoped OpenBao token");
+            let key_name = format!("{key_prefix}-readiness-{}", uuid::Uuid::new_v4().simple());
+            let ca_file = std::env::var("BAO_CACERT").expect("disposable public OpenBao CA");
+            let client = marty_openbao_http::OpenBaoHttp::connect(
+                &endpoint,
+                Some(std::path::Path::new(&ca_file)),
+                std::time::Duration::from_secs(10),
+            )
+            .expect("CA-verified OpenBao HTTPS client")
+            .client()
+            .clone();
+            let key_url = base_url
+                .join(&format!("/v1/transit/keys/{key_name}"))
+                .expect("remote key URL");
+            client
+                .post(key_url.clone())
+                .header("X-Vault-Token", &token)
+                .json(&json!({"type": "rsa-2048"}))
+                .send()
+                .await
+                .expect("create remote RSA key")
+                .error_for_status()
+                .expect("scoped RSA key creation");
+            let metadata = client
+                .get(key_url)
+                .header("X-Vault-Token", &token)
+                .send()
+                .await
+                .expect("read remote RSA metadata")
+                .error_for_status()
+                .expect("scoped RSA metadata read")
+                .json::<Value>()
+                .await
+                .expect("remote RSA metadata JSON");
+            assert_eq!(metadata["data"]["exportable"], false);
+            assert_eq!(metadata["data"]["imported_key"], false);
+            let pem = metadata["data"]["keys"]["1"]["public_key"]
+                .as_str()
+                .expect("provider-generated RSA public key");
+            let mut public_jwk = serde_json::to_value(
+                public_key_pem_to_jwk(pem).expect("valid remote RSA public key"),
+            )
+            .expect("public RSA JWK JSON");
+            public_jwk["kid"] = json!(key_id);
             Self {
-                private,
+                client,
+                base_url,
+                token,
+                key_name,
                 key_id: key_id.to_owned(),
-                public_jwk: json!({
-                    "kid": key_id,
-                    "kty": "RSA",
-                    "alg": "RS256",
-                    "use": "sig",
-                    "n": URL_SAFE_NO_PAD.encode(public.n().to_bytes_be()),
-                    "e": URL_SAFE_NO_PAD.encode(public.e().to_bytes_be()),
-                }),
+                public_jwk,
             }
         }
 
-        fn sign(&self, payload: &[u8]) -> String {
-            let signature = SigningKey::<Sha256>::new((*self.private).clone()).sign(payload);
-            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        async fn sign(&self, payload: &[u8]) -> Result<String, ()> {
+            let digest = Sha256::digest(payload);
+            let url = self
+                .base_url
+                .join(&format!("/v1/transit/sign/{}", self.key_name))
+                .map_err(|_| ())?;
+            let response = self
+                .client
+                .post(url)
+                .header("X-Vault-Token", &self.token)
+                .json(&json!({
+                    "input": STANDARD.encode(digest),
+                    "prehashed": true,
+                    "hash_algorithm": "sha2-256",
+                    "signature_algorithm": "pkcs1v15",
+                }))
+                .send()
+                .await
+                .map_err(|_| ())?
+                .error_for_status()
+                .map_err(|_| ())?
+                .json::<Value>()
+                .await
+                .map_err(|_| ())?;
+            let encoded = response["data"]["signature"]
+                .as_str()
+                .and_then(|value| value.split(':').nth(2))
+                .ok_or(())?;
+            let signature = STANDARD.decode(encoded).map_err(|_| ())?;
+            Ok(URL_SAFE_NO_PAD.encode(signature))
         }
     }
 
@@ -900,7 +1120,12 @@ mod tests {
 
     #[async_trait]
     impl CanvasLtiToolJwtSigner for TestLtiSigner {
-        async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+        async fn sign_jwt(
+            &self,
+            payload: &Value,
+            _kind: CanvasLtiSigningKind,
+            _source_id: &str,
+        ) -> Result<String, CanvasLtiToolSigningError> {
             let header = json!({"alg": "RS256", "typ": "JWT", "kid": self.rsa.key_id});
             let signing_input = format!(
                 "{}.{}",
@@ -909,7 +1134,9 @@ mod tests {
             );
             Ok(format!(
                 "{signing_input}.{}",
-                self.rsa.sign(signing_input.as_bytes())
+                self.rsa.sign(signing_input.as_bytes()).await.map_err(|_| {
+                    CanvasLtiToolSigningError::SigningFailed("remote RSA signer unavailable".into())
+                })?
             ))
         }
 
@@ -949,10 +1176,15 @@ mod tests {
             _organization_id: &str,
             _configuration: &CanvasReadinessIssuerConfiguration,
             _verification_method_id: &str,
+            _signing_key_reference: &str,
+            _operation_id: &str,
             challenge: &[u8],
         ) -> Result<String, CanvasReadinessDependencyError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.rsa.sign(challenge))
+            self.rsa
+                .sign(challenge)
+                .await
+                .map_err(|_| CanvasReadinessDependencyError)
         }
     }
 
@@ -962,6 +1194,7 @@ mod tests {
             "issuer_did": issuer_did,
             "algorithm": "RS256",
             "verification_method_id": rsa.key_id,
+            "signing_key_reference": "transit/keys/canvas-readiness-1",
             "public_jwk": rsa.public_jwk,
             "issuer_profile": {
                 "status": "active",
@@ -990,10 +1223,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn live_challenges_prove_the_published_lti_and_kms_keys() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let calls = Arc::new(AtomicUsize::new(0));
         let provider = LiveCanvasReadinessChallengeProvider::with_ports(
             Arc::new(TestLtiSigner {
@@ -1020,10 +1255,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn live_challenges_reject_ambiguous_or_private_key_material_before_kms_use() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let mut resolution = issuer_resolution(issuer_did, &kms_rsa);
         resolution["public_jwk"]["d"] = json!("private-material-must-not-cross-boundary");
         let calls = Arc::new(AtomicUsize::new(0));
@@ -1050,10 +1287,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires disposable loopback OpenBao with scoped managed-signing token"]
     async fn kms_challenge_requires_the_active_method_in_both_did_relationships() {
-        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256");
+        let lti_rsa = RsaFixture::new("did:web:issuer.example:canvas#lti-rs256", "lti-tool").await;
         let issuer_did = "did:web:issuer.example:org-1";
-        let kms_rsa = RsaFixture::new(&format!("{issuer_did}#credential-rs256"));
+        let kms_rsa =
+            RsaFixture::new(&format!("{issuer_did}#credential-rs256"), "cred-issuer").await;
         let mut resolution = issuer_resolution(issuer_did, &kms_rsa);
         resolution["did_document"]["assertionMethod"] = json!([]);
         let calls = Arc::new(AtomicUsize::new(0));

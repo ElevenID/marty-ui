@@ -2,6 +2,7 @@
 /* eslint-disable no-console */
 
 const fs = require('fs');
+const { acquireWalletSession, openIsolatedWallet } = require('./demo-wallet-session');
 const path = require('path');
 const { chromium } = require('@playwright/test');
 const {
@@ -76,7 +77,7 @@ async function selectOrg(page) {
 }
 
 async function receiveInTestWallet(walletPage, offerUri, expectedVct, expectedConfigurationId = null) {
-  await walletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await openIsolatedWallet(walletPage, TEST_WALLET_ORIGIN);
   await showStep(walletPage, 'Receive credential in browser wallet', 'The credential offer is hidden in this recording.');
   await maskProtocolField(walletPage, 'Credential offer URI');
   await walletPage.getByLabel('Credential offer URI').fill(offerUri);
@@ -422,6 +423,7 @@ async function main() {
       : [],
   });
   let context = null;
+  let walletSession;
   try {
     context = await browser.newContext({
       viewport: VIDEO_SIZE,
@@ -433,13 +435,14 @@ async function main() {
         },
       } : {}),
     });
+    walletSession = await acquireWalletSession(context, { origin: TEST_WALLET_ORIGIN });
+    report.walletSession = walletSession.evidence;
     const page = await context.newPage();
     const testWalletPage = await context.newPage();
     const organizationVideo = RECORD_VIDEO ? page.video() : null;
     const walletVideo = RECORD_VIDEO ? testWalletPage.video() : null;
-    await testWalletPage.goto(TEST_WALLET_ORIGIN, { waitUntil: 'domcontentloaded', timeout: 60_000 });
-    const resetResponse = await testWalletPage.request.post(`${TEST_WALLET_ORIGIN}/api/reset`, { data: {} });
-    report.testWallet = { ready: resetResponse.status() === 204 };
+    await openIsolatedWallet(testWalletPage, TEST_WALLET_ORIGIN);
+    report.testWallet = { ready: true, isolation: 'RUN_OWNED_RUST_SESSION' };
     try {
       const betaOffer = await collectBetaOffer(browser, {
         walletId: 'wr-default',
@@ -725,6 +728,7 @@ async function main() {
         : 'The report records the failed assertion or browser response.',
     );
     if (RECORD_VIDEO) {
+      await walletSession.close();
       await context.close();
       context = null;
       report.recordings = {
@@ -736,12 +740,25 @@ async function main() {
         )),
       };
     }
+  } catch (error) {
+    report.error = redact(error.message || String(error));
+    report.releaseReady = false;
+    throw error;
+  } finally {
+    for (const [operation, close] of [
+      ['wallet', () => walletSession?.close()], ['context', () => context?.close()],
+      ['browser', () => browser.close()],
+    ]) {
+      try { await close(); }
+      catch (error) {
+        report.cleanupErrors ||= [];
+        report.cleanupErrors.push({ operation, error: redact(error.message || String(error)) });
+        report.releaseReady = false;
+      }
+    }
     fs.writeFileSync(path.join(artifactDir, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report, null, 2));
     if (!report.releaseReady) process.exitCode = 1;
-  } finally {
-    if (context) await context.close().catch(() => {});
-    await browser.close();
   }
 }
 

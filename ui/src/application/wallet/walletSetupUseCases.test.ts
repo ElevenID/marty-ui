@@ -2,29 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   getOrCreateWalletDeviceId,
-  loadWalletStatus,
   registerWalletPushNotifications,
 } from './walletSetupUseCases';
 
 describe('walletSetupUseCases', () => {
-  it('loads wallet status through an injected transport', async () => {
-    const loadDevices = vi.fn().mockResolvedValue({
-      devices: [{ device_id: 'device-1' }],
-    });
-
-    await expect(loadWalletStatus({
-      userId: 'user-1',
-      activeStep: 0,
-      loadDevices,
-    })).resolves.toEqual({
-      walletConnected: true,
-      walletDeviceId: 'device-1',
-      nextStep: 1,
-      successMessage: 'Wallet paired successfully!',
-      error: null,
-    });
-  });
-
   it('gets or creates a stable wallet device id in storage', () => {
     const storage = {
       getItem: vi.fn().mockReturnValue(null),

@@ -15,7 +15,7 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Mutex as StdMutex,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, Notify, RwLock};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -23,15 +23,120 @@ struct TemplateMock(ApplicationTemplate);
 
 #[async_trait]
 impl TemplateProvider for TemplateMock {
-    async fn get(&self, _: &str) -> Result<ApplicationTemplate, ProviderError> {
+    async fn get(&self, _: &str, _: &str) -> Result<ApplicationTemplate, ProviderError> {
         Ok(self.0.clone())
     }
+}
+
+struct RetirableTemplate(StdMutex<ApplicationTemplate>);
+
+#[async_trait]
+impl TemplateProvider for RetirableTemplate {
+    async fn get(&self, _: &str, _: &str) -> Result<ApplicationTemplate, ProviderError> {
+        Ok(self.0.lock().unwrap().clone())
+    }
+}
+
+#[tokio::test]
+async fn retired_template_blocks_new_claim_cached_offer_and_reissuance_without_mutation() {
+    let templates = Arc::new(RetirableTemplate(StdMutex::new(template())));
+    let flow = Arc::new(FlowMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        templates.clone(),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        Arc::new(EventsMock::default()),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    for template_status in ["DEPRECATED", "DRAFT"] {
+        templates.0.lock().unwrap().status = template_status.into();
+        for status in [
+            LifecycleStatus::Approved,
+            LifecycleStatus::Offered,
+            LifecycleStatus::Credentialed,
+        ] {
+            {
+                let mut store = service.store().write().await;
+                let application = &mut store.applications[0];
+                application.status = status;
+                application.claim_state = ClaimState::OfferReady;
+                application.issued_at = Some(application.created_at);
+                application.system_data.insert(
+                    "credential_offer_uri".into(),
+                    json!("openid-credential-offer://existing-offer"),
+                );
+                application.system_data.insert(
+                    "offer_expires_at".into(),
+                    json!((application.created_at + chrono::Duration::hours(1)).to_rfc3339()),
+                );
+            }
+            let before = serde_json::to_value(service.store().read().await.clone()).unwrap();
+            let persisted_before = persistence.0.lock().unwrap().len();
+            assert!(matches!(
+                service.issue(&application.id, application.created_at).await,
+                Err(ServiceError::InactiveTemplate)
+            ));
+            assert!(matches!(
+                service.claim(&application.id, application.created_at).await,
+                Err(ServiceError::InactiveTemplate)
+            ));
+            assert_eq!(
+                serde_json::to_value(service.store().read().await.clone()).unwrap(),
+                before,
+                "Retirement must not rewrite status, offer, issued_at or attempt state"
+            );
+            assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
+            assert!(flow.calls.lock().await.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn retired_template_blocks_uncertain_flow_retry_without_losing_reserved_attempt() {
+    let templates = Arc::new(RetirableTemplate(StdMutex::new(template())));
+    let flow = Arc::new(FlowMock::default());
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        templates.clone(),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        Arc::new(EventsMock::default()),
+        persistence.clone(),
+    );
+    let application = draft(&service).await;
+    service.store().write().await.applications[0].status = LifecycleStatus::Approved;
+    assert!(matches!(
+        service.issue(&application.id, application.created_at).await,
+        Err(ServiceError::Provider(ProviderError::Unavailable(_)))
+    ));
+    templates.0.lock().unwrap().status = "DEPRECATED".into();
+    let before = serde_json::to_value(service.store().read().await.clone()).unwrap();
+    let persisted_before = persistence.0.lock().unwrap().len();
+    for claim in [false, true] {
+        let result = if claim {
+            service.claim(&application.id, application.created_at).await
+        } else {
+            service.issue(&application.id, application.created_at).await
+        };
+        assert!(matches!(result, Err(ServiceError::InactiveTemplate)));
+    }
+    assert_eq!(flow.calls.lock().await.len(), 1);
+    assert_eq!(persistence.0.lock().unwrap().len(), persisted_before);
+    assert_eq!(
+        serde_json::to_value(service.store().read().await.clone()).unwrap(),
+        before
+    );
 }
 
 #[derive(Default)]
 struct FlowMock {
     calls: Mutex<Vec<(Uuid, Map<String, Value>)>>,
     fail_count: AtomicUsize,
+    pause: Option<(Arc<Notify>, Arc<Notify>)>,
 }
 
 #[async_trait]
@@ -44,21 +149,230 @@ impl FlowProvider for FlowMock {
         attempt_id: Uuid,
     ) -> Result<IssuanceOffer, ProviderError> {
         self.calls.lock().await.push((attempt_id, claims.clone()));
+        if let Some((entered, resume)) = &self.pause {
+            entered.notify_one();
+            resume.notified().await;
+        }
         if self.fail_count.fetch_add(1, Ordering::SeqCst) == 0 {
             return Err(ProviderError::Unavailable("uncertain transport".into()));
         }
-        Ok(IssuanceOffer {
-            id: Some("transaction-1".into()),
-            credential_offer_uri: Some("openid-credential-offer://offer-1".into()),
-            credential_offer_uris: Map::new(),
-            credential_offer_labels: Map::new(),
-            expires_at: Some("2026-08-21T12:05:00Z".into()),
-            status: "pending".into(),
-            flow_instance_id: Some("flow-instance-1".into()),
-            flow_definition_id: Some("flow-1".into()),
-            source: Some("flow".into()),
-        })
+        Ok(flow_offer())
     }
+}
+
+fn flow_offer() -> IssuanceOffer {
+    IssuanceOffer {
+        id: Some("transaction-1".into()),
+        credential_offer_uri: Some("openid-credential-offer://offer-1".into()),
+        credential_offer_uris: Map::new(),
+        credential_offer_labels: Map::new(),
+        expires_at: Some("2026-08-21T12:05:00Z".into()),
+        status: "pending".into(),
+        flow_instance_id: Some("flow-instance-1".into()),
+        flow_definition_id: Some("flow-1".into()),
+        source: Some("flow".into()),
+    }
+}
+
+struct ConcurrentFlow {
+    calls: Mutex<Vec<(Uuid, Map<String, Value>)>>,
+    entered: Notify,
+    release: [Notify; 2],
+    second_offer: Option<IssuanceOffer>,
+}
+
+#[async_trait]
+impl FlowProvider for ConcurrentFlow {
+    async fn issue(
+        &self,
+        _: &Application,
+        _: &marty_applicant::Applicant,
+        claims: &Map<String, Value>,
+        attempt_id: Uuid,
+    ) -> Result<IssuanceOffer, ProviderError> {
+        let index = {
+            let mut calls = self.calls.lock().await;
+            let index = calls.len();
+            calls.push((attempt_id, claims.clone()));
+            index
+        };
+        self.entered.notify_one();
+        self.release[index].notified().await;
+        if index == 0 {
+            Ok(flow_offer())
+        } else {
+            self.second_offer.clone().ok_or(ProviderError::NoActiveFlow)
+        }
+    }
+}
+
+type ClaimTask = tokio::task::JoinHandle<Result<Application, ServiceError>>;
+
+async fn concurrent_claims(
+    second_offer: Option<IssuanceOffer>,
+) -> (
+    Arc<ApplicantService>,
+    Arc<ConcurrentFlow>,
+    Application,
+    Arc<PersistenceMock>,
+    [ClaimTask; 2],
+) {
+    let flow = Arc::new(ConcurrentFlow {
+        calls: Mutex::new(Vec::new()),
+        entered: Notify::new(),
+        release: [Notify::new(), Notify::new()],
+        second_offer,
+    });
+    let persistence = Arc::new(PersistenceMock::default());
+    let service = Arc::new(ApplicantService::with_persistence(
+        Arc::new(RwLock::new(StoreDocument::default())),
+        Arc::new(TemplateMock(template())),
+        flow.clone(),
+        Arc::new(AuthorizerMock::default()),
+        Arc::new(EventsMock::default()),
+        persistence.clone(),
+    ));
+    let application = draft(&service).await;
+    service.store().write().await.applications[0].status = LifecycleStatus::Approved;
+    let mut tasks = Vec::new();
+    for index in 0..2 {
+        let service = service.clone();
+        let id = application.id.clone();
+        let now = application.created_at + chrono::Duration::seconds(index + 1);
+        tasks.push(tokio::spawn(async move { service.issue(&id, now).await }));
+        tokio::time::timeout(std::time::Duration::from_secs(5), flow.entered.notified())
+            .await
+            .unwrap();
+    }
+    let calls = flow.calls.lock().await;
+    assert_eq!(
+        calls[0], calls[1],
+        "Concurrent requests must share the reserved attempt and frozen claims"
+    );
+    drop(calls);
+    (
+        service,
+        flow,
+        application,
+        persistence,
+        tasks.try_into().unwrap(),
+    )
+}
+
+async fn completed(task: ClaimTask) -> Result<Application, ServiceError> {
+    tokio::time::timeout(std::time::Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn completed_claim_reply_preserves_reconciled_success_and_expiry_without_writes() {
+    for status in [None, Some("issued"), Some("expired")] {
+        let (service, flow, application, persistence, [first, second]) =
+            concurrent_claims(Some(flow_offer())).await;
+        flow.release[0].notify_one();
+        completed(first).await.unwrap();
+        if let Some(status) = status {
+            service
+                .reconcile_issuance(
+                    &application.id,
+                    Some("transaction-1"),
+                    Some(status),
+                    None,
+                    application.created_at + chrono::Duration::minutes(6),
+                )
+                .await
+                .unwrap();
+        }
+        let before = service.store().read().await.clone();
+        let writes = persistence.0.lock().unwrap().len();
+        flow.release[1].notify_one();
+        let current = completed(second).await.unwrap();
+        assert_eq!(current, before.applications[0]);
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.lock().unwrap().len(), writes);
+    }
+}
+
+#[tokio::test]
+async fn completed_claim_reply_rejects_changed_offer_transaction_and_flow_identity() {
+    for changed in 0..4 {
+        let mut mismatched = flow_offer();
+        match changed {
+            0 => mismatched.id = Some("different-transaction".into()),
+            1 => mismatched.flow_instance_id = Some("different-flow".into()),
+            2 => {
+                mismatched.credential_offer_uri =
+                    Some("openid-credential-offer://different-offer".into())
+            }
+            _ => mismatched.flow_definition_id = None,
+        }
+        let (service, flow, _, persistence, [first, second]) =
+            concurrent_claims(Some(mismatched)).await;
+        flow.release[0].notify_one();
+        completed(first).await.unwrap();
+        let before = service.store().read().await.clone();
+        let writes = persistence.0.lock().unwrap().len();
+        flow.release[1].notify_one();
+        assert!(completed(second).await.is_err());
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.lock().unwrap().len(), writes);
+    }
+}
+
+#[tokio::test]
+async fn completed_claim_reply_refuses_malformed_markers_and_a_new_active_attempt() {
+    for replacement in [json!(42), json!("invalid-attempt"), Value::Null] {
+        let (service, flow, application, persistence, [first, second]) =
+            concurrent_claims(Some(flow_offer())).await;
+        flow.release[0].notify_one();
+        completed(first).await.unwrap();
+        {
+            let mut store = service.store().write().await;
+            if replacement.is_null() {
+                marty_applicant::issuance::reserve_attempt(
+                    &mut store.applications[0],
+                    Map::new(),
+                    application.created_at + chrono::Duration::minutes(1),
+                )
+                .unwrap();
+            } else {
+                store.applications[0]
+                    .system_data
+                    .insert("last_issuance_attempt_id".into(), replacement);
+            }
+        }
+        let before = service.store().read().await.clone();
+        let writes = persistence.0.lock().unwrap().len();
+        flow.release[1].notify_one();
+        assert!(completed(second).await.is_err());
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.lock().unwrap().len(), writes);
+    }
+}
+
+#[tokio::test]
+async fn completed_claim_is_not_overwritten_by_a_late_no_flow_error() {
+    let (service, flow, application, persistence, [first, second]) = concurrent_claims(None).await;
+    flow.release[0].notify_one();
+    completed(first).await.unwrap();
+    service
+        .reconcile_issuance(
+            &application.id,
+            Some("transaction-1"),
+            Some("issued"),
+            None,
+            application.created_at + chrono::Duration::seconds(3),
+        )
+        .await
+        .unwrap();
+    let before = service.store().read().await.clone();
+    let writes = persistence.0.lock().unwrap().len();
+    flow.release[1].notify_one();
+    assert!(completed(second).await.is_err());
+    assert_eq!(*service.store().read().await, before);
+    assert_eq!(persistence.0.lock().unwrap().len(), writes);
 }
 
 #[derive(Default)]
@@ -142,7 +456,10 @@ type Harness = (
 );
 
 fn service() -> Harness {
-    let flow = Arc::new(FlowMock::default());
+    service_with_flow(Arc::new(FlowMock::default()))
+}
+
+fn service_with_flow(flow: Arc<FlowMock>) -> Harness {
     let authorizer = Arc::new(AuthorizerMock::default());
     let events = Arc::new(EventsMock::default());
     let persistence = Arc::new(PersistenceMock::default());
@@ -301,6 +618,205 @@ async fn creation_is_profile_bound_duplicate_safe_and_submission_creates_checks(
         .unwrap();
     assert_eq!(submitted.status, LifecycleStatus::Submitted);
     assert_eq!(service.store().read().await.checks.len(), 1);
+}
+
+#[tokio::test]
+async fn withdrawal_refuses_issuance_states_without_changing_records_or_persistence() {
+    for organization in [false, true] {
+        for status in [
+            LifecycleStatus::Approved,
+            LifecycleStatus::Offered,
+            LifecycleStatus::Credentialed,
+            LifecycleStatus::Suspended,
+        ] {
+            let (service, _, _, _, persistence) = service();
+            let application = draft(&service).await;
+            service.store().write().await.applications[0].status = status;
+            let before = service.store().read().await.encode().unwrap();
+            let writes = persistence.0.lock().unwrap().len();
+            let result = if organization {
+                service
+                    .withdraw_by_organization(&application.id, Some("retire".into()), Utc::now())
+                    .await
+            } else {
+                service
+                    .withdraw(&application.id, Some("retire".into()), Utc::now())
+                    .await
+            };
+            assert!(
+                result.is_err(),
+                "organization={organization}, status={status:?}"
+            );
+            assert_eq!(service.store().read().await.encode().unwrap(), before);
+            assert_eq!(persistence.0.lock().unwrap().len(), writes);
+        }
+    }
+}
+
+#[tokio::test]
+async fn withdrawal_refuses_retained_issuance_markers_even_on_early_or_terminal_states() {
+    let markers = [
+        json!({"active_issuance_attempt":{"id":"uncertain-attempt"}}),
+        json!({"issuance_transaction_id":"transaction-1"}),
+        json!({"credential_offer_uri":"openid-credential-offer://offer-1"}),
+        json!({"credential_offer_uris":{"wallet":"openid-credential-offer://offer-1"}}),
+        json!({"flow_instance_id":"flow-instance-1"}),
+        json!({"issuance_status":"revoked"}),
+        json!({"issuance_transaction_id":42}),
+        json!({"active_issuance_attempt":{}}),
+    ];
+    for organization in [false, true] {
+        for status in [LifecycleStatus::Draft, LifecycleStatus::Withdrawn] {
+            for marker in &markers {
+                let (service, _, _, _, persistence) = service();
+                let application = draft(&service).await;
+                {
+                    let mut store = service.store().write().await;
+                    store.applications[0].status = status;
+                    store.applications[0].system_data = marker.as_object().unwrap().clone();
+                }
+                let before = service.store().read().await.encode().unwrap();
+                let writes = persistence.0.lock().unwrap().len();
+                let result = if organization {
+                    service
+                        .withdraw_by_organization(&application.id, None, Utc::now())
+                        .await
+                } else {
+                    service.withdraw(&application.id, None, Utc::now()).await
+                };
+                assert!(
+                    result.is_err(),
+                    "organization={organization}, status={status:?}, marker={marker}"
+                );
+                assert_eq!(service.store().read().await.encode().unwrap(), before);
+                assert_eq!(persistence.0.lock().unwrap().len(), writes);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn withdrawal_preserves_safe_self_and_organization_decisions() {
+    for organization in [false, true] {
+        for status in [
+            LifecycleStatus::Draft,
+            LifecycleStatus::Submitted,
+            LifecycleStatus::UnderReview,
+            LifecycleStatus::PendingInformation,
+            LifecycleStatus::Rejected,
+            LifecycleStatus::Withdrawn,
+        ] {
+            let (service, _, _, _, persistence) = service();
+            let application = draft(&service).await;
+            service.store().write().await.applications[0].status = status;
+            let before = service.store().read().await.encode().unwrap();
+            let writes = persistence.0.lock().unwrap().len();
+            let reason = "Application no longer required";
+            let now = application.created_at + chrono::Duration::minutes(1);
+            let result = if organization {
+                service
+                    .withdraw_by_organization(&application.id, Some(reason.into()), now)
+                    .await
+            } else {
+                service
+                    .withdraw(&application.id, Some(reason.into()), now)
+                    .await
+            };
+            if !organization
+                && matches!(
+                    status,
+                    LifecycleStatus::UnderReview | LifecycleStatus::Rejected
+                )
+            {
+                assert!(result.is_err());
+                assert_eq!(service.store().read().await.encode().unwrap(), before);
+                assert_eq!(persistence.0.lock().unwrap().len(), writes);
+                continue;
+            }
+            let withdrawn = result.unwrap();
+            assert_eq!(withdrawn.id, application.id);
+            assert_eq!(withdrawn.organization_id, application.organization_id);
+            assert_eq!(withdrawn.status, LifecycleStatus::Withdrawn);
+            assert_eq!(withdrawn.system_data["withdrawal_reason"], reason);
+            assert_eq!(withdrawn.updated_at, now);
+            assert_eq!(persistence.0.lock().unwrap().len(), writes + 1);
+        }
+    }
+}
+
+#[tokio::test]
+async fn withdrawal_cannot_hide_a_reserved_in_flight_offer() {
+    let entered = Arc::new(Notify::new());
+    let resume = Arc::new(Notify::new());
+    let flow = Arc::new(FlowMock {
+        fail_count: AtomicUsize::new(1),
+        pause: Some((entered.clone(), resume.clone())),
+        ..Default::default()
+    });
+    let (service, _, _, _, persistence) = service_with_flow(flow);
+    let service = Arc::new(service);
+    let application = draft(&service).await;
+    service
+        .submit(&application.id, application.created_at)
+        .await
+        .unwrap();
+    service
+        .acquire_lock(
+            &application.id,
+            "reviewer-1",
+            "Reviewer",
+            application.created_at,
+        )
+        .await
+        .unwrap();
+    service
+        .review(
+            &application.id,
+            review_context(),
+            true,
+            None,
+            None,
+            application.created_at,
+        )
+        .await
+        .unwrap();
+
+    let issuing_service = service.clone();
+    let id = application.id.clone();
+    let now = application.created_at;
+    let issuing = tokio::spawn(async move { issuing_service.issue(&id, now).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered.notified())
+        .await
+        .unwrap();
+    let before = service.store().read().await.encode().unwrap();
+    assert!(service.store().read().await.applications[0]
+        .system_data
+        .contains_key("active_issuance_attempt"));
+    let writes = persistence.0.lock().unwrap().len();
+    let withdrawal = service
+        .withdraw_by_organization(&application.id, None, now)
+        .await;
+    let after = service.store().read().await.encode().unwrap();
+    let writes_after = persistence.0.lock().unwrap().len();
+    resume.notify_one();
+    let offer = tokio::time::timeout(std::time::Duration::from_secs(5), issuing)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(
+        withdrawal.is_err(),
+        "Withdrawal must not abandon an in-flight issuance"
+    );
+    assert_eq!(after, before);
+    assert_eq!(writes_after, writes);
+    let offered = offer.unwrap();
+    assert_eq!(offered.status, LifecycleStatus::Offered);
+    assert_eq!(offered.claim_state, ClaimState::OfferReady);
+    assert_eq!(
+        offered.system_data["issuance_transaction_id"],
+        "transaction-1"
+    );
 }
 
 #[tokio::test]
@@ -562,6 +1078,47 @@ async fn uncertain_flow_retry_reuses_attempt_and_complete_claim_snapshot() {
 }
 
 #[tokio::test]
+async fn issuance_reconciliation_checks_transaction_binding_before_local_expiry() {
+    for previous_transaction in [None, Some(""), Some("local-old"), Some("old-transaction")] {
+        let (service, flow, _, _, persistence) = service();
+        let application = draft(&service).await;
+        {
+            let mut store = service.store().write().await;
+            store.applications[0].status = LifecycleStatus::Approved;
+            if let Some(previous_transaction) = previous_transaction {
+                store.applications[0].system_data.insert(
+                    "issuance_transaction_id".into(),
+                    json!(previous_transaction),
+                );
+            }
+        }
+        flow.fail_count.store(1, Ordering::SeqCst);
+        service
+            .issue(&application.id, application.created_at)
+            .await
+            .unwrap();
+        let before = service.store().read().await.clone();
+        let writes = persistence.0.lock().unwrap().len();
+        let later = application.created_at + chrono::Duration::hours(1);
+        let current = service
+            .reconcile_issuance(&application.id, previous_transaction, None, None, later)
+            .await
+            .unwrap();
+        assert_eq!(current, before.applications[0]);
+        assert_eq!(*service.store().read().await, before);
+        assert_eq!(persistence.0.lock().unwrap().len(), writes);
+
+        let current = service
+            .reconcile_issuance(&application.id, Some("transaction-1"), None, None, later)
+            .await
+            .unwrap();
+        assert_eq!(current.claim_state, ClaimState::Expired);
+        assert_eq!(current.claim_blocker.unwrap()["code"], "OFFER_EXPIRED");
+        assert_eq!(persistence.0.lock().unwrap().len(), writes + 1);
+    }
+}
+
+#[tokio::test]
 async fn no_op_issuance_reconciliation_preserves_application_ordering_metadata() {
     let (service, _, _, _, persistence) = service();
     let application = draft(&service).await;
@@ -569,7 +1126,7 @@ async fn no_op_issuance_reconciliation_preserves_application_ordering_metadata()
     let later = application.created_at + chrono::Duration::hours(1);
 
     let reconciled = service
-        .reconcile_issuance(&application.id, None, None, later)
+        .reconcile_issuance(&application.id, None, None, None, later)
         .await
         .unwrap();
 

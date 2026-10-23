@@ -282,7 +282,9 @@ def run(case_name):
         == worker_source_sha256()["issuance.infrastructure.api.canvas_routes"]
     )
     child = None
-    with MixedRosterHttpsFixture(matrix) as https:
+    # The frozen published Python image predates grant-bound signer requests.
+    # Native replay retains the fixture's strict grant-bound default.
+    with MixedRosterHttpsFixture(matrix, signer_contract="pinned_published") as https:
         engine = create_engine(DATABASE, hide_parameters=True)
         try:
             preserved = seed_worker_database(engine, https.origin, spec, shared)
@@ -333,12 +335,12 @@ def run(case_name):
                         if jobs[-1]["status"] in {"retry", "dead_letter"}:
                             _raise_job_failure(jobs[-1])
                         if jobs[-1]["status"] == "succeeded":
-                            heartbeat = scalar(
-                                engine,
-                                "SELECT metadata->>'phase' FROM issuance_service.canvas_worker_heartbeats WHERE worker_id='worker-rest'",
-                            )
-                            if heartbeat == "idle":
-                                return observe()
+                            state, roster = observe()
+                            # The worker can begin scheduling its next cycle
+                            # between a separate idle query and this snapshot.
+                            # Return only the snapshot that records idle.
+                            if state["heartbeat"]["metadata"]["phase"] == "idle":
+                                return state, roster
                     return None
 
                 # Natural due times are intentionally not shortened. The

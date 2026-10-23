@@ -921,6 +921,71 @@ impl IntoResponse for OperationsError {
 mod tests {
     use super::*;
 
+    mod input_http {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/canvas_operations_input_http.rs"
+        ));
+    }
+
+    #[tokio::test]
+    async fn frozen_operations_input_rejections_do_not_require_postgres() {
+        use marty_oid4vci::discovery::StaticDiscoveryDocuments;
+
+        let cases: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-operations-input-scenarios.json"
+        ))
+        .unwrap();
+        let frozen: Value = serde_json::from_str(include_str!(
+            "../../../../contracts/canvas-operations-input-oracle.json"
+        ))
+        .unwrap();
+        let cases = cases["cases"].as_array().unwrap();
+        let observations = frozen["observations"].as_array().unwrap();
+        assert_eq!(cases.len(), 75);
+        assert_eq!(observations.len(), cases.len());
+
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://unused:unused@127.0.0.1:1/unused")
+            .unwrap();
+        let service = CanvasOperationsService::new(pool, Some("synthetic-operations-key"));
+        let config =
+            crate::IssuanceServiceConfig::from_values(std::iter::empty::<(String, String)>())
+                .unwrap();
+        let runtime = crate::IssuanceRuntime::new(&config).unwrap();
+        let router = crate::http::router_with_canvas_operations(
+            runtime.state(),
+            StaticDiscoveryDocuments::new(&config.issuer_base_url, &config.issuer_display_name),
+            crate::transport::TransportPolicy::new(["https://console.example.invalid".to_owned()]),
+            service,
+        );
+        let mut statuses = std::collections::BTreeMap::<u16, usize>::new();
+        let mut names = std::collections::BTreeSet::new();
+        for (case, expected) in cases.iter().zip(observations) {
+            assert_eq!(case["name"], expected["name"]);
+            assert!(names.insert(case["name"].as_str().unwrap()));
+            let expected_status = u16::try_from(expected["status"].as_u64().unwrap()).unwrap();
+            if expected_status == 200 {
+                continue; // Successful reads retain the real PostgreSQL acceptance owner.
+            }
+            *statuses.entry(expected_status).or_default() += 1;
+            let (status, _content_type, body) = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                input_http::request_case(&router, case),
+            )
+            .await
+            .expect("input rejection must not wait for PostgreSQL");
+            assert_eq!(
+                json!({"name":case["name"],"status":status,"body":body}),
+                *expected,
+                "input: {}",
+                case["name"]
+            );
+        }
+        assert_eq!(names.len(), 75);
+        assert_eq!(statuses, [(400, 1), (401, 1), (422, 34)].into());
+    }
+
     #[tokio::test]
     async fn every_frozen_operation_is_mounted_and_rejects_unauthenticated_access() {
         assert_operations_transport(false).await;

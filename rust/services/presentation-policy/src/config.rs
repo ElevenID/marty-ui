@@ -23,18 +23,25 @@ impl RuntimeEnvironment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkloadServerTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PresentationPolicyServiceConfig {
+    pub did_resolution_base_urls: Vec<String>,
+    pub did_web_allowed_hosts: Vec<String>,
     pub environment: RuntimeEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
     pub database_url: String,
     pub database_max_connections: u32,
     pub organization_grpc_target: String,
+    pub organization_grpc_ca_cert: Option<PathBuf>,
     pub trust_profile_url: String,
     pub credential_status_url_template: String,
     pub service_token: Option<String>,
@@ -102,6 +109,16 @@ impl PresentationPolicyServiceConfig {
         }
         let organization_grpc_target =
             grpc_target(value(&values, "ORG_GRPC_TARGET").unwrap_or("organization:9002"))?;
+        let organization_grpc_ca_cert = value(&values, "ORG_GRPC_CA_CERT").map(PathBuf::from);
+        if environment.is_deployed() && organization_grpc_ca_cert.is_none() {
+            return Err(PresentationPolicyConfigError::Missing {
+                name: "ORG_GRPC_CA_CERT",
+            });
+        }
+        if organization_grpc_ca_cert.is_some() && !organization_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
         let trust_profile_url = service_url(
             value(&values, "TRUST_PROFILE_SERVICE_URL").unwrap_or("http://trust-profile:8004"),
             "TRUST_PROFILE_SERVICE_URL",
@@ -125,13 +142,42 @@ impl PresentationPolicyServiceConfig {
             secret(&values, "ISSUANCE_API_KEY", environment)?
         };
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        let did_resolution_base_urls = value(&values, "DID_RESOLUTION_BASE_URL")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        for base in &did_resolution_base_urls {
+            let parsed = Url::parse(base).map_err(|_| invalid("DID_RESOLUTION_BASE_URL"))?;
+            if !matches!(parsed.scheme(), "http" | "https")
+                || parsed.host_str().is_none()
+                || !parsed.username().is_empty()
+                || parsed.password().is_some()
+                || parsed.query().is_some()
+                || parsed.fragment().is_some()
+            {
+                return Err(invalid("DID_RESOLUTION_BASE_URL"));
+            }
+        }
+        let did_web_allowed_hosts = value(&values, "DID_WEB_ALLOWED_HOSTS")
+            .unwrap_or("")
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect();
         Ok(Self {
+            did_resolution_base_urls,
+            did_web_allowed_hosts,
             environment,
             http_addr,
             grpc_addr,
             database_url,
             database_max_connections,
             organization_grpc_target,
+            organization_grpc_ca_cert,
             trust_profile_url,
             credential_status_url_template,
             service_token,
@@ -173,9 +219,16 @@ fn workload_server_tls(
 ) -> Result<Option<WorkloadServerTlsFiles>, PresentationPolicyConfigError> {
     let names = [
         "GRPC_WORKLOAD_TLS_SERVER_CERT",
-        "GRPC_WORKLOAD_TLS_SERVER_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
     ];
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
+    }
     let configured = names
         .iter()
         .filter(|name| value(values, name).is_some())
@@ -192,8 +245,16 @@ fn workload_server_tls(
     }
     Ok(Some(WorkloadServerTlsFiles {
         certificate: PathBuf::from(required(values, names[0])?),
-        private_key: PathBuf::from(required(values, names[1])?),
-        ca_certificate: PathBuf::from(required(values, names[2])?),
+        ca_certificate: PathBuf::from(required(values, names[1])?),
+        kms_endpoint: required(values, names[2])?,
+        kms_ca_certificate: PathBuf::from(required(values, names[3])?),
+        kms_token_file: PathBuf::from(required(values, names[4])?),
+        kms_key_name: required(values, names[5])?,
+        kms_key_version: required(values, names[6])?
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| invalid(names[6]))?,
     }))
 }
 

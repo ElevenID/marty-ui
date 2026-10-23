@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "scope": "Canvas imported prerequisites cannot produce current-run assertions",
+  "source_repository": "https://github.com/ElevenID/marty-demo-recorder.git",
+  "base_revision": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+  "implementation_revision": "a124bae31717c0b55f1a8dbe5944f9dbe2408a24",
+  "source_files": [
+    {
+      "path": "demos/canvas-learning-achievement.hooks.js",
+      "sha256": "a10a2f195e3c5445caca8b18b2ab01e36884a52d34e4aa758204b65a6c083f94"
+    },
+    {
+      "path": "test/canvasPortability.test.js",
+      "sha256": "8d88f41293bd8c295acc322a19bf7ae228d3f493f7836677933b07b2fa5bd381"
+    },
+    {
+      "path": "docs/canvas-capture-source-gaps.md",
+      "sha256": "9425a0a92cdd13c931c4ed6c9752d344c8ea04dc4ad29fa4c0207f4457c0b478"
+    }
+  ],
+  "regression_baseline_source": {
+    "path": "demos/canvas-learning-achievement.hooks.js",
+    "revision": "8d8bf8673f9a1162a4f7a788c1f2e8349a3f8a25",
+    "sha256": "fb28148c25ce900f5b36be7e94ece5651288139d2b5a63421e9823e8178fb9d2"
+  },
+  "command": "node test/canvasPortability.test.js",
+  "working_directory": "marty-demo-recorder-runtime-integrity",
+  "verification": [
+    {
+      "phase": "before",
+      "exit_code": 1,
+      "passed": 11,
+      "failed": 4,
+      "skipped": 0,
+      "log": "canvas-prerequisite-guard-before.log",
+      "log_bytes": 5688,
+      "log_sha256": "40e1da5f6c3830f70323c4d849dc86c7465f06e4a9402bae2df74a27b6ba0c7d"
+    },
+    {
+      "phase": "after",
+      "exit_code": 0,
+      "passed": 15,
+      "failed": 0,
+      "skipped": 0,
+      "log": "canvas-prerequisite-guard-after.log",
+      "log_bytes": 1564,
+      "log_sha256": "84eb4eee5ccb790d551360295a81c32176edd568a283579365033676305c6353"
+    }
+  ],
+  "behavior": [
+    "Both current scenario definitions reject assertion-bound imported cases before runtime inputs and browser actions.",
+    "The action boundary independently rejects current-run assertion promotion, including receipt-shaped action/runtime JSON.",
+    "Legitimate prerequisite-only validation and configuration dry-runs remain available; neither registers a current-run assertion."
+  ],
+  "configuration_files_changed": false,
+  "boundaries": [
+    "D07 and D08 remain OPEN_SOURCE_AND_LIVE_EVIDENCE.",
+    "No accepted current-run receipt format or producer is invented by this guard.",
+    "LTI Continue, current application/job binding, approval, actual wallet receipt/verification, runtime fixture registration, and visible negative/recovery integration remain required.",
+    "No stock Canvas, external KMS, wallet, beta, or capture run occurred."
+  ]
+}

@@ -13,7 +13,30 @@ use crate::canvas_lti_experience::{
 };
 use crate::canvas_lti_launch::CanvasLtiClock;
 
-const PROTECTED_CALLER_FIELDS: [&str; 3] = ["canvas_subject", "canvas_course_id", "canvas_user_id"];
+// Badge achievement and result claims must come from verified Canvas evidence
+// or issuer configuration, never from the learner's bootstrap request.
+const PROTECTED_CALLER_FIELDS: &[&str] = &[
+    "canvas_subject",
+    "canvas_course_id",
+    "canvas_course_name",
+    "canvas_user_id",
+    "canvas_enrollment_id",
+    "achievement_id",
+    "achievement_name",
+    "achievement_description",
+    "achievement_criteria",
+    "badge_image_url",
+    "course_name",
+    "quiz_name",
+    "score_percent",
+    "completion_date",
+    "institution_name",
+    "certificate_id",
+    "organization_id",
+    "achievement",
+    "result",
+    "learning_context",
+];
 const REDACTED: &str = "[REDACTED]";
 
 #[derive(Clone, Default, PartialEq)]
@@ -547,7 +570,9 @@ fn application_form_data(
     let mut form_data = request
         .applicant_data
         .iter()
-        .filter(|(name, _)| !PROTECTED_CALLER_FIELDS.contains(&name.as_str()))
+        .filter(|(name, _)| {
+            !name.starts_with('_') && !PROTECTED_CALLER_FIELDS.contains(&name.as_str())
+        })
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect::<Map<_, _>>();
     let trusted = [

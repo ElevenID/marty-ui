@@ -20,8 +20,6 @@ def test_retired_helpers_cannot_return_even_as_empty_files(tmp_path: Path) -> No
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     source_root = tmp_path / "services" / "common"
     source_root.mkdir(parents=True)
-    # The guard must not ban the still-retained common adapter namespace.
-    (source_root / "retained_adapter.py").write_text("VALUE = 1\n", encoding="utf-8")
     assert scan_repository(tmp_path, manifest_path) == []
     for filename, rule in (
         ("di.py", "no-retired-python-org-client-setup"),
@@ -32,6 +30,8 @@ def test_retired_helpers_cannot_return_even_as_empty_files(tmp_path: Path) -> No
         for contents in ("", "def legacy_helper(): return True\n"):
             source.write_text(contents, encoding="utf-8")
             assert scan_repository(tmp_path, manifest_path) == [
+                "text guard no-retired-python-common-adapters changed: expected {}, "
+                f"found {{'services/common/{filename}': 1}}",
                 f"text guard {rule} changed: expected {{}}, found "
                 f"{{'services/common/{filename}': 1}}"
             ]

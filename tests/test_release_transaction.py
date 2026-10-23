@@ -18,13 +18,21 @@ DIGESTS = {
     "ui": "sha256:" + "1" * 64,
     "services": "sha256:" + "2" * 64,
     "migrations": "sha256:" + "3" * 64,
+    "openbao_didcomm": "sha256:" + "7" * 64,
+    "keycloak": "sha256:" + "9" * 64,
 }
 IMAGES = {
     "ui": "ghcr.io/elevenid/marty-ui-oss/ui",
     "services": "ghcr.io/elevenid/marty-ui-oss/services",
     "migrations": "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "openbao_didcomm": "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+    "keycloak": "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 GATES = {
+    "official_interoperability": {
+        "run_id": "106",
+        "evidence_sha256": "sha256:" + "6" * 64,
+    },
     "public_stack": {
         "run_id": "101",
         "evidence_sha256": "sha256:" + "4" * 64,
@@ -32,6 +40,18 @@ GATES = {
     "verifier_differential": {
         "run_id": "102",
         "evidence_sha256": "sha256:" + "5" * 64,
+    },
+    "native_schema": {
+        "run_id": "103",
+        "evidence_sha256": "sha256:" + "6" * 64,
+    },
+    "didcomm_plugin": {
+        "run_id": "104",
+        "evidence_sha256": "sha256:" + "8" * 64,
+    },
+    "keycloak_kms": {
+        "run_id": "105",
+        "evidence_sha256": "sha256:" + "9" * 64,
     },
 }
 
@@ -71,6 +91,34 @@ def qualified(tmp_path: Path) -> dict[str, object]:
     return transaction.qualify(digests_recorded(tmp_path), GATES)
 
 
+def test_fresh_native_schema_evidence_is_required_for_release(tmp_path: Path) -> None:
+    without_native = {role: value for role, value in GATES.items()
+                      if role != "native_schema"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="native_schema"):
+        transaction.qualify(digests_recorded(tmp_path), without_native)
+
+
+def test_official_suite_cannot_be_omitted_from_qualification(tmp_path: Path) -> None:
+    without_official = {role: value for role, value in GATES.items()
+                        if role != "official_interoperability"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="official_interoperability"):
+        transaction.qualify(digests_recorded(tmp_path), without_official)
+
+
+def test_exact_plugin_image_evidence_is_required_for_release(tmp_path: Path) -> None:
+    without_plugin = {role: value for role, value in GATES.items()
+                      if role != "didcomm_plugin"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="didcomm_plugin"):
+        transaction.qualify(digests_recorded(tmp_path), without_plugin)
+
+
+def test_exact_keycloak_kms_evidence_is_required_for_release(tmp_path: Path) -> None:
+    without_keycloak = {role: value for role, value in GATES.items()
+                        if role != "keycloak_kms"}
+    with pytest.raises(transaction.ReleaseTransactionError, match="keycloak_kms"):
+        transaction.qualify(digests_recorded(tmp_path), without_keycloak)
+
+
 def promoted(tmp_path: Path) -> dict[str, object]:
     value = qualified(tmp_path)
     for role in transaction.REQUIRED_IMAGE_ROLES:
@@ -92,6 +140,8 @@ def test_claim_is_deterministic_and_binds_all_absence_checks(tmp_path: Path) -> 
             "ui": True,
             "services": True,
             "migrations": True,
+            "openbao_didcomm": True,
+            "keycloak": True,
         },
     }
     assert first["stack_lock_sha256"] == transaction.file_digest(
@@ -173,9 +223,14 @@ def test_claim_fails_closed_before_any_write(
 @pytest.mark.parametrize(
     ("tag_absent", "release_absent", "version_absence", "message"),
     [
-        (False, True, {"ui": True, "services": True, "migrations": True}, "tag"),
-        (True, False, {"ui": True, "services": True, "migrations": True}, "release"),
-        (True, True, {"ui": True, "services": False, "migrations": True}, "registry"),
+        (False, True, {role: True for role in transaction.REQUIRED_IMAGE_ROLES}, "tag"),
+        (True, False, {role: True for role in transaction.REQUIRED_IMAGE_ROLES}, "release"),
+        (True, True, {**{role: True for role in transaction.REQUIRED_IMAGE_ROLES},
+                      "services": False}, "registry"),
+        (True, True, {**{role: True for role in transaction.REQUIRED_IMAGE_ROLES},
+                      "openbao_didcomm": False}, "registry"),
+        (True, True, {**{role: True for role in transaction.REQUIRED_IMAGE_ROLES},
+                      "keycloak": False}, "registry"),
     ],
 )
 def test_claim_requires_every_exact_coordinate_absence(

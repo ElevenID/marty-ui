@@ -26,7 +26,7 @@ def test_only_the_native_flow_runtime_remains() -> None:
 
 def test_rust_owns_flow_schema_and_postgresql_behavior() -> None:
     contract = json.loads(text("contracts/flow-rust-cutover-behavior.json"))
-    migration_runner = text("services/run_all_migrations.py")
+    migration_runner = text("rust/services/signing-keys/src/bootstrap_engine.rs")
     workflow = text(".github/workflows/ci.yml")
 
     assert (ROOT / contract["migration_owner"]).is_dir()
@@ -34,7 +34,7 @@ def test_rust_owns_flow_schema_and_postgresql_behavior() -> None:
     assert '"flow_service"' not in migration_runner
     assert "flow-idempotency-contract:" not in workflow
     assert "docker-compose.flow-idempotency-contract.yml" not in workflow
-    assert "target/debug/flow-postgres-contract --test-threads=1" in workflow
+    assert "run_timed flow_postgres target/debug/flow-postgres-contract --test-threads=1" in workflow
 
 
 def test_compose_preserves_development_and_beta_features() -> None:
@@ -50,13 +50,14 @@ def test_compose_preserves_development_and_beta_features() -> None:
 
     assert f'ENVIRONMENT: {contract["development_environment"]}' in flow_base
     assert f'ENVIRONMENT: {contract["deployed_environment"]}' in flow_beta
-    assert 'GRPC_INSECURE_ALLOWED: "true"' in flow_beta
+    assert 'GRPC_INSECURE_ALLOWED: "false"' in flow_beta
+    assert "PP_GRPC_TARGET: https://presentation-policy:9009" in flow_beta
     assert "FLOW_WEBHOOK_SECRET must be set for beta" in flow_beta
     assert "FLOW_APPLICATION_EVENT_HMAC_KEY must be set for beta" in flow_beta
     assert "flow_workload_client_cert" in flow_beta
     assert "flow_workload_server_cert" in flow_beta
     assert "auth_workload_client_cert" in beta
-    assert "applicant_workload_client_cert" in beta
+    assert "applicant_workload_client_cert" not in beta
     assert "pp_workload_server_cert" in beta
     assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_base
 
@@ -64,6 +65,7 @@ def test_compose_preserves_development_and_beta_features() -> None:
     flow_selfhost = selfhost.split("\n  flow:\n", maxsplit=1)[1].split(
         "\n  verification:\n", maxsplit=1
     )[0]
+    assert "PP_GRPC_TARGET: https://presentation-policy:9009" in flow_selfhost
     assert "SIGNING_KEYS_INTERNAL_URL: http://signing-keys:8017/internal" in flow_selfhost
 
 

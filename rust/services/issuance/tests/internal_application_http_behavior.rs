@@ -49,6 +49,7 @@ struct MemoryState {
     templates: BTreeMap<String, ApplicationTemplateRecord>,
     applications: BTreeMap<String, ApplicationRecord>,
     evidence_facts: Vec<EvidenceFactRecord>,
+    current_fact_ids: BTreeSet<String>,
     issuance_events: Vec<IssuanceEventRecord>,
 }
 
@@ -405,6 +406,21 @@ impl InternalApplicationRepository for MemoryRepository {
             .evidence_facts
             .iter()
             .filter(|fact| fact.application_id == application_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_current_evidence_facts_for_application(
+        &self,
+        application_id: &str,
+    ) -> Result<Vec<EvidenceFactRecord>, InternalApplicationRepositoryError> {
+        let state = self.state.lock().expect("repository state");
+        Ok(state
+            .evidence_facts
+            .iter()
+            .filter(|fact| {
+                fact.application_id == application_id && state.current_fact_ids.contains(&fact.id)
+            })
             .cloned()
             .collect())
     }
@@ -853,6 +869,63 @@ async fn completed_http_slice_replays_create_read_evidence_and_rejection() {
     assert_eq!(rejected["status"], "rejected");
     assert_eq!(rejected["review_notes"], "Insufficient evidence");
     assert_eq!(rejected["reviewer_id"], "issuance-management-api");
+}
+
+#[tokio::test]
+async fn private_material_is_rejected_at_the_application_http_boundary() {
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_template(template("org-123", ApplicationTemplateStatus::Active));
+    let service = service(repository, Some("secret"));
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"detail": "Private key material is not accepted; use a remote key reference"})
+    );
+
+    let (status, created) = request(
+        &service,
+        Method::POST,
+        "/internal/applications",
+        Some(json!({
+            "application_template_id": "template-1",
+            "applicant_data": {},
+            "integration_context": {"key_reference": "transit/keys/issuer-v4"}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let application_id = created["id"].as_str().unwrap();
+    let (status, body) = request(
+        &service,
+        Method::POST,
+        &format!("/internal/applications/{application_id}/submit-evidence"),
+        Some(json!({
+            "evidence_type": "DOCUMENT_SCAN",
+            "evidence_data": {"private_key_pem": "synthetic"}
+        })),
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"detail": "Private key material is not accepted; use a remote key reference"})
+    );
 }
 
 #[tokio::test]
@@ -1675,3 +1748,75 @@ async fn issuance_offer_routes_preserve_success_shape_state_errors_and_missing_t
         json!({"detail": "Wallet invite has not been generated yet. Please contact the issuer."})
     );
 }
+
+#[tokio::test]
+async fn current_evidence_reads_use_authoritative_heads_without_changing_history_or_tenant_hiding()
+{
+    let repository = Arc::new(MemoryRepository::default());
+    repository.seed_application(application(
+        "application-heads",
+        "org-123",
+        ApplicationStatus::UnderReview,
+    ));
+    let head = evidence_fact("application-heads");
+    let mut older_unlinked = head.clone();
+    older_unlinked.id = "older-unlinked-observation".to_owned();
+    older_unlinked.superseded_fact_id = None;
+    repository.seed_evidence_fact(head.clone());
+    repository.seed_evidence_fact(older_unlinked);
+    repository
+        .state
+        .lock()
+        .expect("repository state")
+        .current_fact_ids
+        .insert(head.id.clone());
+    let service = service(repository, Some("secret"));
+    for suffix in ["", "?current_only=false"] {
+        let (status, facts) = request(
+            &service,
+            Method::GET,
+            &format!("/internal/applications/application-heads/evidence-facts{suffix}"),
+            None,
+            Some("secret"),
+            Some("org-123"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(facts.as_array().unwrap().len(), 2);
+    }
+    let (status, facts) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-heads/evidence-facts?current_only=true",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(facts.as_array().unwrap().len(), 1);
+    assert_eq!(facts[0]["id"], head.id);
+    let (status, _) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-heads/evidence-facts?current_only=true",
+        None,
+        Some("secret"),
+        Some("foreign-org"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = request(
+        &service,
+        Method::GET,
+        "/internal/applications/application-heads/evidence-facts?current_only=invalid",
+        None,
+        Some("secret"),
+        Some("org-123"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[path = "support/canvas_claim_behavior.rs"]
+mod canvas_claim_behavior;

@@ -58,12 +58,10 @@ def model(tmp_path, enabled=True):
             "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
             "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
             "PASSPORT_KMS_CALLBACKS_ENABLED": "true",
-            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED": "false",
-            "ICAO_DOCUMENT_SIGNER_URL": "",
             "PERSONALIZATION_BUREAU_URL": VALIDATOR["PRIVATE_BUREAU_URL"],
             "PERSONALIZATION_BUREAU_API_KEY": TOKEN,
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "DATABASE_URL": "postgresql+asyncpg://marty:synthetic@postgres:5432/marty",
+            "DATABASE_URL": "postgresql://marty:synthetic@postgres:5432/marty",
         }
     )
     services["gateway"]["environment"]["SIGNING_KEYS_INTERNAL_API_KEY"] = (
@@ -90,10 +88,18 @@ def model(tmp_path, enabled=True):
             "PASSPORT_CALLBACK_SIGNER_ENABLED": "true",
             "SIGNING_KEYS_SERVICE_PORT": "8018",
             "SIGNING_KEYS_INTERNAL_API_KEY": "synthetic-signing-credential",
-            "BAO_ADDR": "http://openbao:8200",
-            "BAO_TOKEN": "synthetic-existing-openbao-token",
+            "BAO_ADDR": "https://openbao:8200",
+            "BAO_CACERT": "/bao/public-ca/ca.crt",
+            "BAO_TOKEN_FILE": "/bao/passport-callback/token",
+            "PRESERVE_BAO_TOKEN_FILE": "1",
         },
         "networks": {"passport-callback-signing": None},
+        "volumes": [
+            {"type": "volume", "source": "openbao_public_ca",
+             "target": "/bao/public-ca", "read_only": True},
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True},
+        ],
     }
     services["passport-beta-bureau"] = {
         "image": IMAGE,
@@ -134,6 +140,63 @@ def validate(candidate, enabled=True):
         passport_enabled=enabled,
         files=[PROFILE] if enabled else ["base.yml"],
     )
+
+
+def test_caller_verified_prepared_image_is_exact_and_does_not_relax_default(tmp_path):
+    candidate = model(tmp_path)
+    prepared = "sha256:" + "b" * 64
+    for role in ("passport-beta-bureau", "passport-callback-signer"):
+        candidate["services"][role]["image"] = prepared
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        validate(candidate)
+    VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                prepared_services_image=prepared)
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                    prepared_services_image="sha256:" + "c" * 64)
+    candidate["services"]["passport-callback-signer"]["image"] = "sha256:" + "c" * 64
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="image must be immutable"):
+        VALIDATOR["validate_model"](candidate, passport_enabled=True, files=[PROFILE],
+                                    prepared_services_image=prepared)
+
+
+@pytest.mark.parametrize("prepared,enabled,physical", [
+    ("services:latest", True, False), ("elevenid-local/services:dev", True, False),
+    ("sha256:" + "b" * 64, False, False), ("sha256:" + "b" * 64, True, True),
+])
+def test_prepared_local_validation_cannot_select_tag_or_non_simulator_mode(tmp_path, prepared, enabled, physical):
+    with pytest.raises(VALIDATOR["PassportConfigurationError"], match="explicit native simulator"):
+        VALIDATOR["validate_model"](model(tmp_path), passport_enabled=enabled, files=[PROFILE],
+                                    physical_provider=physical, prepared_services_image=prepared)
+
+
+def test_prepared_image_cli_projection_keeps_read_only_compose_and_exact_binding(tmp_path):
+    candidate = model(tmp_path)
+    prepared = "sha256:" + "b" * 64
+    for role in ("passport-beta-bureau", "passport-callback-signer"):
+        candidate["services"][role]["image"] = prepared
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(candidate).encode())
+
+    VALIDATOR["validate_compose"](project="elevenid-beta", env_files=["synthetic.env"],
+        files=[PROFILE], passport_enabled=True, prepared_services_image=prepared,
+        runner=run, keycloak_validator=lambda *args, **kwargs: None)
+    assert len(calls) == 1 and calls[0][-3:] == ["config", "--format", "json"]
+
+
+def test_runner_freezes_prepared_id_before_all_passport_validation_calls():
+    source = (ROOT / "scripts/deploy-local-beta-release.ps1").read_text()
+    capture = '$script:PreparedPassportServicesImage = $preparedServicesForValidation'
+    assert source.index(capture) > source.index('Get-PreparedLocalBetaImage "elevenid-local/services:$releaseVersion" "services"')
+    assert source.index(capture) < source.index('Assert-BetaPassportConfiguration -RepoRoot')
+    assert source.count('-PreparedServicesImage $script:PreparedPassportServicesImage') == 3
+    assert '$preparedServices -cne $script:PreparedPassportServicesImage' in source
+    wrapper = (ROOT / "scripts/beta-passport-configuration.ps1").read_text()
+    assert '@("--prepared-services-image", $PreparedServicesImage)' in wrapper
+    assert '-not $PassportEnabled -or $PhysicalProvider' in wrapper
 
 
 @pytest.mark.parametrize("mutation", [
@@ -311,6 +374,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "dsc_key_in_service_command",
         "bureau_database_target",
         "native_database_target",
+        "native_database_driver",
         "signing_route",
         "callback_route",
         "callback_direct_native",
@@ -329,6 +393,7 @@ def test_rendered_compose_environment_list_is_supported(tmp_path):
         "callback_signer_disabled",
         "callback_signer_image",
         "callback_signer_key_mismatch",
+        "callback_signer_token_mount_leak",
         "callback_signer_extra_member",
     ),
 )
@@ -475,7 +540,9 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
             "postgresql://marty:synthetic@production.example:5432/marty"
         )
     elif mutation == "native_database_target":
-        native["DATABASE_URL"] = "postgresql+asyncpg://marty:other@postgres:5432/marty"
+        native["DATABASE_URL"] = "postgresql://marty:other@postgres:5432/marty"
+    elif mutation == "native_database_driver":
+        native["DATABASE_URL"] = "postgresql+asyncpg://marty:synthetic@postgres:5432/marty"
     elif mutation == "signing_route":
         bureau["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
             "https://public.example.test"
@@ -522,6 +589,11 @@ def test_partial_or_unsafe_selection_fails_closed(tmp_path, mutation):
         services["passport-callback-signer"]["environment"][
             "SIGNING_KEYS_INTERNAL_API_KEY"
         ] = "another-key"
+    elif mutation == "callback_signer_token_mount_leak":
+        services["gateway"]["volumes"] = [
+            {"type": "volume", "source": "openbao_passport_callback",
+             "target": "/bao/passport-callback", "read_only": True}
+        ]
     elif mutation == "callback_signer_extra_member":
         services["gateway"]["networks"] = {"passport-callback-signing": None}
     with pytest.raises(VALIDATOR["PassportConfigurationError"]) as error:
@@ -739,6 +811,7 @@ def test_compose_call_is_read_only_and_closed(tmp_path):
         files=[PROFILE],
         passport_enabled=True,
         runner=run,
+        keycloak_validator=lambda model, **_: None,
     )
     command, kwargs = calls[0]
     assert command[-3:] == ["config", "--format", "json"]
@@ -786,7 +859,8 @@ def test_runner_validates_twice_before_mutation():
         "retire them explicitly before deploying without the passport profile" in source
     )
     marker = "Assert-BetaPassportConfiguration -RepoRoot $script:RepoRoot"
-    assert source.count(marker) == 2
+    assert source.count(marker) >= 2
+    assert source.rindex(marker) > source.index('Write-Step "Reverify coordinated source after image builds"')
     assert source.index(marker) < source.index(
         'Invoke-Checked -FilePath docker -Arguments @("pull",'
     )
@@ -865,18 +939,23 @@ def test_selected_bureau_has_a_packaged_rust_entrypoint():
 
 def test_passport_transit_keys_are_verified_non_exportable_at_bootstrap():
     source = (ROOT / "docker/openbao-init.sh").read_text(encoding="utf-8")
-    for key, kind in (
-        ("passport-artifact-marty-aes256", "aes256-gcm96"),
-        ("passport-bureau-callback-marty-hmac", "hmac"),
+    for key, kind, target in (
+        ("passport-artifact-marty-aes256", "aes256-gcm96", "transit/keys/passport-artifact-marty-aes256"),
+        ("passport-bureau-callback-marty-hmac", "hmac", '"${callback_path}"'),
     ):
         assert f"transit/keys/{key}" in source
-        creation = source.split(f"transit/keys/{key} \\\n", 1)[1].split("2>/dev/null", 1)[0]
+        creation = re.search(
+            r"bao write[^\n]*" + re.escape(target) + r"((?:[^\n]*\\\n)*[^\n]*)", source
+        )
+        assert creation, f"Missing key creation for {key}"
+        creation = creation.group(1)
         assert f"type={kind}" in creation
         assert "exportable=false" in creation
         if kind == "hmac":
             assert "key_size=32" in creation
-        assert f"-field=type transit/keys/{key}" in source
-        assert f"-field=exportable transit/keys/{key}" in source
+            assert f'callback_path="transit/keys/{key}"' in source
+        assert f"-field=type {target}" in source
+        assert f"-field=exportable {target}" in source
 
 
 def synthetic_beta_compose_env(tmp_path):
@@ -887,8 +966,17 @@ def synthetic_beta_compose_env(tmp_path):
     for name in required:
         if name.endswith("_FILE"):
             fixture = tmp_path / name.lower()
-            fixture.write_text("synthetic-workload-material", encoding="utf-8")
+            if (name.startswith("KEYCLOAK_") and name.endswith("CERT_FILE")) or name == "OPENBAO_TLS_CA_CERT_FILE":
+                content = "-----BEGIN CERTIFICATE-----\ncHVibGlj\n-----END CERTIFICATE-----\n"
+            elif name.startswith("KEYCLOAK_") and name.endswith("TOKEN_FILE"):
+                content = f"synthetic-scoped-{name}-token-value"
+            else:
+                content = "synthetic-workload-material"
+            fixture.write_text(content, encoding="utf-8")
             values[name] = str(fixture)
+    values["KEYCLOAK_KMS_IMAGE_DIGEST"] = "sha256:" + "c" * 64
+    values["KEYCLOAK_KMS_ADDR"] = "https://openbao:8200"
+    values["KEYCLOAK_KMS_KEY_VERSION"] = "1"
     values["GRPC_SERVICE_TOKEN"] = TOKEN
     values["PASSPORT_BETA_RECONCILIATION_OPERATOR_TOKEN"] = RECONCILIATION_TOKEN
     values["MARTY_SERVICES_IMAGE"] = IMAGE
@@ -1015,3 +1103,15 @@ def test_actual_interpolated_beta_compose_passes_selector(tmp_path):
         passport_enabled=True,
         runner=run,
     )
+
+
+@pytest.mark.parametrize("value", [None, "0"])
+def test_callback_signer_requires_token_file_preservation(tmp_path, value):
+    candidate = model(tmp_path)
+    env = candidate["services"]["passport-callback-signer"]["environment"]
+    if value is None:
+        env.pop("PRESERVE_BAO_TOKEN_FILE")
+    else:
+        env["PRESERVE_BAO_TOKEN_FILE"] = value
+    with pytest.raises(VALIDATOR["PassportConfigurationError"]):
+        validate(candidate)

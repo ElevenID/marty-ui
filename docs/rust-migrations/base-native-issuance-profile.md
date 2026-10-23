@@ -191,22 +191,19 @@ Python source references above are the unchanged retained renewal/DIDComm refere
 at `87eae307` (route blob `6b3a7fa0e169862e815bcb6bca64b0b21a5adf6a`). CI source
 guards are repo-local and do not require that separate checkout or Python binding.
 
-## Explicit authcrypt compatibility policy
+## Explicit remote authcrypt policy
 
-Add `docker-compose.profile.issuance-native-authcrypt.yml` only when both owners
-need the existing compatibility policy. One shared mount definition binds the
-exact required `DIDCOMM_ENCRYPTION_POLICY_DIR` read-only to both issuance owners,
-sets the existing policy-file target, and forbids host directory auto-creation.
-No other service receives the mount. The existing policy/model validator is reused;
-no new policy schema, parser or encryption implementation is introduced.
-
-The historical `docker-compose.profile.didcomm-authcrypt.yml` is deliberately not
-reused: it mounts only legacy using short syntax that permits missing-directory
-creation. The new opt-in is **not equivalent to that missing-directory behavior**.
-Its directory must already exist and is checked in the actual rendered-model gate;
-Compose's `:?` alone only checks nonempty interpolation. Default anoncrypt has no
-policy mount. Beta/conformance overlay behavior remains unchanged. This preserves
-both modes and leaves `DIDCOMM-KMS-001` explicitly outstanding.
+`docker-compose.profile.issuance-native-authcrypt.yml` is the single optional
+authcrypt overlay for the default base, beta and conformance native owners. It
+mounts only `didcomm-encryption-policy.json` from the required existing
+`DIDCOMM_ENCRYPTION_POLICY_DIR`, never the whole directory or a private key.
+The strict Rust parser accepts versioned remote sender references and rejects
+private-key fields. The reviewed plugin image digest replaces stock OpenBao;
+init creates the narrow read/pack policy and mints a token into a dedicated
+project volume. Native Issuance waits for init and mounts that volume read-only.
+The former legacy and native compatibility overlays have been retired. Default
+anoncrypt has no policy mount. Compose-model checks are not live KMS acceptance;
+the beta/conformance composition still needs a real authcrypt exchange.
 
 ## Qualification and remaining acceptance
 

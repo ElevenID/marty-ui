@@ -5,9 +5,9 @@
 # scripts/conformance_stack.py.
 # It exercises the same gateway, Keycloak, flow, and verification services as a
 # deployment, while making their protocol URLs HTTPS. The certificate directory
-# is intentionally supplied by the invoking environment: a local disposable
-# run may use a test CA (scripts/new-oidf-local-certificate.ps1), while
-# certification uses its registered certificate.
+# is intentionally supplied by the invoking environment. The public leaf and
+# CA may be disposable or registered; private-key operations remain in a
+# versioned, non-exportable OpenBao Transit key.
 #
 # The authenticated /v1/vc-api boundary is part of the ordinary gateway. W3C
 # runners use organization-scoped API keys and need no test-only overlay.
@@ -25,17 +25,29 @@ services:
 
   oidf-tls-proxy:
     profiles: [oidf]
-    image: nginx@sha256:679a5fd058f6ca754a561846fe27927e408074431d63556e8fc588fc38be6901
+    build:
+      context: .
+      dockerfile: services/Dockerfile
+      args:
+        SERVICE_NAME: oidf-keyless-edge
     ports:
       - "${OIDF_TLS_HOST_PORT:-8443}:${OIDF_INTERNAL_TLS_PORT:-443}"
     volumes:
-      - ./services/oidf-tls-proxy/nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - ${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to a directory containing tls.crt and tls.key}:/etc/nginx/certs:ro
+      - ${OIDF_EDGE_TLS_CERT_FILE:-${OIDF_TLS_CERT_DIR:?set OIDF_TLS_CERT_DIR to a directory containing tls.crt and root-ca.pem}/tls.crt}:/run/marty-oidf-tls/tls.crt:ro
+      - ${OIDF_TLS_KMS_CA_CERT_FILE:?set OIDF_TLS_KMS_CA_CERT_FILE to the public OpenBao CA}:/run/marty-oidf-tls/openbao-ca.pem:ro
+      - ${OIDF_TLS_KMS_TOKEN_FILE:?set OIDF_TLS_KMS_TOKEN_FILE to a scoped token file}:/run/secrets/oidf-edge-tls-kms-token:ro
     environment:
+      SERVICE_NAME: oidf_keyless_edge
       # Must equal the port in OIDF_PUBLIC_BASE_URL. The runner reaches this
       # listener directly across oidf-runner-network, so Docker's host-port
       # mapping is not a substitute for listening on the published port.
-      OIDF_INTERNAL_TLS_PORT: ${OIDF_INTERNAL_TLS_PORT:-443}
+      OIDF_EDGE_BIND: 0.0.0.0:${OIDF_INTERNAL_TLS_PORT:-443}
+      OIDF_EDGE_TLS_CERT_FILE: /run/marty-oidf-tls/tls.crt
+      OIDF_EDGE_TLS_KMS_CA_CERT_FILE: /run/marty-oidf-tls/openbao-ca.pem
+      OIDF_EDGE_TLS_KMS_TOKEN_FILE: /run/secrets/oidf-edge-tls-kms-token
+      OIDF_EDGE_TLS_KMS_ADDR: ${OIDF_TLS_KMS_ADDR:?set OIDF_TLS_KMS_ADDR to an HTTPS OpenBao origin}
+      OIDF_EDGE_TLS_KMS_KEY_NAME: ${OIDF_TLS_KMS_KEY_NAME:?set OIDF_TLS_KMS_KEY_NAME to the non-exportable Transit key}
+      OIDF_EDGE_TLS_KMS_KEY_VERSION: ${OIDF_TLS_KMS_KEY_VERSION:?set OIDF_TLS_KMS_KEY_VERSION to a positive integer}
     depends_on:
       gateway:
         condition: service_healthy

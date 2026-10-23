@@ -16,8 +16,10 @@ pub struct ReqwestUpstream {
 impl ReqwestUpstream {
     pub fn new(maximum_response_bytes: usize) -> Result<Self, PlatformError> {
         Self::validate_response_limit(maximum_response_bytes)?;
+        // Return browser redirects to callers; internal upstreams cannot follow public origins.
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(5))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| PlatformError::ProviderUnavailable(error.to_string()))?;
         Self::with_client(maximum_response_bytes, client)
@@ -65,7 +67,9 @@ impl UpstreamClient for ReqwestUpstream {
         );
         let mut url = url::Url::parse(&raw_url)
             .map_err(|error| PlatformError::Operation(error.to_string()))?;
-        {
+        // Opening the serializer creates a query delimiter even without pairs.
+        // Preserve absence for endpoints that reject caller-supplied options.
+        if request.query.values().any(|values| !values.is_empty()) {
             let mut query = url.query_pairs_mut();
             for (key, values) in &request.query {
                 for value in values {
@@ -95,19 +99,19 @@ impl UpstreamClient for ReqwestUpstream {
         }
         let mut response = builder.send().await.map_err(map_reqwest_error)?;
         let status_code = response.status().as_u16();
-        let headers = response
-            .headers()
-            .iter()
-            .map(|(name, value)| {
-                Ok((
-                    name.as_str().to_owned(),
-                    value
-                        .to_str()
-                        .map_err(|error| PlatformError::Operation(error.to_string()))?
-                        .to_owned(),
-                ))
-            })
-            .collect::<Result<BTreeMap<_, _>, PlatformError>>()?;
+        let mut headers = BTreeMap::new();
+        let mut set_cookies = Vec::new();
+        for (name, value) in response.headers() {
+            let value = value
+                .to_str()
+                .map_err(|error| PlatformError::Operation(error.to_string()))?
+                .to_owned();
+            if name == reqwest::header::SET_COOKIE {
+                set_cookies.push(value);
+            } else {
+                headers.insert(name.as_str().to_owned(), value);
+            }
+        }
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await.map_err(map_reqwest_error)? {
             if body.len().saturating_add(chunk.len()) > self.maximum_response_bytes {
@@ -119,6 +123,7 @@ impl UpstreamClient for ReqwestUpstream {
         Ok(GatewayResponse {
             status_code,
             headers,
+            set_cookies,
             body: Some(body),
             response_time_ms: Some(
                 u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -245,7 +250,92 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn injected_client_preserves_no_redirect_policy_without_target_requests() {
+    async fn upstream_preserves_query_absence_and_values() {
+        async fn query_echo(uri: axum::http::Uri) -> Json<Value> {
+            Json(json!({"query": uri.query()}))
+        }
+        let mut servers = OwnedLoopbacks::new();
+        let port = servers
+            .serve(Router::new().route("/claim", post(query_echo).get(query_echo)))
+            .await;
+        let upstream = ReqwestUpstream::with_client(1_024, isolated_client()).unwrap();
+        for method in [HttpMethod::Get, HttpMethod::Post] {
+            for (path, query, expected) in [
+                ("/claim", BTreeMap::new(), Value::Null),
+                (
+                    "/claim",
+                    BTreeMap::from([("unused".into(), Vec::new())]),
+                    Value::Null,
+                ),
+                (
+                    "/claim",
+                    BTreeMap::from([("tag".into(), vec!["".into(), "a b".into(), "x&y".into()])]),
+                    json!("tag=&tag=a+b&tag=x%26y"),
+                ),
+                (
+                    "/claim?original=present",
+                    BTreeMap::from([("tag".into(), vec!["next".into()])]),
+                    json!("original=present&tag=next"),
+                ),
+            ] {
+                let mut request = GatewayRequest::new(method, path, 0);
+                request.query = query;
+                let response = upstream
+                    .send(&instance(port, 1_000), request)
+                    .await
+                    .unwrap();
+                assert_eq!(response.status_code, 200);
+                let body: Value =
+                    serde_json::from_slice(response.body.as_deref().unwrap()).unwrap();
+                assert_eq!(body["query"], expected, "{method:?} {path}");
+            }
+        }
+        servers.close().await;
+    }
+
+    #[tokio::test]
+    async fn upstream_keeps_each_set_cookie_field_for_auth_callbacks() {
+        let mut servers = OwnedLoopbacks::new();
+        let port = servers
+            .serve(Router::new().route(
+                "/callback",
+                post(|| async {
+                    let mut headers = HeaderMap::new();
+                    headers.append(
+                        axum::http::header::SET_COOKIE,
+                        axum::http::HeaderValue::from_static("sessionId=synthetic; Path=/; Secure"),
+                    );
+                    headers.append(
+                        axum::http::header::SET_COOKIE,
+                        axum::http::HeaderValue::from_static(
+                            "marty_impersonation_handoff=; Max-Age=0; Path=/; Secure",
+                        ),
+                    );
+                    (headers, "redirect")
+                }),
+            ))
+            .await;
+        let upstream = ReqwestUpstream::new(1_024).unwrap();
+        let response = upstream
+            .send(
+                &instance(port, 1_000),
+                GatewayRequest::new(HttpMethod::Post, "/callback", 0),
+            )
+            .await
+            .unwrap();
+        assert!(!response.headers.contains_key("set-cookie"));
+        assert_eq!(
+            response.set_cookies,
+            [
+                "sessionId=synthetic; Path=/; Secure",
+                "marty_impersonation_handoff=; Max-Age=0; Path=/; Secure",
+            ]
+        );
+        servers.close().await;
+    }
+
+    #[tokio::test]
+    async fn both_upstream_constructors_preserve_redirects_without_target_requests() {
         use std::sync::{
             atomic::{AtomicUsize, Ordering},
             Arc,
@@ -279,31 +369,35 @@ mod tests {
                 }),
             ))
             .await;
-        let upstream = ReqwestUpstream::with_client(1_024, isolated_client()).unwrap();
-        let control = upstream
-            .send(
-                &instance(target, 1_000),
-                GatewayRequest::new(HttpMethod::Post, "/target", 0),
+        for upstream in [
+            ReqwestUpstream::with_client(1_024, isolated_client()).unwrap(),
+            ReqwestUpstream::new(1_024).unwrap(),
+        ] {
+            let control = upstream
+                .send(
+                    &instance(target, 1_000),
+                    GatewayRequest::new(HttpMethod::Post, "/target", 0),
+                )
+                .await
+                .unwrap();
+            assert_eq!(control.status_code, 200);
+            assert_eq!(target_calls.swap(0, Ordering::SeqCst), 1);
+            let response = tokio::time::timeout(
+                Duration::from_secs(2),
+                upstream.send(
+                    &instance(origin, 1_000),
+                    GatewayRequest::new(HttpMethod::Post, "/redirect", 0),
+                ),
             )
             .await
+            .unwrap()
             .unwrap();
-        assert_eq!(control.status_code, 200);
-        assert_eq!(target_calls.swap(0, Ordering::SeqCst), 1);
-        let response = tokio::time::timeout(
-            Duration::from_secs(2),
-            upstream.send(
-                &instance(origin, 1_000),
-                GatewayRequest::new(HttpMethod::Post, "/redirect", 0),
-            ),
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(response.status_code, 307);
-        assert_eq!(response.headers.get("location"), Some(&location));
-        assert_eq!(redirect_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(response.status_code, 307);
+            assert_eq!(response.headers.get("location"), Some(&location));
+            assert_eq!(redirect_calls.swap(0, Ordering::SeqCst), 1);
+            assert_eq!(target_calls.load(Ordering::SeqCst), 0);
+        }
         servers.close().await;
-        assert_eq!(target_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

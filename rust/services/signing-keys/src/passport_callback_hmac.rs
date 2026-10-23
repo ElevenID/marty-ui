@@ -8,8 +8,10 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use marty_passport_auth::valid_provider_profile_id;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use crate::flow_envelope::OpenBaoEnvelopeProvider;
@@ -43,6 +45,65 @@ pub struct SignRequest {
 pub struct VerifyRequest {
     pub body_b64: String,
     pub signature: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProviderVerifyRequest {
+    pub body_b64: String,
+    pub signature_hex: String,
+    pub key_version: u32,
+}
+
+fn provider_key_name(profile_id: &str) -> Result<String, CallbackKmsError> {
+    if !valid_provider_profile_id(profile_id) {
+        return Err(CallbackKmsError::InvalidEvent);
+    }
+    Ok(format!(
+        "passport-provider-callback-{}",
+        hex::encode(Sha256::digest(profile_id.as_bytes()))
+    ))
+}
+
+pub async fn verify_provider(
+    provider: &OpenBaoEnvelopeProvider,
+    profile_id: &str,
+    request: ProviderVerifyRequest,
+) -> Result<Value, CallbackKmsError> {
+    let key_name = provider_key_name(profile_id)?;
+    if request.key_version == 0
+        || request.body_b64.len() > MAX_BODY_BYTES.div_ceil(3) * 4
+        || request.signature_hex.len() != 64
+        || !request
+            .signature_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(CallbackKmsError::InvalidSignature);
+    }
+    let body = STANDARD
+        .decode(&request.body_b64)
+        .map_err(|_| CallbackKmsError::InvalidEvent)?;
+    if body.is_empty() || body.len() > MAX_BODY_BYTES {
+        return Err(CallbackKmsError::InvalidEvent);
+    }
+    let mac =
+        hex::decode(&request.signature_hex).map_err(|_| CallbackKmsError::InvalidSignature)?;
+    let response = provider
+        .post(
+            &format!("/v1/transit/verify/{key_name}"),
+            json!({
+                "input": request.body_b64,
+                "hmac": format!("vault:v{}:{}", request.key_version, STANDARD.encode(mac))
+            }),
+        )
+        .await
+        .map_err(|_| CallbackKmsError::Unavailable)?;
+    let valid = response
+        .pointer("/data/valid")
+        .and_then(Value::as_bool)
+        .ok_or(CallbackKmsError::Unavailable)?;
+    Ok(json!({"valid": valid}))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -168,24 +229,42 @@ pub fn isolated_signer_router(
     provider: OpenBaoEnvelopeProvider,
     internal_api_key: String,
 ) -> Router {
-    Router::new()
+    isolated_router(provider, internal_api_key, false)
+}
+
+pub fn isolated_supported_signer_router(
+    provider: OpenBaoEnvelopeProvider,
+    internal_api_key: String,
+) -> Router {
+    isolated_router(provider, internal_api_key, true)
+}
+
+fn isolated_router(
+    provider: OpenBaoEnvelopeProvider,
+    internal_api_key: String,
+    provider_verification: bool,
+) -> Router {
+    let router = Router::new()
         .route("/health", get(|| async { StatusCode::OK }))
         .route(
             "/internal/documents/{organization_id}/passport-callbacks/sign",
             post(sign_callback),
+        );
+    let router = if provider_verification {
+        router.route(
+            "/internal/documents/{profile_id}/passport-provider-callbacks/verify",
+            post(verify_provider_callback),
         )
-        .with_state(SignerState {
-            provider,
-            internal_api_key,
-        })
+    } else {
+        router
+    };
+    router.with_state(SignerState {
+        provider,
+        internal_api_key,
+    })
 }
 
-async fn sign_callback(
-    State(state): State<SignerState>,
-    Path(organization_id): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<SignRequest>,
-) -> Result<Json<Value>, CallbackKmsError> {
+fn authorize_internal(state: &SignerState, headers: &HeaderMap) -> Result<(), CallbackKmsError> {
     let supplied = headers
         .get("x-api-key")
         .and_then(|value| value.to_str().ok())
@@ -199,7 +278,29 @@ async fn sign_callback(
     {
         return Err(CallbackKmsError::Unauthorized);
     }
+    Ok(())
+}
+
+async fn sign_callback(
+    State(state): State<SignerState>,
+    Path(organization_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<SignRequest>,
+) -> Result<Json<Value>, CallbackKmsError> {
+    authorize_internal(&state, &headers)?;
     sign(&state.provider, &organization_id, request)
+        .await
+        .map(Json)
+}
+
+async fn verify_provider_callback(
+    State(state): State<SignerState>,
+    Path(profile_id): Path<String>,
+    headers: HeaderMap,
+    Json(request): Json<ProviderVerifyRequest>,
+) -> Result<Json<Value>, CallbackKmsError> {
+    authorize_internal(&state, &headers)?;
+    verify_provider(&state.provider, &profile_id, request)
         .await
         .map(Json)
 }
@@ -210,7 +311,7 @@ mod tests {
 
     use axum::{
         body::Body,
-        extract::{Json, State},
+        extract::{Json, Path, State},
         http::Request,
         routing::post,
         Router,
@@ -381,6 +482,123 @@ mod tests {
                 .unwrap();
             assert_eq!(response.status(), StatusCode::NOT_FOUND, "{isolated_path}");
         }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn supported_provider_verifier_forwards_exact_body_to_profile_scoped_transit_key() {
+        async fn verify_external(Path(key): Path<String>, Json(body): Json<Value>) -> Json<Value> {
+            assert_eq!(key, provider_key_name("provider-a").unwrap());
+            Json(json!({"data": {"valid":
+                body["input"] == STANDARD.encode(br#"{"bureau_job_id":"job-a"}"#)
+                && body["hmac"] == format!("vault:v2:{}", STANDARD.encode([0u8; 32]))
+            }}))
+        }
+        let app = Router::new().route("/v1/transit/verify/{key}", post(verify_external));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let provider =
+            OpenBaoEnvelopeProvider::new(format!("http://{address}"), "test-token").unwrap();
+        let request = ProviderVerifyRequest {
+            body_b64: STANDARD.encode(br#"{"bureau_job_id":"job-a"}"#),
+            signature_hex: "00".repeat(32),
+            key_version: 2,
+        };
+        assert_eq!(
+            verify_provider(&provider, "provider-a", request)
+                .await
+                .unwrap()["valid"],
+            true
+        );
+        assert_eq!(
+            verify_provider(
+                &provider,
+                "provider-a",
+                ProviderVerifyRequest {
+                    body_b64: STANDARD.encode(br#"{"bureau_job_id":"job-b"}"#),
+                    signature_hex: "00".repeat(32),
+                    key_version: 2,
+                }
+            )
+            .await
+            .unwrap()["valid"],
+            false
+        );
+        assert!(matches!(
+            verify_provider(
+                &provider,
+                "provider/a",
+                ProviderVerifyRequest {
+                    body_b64: STANDARD.encode(b"{}"),
+                    signature_hex: "00".repeat(32),
+                    key_version: 2,
+                }
+            )
+            .await,
+            Err(CallbackKmsError::InvalidEvent)
+        ));
+        assert!(matches!(
+            verify_provider(
+                &provider,
+                "provider-a",
+                ProviderVerifyRequest {
+                    body_b64: STANDARD.encode(b"{}"),
+                    signature_hex: "AA".repeat(32),
+                    key_version: 2,
+                }
+            )
+            .await,
+            Err(CallbackKmsError::InvalidSignature)
+        ));
+        let endpoint = "/internal/documents/provider-a/passport-provider-callbacks/verify";
+        let request_body = json!({
+            "body_b64": STANDARD.encode(br#"{"bureau_job_id":"job-a"}"#),
+            "signature_hex": "00".repeat(32),
+            "key_version": 2
+        })
+        .to_string();
+        let beta = isolated_signer_router(provider.clone(), "internal-key".into());
+        let unavailable_on_beta = beta
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("x-api-key", "internal-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable_on_beta.status(), StatusCode::NOT_FOUND);
+        let supported = isolated_supported_signer_router(provider, "internal-key".into());
+        let unauthorized = supported
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body.clone()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unauthorized.status(), StatusCode::UNAUTHORIZED);
+        let verified = supported
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(endpoint)
+                    .header("x-api-key", "internal-key")
+                    .header("content-type", "application/json")
+                    .body(Body::from(request_body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(verified.status(), StatusCode::OK);
         server.abort();
     }
 }

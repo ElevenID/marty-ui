@@ -1099,6 +1099,43 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         .await
         .unwrap()
         .unwrap();
+    let initial = unscoped.resources(&target).await.unwrap().unwrap();
+    let template = initial.application_template.as_ref().unwrap();
+    let template_id = template["id"].as_str().unwrap();
+    let original_rules = template["claim_collection_rules"].clone();
+    let mapped_rules = json!([{"claim_name":"activity_name","source":"EVIDENCE_EXTRACTION",
+        "source_config":{"requirement_id":"ags-score","fact_type":"canvas.ags_result",
+            "json_pointer":"/assertion/activity_name"}}]);
+    sqlx::query(
+        "UPDATE issuance_service.application_templates SET claim_collection_rules = $1
+        WHERE id = $2 AND organization_id = $3",
+    )
+    .bind(&mapped_rules)
+    .bind(template_id)
+    .bind(&target.organization_id)
+    .execute(pool)
+    .await
+    .unwrap();
+    let mapped = unscoped.resources(&target).await.unwrap().unwrap();
+    let loaded_rules = mapped.application_template.as_ref().unwrap()["claim_collection_rules"]
+        .as_array()
+        .unwrap();
+    assert_eq!(loaded_rules, mapped_rules.as_array().unwrap());
+    assert!(marty_claim_collection::evidence_pointer_requested(
+        loaded_rules,
+        &json!({"requirement_id":"ags-score","fact_type":"canvas.ags_result"}),
+        "/assertion/activity_name"
+    ));
+    sqlx::query(
+        "UPDATE issuance_service.application_templates SET claim_collection_rules = $1
+        WHERE id = $2 AND organization_id = $3",
+    )
+    .bind(original_rules)
+    .bind(template_id)
+    .bind(&target.organization_id)
+    .execute(pool)
+    .await
+    .unwrap();
     let resources = unscoped.resources(&target).await.unwrap().unwrap();
     let original = roster_storage(pool).await;
     let candidate = CanvasRosterCandidate {
@@ -1115,6 +1152,14 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         verification_method: "synthetic",
         effective_at: None,
     };
+    let private_requirement =
+        ["{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"d\":\"private-seed\"}".to_owned()];
+    let denied = unscoped
+        .patch_application_sync(&target, &resources, &private_requirement, true)
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_repository_unavailable");
+    assert_eq!(roster_storage(pool).await, original);
     for effect in [
         "fact",
         "application",
@@ -1174,6 +1219,23 @@ async fn assert_roster_cursor_storage(pool: &sqlx::PgPool) {
         .unwrap();
     let lease = CanvasSyncLease::from_job(&job, "processor-auth-worker").unwrap();
     let processor = unscoped.clone().for_lease(lease);
+    let mut private_observation = observation.clone();
+    private_observation.assertion.insert(
+        "issuer".into(),
+        json!({"private_jwk": {"kty": "EC", "d": "synthetic"}}),
+    );
+    let denied = processor
+        .save_candidate_observation(
+            &target,
+            &resources,
+            &candidate.id,
+            "synthetic",
+            &private_observation,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(denied.code, "canvas_sync_repository_unavailable");
+    assert_eq!(roster_storage(pool).await, original);
     processor
         .update_roster_cursor(&target, &resources, 25, 40)
         .await
@@ -1398,7 +1460,7 @@ async fn setup_schema(pool: &sqlx::PgPool) {
             organization_id text NOT NULL,
             credential_template_id text,
             approval_policy_set_id text,
-            status text NOT NULL)",
+            status text NOT NULL, name TEXT, description TEXT, claim_collection_rules JSON NOT NULL DEFAULT '[]'::json, form_fields JSON NOT NULL DEFAULT '[]'::json, application_validity_days INTEGER NOT NULL DEFAULT 30)",
     )
     .execute(pool)
     .await

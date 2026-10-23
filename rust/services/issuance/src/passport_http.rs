@@ -20,6 +20,7 @@ use marty_passport_auth::{
     PassportTenantAuthError, PassportTenantCredentialSource, PassportTenantKeyring,
     PassportTenantPrincipal,
 };
+use marty_signing_grant::SigningOrigin;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -31,13 +32,12 @@ use zeroize::Zeroizing;
 
 use crate::{
     config::IssuanceServiceConfig,
-    passport_artifact::{PassportArtifactCipher, PassportArtifactError},
     passport_artifact_kms::{KmsArtifactError, KmsPassportArtifactCipher},
     passport_beta_material::{material_digests, PassportBetaMaterialDigests},
     passport_bureau::{
-        beta_batch_wire_commitment, parse_beta_batch_mapping, parse_verified_webhook,
-        BetaBatchWireCommitments, BetaBatchWireEvidence, BureauClient, BureauError, DocumentType,
-        KmsWebhookVerifier, PersonalizationBatch, PersonalizationJob, ProductionStatus,
+        beta_batch_wire_commitment, parse_beta_batch_mapping, BetaBatchWireCommitments,
+        BetaBatchWireEvidence, BureauClient, BureauError, DocumentType, KmsWebhookVerifier,
+        PersonalizationBatch, PersonalizationJob, ProductionStatus,
     },
     passport_contract::{
         application_nested_field_orders, decode_python_validated_base64, json_field_order,
@@ -50,9 +50,8 @@ use crate::{
         PassportJob, PassportJobInsert, PassportJobPatch, PassportJobStatus,
         PassportSubmissionReservation, PassportWebhookRepositoryError, PostgresPassportRepository,
     },
-    passport_signer::{
-        ManagedProfileSigner, PassportSigner, RemoteSigner, SignedMaterial, SignerError,
-    },
+    passport_signer::{ManagedProfileSigner, PassportSigner, SignedMaterial, SignerError},
+    signing_grant_config::{managed_grant_minter, IssuanceGrantConfigError},
 };
 
 #[derive(Clone)]
@@ -66,22 +65,17 @@ pub struct PassportHttpService {
     bureau_provider_profile_id: Option<String>,
     beta_reconciliation_enabled: bool,
     beta_reconciliation_operator_token: Option<String>,
-    webhook_secret: Option<Vec<u8>>,
     webhook_kms: Option<KmsWebhookVerifier>,
 }
 
 #[derive(Clone)]
 enum ArtifactAvailability {
     Missing,
-    Invalid,
     Ready(ArtifactCryptor),
 }
 
 #[derive(Clone)]
-enum ArtifactCryptor {
-    Legacy(PassportArtifactCipher),
-    Kms(KmsPassportArtifactCipher),
-}
+struct ArtifactCryptor(KmsPassportArtifactCipher);
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct SubmissionSigningProvenance {
@@ -156,47 +150,34 @@ impl ArtifactCryptor {
         artifact_id: &str,
         artifact: &crate::passport_artifact::PassportSensitiveArtifact,
     ) -> Result<String, PassportHttpError> {
-        match self {
-            Self::Legacy(cipher) => cipher
-                .encrypt(artifact)
-                .map_err(|_| PassportHttpError::InvalidArtifact),
-            Self::Kms(cipher) => cipher
-                .encrypt(organization_id, artifact_id, artifact)
-                .await
-                .map_err(kms_artifact_error),
-        }
+        self.0
+            .encrypt(organization_id, artifact_id, artifact)
+            .await
+            .map_err(kms_artifact_error)
     }
 
     async fn decrypt(
         &self,
         job: &PassportJob,
     ) -> Result<crate::passport_artifact::PassportSensitiveArtifact, PassportHttpError> {
-        match self {
-            Self::Legacy(cipher) => cipher
-                .decrypt(&job.secure_artifact_ciphertext)
-                .map_err(|_| PassportHttpError::InvalidArtifact),
-            Self::Kms(cipher) => cipher
-                .decrypt(
-                    &job.organization_id,
-                    &job.id,
-                    &job.secure_artifact_ciphertext,
-                )
-                .await
-                .map_err(kms_artifact_error),
-        }
+        self.0
+            .decrypt(
+                &job.organization_id,
+                &job.id,
+                &job.secure_artifact_ciphertext,
+            )
+            .await
+            .map_err(kms_artifact_error)
     }
 
     async fn encrypted_scrubbed_artifact(
         &self,
         job: &PassportJob,
     ) -> Result<String, PassportHttpError> {
-        match self {
-            Self::Legacy(cipher) => Ok(cipher.encrypted_scrubbed_artifact()),
-            Self::Kms(cipher) => cipher
-                .encrypted_scrubbed_artifact(&job.organization_id, &job.id)
-                .await
-                .map_err(kms_artifact_error),
-        }
+        self.0
+            .encrypted_scrubbed_artifact(&job.organization_id, &job.id)
+            .await
+            .map_err(kms_artifact_error)
     }
 }
 
@@ -221,6 +202,8 @@ pub enum PassportStartupError {
     Bureau(#[from] BureauError),
     #[error(transparent)]
     Artifact(#[from] KmsArtifactError),
+    #[error(transparent)]
+    SigningGrant(#[from] IssuanceGrantConfigError),
 }
 
 impl PassportHttpService {
@@ -232,7 +215,7 @@ impl PassportHttpService {
                 (&self.signer, &self.cipher),
                 (
                     Some(PassportSigner::Managed(_)),
-                    ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+                    ArtifactAvailability::Ready(_)
                 )
             )
     }
@@ -270,58 +253,29 @@ impl PassportHttpService {
             let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
                 PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
             )?;
-            ArtifactAvailability::Ready(ArtifactCryptor::Kms(KmsPassportArtifactCipher::new(
+            ArtifactAvailability::Ready(ArtifactCryptor(KmsPassportArtifactCipher::new(
                 config.signing_keys_internal_url.clone(),
                 api_key,
             )?))
         } else {
-            match native.artifact_key.as_deref() {
-                None => ArtifactAvailability::Missing,
-                Some(key) => match PassportArtifactCipher::from_key(key) {
-                    Ok(cipher) => ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher)),
-                    Err(PassportArtifactError::InvalidKey) => ArtifactAvailability::Invalid,
-                    Err(PassportArtifactError::InvalidArtifact) => {
-                        unreachable!("key parsing cannot decrypt")
-                    }
-                },
-            }
+            ArtifactAvailability::Missing
         };
         let signer = if native.managed_issuer_signing_enabled {
             Some(PassportSigner::Managed(Box::new(
-                ManagedProfileSigner::new(
+                ManagedProfileSigner::new_with_grant(
                     config.signing_keys_internal_url.clone(),
                     config.signing_keys_internal_api_key.as_deref(),
+                    config.issuer_sign_key.as_deref(),
+                    managed_grant_minter(SigningOrigin::IssuancePassport)?,
                 )?,
             )))
-        } else if let Some(url) = native.signer_url.as_deref() {
-            Some(PassportSigner::Remote(RemoteSigner::new(
-                url,
-                native.signer_api_key.as_deref().unwrap_or_default(),
-            )?))
-        } else if native.self_signed_test_enabled {
-            #[cfg(feature = "passport-self-signed-test")]
-            {
-                Some(PassportSigner::SelfSignedTest)
-            }
-            #[cfg(not(feature = "passport-self-signed-test"))]
-            {
-                return Err(PassportStartupError::Signer(
-                    SignerError::TestModeUnavailable,
-                ));
-            }
         } else {
             None
         };
         let bureau = native
             .bureau_url
             .as_deref()
-            .map(|url| {
-                BureauClient::new(
-                    url,
-                    native.bureau_api_key.as_deref().unwrap_or_default(),
-                    native.bureau_webhook_secret.as_deref(),
-                )
-            })
+            .map(|url| BureauClient::new(url, native.bureau_api_key.as_deref().unwrap_or_default()))
             .transpose()?;
         let mut service = Self::with_artifact_availability(
             keyring,
@@ -341,17 +295,10 @@ impl PassportHttpService {
             let api_key = config.signing_keys_internal_api_key.as_deref().ok_or(
                 PassportStartupError::Missing("SIGNING_KEYS_INTERNAL_API_KEY"),
             )?;
-            service.webhook_secret = None;
             service.webhook_kms = Some(KmsWebhookVerifier::new(
                 config.signing_keys_internal_url.clone(),
                 api_key,
             )?);
-        } else {
-            service.webhook_secret = native
-                .bureau_webhook_secret
-                .as_deref()
-                .filter(|secret| !secret.is_empty())
-                .map(|secret| secret.as_bytes().to_vec());
         }
         Ok(Some(service))
     }
@@ -360,7 +307,7 @@ impl PassportHttpService {
     pub fn new(
         keyring: PassportTenantKeyring,
         repository: PostgresPassportRepository,
-        cipher: Option<PassportArtifactCipher>,
+        cipher: Option<KmsPassportArtifactCipher>,
         signer: Option<PassportSigner>,
         bureau: Option<BureauClient>,
     ) -> Self {
@@ -368,11 +315,17 @@ impl PassportHttpService {
             keyring.into(),
             repository,
             cipher.map_or(ArtifactAvailability::Missing, |cipher| {
-                ArtifactAvailability::Ready(ArtifactCryptor::Legacy(cipher))
+                ArtifactAvailability::Ready(ArtifactCryptor(cipher))
             }),
             signer,
             bureau,
         )
+    }
+
+    #[must_use]
+    pub fn with_webhook_verifier(mut self, verifier: KmsWebhookVerifier) -> Self {
+        self.webhook_kms = Some(verifier);
+        self
     }
 
     fn with_artifact_availability(
@@ -382,10 +335,6 @@ impl PassportHttpService {
         signer: Option<PassportSigner>,
         bureau: Option<BureauClient>,
     ) -> Self {
-        let webhook_secret = bureau
-            .as_ref()
-            .and_then(BureauClient::webhook_secret)
-            .map(<[u8]>::to_vec);
         Self {
             keyring,
             internal_service_token: None,
@@ -396,7 +345,6 @@ impl PassportHttpService {
             bureau_provider_profile_id: None,
             beta_reconciliation_enabled: false,
             beta_reconciliation_operator_token: None,
-            webhook_secret,
             webhook_kms: None,
         }
     }
@@ -450,8 +398,7 @@ impl PassportHttpService {
     fn cipher(&self) -> Result<&ArtifactCryptor, PassportHttpError> {
         match &self.cipher {
             ArtifactAvailability::Ready(cipher) => Ok(cipher),
-            ArtifactAvailability::Missing => Err(PassportHttpError::MissingArtifactKey),
-            ArtifactAvailability::Invalid => Err(PassportHttpError::InvalidArtifactKey),
+            ArtifactAvailability::Missing => Err(PassportHttpError::ArtifactKmsUnavailable),
         }
     }
 
@@ -524,17 +471,15 @@ impl PassportHttpService {
                 &job.country_code,
                 &job.organization_id,
                 job.issuer_did.as_deref(),
+                &job.id,
                 &data_groups,
             )
             .await
             .map_err(PassportHttpError::Signer)?;
-        let sod_verified = signed.verify_data_groups(&data_groups).is_ok();
-        if matches!(self.signer.as_ref(), Some(PassportSigner::Managed(_))) && !sod_verified {
-            return Err(PassportHttpError::Signer(
-                SignerError::InvalidManagedMaterial,
-            ));
-        }
-        Ok((artifact, signed, sod_verified))
+        signed
+            .verify_data_groups(&data_groups)
+            .map_err(PassportHttpError::Signer)?;
+        Ok((artifact, signed, true))
     }
 
     async fn validate_cached_signed_material(
@@ -546,23 +491,22 @@ impl PassportHttpService {
         let groups = artifact
             .numbered_data_groups()
             .map_err(|_| PassportHttpError::InvalidArtifact)?;
-        if let Some(PassportSigner::Managed(managed)) = self.signer.as_ref() {
-            managed
-                .validate_existing(
-                    &job.country_code,
-                    &job.organization_id,
-                    job.issuer_did
-                        .as_deref()
-                        .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?,
-                    &groups,
-                    signed,
-                )
-                .await
-                .map_err(PassportHttpError::Signer)?;
-            Ok(true)
-        } else {
-            Ok(signed.verify_data_groups(&groups).is_ok())
-        }
+        let Some(PassportSigner::Managed(managed)) = self.signer.as_ref() else {
+            return Err(PassportHttpError::Signer(SignerError::NotConfigured));
+        };
+        managed
+            .validate_existing(
+                &job.country_code,
+                &job.organization_id,
+                job.issuer_did
+                    .as_deref()
+                    .ok_or(PassportHttpError::Signer(SignerError::MissingIssuerDid))?,
+                &groups,
+                signed,
+            )
+            .await
+            .map_err(PassportHttpError::Signer)?;
+        Ok(true)
     }
 }
 
@@ -609,10 +553,6 @@ enum PassportHttpError {
     ApplicationNotFound,
     #[error("Physical document job not found")]
     WebhookJobNotFound,
-    #[error("PHYSICAL_DOCUMENT_ARTIFACT_KEY is required for encrypted document artifacts")]
-    MissingArtifactKey,
-    #[error("PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid")]
-    InvalidArtifactKey,
     #[error("Secure physical document artifact cannot be decrypted")]
     InvalidArtifact,
     #[error("KMS passport artifact provider is unavailable")]
@@ -669,9 +609,7 @@ impl IntoResponse for PassportHttpError {
             | Self::MissingDataGroups
             | Self::Signer(SignerError::MissingIssuerDid) => StatusCode::UNPROCESSABLE_ENTITY,
             Self::ApplicationNotFound | Self::WebhookJobNotFound => StatusCode::NOT_FOUND,
-            Self::MissingArtifactKey
-            | Self::InvalidArtifactKey
-            | Self::ArtifactKmsUnavailable
+            Self::ArtifactKmsUnavailable
             | Self::Signer(SignerError::NotConfigured)
             | Self::Signer(SignerError::ManagedUnavailable)
             | Self::MissingBureau
@@ -715,7 +653,7 @@ impl IntoResponse for PassportHttpError {
                 "Internal Server Error".to_owned()
             }
             Self::Signer(error) if status == StatusCode::INTERNAL_SERVER_ERROR => match error {
-                SignerError::IncompleteMaterial => error.to_string(),
+                SignerError::InvalidSodEncoding => error.to_string(),
                 _ => "ICAO document signer failed".to_owned(),
             },
             Self::Bureau(error) if status == StatusCode::INTERNAL_SERVER_ERROR => match error {
@@ -787,28 +725,47 @@ pub fn router(service: PassportHttpService) -> Router {
 }
 
 async fn capabilities(State(service): State<PassportHttpService>) -> Json<Value> {
+    Json(capability_document(Some(&service)))
+}
+
+/// Discovery remains available when the feature is off; no operation routes,
+/// database repository or signing authority are installed in this mode.
+pub fn disabled_router() -> Router {
+    Router::new().route(
+        "/v1/passport/capabilities",
+        get(|| async { Json(capability_document(None)) }),
+    )
+}
+
+fn capability_document(service: Option<&PassportHttpService>) -> Value {
+    let signer = service.and_then(|service| service.signer.as_ref());
+    let encrypted =
+        service.is_some_and(|service| matches!(&service.cipher, ArtifactAvailability::Ready(_)));
+    let bureau = service.is_some_and(|service| service.bureau.is_some());
     let mut blockers = Vec::new();
-    if service.signer.is_none() {
-        blockers.push("Configure ICAO_DOCUMENT_SIGNER_URL. Self-signed document certificates are permitted only in explicit test mode.");
+    if service.is_none() {
+        blockers.push("Passport issuance is disabled in this deployment.");
+    }
+    if signer.is_none() {
+        blockers
+            .push("Configure managed passport issuer signing with a KMS-backed issuer profile.");
     }
     let signer_blockers = blockers.clone();
-    match &service.cipher {
-        ArtifactAvailability::Missing => blockers
-            .push("Configure PHYSICAL_DOCUMENT_ARTIFACT_KEY for encrypted sensitive artifacts."),
-        ArtifactAvailability::Invalid => blockers
-            .push("PHYSICAL_DOCUMENT_ARTIFACT_KEY is invalid for encrypted sensitive artifacts."),
-        ArtifactAvailability::Ready(_) => {}
+    if !encrypted {
+        blockers.push(
+            "Configure managed KMS passport artifact custody for encrypted sensitive artifacts.",
+        );
     }
-    if service.bureau.is_none() {
+    if !bureau {
         blockers.push("Configure PERSONALIZATION_BUREAU_URL for production handoff.");
     }
-    Json(json!({
+    json!({
         "supported": blockers.is_empty(),
-        "signer": {"configured": service.signer.is_some(), "mode": service.signer.as_ref().map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
-        "bureau_configured": service.bureau.is_some(),
-        "encrypted_artifact_store": matches!(&service.cipher, ArtifactAvailability::Ready(_)),
+        "signer": {"configured": signer.is_some(), "mode": signer.map_or("UNAVAILABLE", PassportSigner::mode), "blockers": signer_blockers},
+        "bureau_configured": bureau,
+        "encrypted_artifact_store": encrypted,
         "blockers": blockers,
-    }))
+    })
 }
 
 async fn create_application(
@@ -1086,7 +1043,7 @@ async fn submit_personalization(
         (&service.signer, &service.cipher),
         (
             Some(PassportSigner::Managed(_)),
-            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+            ArtifactAvailability::Ready(_)
         )
     ) {
         Some(
@@ -1744,9 +1701,11 @@ async fn verified_bound_batch_job(
         || provenance.artifact_custody != "kms"
         || job.issuer_did.as_deref() != Some(provenance.issuer_did.as_str())
         || provenance.validated_at < job.created_at
-        || job
-            .submitted_at
-            .is_none_or(|at| provenance.validated_at > at)
+        // The receipt timestamp comes from PostgreSQL while validation uses
+        // the service clock. Keep the ordering check with bounded clock skew.
+        || job.submitted_at.is_none_or(|at| {
+            provenance.validated_at > at + chrono::Duration::seconds(30)
+        })
         || digests
             .sod_der_sha256
             .as_ref()
@@ -1937,9 +1896,7 @@ async fn retain_beta_batch_first_wire(
     wire_key_sha256: &str,
     evidence: BetaBatchWireEvidence,
 ) -> Result<(), PassportHttpError> {
-    let ArtifactCryptor::Kms(cipher) = service.cipher()? else {
-        return Err(PassportHttpError::ProviderUnavailable);
-    };
+    let ArtifactCryptor(cipher) = service.cipher()?;
     let request_len = u32::try_from(evidence.request_bytes.len())
         .map_err(|_| PassportHttpError::ConcurrentChange)?;
     // PBW1 || u32 request length || exact request || exact response. The
@@ -2043,9 +2000,7 @@ async fn beta_batch_first_wire_commitments(
         .await
         .map_err(PassportHttpError::Storage)?
         .ok_or(PassportHttpError::ConcurrentChange)?;
-    let ArtifactCryptor::Kms(cipher) = service.cipher()? else {
-        return Err(PassportHttpError::ProviderUnavailable);
-    };
+    let ArtifactCryptor(cipher) = service.cipher()?;
     let plaintext = cipher
         .decrypt_bytes(
             principal.organization_id(),
@@ -2239,7 +2194,7 @@ async fn reconcile_beta_submission(
         (&service.signer, &service.cipher),
         (
             Some(PassportSigner::Managed(_)),
-            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
+            ArtifactAvailability::Ready(_)
         )
     ) {
         return Err(PassportHttpError::ProviderUnavailable);
@@ -2329,7 +2284,7 @@ async fn reconcile_beta_submission(
 
 fn signed_sod_sha256(signed: &SignedMaterial) -> Result<String, PassportHttpError> {
     let sod = decode_python_validated_base64(&signed.sod_der_base64)
-        .map_err(|_| PassportHttpError::Signer(SignerError::IncompleteMaterial))?;
+        .map_err(|_| PassportHttpError::Signer(SignerError::InvalidSodEncoding))?;
     Ok(hex::encode(Sha256::digest(sod)))
 }
 
@@ -2483,12 +2438,16 @@ async fn personalization_webhook(
 ) -> Result<Json<Value>, PassportHttpError> {
     let signature = header(&headers, "x-personalization-signature")
         .ok_or(PassportHttpError::MissingWebhookSignature)?;
-    let event = if let Some(verifier) = &service.webhook_kms {
-        verifier.verify(&body, signature).await
-    } else {
-        parse_verified_webhook(service.webhook_secret.as_deref(), &body, signature)
-    }
-    .map_err(PassportHttpError::Bureau)?;
+    let verifier = service
+        .webhook_kms
+        .as_ref()
+        .ok_or(PassportHttpError::Bureau(
+            BureauError::CallbackKmsUnavailable,
+        ))?;
+    let event = verifier
+        .verify(&body, signature)
+        .await
+        .map_err(PassportHttpError::Bureau)?;
     let updated = service
         .repository
         .apply_verified_webhook(&event, Utc::now())
@@ -2510,6 +2469,41 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+
+    #[tokio::test]
+    async fn disabled_discovery_does_not_install_passport_operations() {
+        let response = disabled_router()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/passport/capabilities")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
+        assert_eq!(value["supported"], false);
+        assert_eq!(value["signer"]["configured"], false);
+        assert_eq!(value["encrypted_artifact_store"], false);
+        assert!(value["blockers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason.as_str().unwrap().contains("disabled")));
+        let operation = disabled_router()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/applications")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(operation.status(), StatusCode::NOT_FOUND);
+    }
 
     #[test]
     fn beta_receipt_requires_every_first_accepted_digest() {
@@ -2796,9 +2790,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn signed_webhook_verification_does_not_require_outbound_bureau_url() {
-        use hmac::Mac;
-
+    async fn managed_webhook_verification_does_not_require_outbound_bureau_url() {
         let frozen: Value = serde_json::from_str(include_str!(
             "../../../../contracts/issuance-physical-passport-native.json"
         ))
@@ -2813,8 +2805,16 @@ mod tests {
                 r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
             ),
             (
-                "PERSONALIZATION_BUREAU_WEBHOOK_SECRET".to_owned(),
-                "webhook-secret".to_owned(),
+                "PASSPORT_KMS_CALLBACKS_ENABLED".to_owned(),
+                "true".to_owned(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".to_owned(),
+                "internal-test-key".to_owned(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_URL".to_owned(),
+                "http://127.0.0.1:1/internal/signing-keys".to_owned(),
             ),
         ])
         .unwrap();
@@ -2822,16 +2822,12 @@ mod tests {
             .unwrap()
             .unwrap();
         assert!(service.bureau.is_none());
-        assert!(service.webhook_secret.is_some());
+        assert!(service.webhook_kms.is_some());
         let payload =
             br#"{"organization_id":"org-1","bureau_job_id":"synthetic","status":"SHIPPED"}"#;
-        let mut mac = hmac::Hmac::<Sha256>::new_from_slice(b"webhook-secret").unwrap();
-        mac.update(payload);
-        let signature = hex::encode(mac.finalize().into_bytes());
-        let verified =
-            parse_verified_webhook(service.webhook_secret.as_deref(), payload, &signature).unwrap();
-        assert_eq!(verified.bureau_job_id(), "synthetic");
-        let response = router(service)
+        let router = router(service);
+        let response = router
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -2850,6 +2846,21 @@ mod tests {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body, expected["body"]);
+        let unavailable = router
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/passport/webhooks/personalization")
+                    .header(
+                        "x-personalization-signature",
+                        "vault:v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    )
+                    .body(Body::from(payload.as_slice().to_vec()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -2885,7 +2896,6 @@ mod tests {
         let service = PassportHttpService::from_config(&configured, pool)
             .unwrap()
             .unwrap();
-        assert!(service.webhook_secret.is_none());
         assert!(service.webhook_kms.is_some());
         let router = router(service);
         let response = router
@@ -3013,7 +3023,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn startup_is_default_off_and_reports_invalid_key_or_rejects_unsafe_urls() {
+    async fn startup_is_default_off_and_rejects_local_key_or_unsafe_urls() {
         let pool = PgPoolOptions::new()
             .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
             .unwrap();
@@ -3022,19 +3032,20 @@ mod tests {
             .unwrap()
             .is_none());
 
-        let fernet_key = fernet::Fernet::generate_key();
-        let values = |key: &str, signer_url: &str, bureau_url: &str| {
+        let values = |bureau_url: &str| {
             vec![
                 ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
                 (
+                    "PASSPORT_KMS_ARTIFACTS_ENABLED".to_owned(),
+                    "true".to_owned(),
+                ),
+                (
+                    "SIGNING_KEYS_INTERNAL_API_KEY".to_owned(),
+                    "internal-test-key".to_owned(),
+                ),
+                (
                     "PASSPORT_TENANT_API_KEYS".to_owned(),
                     r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
-                ),
-                ("PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(), key.to_owned()),
-                ("ICAO_DOCUMENT_SIGNER_URL".to_owned(), signer_url.to_owned()),
-                (
-                    "ICAO_DOCUMENT_SIGNER_API_KEY".to_owned(),
-                    "signer-key".to_owned(),
                 ),
                 (
                     "PERSONALIZATION_BUREAU_URL".to_owned(),
@@ -3044,18 +3055,10 @@ mod tests {
                     "PERSONALIZATION_BUREAU_API_KEY".to_owned(),
                     "bureau-key".to_owned(),
                 ),
-                (
-                    "PERSONALIZATION_BUREAU_WEBHOOK_SECRET".to_owned(),
-                    "webhook-secret".to_owned(),
-                ),
             ]
         };
-        let valid = IssuanceServiceConfig::from_values(values(
-            &fernet_key,
-            "https://signer.example.test",
-            "https://bureau.example.test",
-        ))
-        .unwrap();
+        let valid =
+            IssuanceServiceConfig::from_values(values("https://bureau.example.test")).unwrap();
         assert!(PassportHttpService::from_config(&valid, pool.clone())
             .unwrap()
             .is_some());
@@ -3095,10 +3098,7 @@ mod tests {
         let kms_service = PassportHttpService::from_config(&kms_config, pool.clone())
             .unwrap()
             .unwrap();
-        assert!(matches!(
-            kms_service.cipher,
-            ArtifactAvailability::Ready(ArtifactCryptor::Kms(_))
-        ));
+        assert!(matches!(kms_service.cipher, ArtifactAvailability::Ready(_)));
         let managed = IssuanceServiceConfig::from_values(vec![
             ("PASSPORT_NATIVE_HTTP_ENABLED".into(), "true".into()),
             (
@@ -3111,9 +3111,29 @@ mod tests {
             ),
         ])
         .unwrap();
+        let _bao_config_guard = crate::signing_grant_config::BAO_ADDR_TEST_LOCK
+            .lock()
+            .unwrap();
+        let previous_bao_addr = std::env::var_os("BAO_ADDR");
+        let previous_token_file = std::env::var_os("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE");
+        let token_file = tempfile::NamedTempFile::new().unwrap();
+        std::env::set_var("BAO_ADDR", "https://127.0.0.1:8200");
+        std::env::set_var(
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            token_file.path(),
+        );
         let managed = PassportHttpService::from_config(&managed, pool.clone())
             .unwrap()
             .unwrap();
+        match previous_bao_addr {
+            Some(value) => std::env::set_var("BAO_ADDR", value),
+            None => std::env::remove_var("BAO_ADDR"),
+        }
+        match previous_token_file {
+            Some(value) => std::env::set_var("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", value),
+            None => std::env::remove_var("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE"),
+        }
+        drop(_bao_config_guard);
         assert_eq!(
             managed.signer.as_ref().unwrap().mode(),
             "MANAGED_ISSUER_PROFILE"
@@ -3169,125 +3189,57 @@ mod tests {
             body["detail"],
             expected["authenticated_application_create"]["detail"]
         );
-        let bad_key = IssuanceServiceConfig::from_values(values(
-            "invalid-secret-artifact-key",
-            "https://signer.example.test",
-            "https://bureau.example.test",
-        ))
-        .unwrap();
-        let bad_key = PassportHttpService::from_config(&bad_key, pool.clone())
-            .unwrap()
-            .unwrap();
-        let bad_key_router = router(bad_key);
-        let response = bad_key_router
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/passport/capabilities")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["encrypted_artifact_store"], false);
-        assert!(body["blockers"]
-            .as_array()
-            .unwrap()
-            .contains(&expected["invalid_artifact_key"]["capability_blocker"]));
-        let response = bad_key_router
-            .oneshot(authenticated_application_request())
-            .await
-            .unwrap();
-        assert_eq!(
-            u64::from(response.status().as_u16()),
-            expected["invalid_artifact_key"]["authenticated_application_create"]["status"]
-                .as_u64()
-                .unwrap()
-        );
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(
-            body["detail"],
-            expected["invalid_artifact_key"]["authenticated_application_create"]["detail"]
-        );
-        let bad_signer = IssuanceServiceConfig::from_values(values(
-            &fernet_key,
-            "https://user:password@signer.example.test",
-            "https://bureau.example.test",
-        ))
-        .unwrap();
-        assert!(matches!(
-            PassportHttpService::from_config(&bad_signer, pool.clone()).err(),
-            Some(PassportStartupError::Signer(SignerError::InvalidUrl))
+        let mut local_key = values("https://bureau.example.test");
+        local_key.push((
+            "PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(),
+            "invalid-secret-artifact-key".to_owned(),
         ));
-        let bad_bureau = IssuanceServiceConfig::from_values(values(
-            &fernet_key,
-            "https://signer.example.test",
-            "https://bureau.example.test?token=secret",
-        ))
-        .unwrap();
+        assert!(IssuanceServiceConfig::from_values(local_key).is_err());
+        let bad_bureau =
+            IssuanceServiceConfig::from_values(values("https://bureau.example.test?token=secret"))
+                .unwrap();
         assert!(matches!(
             PassportHttpService::from_config(&bad_bureau, pool).err(),
             Some(PassportStartupError::Bureau(BureauError::InvalidUrl))
         ));
     }
 
-    #[cfg(feature = "passport-self-signed-test")]
     #[tokio::test]
-    async fn explicit_test_signer_is_capable_and_remote_url_takes_precedence() {
-        let pool = PgPoolOptions::new()
-            .connect_lazy("postgresql://unused:unused@127.0.0.1:5432/unused")
-            .unwrap();
-        let mut values = vec![
+    async fn external_signer_and_local_signing_are_rejected() {
+        let values = vec![
             ("PASSPORT_NATIVE_HTTP_ENABLED".to_owned(), "true".to_owned()),
             (
-                "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED".to_owned(),
-                "true".to_owned(),
+                "ICAO_DOCUMENT_SIGNER_URL".to_owned(),
+                "https://signer.example.test".to_owned(),
             ),
             (
                 "PASSPORT_TENANT_API_KEYS".to_owned(),
                 r#"{"org-1":"passport-tenant-test-key-00000000000001"}"#.to_owned(),
             ),
             (
-                "PHYSICAL_DOCUMENT_ARTIFACT_KEY".to_owned(),
-                fernet::Fernet::generate_key(),
+                "PASSPORT_KMS_ARTIFACTS_ENABLED".to_owned(),
+                "true".to_owned(),
+            ),
+            (
+                "SIGNING_KEYS_INTERNAL_API_KEY".to_owned(),
+                "synthetic-internal-key".to_owned(),
             ),
             (
                 "PERSONALIZATION_BUREAU_URL".to_owned(),
                 "https://bureau.example.test".to_owned(),
             ),
         ];
-        let local_config = IssuanceServiceConfig::from_values(values.clone()).unwrap();
-        let local = PassportHttpService::from_config(&local_config, pool.clone())
-            .unwrap()
-            .unwrap();
-        assert_eq!(local.signer.as_ref().unwrap().mode(), "SELF_SIGNED_TEST");
-        let response = router(local)
-            .oneshot(
-                Request::builder()
-                    .uri("/v1/passport/capabilities")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["signer"]["mode"], "SELF_SIGNED_TEST");
-        assert_eq!(body["supported"], true);
+        assert!(IssuanceServiceConfig::from_values(values.clone())
+            .unwrap_err()
+            .to_string()
+            .contains("external passport signer configuration is forbidden"));
 
-        values.push((
-            "ICAO_DOCUMENT_SIGNER_URL".to_owned(),
-            "https://signer.example.test".to_owned(),
+        let mut forbidden = values;
+        forbidden.push((
+            "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED".to_owned(),
+            "true".to_owned(),
         ));
-        let remote_config = IssuanceServiceConfig::from_values(values).unwrap();
-        let remote = PassportHttpService::from_config(&remote_config, pool)
-            .unwrap()
-            .unwrap();
-        assert_eq!(remote.signer.as_ref().unwrap().mode(), "REMOTE");
+        assert!(IssuanceServiceConfig::from_values(forbidden).is_err());
     }
 
     #[tokio::test]

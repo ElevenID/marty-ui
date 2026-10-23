@@ -434,7 +434,7 @@ The remediation is a clean one-way change:
   `https://beta.elevenidllc.com/credentials/*` and leaves nine deprecated
   placeholder values intact for audit display;
 - Credential Template create, update, and activation reject `marty.example`;
-- `scripts/check_spruceid_metadata.py` requires matching canonical and appended
+- `marty-spruce-metadata-probe` requires matching canonical and appended
   metadata, issuer display, the membership profile, public HTTPS SD-JWT VCTs,
   and correctly formed Spruce mDoc entries;
 - beta lifecycle records the probe as `spruce-metadata.json`, while protected

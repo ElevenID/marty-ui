@@ -162,9 +162,11 @@ pub async fn assert_renewal_job_outcomes(pool: &PgPool) {
     );
 }
 
-type GroupResult = Result<usize, Box<dyn std::any::Any + Send>>;
+type GroupResult<T = usize> = Result<T, Box<dyn std::any::Any + Send>>;
 
-async fn settle_group(future: impl std::future::Future<Output = GroupResult>) -> GroupResult {
+pub(super) async fn settle_group<T>(
+    future: impl std::future::Future<Output = GroupResult<T>>,
+) -> GroupResult<T> {
     // Also catch setup and cleanup panics, so join! never cancels sibling cleanup.
     std::panic::AssertUnwindSafe(future)
         .catch_unwind()
@@ -175,8 +177,8 @@ async fn settle_group(future: impl std::future::Future<Output = GroupResult>) ->
 #[tokio::test]
 async fn group_failure_does_not_cancel_sibling_cleanup() {
     let (panicked, failed, completed) = tokio::join!(
-        settle_group(async { panic!("synthetic setup or cleanup failure") }),
-        settle_group(async { Err(Box::new("synthetic assertion failure") as _) }),
+        settle_group::<usize>(async { panic!("synthetic setup or cleanup failure") }),
+        settle_group::<usize>(async { Err(Box::new("synthetic assertion failure") as _) }),
         settle_group(async {
             tokio::task::yield_now().await;
             Ok(20)
@@ -185,9 +187,37 @@ async fn group_failure_does_not_cancel_sibling_cleanup() {
     assert!(panicked.is_err());
     assert!(failed.is_err());
     assert_eq!(completed.unwrap(), 20);
+
+    // Write-boundary actions return unit rather than outcome counts. A panic
+    // must still settle independently of the sibling action's owned cleanup.
+    let cleaned = std::sync::atomic::AtomicBool::new(false);
+    let (panicked, completed) = tokio::join!(
+        settle_group::<()>(async { panic!("synthetic unit action failure") }),
+        settle_group(async {
+            tokio::task::yield_now().await;
+            cleaned.store(true, Ordering::SeqCst);
+            Ok(())
+        }),
+    );
+    assert!(panicked.is_err());
+    completed.unwrap();
+    assert!(cleaned.load(Ordering::SeqCst));
 }
 
 async fn isolated_group(admin: &PgPool, failed_stage: &str) -> GroupResult {
+    isolated_database(admin, |pool| async move {
+        assert_group(&pool, failed_stage).await
+    })
+    .await
+}
+
+// Both renewal suites share this ownership boundary. The caller settles every
+// sibling before propagating a panic; each database is closed and dropped here.
+pub(super) async fn isolated_database<T, F, Fut>(admin: &PgPool, action: F) -> GroupResult<T>
+where
+    F: FnOnce(PgPool) -> Fut,
+    Fut: std::future::Future<Output = T>,
+{
     let database = format!("marty_renewal_{}_test", uuid::Uuid::new_v4().simple());
     assert!(database.starts_with("marty_renewal_") && database.ends_with("_test"));
     assert!(database
@@ -205,7 +235,7 @@ async fn isolated_group(admin: &PgPool, failed_stage: &str) -> GroupResult {
         .connect_lazy_with(options);
     let result = std::panic::AssertUnwindSafe(async {
         super::setup_worker_schema(&pool).await;
-        assert_group(&pool, failed_stage).await
+        action(pool.clone()).await
     })
     .catch_unwind()
     .await;

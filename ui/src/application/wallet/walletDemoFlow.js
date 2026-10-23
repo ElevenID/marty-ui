@@ -2,6 +2,7 @@
  * Pure helpers for wallet demo flows.
  */
 
+// Explicit sample data only; never used to populate a real wallet inventory.
 export const WALLET_DEMO_FALLBACK_CREDENTIALS = [
   {
     id: 'demo_mdl_001',
@@ -20,24 +21,27 @@ export const WALLET_DEMO_FALLBACK_CREDENTIALS = [
 ];
 
 export function mapWalletCredential(credential = {}) {
+  const expiry = Date.parse(credential.expiration_date);
+  const reportedStatus = typeof credential.status === 'string' ? credential.status : 'unknown';
+  const status = ['revoked', 'suspended'].includes(reportedStatus)
+    ? reportedStatus
+    : Number.isFinite(expiry) && expiry <= Date.now() ? 'expired' : reportedStatus;
   return {
     id: credential.id,
     type: credential.types ? credential.types.join(', ') : 'VerifiableCredential',
     issuer: credential.issuer,
     issued_date: credential.issuance_date ? credential.issuance_date.split('T')[0] : 'Unknown',
     expiry_date: credential.expiration_date ? credential.expiration_date.split('T')[0] : 'No expiry',
-    status: 'active',
+    status,
     subject_data: credential.claims || {},
   };
 }
 
 export function resolveWalletCredentials(data = {}) {
-  const credentials = data.credentials || [];
-  if (!credentials.length) {
-    return WALLET_DEMO_FALLBACK_CREDENTIALS;
+  if (!Array.isArray(data?.credentials)) {
+    throw new Error('Wallet inventory response must contain a credentials array');
   }
-
-  return credentials.map(mapWalletCredential);
+  return data.credentials.map(mapWalletCredential);
 }
 
 export function resolveWalletDelete(credentials = [], credentialId) {
@@ -45,21 +49,23 @@ export function resolveWalletDelete(credentials = [], credentialId) {
 }
 
 export function resolveWalletPresentationRequest(requestText = '') {
-  let audience = 'demo_verifier';
-  let nonce = null;
-
-  if (!requestText.trim()) {
-    return { audience, nonce };
-  }
-
+  let parsed;
   try {
-    const parsed = JSON.parse(requestText);
-    audience = parsed.audience || parsed.verifier || audience;
-    nonce = parsed.nonce || null;
+    parsed = JSON.parse(requestText);
   } catch {
-    // ignore malformed demo input and fall back to defaults
+    throw new Error('Presentation request must be valid JSON');
   }
-
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    throw new Error('Presentation request must be an object');
+  }
+  const audience = parsed.audience ?? parsed.verifier;
+  if (typeof audience !== 'string' || !audience.trim()) {
+    throw new Error('Presentation request requires a verifier audience');
+  }
+  const nonce = parsed.nonce ?? null;
+  if (nonce !== null && (typeof nonce !== 'string' || !nonce.trim())) {
+    throw new Error('Presentation request nonce must be a nonempty string');
+  }
   return { audience, nonce };
 }
 

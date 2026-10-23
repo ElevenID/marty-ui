@@ -2,16 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
+from scripts.check_passport_beta_fence_authority import HostProbeError, manifest_source
+from scripts.kms_core_release import (
+    CORE_RELEASE_URI,
+    CORE_REVISION,
+    CORE_VERSION,
+    CORE_WHEEL_PREFIXES,
+)
 from scripts.prepare_official_beta_release import (
     OfficialReleaseError,
+    _validated_components,
+    main,
     prepare_release,
     validate_release_inputs,
 )
-
 
 UI_SHA = "1" * 40
 RECORDER_SHA = "2" * 40
@@ -19,6 +29,25 @@ UI_DIGEST = "sha256:" + "a" * 64
 SERVICES_DIGEST = "sha256:" + "b" * 64
 MIGRATIONS_DIGEST = "sha256:" + "c" * 64
 ISSUANCE_DIGEST = "sha256:" + "d" * 64
+
+
+def test_isolated_renderer_and_promotion_load_core_release_policy() -> None:
+    root = Path(__file__).resolve().parents[1]
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import runpy, sys; runpy.run_path(sys.argv[1]); runpy.run_path(sys.argv[2])",
+            str(root / "scripts/render_base_native_runtime_fixture.py"),
+            str(root / "scripts/promote_release_evidence.py"),
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
 
 
 def _artifact(kind: str, uri: str, digest: str = UI_DIGEST) -> dict[str, str]:
@@ -42,10 +71,6 @@ def _component(
 
 
 def _manifest() -> dict:
-    wheel = _artifact(
-        "python",
-        "https://github.com/ElevenID/component/releases/download/v1/component.whl",
-    )
     package = _artifact(
         "npm",
         "https://github.com/ElevenID/component/releases/download/v1/component.tgz",
@@ -58,10 +83,16 @@ def _manifest() -> dict:
             _component("marty-api-core", "ElevenID/marty-cli", [package]),
             _component("marty-cli", "ElevenID/marty-cli", [package]),
             _component("marty-blog", "ElevenID/marty-blog", [package]),
-            _component("marty-core-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-verification-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-iso18013-python", "ElevenID/marty-core", [wheel]),
-            _component("marty-common", "ElevenID/Marty", [wheel]),
+            *[
+                _component(
+                    name,
+                    "ElevenID/marty-core",
+                    [_artifact("python", f"{CORE_RELEASE_URI}{prefix}-{CORE_VERSION}-cp311.whl")],
+                    CORE_REVISION,
+                    CORE_VERSION,
+                )
+                for name, prefix in CORE_WHEEL_PREFIXES.items()
+            ],
             _component(
                 "marty-credentials-issuance",
                 "ElevenID/marty-credentials",
@@ -91,6 +122,16 @@ def _manifest() -> dict:
                         "ghcr.io/elevenid/marty-ui-oss/migrations",
                         MIGRATIONS_DIGEST,
                     ),
+                    _artifact(
+                        "oci",
+                        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+                        "sha256:" + "7" * 64,
+                    ),
+                    _artifact(
+                        "oci",
+                        "ghcr.io/elevenid/marty-ui-oss/keycloak",
+                        "sha256:" + "9" * 64,
+                    ),
                 ],
                 UI_SHA,
                 "1.1.205",
@@ -109,6 +150,13 @@ def _write_release(tmp_path: Path, manifest: dict) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return manifest_path, checksums
+
+
+def _rust_manifest() -> dict:
+    manifest = _manifest()
+    manifest["components"] = [component for component in manifest["components"]
+                              if component["name"] != "marty-credentials-issuance"]
+    return manifest
 
 
 def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
@@ -154,13 +202,184 @@ def test_prepares_digest_only_official_beta_inputs(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.parametrize("disguise", ["name", "repository", "artifact"])
+def test_official_release_rejects_retired_private_key_wheel(
+    tmp_path: Path, disguise: str
+) -> None:
+    manifest = _manifest()
+    component = _component(
+        "extra-package",
+        "ElevenID/extra-package",
+        [_artifact("python", "https://example.test/extra-package.whl")],
+    )
+    if disguise == "name":
+        component["name"] = "marty-common"
+    elif disguise == "repository":
+        component["repository"] = "ElevenID/marty-common"
+    else:
+        component["artifacts"][0]["uri"] = "https://example.test/marty_common-0.2.16.whl"
+    manifest["components"].append(component)
+    path, checksums = _write_release(tmp_path, manifest)
+
+    with pytest.raises(OfficialReleaseError, match="retired marty-common"):
+        prepare_release(
+            path, checksums, recorder_revision=RECORDER_SHA,
+            expected_ui_revision=UI_SHA,
+        )
+
+
+@pytest.mark.parametrize("field", ["commit", "version", "uri"])
+def test_official_release_rejects_old_core_wheel(
+    tmp_path: Path, field: str
+) -> None:
+    manifest = _manifest()
+    core = next(
+        component for component in manifest["components"]
+        if component["name"] == "marty-core-python"
+    )
+    if field == "uri":
+        core["artifacts"][0]["uri"] = (
+            "https://github.com/ElevenID/marty-core/releases/download/v0.1.61/"
+            "marty_rs-0.1.61-cp311.whl"
+        )
+    elif field == "commit":
+        for component in manifest["components"]:
+            if component["repository"] == "ElevenID/marty-core":
+                component["commit"] = "a" * 40
+    else:
+        core["version"] = "0.1.61"
+    path, checksums = _write_release(tmp_path, manifest)
+
+    with pytest.raises(OfficialReleaseError, match="KMS-only Core wheel"):
+        prepare_release(
+            path, checksums, recorder_revision=RECORDER_SHA,
+            expected_ui_revision=UI_SHA,
+        )
+
+
+def test_rust_only_signed_source_uses_services_image_without_python_issuance(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    path, _ = _write_release(tmp_path, manifest)
+    attested = []
+
+    def attest(manifest_path, digests, commit):
+        attested.append((manifest_path, digests, commit))
+        return True
+
+    def legacy_attest(*_):
+        pytest.fail("Rust-only source must not attest a Python issuance image")
+
+    source = manifest_source(path, UI_SHA, attest, legacy_attest, rust_only=True)
+
+    assert source["issuance_image"] == source["services_image"]
+    assert source["issuance_source_commit"] == UI_SHA
+    assert len(attested) == 1
+    assert set(attested[0][1]) == {
+        "ghcr.io/elevenid/marty-ui-oss/ui",
+        "ghcr.io/elevenid/marty-ui-oss/services",
+        "ghcr.io/elevenid/marty-ui-oss/migrations",
+        "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+        "ghcr.io/elevenid/marty-ui-oss/keycloak",
+    }
+    assert source["build_only_artifacts"]
+
+
+def test_official_release_cli_accepts_only_explicit_rust_only_manifest(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    path, checksums = _write_release(tmp_path, manifest)
+    args = ["prepare_official_beta_release.py", "--manifest", str(path),
+            "--checksums", str(checksums), "--recorder-revision", RECORDER_SHA,
+            "--expected-ui-revision", UI_SHA]
+    monkeypatch.setattr(sys, "argv", args)
+    assert main() == 1
+    assert "missing components" in capsys.readouterr().out
+
+    monkeypatch.setattr(sys, "argv", args + ["--rust-only"])
+    assert main() == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert set(plan["images"]) == {"ui", "services", "migrations", "openbao_didcomm", "keycloak"}
+    assert plan["images"]["services"]["reference"].endswith(SERVICES_DIGEST)
+    assert "marty-credentials" not in plan["source_manifest"]["repositories"]
+    assert validate_release_inputs(path, checksums, expected_ui_revision=UI_SHA,
+                                   rust_only=True)["images"] == plan["images"]
+
+
+def test_rust_only_release_requires_the_didcomm_plugin_image(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["components"] = [component for component in manifest["components"]
+                              if component["name"] != "marty-credentials-issuance"]
+    ui = next(component for component in manifest["components"]
+              if component["name"] == "marty-ui")
+    ui["artifacts"] = [artifact for artifact in ui["artifacts"]
+                       if artifact["uri"] != "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm"]
+    path, checksums = _write_release(tmp_path, manifest)
+    with pytest.raises(OfficialReleaseError, match="openbao_didcomm"):
+        validate_release_inputs(path, checksums, expected_ui_revision=UI_SHA,
+                                rust_only=True)
+
+
+def test_rust_only_source_rejects_legacy_issuance_component(tmp_path: Path) -> None:
+    path, _ = _write_release(tmp_path, _manifest())
+    with pytest.raises(HostProbeError, match="components are invalid"):
+        manifest_source(path, UI_SHA, lambda *_: True, lambda *_: True,
+                        rust_only=True)
+
+
+@pytest.mark.parametrize("disguise", ["repository", "artifact", "case-variant"])
+def test_rust_only_source_rejects_renamed_legacy_image(
+    tmp_path: Path, disguise: str,
+) -> None:
+    manifest = _manifest()
+    legacy = next(component for component in manifest["components"]
+                  if component["name"] == "marty-credentials-issuance")
+    legacy["name"] = "renamed-issuer"
+    if disguise == "repository":
+        legacy["artifacts"][0]["uri"] = "ghcr.io/elevenid/other-issuer"
+    elif disguise == "case-variant":
+        legacy["repository"] = "ElevenID/Marty-Credentials"
+        legacy["artifacts"][0]["uri"] = "ghcr.io/elevenid/other-issuer"
+    else:
+        legacy["repository"] = "ElevenID/other-issuer"
+    path, _ = _write_release(tmp_path, manifest)
+    with pytest.raises(HostProbeError, match="components are invalid"):
+        manifest_source(path, UI_SHA, lambda *_: True, lambda *_: True,
+                        rust_only=True)
+
+
+def test_rust_only_source_still_requires_signed_services_image(tmp_path: Path) -> None:
+    manifest = _manifest()
+    manifest["components"] = [
+        component for component in manifest["components"]
+        if component["name"] != "marty-credentials-issuance"
+    ]
+    ui = next(component for component in manifest["components"]
+              if component["name"] == "marty-ui")
+    ui["artifacts"] = [artifact for artifact in ui["artifacts"]
+                       if not artifact["uri"].endswith("/services")]
+    with pytest.raises(OfficialReleaseError, match="one services image"):
+        _validated_components(manifest, UI_SHA, rust_only=True)
+
+
 def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
     tmp_path: Path,
 ) -> None:
     from types import SimpleNamespace
+
     from scripts.conformance_native import verify_release
 
-    manifest, checksums = _write_release(tmp_path, _manifest())
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
     calls = []
     coverage = {
         "schema": "marty.issuance-native-coverage/v1",
@@ -265,7 +484,7 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
     image = "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST
     plan = verify_release(manifest, checksums, UI_SHA, image, runner=runner)
     assert plan == validate_release_inputs(
-        manifest, checksums, expected_ui_revision=UI_SHA
+        manifest, checksums, expected_ui_revision=UI_SHA, rust_only=True
     )
     assert calls == [
         [
@@ -291,6 +510,66 @@ def test_conformance_reuses_manifest_binding_and_verifies_its_source_floor(
             image,
             runner=lambda *_, **__: SimpleNamespace(returncode=1, stdout=""),
         )
+
+
+def test_native_conformance_rejects_legacy_manifest_before_attestation(tmp_path: Path) -> None:
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _manifest())
+
+    def unexpected_command(*_, **__):
+        pytest.fail("Legacy native manifest must be rejected before attestation")
+
+    with pytest.raises(ValueError, match="qualification failed at manifest validation"):
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=unexpected_command)
+
+
+def test_native_conformance_rechecks_rust_only_policy_after_attestation(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
+    calls = []
+
+    def replace_after_attestation(command, **_):
+        calls.append(command)
+        assert command[:3] == ["gh", "attestation", "verify"]
+        _write_release(tmp_path, _manifest())
+        return SimpleNamespace(returncode=0, stdout="")
+
+    with pytest.raises(ValueError, match="qualification failed at manifest revalidation"):
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=replace_after_attestation)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize(("command", "stage", "code"), [
+    ("gh", "manifest attestation", 4),
+    ("git", "native capability source", 128),
+])
+def test_native_preflight_reports_failed_stage_without_command_output(
+    tmp_path: Path, command: str, stage: str, code: int,
+) -> None:
+    from types import SimpleNamespace
+
+    from scripts.conformance_native import verify_release
+
+    manifest, checksums = _write_release(tmp_path, _rust_manifest())
+
+    def runner(args, **options):
+        assert options["stderr"] == subprocess.DEVNULL
+        return SimpleNamespace(returncode=code if args[0] == command else 0,
+                               stdout="sensitive command output must stay suppressed")
+
+    with pytest.raises(ValueError, match=f"failed at {stage} \\(exit {code}\\)") as failure:
+        verify_release(manifest, checksums, UI_SHA,
+                       "ghcr.io/elevenid/marty-ui-oss/services@" + SERVICES_DIGEST,
+                       runner=runner)
+    assert "sensitive" not in str(failure.value)
 
 
 def test_rejects_tampered_or_mismatched_release_inputs(tmp_path: Path) -> None:

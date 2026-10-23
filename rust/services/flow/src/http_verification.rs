@@ -419,6 +419,7 @@ async fn direct_post_input(
         ));
     }
     if let Some(response) = response {
+        reject_unactionable_encrypted_submission(state, &instance).await?;
         let decrypted =
             decrypt_verification_response(&state.providers, &instance, &response).await?;
         let vp_token = decrypted.get("vp_token").cloned().ok_or_else(|| {
@@ -478,6 +479,7 @@ async fn submit_dc_api(
         .and_then(Value::as_str)
         .map(str::to_owned)
     {
+        reject_unactionable_encrypted_submission(&state, &instance).await?;
         data = decrypt_verification_response(&state.providers, &instance, &response).await?;
         response_mode = Some(DC_API_RESPONSE_MODE);
     }
@@ -706,6 +708,38 @@ async fn persist_expired(
     } else {
         Err(replay_conflict())
     }
+}
+
+async fn reject_unactionable_encrypted_submission(
+    state: &FlowHttpState,
+    instance: &crate::FlowInstanceRecord,
+) -> Result<(), FlowHttpError> {
+    use marty_verification::flow::FlowInstanceStatus;
+
+    if instance.status == FlowInstanceStatus::Cancelled {
+        return Err(FlowVerificationSubmissionError::InvalidState.into());
+    }
+    if !matches!(
+        instance.status,
+        FlowInstanceStatus::AwaitingWallet | FlowInstanceStatus::InProgress
+    ) {
+        return Ok(());
+    }
+    let now = Utc::now().max(instance.updated_at + Duration::microseconds(1));
+    if instance
+        .expires_at
+        .is_none_or(|expires_at| now < expires_at)
+    {
+        return Ok(());
+    }
+    let mut expired = instance.clone();
+    crate::verification_submission::expire_submission(&mut expired, now, "submission_expired")?;
+    persist_expired(state, &expired, instance.status, instance.updated_at).await?;
+    Err(FlowHttpError::new(
+        StatusCode::GONE,
+        "verification_submission_expired",
+        "Verification transaction has expired",
+    ))
 }
 
 fn token_string(value: Value) -> Result<String, FlowHttpError> {

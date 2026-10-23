@@ -98,13 +98,15 @@ def fixture(monkeypatch):
                       {"PUBLIC_DOMAIN": "beta.elevenidllc.com",
                        "GATEWAY_UPSTREAM": "gateway:8000"}),
         OPENBAO: record(OPENBAO, "elevenid-beta", "openbao", "openbao:2",
-                        {"BAO_DEV_ROOT_TOKEN_ID": "test-token"},
+                        {},
                         networks={"elevenid-beta-network": {"NetworkID": "e" * 64},
                                   "elevenid-beta-passport-callback-signing": {
                                       "NetworkID": "8" * 64, "Aliases": ["openbao"]}}),
         CALLBACK: record(CALLBACK, "elevenid-beta", "passport-callback-signer",
                          SERVICES, {"SERVICE_NAME": "passport_callback_signer",
-                                    "BAO_TOKEN": "test-token",
+                                    "BAO_ADDR": "https://openbao:8200",
+                                    "BAO_CACERT": "/bao/public-ca/ca.crt",
+                                    "BAO_TOKEN_FILE": "/bao/passport-callback/token",
                                     **runtime.RUNTIME_ENV["passport-callback-signer"]},
                          {"elevenid-beta-passport-callback-signing": {
                              "NetworkID": "8" * 64}}),
@@ -117,6 +119,15 @@ def fixture(monkeypatch):
         UI: record(UI, "elevenid-beta-ui", "ui-prod", UI_IMAGE,
                    networks={"elevenid-beta-network": {}}),
     }
+    records[OPENBAO]["Config"]["Cmd"] = ["server", "-config=/bao/config/openbao.hcl"]
+    records[OPENBAO]["Mounts"] = [{"Type": "volume", "Name": "elevenid-beta_openbao_data",
+                                   "Destination": "/bao/data", "RW": True}]
+    records[CALLBACK]["Mounts"] = [
+        {"Type": "volume", "Name": "elevenid-beta_openbao_public_ca",
+         "Destination": "/bao/public-ca", "RW": False},
+        {"Type": "volume", "Name": "elevenid-beta_openbao_passport_callback",
+         "Destination": "/bao/passport-callback", "RW": False},
+    ]
     monkeypatch.setattr(runtime, "ids", lambda project, _runner: [
         key[:12] for key, value in records.items()
         if value["Config"]["Labels"]["com.docker.compose.project"] == project])
@@ -163,6 +174,31 @@ def test_runtime_requires_replaced_signed_generation(monkeypatch):
     assert evidence["ui_runtime"]["configured_image"] == UI_IMAGE
     assert evidence["production_public_route"]["status"] == 200
     assert "test-token" not in json.dumps(evidence)
+
+
+@pytest.mark.parametrize("location", ["intent", "old", "restart", "target"])
+def test_runtime_rejects_optional_bridge_in_saved_generation(monkeypatch, location):
+    plan, intent, _, runner = fixture(monkeypatch)
+    bridge = "issuance-canvas-localhost-bridge"
+    if location == "intent":
+        intent["beta_generation"].append({"service": bridge, "container_id": "f" * 64})
+    elif location == "old":
+        plan["old_container_ids_by_service"][bridge] = "f" * 64
+    elif location == "restart":
+        plan["restart_infrastructure"].append(bridge)
+    else:
+        plan["target_services"].append(bridge)
+    with pytest.raises(runtime.HostProbeError, match="bridge survived in signed beta plan"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+
+
+def test_runtime_rejects_optional_bridge_in_live_beta_project(monkeypatch):
+    plan, intent, records, runner = fixture(monkeypatch)
+    bridge = "issuance-canvas-localhost-bridge"
+    records["f" * 64] = record("f" * 64, "elevenid-beta", bridge, "python:3.12-alpine")
+    with pytest.raises(runtime.HostProbeError,
+                       match="bridge survived aggregate beta deployment"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
 
 
 def test_production_only_checks_public_route(monkeypatch):
@@ -342,14 +378,25 @@ def test_runtime_rejects_public_callback_network(monkeypatch):
         runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
 
 
-def test_runtime_rejects_restarted_openbao_or_signer_token_drift(monkeypatch):
+def test_runtime_rejects_restarted_openbao_or_signer_custody_drift(monkeypatch):
     plan, intent, records, runner = fixture(monkeypatch)
     records[OPENBAO]["State"]["StartedAt"] = "2026-09-29T01:00:00Z"
     with pytest.raises(runtime.HostProbeError, match="OpenBao restarted"):
         runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
     records[OPENBAO]["State"]["StartedAt"] = "2026-09-29T00:00:00Z"
     records[CALLBACK]["Config"]["Env"] = [
-        "BAO_TOKEN=wrong" if item.startswith("BAO_TOKEN=") else item
+        "BAO_TOKEN_FILE=/wrong" if item.startswith("BAO_TOKEN_FILE=") else item
         for item in records[CALLBACK]["Config"]["Env"]]
-    with pytest.raises(runtime.HostProbeError, match="signer token differs"):
+    with pytest.raises(runtime.HostProbeError, match="scoped Raft KMS custody"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+    records[CALLBACK]["Config"]["Env"] = [
+        "BAO_TOKEN_FILE=/bao/passport-callback/token"
+        if item.startswith("BAO_TOKEN_FILE=") else item
+        for item in records[CALLBACK]["Config"]["Env"]]
+    records[OPENBAO]["Config"]["Env"] = ["BAO_DEV_ROOT_TOKEN_ID=retired"]
+    with pytest.raises(runtime.HostProbeError, match="scoped Raft KMS custody"):
+        runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})
+    records[OPENBAO]["Config"]["Env"] = []
+    records[CALLBACK]["Mounts"][1]["RW"] = True
+    with pytest.raises(runtime.HostProbeError, match="scoped Raft KMS custody"):
         runtime.verify(plan, intent, "f" * 64, runner, lambda _: {"verified": True})

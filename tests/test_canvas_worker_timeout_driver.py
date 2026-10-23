@@ -214,7 +214,7 @@ def test_single_authenticated_get_is_exact_and_errors_do_not_echo_payload(
 ):
     _, reference = corpus
     observation = reference["observations"][0]
-    fixture = SimpleNamespace(requests=deepcopy(observation["requests"]), failures=[])
+    fixture = SimpleNamespace(requests=native.native_requests(observation["requests"]), failures=[])
     if field is None:
         native.assert_requests(fixture, observation)
         return
@@ -615,7 +615,7 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
 
     class Fixture:
         def __init__(self, expected_request, response, *, delay_seconds):
-            assert expected_request == observation["requests"][0]
+            assert expected_request == native.native_requests(observation["requests"])[0]
             assert response == responses[case_name]
             assert delay_seconds == (17 if case["delayed"] else 0)
             self.requests, self.failures = [], []
@@ -674,7 +674,7 @@ def test_controller_protocol_keeps_independent_release_full_late_window_and_clea
                 [],
             )
             model.child = self
-            model.fixture.requests = deepcopy(observation["requests"])
+            model.fixture.requests = native.native_requests(observation["requests"])
             if failure != "missing-request":
                 model.fixture.request_started.set()
             if failure == "wrong-request":

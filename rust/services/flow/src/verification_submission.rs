@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Duration, Utc};
+use marty_oid4vp_contract::{digest_query_document, Oid4vpEvaluationTransportV1, QueryKind};
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_messaging::Message;
 use mmf_push::{payload_digest, WebhookDestinationRegistry, MINIMUM_EVENT_SECRET_BYTES};
@@ -11,8 +12,8 @@ use subtle::ConstantTimeEq;
 use thiserror::Error;
 
 use crate::{
-    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowKeyEnvelope,
-    FlowProviderError, FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
+    public_context, public_status, CallbackEvent, FlowInstanceRecord, FlowProviderError,
+    FlowProviderRegistry, FlowRecordError, PresentationEvaluationRequest,
     PresentationEvaluationResult, VerificationResultResponse,
 };
 
@@ -84,28 +85,45 @@ pub async fn decrypt_verification_response(
 ) -> Result<Value, FlowVerificationSubmissionError> {
     marty_verification::jwk::validate_haip_response_header(compact_jwe)
         .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
-    let envelope = instance
-        .context
-        .get("haip_response_encryption_key_envelope")
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("vault:"))
-        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     let provider = providers
         .flow_key_envelope
         .as_ref()
         .ok_or(FlowProviderError::Unavailable {
             provider: "flow_key_envelope",
         })?;
-    let private_jwk = provider
-        .unwrap(&FlowKeyEnvelope {
-            organization_id: instance.organization_id.clone(),
-            flow_instance_id: instance.id.clone(),
-            purpose: "oid4vp_response_decryption".into(),
-            envelope: envelope.into(),
-        })
+    if instance
+        .context
+        .get("haip_response_encryption_key_envelope")
+        .is_some()
+    {
+        return Err(FlowVerificationSubmissionError::InvalidEncryptedResponse);
+    }
+    let reference = instance
+        .context
+        .get("haip_response_encryption_key_reference")
+        .and_then(Value::as_str)
+        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    let version = marty_oid4vp_contract::haip_key::version_for(
+        reference,
+        &instance.organization_id,
+        &instance.id,
+    )
+    .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    let public = instance
+        .context
+        .get("haip_response_encryption_public_jwk")
+        .ok_or(FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
+    if !marty_oid4vp_contract::haip_key::matches_public_jwk(public, version) {
+        return Err(FlowVerificationSubmissionError::InvalidEncryptedResponse);
+    }
+    let plaintext = provider
+        .decrypt_haip_response(
+            &instance.organization_id,
+            &instance.id,
+            version,
+            compact_jwe,
+        )
         .await?;
-    let plaintext = marty_verification::jwk::decrypt_haip_response(compact_jwe, &private_jwk)
-        .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     let value: Value = serde_json::from_slice(&plaintext)
         .map_err(|_| FlowVerificationSubmissionError::InvalidEncryptedResponse)?;
     if !value.is_object() {
@@ -183,6 +201,8 @@ pub async fn prepare_verification_submission(
         .to_owned();
     let presentation_submission = parse_presentation_submission(input.presentation_submission)?;
     let raw_vp_token = input.vp_token;
+    let oid4vp_transport =
+        evaluation_transport(context, presentation_submission.as_ref(), &raw_vp_token)?;
     let vp_token = select_vp_token(&raw_vp_token);
     let mut evaluation_context = BTreeMap::new();
     if context
@@ -245,6 +265,7 @@ pub async fn prepare_verification_submission(
                     presentation: vp_token.clone(),
                     nonce: nonce.clone(),
                     audience: audience.clone(),
+                    oid4vp_transport,
                     context: evaluation_context,
                 })
                 .await
@@ -487,6 +508,90 @@ fn parse_presentation_submission(
     Ok(Some(parsed))
 }
 
+fn evaluation_transport(
+    context: &Map<String, Value>,
+    submission: Option<&Value>,
+    vp_token_raw: &str,
+) -> Result<Option<Oid4vpEvaluationTransportV1>, FlowVerificationSubmissionError> {
+    if context.get("oid4vp_verifier_context") != Some(&Value::Bool(true)) {
+        return Ok(None);
+    }
+    // Only the request actually emitted and retained by Flow is authoritative.
+    // Legacy records lacking that request keep their current evaluation path;
+    // malformed recorded requests are not silently promoted to metadata.
+    let Some(message) = context
+        .get("mip_messages")
+        .and_then(Value::as_object)
+        .and_then(|messages| messages.get("presentation_request"))
+    else {
+        return Ok(None);
+    };
+    let payload = message.get("payload").and_then(Value::as_object).ok_or(
+        FlowVerificationSubmissionError::InvalidContext("presentation_request"),
+    )?;
+    for (field, expected) in [
+        ("nonce", context.get("nonce")),
+        ("client_id", context.get("oid4vp_client_id")),
+    ] {
+        if expected.and_then(Value::as_str).is_none_or(str::is_empty)
+            || payload.get(field).and_then(Value::as_str) != expected.and_then(Value::as_str)
+        {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ));
+        }
+    }
+    let dcql = payload.get("dcql_query").filter(|value| !value.is_null());
+    let definition = payload
+        .get("presentation_definition")
+        .filter(|value| !value.is_null());
+    let (query_kind, query_document) = match (dcql, definition) {
+        (Some(document), None) => (QueryKind::Dcql, document),
+        (None, Some(document)) => (QueryKind::PresentationExchange, document),
+        _ => {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_query",
+            ))
+        }
+    };
+    let transport = Oid4vpEvaluationTransportV1 {
+        query_kind,
+        query_document: query_document.clone(),
+        query_digest: digest_query_document(query_document).map_err(|_| {
+            FlowVerificationSubmissionError::InvalidContext("presentation_request_query")
+        })?,
+        presentation_submission: submission.cloned(),
+        vp_token_raw: vp_token_raw.into(),
+        verifier_client_id: payload
+            .get("client_id")
+            .and_then(Value::as_str)
+            .ok_or(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ))?
+            .into(),
+        request_nonce: payload
+            .get("nonce")
+            .and_then(Value::as_str)
+            .ok_or(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_binding",
+            ))?
+            .into(),
+    };
+    match transport.validate_transport() {
+        Ok(()) => {}
+        // Existing accepted payloads can exceed the narrower canonical
+        // transport limits. Keep their legacy policy path, but expose no
+        // transport metadata that a future signed-VP route could accept.
+        Err(marty_oid4vp_contract::Oid4vpContractError::SizeLimit(_)) => return Ok(None),
+        Err(_) => {
+            return Err(FlowVerificationSubmissionError::InvalidContext(
+                "presentation_request_query",
+            ));
+        }
+    }
+    Ok(Some(transport))
+}
+
 fn select_vp_token(raw: &str) -> String {
     let Ok(value) = serde_json::from_str::<Value>(raw) else {
         return raw.into();
@@ -563,7 +668,7 @@ pub(crate) fn transition(
     }));
 }
 
-fn expire_submission(
+pub(crate) fn expire_submission(
     instance: &mut FlowInstanceRecord,
     now: DateTime<Utc>,
     event: &str,

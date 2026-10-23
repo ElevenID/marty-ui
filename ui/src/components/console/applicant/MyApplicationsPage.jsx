@@ -289,6 +289,7 @@ function MyApplicationsPage() {
                       </Button>
                       {(app.status === 'approved' || app.status === 'offered') && (
                         <Button
+                          data-testid="credential-claim-action"
                           size="small"
                           variant="contained"
                           color="primary"

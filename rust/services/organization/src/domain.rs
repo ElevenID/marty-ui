@@ -709,14 +709,19 @@ impl ApiKey {
 
     pub fn revoke(&mut self, now: DateTime<Utc>) {
         self.status = ApiKeyStatus::Revoked;
+        self.enabled = false;
         self.updated_at = now;
+    }
+
+    /// Effective administrative state, including legacy revoked rows whose flag remained true.
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.status == ApiKeyStatus::Active && self.enabled
     }
 
     #[must_use]
     pub fn is_valid_at(&self, now: DateTime<Utc>) -> bool {
-        self.status == ApiKeyStatus::Active
-            && self.enabled
-            && self.expires_at.is_none_or(|expires_at| now <= expires_at)
+        self.is_enabled() && self.expires_at.is_none_or(|expires_at| now <= expires_at)
     }
 
     #[must_use]

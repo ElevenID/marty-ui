@@ -304,6 +304,30 @@ pub struct IssuerContext {
     pub raw_context: Value,
 }
 
+impl IssuerContext {
+    /// Return the remote key selected by the resolved issuer profile only
+    /// when the response's flattened and nested views agree.
+    pub fn signing_key_reference(&self) -> Option<&str> {
+        resolved_signing_key_reference(&self.raw_context)
+    }
+}
+
+pub(crate) fn resolved_signing_key_reference(context: &Value) -> Option<&str> {
+    let flattened = context
+        .get("signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty());
+    let profile = context
+        .pointer("/issuer_profile/signing_key_reference")
+        .and_then(Value::as_str)
+        .filter(|reference| !reference.trim().is_empty());
+    match (flattened, profile) {
+        (Some(left), Some(right)) if left != right => None,
+        (Some(reference), _) | (_, Some(reference)) => Some(reference),
+        (None, None) => None,
+    }
+}
+
 impl std::fmt::Debug for IssuerContext {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -613,7 +637,11 @@ impl CredentialIssuanceService {
         apply_issuer_context(&mut transaction, &issuer);
         let proof_jwt = proof_jwt(request).ok_or(CredentialIssuanceError::ProofRequired)?;
         let proof_claims = unverified_proof_claims(proof_jwt)?;
-        validate_audience(&proof_claims, &transaction.organization_id)?;
+        validate_audience(
+            &proof_claims,
+            &transaction.organization_id,
+            &self.issuer_base_url,
+        )?;
         let nonce = proof_claims
             .get("nonce")
             .and_then(Value::as_str)
@@ -628,7 +656,7 @@ impl CredentialIssuanceService {
             Ok(true) => {}
             Ok(false) => return Err(CredentialIssuanceError::InvalidNonce),
             Err(ProofNonceError::RepositoryUnavailable) => {
-                return Err(CredentialIssuanceError::NonceRepositoryUnavailable)
+                return Err(CredentialIssuanceError::NonceRepositoryUnavailable);
             }
         }
         let issuer = self
@@ -1162,19 +1190,14 @@ fn allowed_audience_paths(organization_id: &str) -> [String; 4] {
 fn validate_audience(
     claims: &Map<String, Value>,
     organization_id: &str,
+    issuer_base_url: &str,
 ) -> Result<(), CredentialIssuanceError> {
     let audience = claims.get("aud").and_then(Value::as_str).unwrap_or("");
-    let path = if audience.contains("://") {
-        url::Url::parse(audience)
-            .map_err(|_| CredentialIssuanceError::MalformedProof)?
-            .path()
-            .trim_end_matches('/')
-            .to_owned()
-    } else {
-        audience.trim_end_matches('/').to_owned()
-    };
     let allowed = allowed_audience_paths(organization_id);
-    if !allowed.iter().any(|candidate| candidate == &path) {
+    if !allowed
+        .iter()
+        .any(|path| audience == format!("{issuer_base_url}{path}"))
+    {
         return Err(CredentialIssuanceError::AudienceMismatch {
             allowed,
             actual: audience.to_owned(),
@@ -1923,6 +1946,43 @@ mod tests {
     }
 
     #[test]
+    fn mdoc_aliases_select_the_native_builder_and_wire_format() {
+        let request = CredentialRequest::default();
+        for alias in ["mso_mdoc", "MDOC", "mdoc"] {
+            let mut transaction = transaction();
+            transaction.credential_payload_format = alias.to_owned();
+            let policy = format_policy(&request, &transaction).expect("supported mdoc alias");
+            assert_eq!(policy.kind, CredentialBuilderKind::Mdoc, "{alias}");
+            assert_eq!(policy.response_format, "mso_mdoc", "{alias}");
+            assert_eq!(policy.remote_format, "mso_mdoc", "{alias}");
+            assert_eq!(
+                credential_configuration_id_for_format("DriverLicense", alias),
+                "DriverLicense#mdoc",
+                "{alias}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_payload_formats_do_not_select_the_mdoc_builder() {
+        let request = CredentialRequest::default();
+        for format in ["vc+sd-jwt", "jwt_vc_json", "ldp_vc"] {
+            let mut transaction = transaction();
+            transaction.credential_payload_format = format.to_owned();
+            let policy = format_policy(&request, &transaction).expect("supported non-mdoc format");
+            assert_ne!(policy.kind, CredentialBuilderKind::Mdoc, "{format}");
+            assert_ne!(policy.remote_format, "mso_mdoc", "{format}");
+            assert_ne!(policy.response_format, "mso_mdoc", "{format}");
+        }
+        let mut transaction = transaction();
+        transaction.credential_payload_format.clear();
+        assert!(matches!(
+            format_policy(&request, &transaction),
+            Err(super::CredentialIssuanceError::UnsupportedFormat(_))
+        ));
+    }
+
+    #[test]
     fn grpc_legacy_format_remains_transport_scoped_and_preserves_response_shape() {
         let request = CredentialRequest {
             legacy_format: Some("dc+sd-jwt".to_owned()),
@@ -1938,11 +1998,21 @@ mod tests {
     }
 
     #[test]
-    fn tenant_audience_requires_the_exact_normalized_path() {
+    fn tenant_audience_requires_the_exact_configured_url() {
         let valid = json!({"aud": "https://issuer.example/org/org-a"});
-        assert!(validate_audience(valid.as_object().expect("object"), "org-a").is_ok());
+        assert!(validate_audience(
+            valid.as_object().expect("object"),
+            "org-a",
+            "https://issuer.example"
+        )
+        .is_ok());
         let prefixed = json!({"aud": "https://issuer.example/evil/org/org-a"});
-        assert!(validate_audience(prefixed.as_object().expect("object"), "org-a").is_err());
+        assert!(validate_audience(
+            prefixed.as_object().expect("object"),
+            "org-a",
+            "https://issuer.example"
+        )
+        .is_err());
     }
 
     #[test]

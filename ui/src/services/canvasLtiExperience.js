@@ -111,3 +111,15 @@ export function createCurrentCanvasLtiDeepLinkingResponse() {
 }
 
 export const CANVAS_LTI_NAVIGATION_MARKER = 'current';
+
+// Both reads and creation are authorized by the same expiring launch session.
+// Never route a Canvas application through the generic applicant-store API.
+export async function generateCurrentCanvasLtiClaim(applicationId) {
+  const claim = await post('/v1/integrations/canvas/lti/experience-sessions/current/claim', {}, canvasLtiAuthorization());
+  if (claim?.id !== applicationId) throw new Error('Canvas claim does not belong to the current application');
+  return claim;
+}
+
+export function getCurrentCanvasLtiClaim() {
+  return get('/v1/integrations/canvas/lti/experience-sessions/current/claim', canvasLtiAuthorization());
+}

@@ -2,11 +2,14 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use marty_key_material_policy::private_jwk_members;
+use marty_signing_grant::{minter::GrantMinting, SigningOrigin};
 use serde_json::{json, Map, Value};
 use thiserror::Error;
 
 use crate::{
     canvas_award_candidate::python_canonical_json,
+    credential::resolved_signing_key_reference,
     credential_builder::{HttpDidSigner, SignRequest},
     credential_issuer::HttpIssuerContextResolver,
 };
@@ -14,7 +17,31 @@ use crate::{
 const CREDENTIAL_FORMAT: &str = "lti_tool_jwt";
 const KEY_PURPOSE: &str = "lti_tool_signing";
 const ALGORITHM: &str = "RS256";
-const PRIVATE_RSA_MEMBERS: [&str; 8] = ["d", "p", "q", "dp", "dq", "qi", "oth", "k"];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CanvasLtiSigningKind {
+    DeepLink,
+    Readiness,
+    OAuthClientAssertion,
+}
+
+impl CanvasLtiSigningKind {
+    fn operation_id(self, source_id: &str) -> Result<String, CanvasLtiToolSigningError> {
+        let prefix = match self {
+            Self::DeepLink => "deep-link",
+            Self::Readiness => "readiness",
+            Self::OAuthClientAssertion => "oauth-assertion",
+        };
+        if source_id.is_empty() || source_id.chars().any(char::is_control) {
+            return Err(CanvasLtiToolSigningError::InvalidSigningOperation);
+        }
+        let operation_id = format!("{prefix}:{source_id}");
+        if operation_id.len() > 128 {
+            return Err(CanvasLtiToolSigningError::InvalidSigningOperation);
+        }
+        Ok(operation_id)
+    }
+}
 
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum CanvasLtiToolSigningError {
@@ -38,11 +65,18 @@ pub enum CanvasLtiToolSigningError {
     MissingSignature,
     #[error("Canvas LTI DID-mediated signer returned invalid signature encoding")]
     InvalidSignatureEncoding,
+    #[error("Canvas LTI signing operation is invalid")]
+    InvalidSigningOperation,
 }
 
 #[async_trait]
 pub trait CanvasLtiToolJwtSigner: Send + Sync {
-    async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError>;
+    async fn sign_jwt(
+        &self,
+        payload: &Value,
+        kind: CanvasLtiSigningKind,
+        source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError>;
     async fn public_jwks(&self) -> Result<Value, CanvasLtiToolSigningError>;
 }
 
@@ -62,6 +96,8 @@ pub trait CanvasLtiToolSignatureProvider: Send + Sync {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError>;
 }
@@ -139,7 +175,7 @@ impl IssuerDidCanvasLtiToolJwtSigner {
             .and_then(Value::as_object)
             .cloned()
             .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
-        if contains_private_material(&public_jwk) {
+        if contains_private_signing_material(&public_jwk) {
             return Err(CanvasLtiToolSigningError::PrivateKeyMaterial);
         }
         if !verification_method_id.starts_with(&format!("{issuer_did}#"))
@@ -155,9 +191,17 @@ impl IssuerDidCanvasLtiToolJwtSigner {
 
 #[async_trait]
 impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
-    async fn sign_jwt(&self, payload: &Value) -> Result<String, CanvasLtiToolSigningError> {
+    async fn sign_jwt(
+        &self,
+        payload: &Value,
+        kind: CanvasLtiSigningKind,
+        source_id: &str,
+    ) -> Result<String, CanvasLtiToolSigningError> {
+        let operation_id = kind.operation_id(source_id)?;
         let (organization_id, issuer_did) = self.configuration()?;
-        let (verification_method_id, _, _) = self.resolved_identity().await?;
+        let (verification_method_id, _, resolution) = self.resolved_identity().await?;
+        let signing_key_reference = resolved_signing_key_reference(&resolution)
+            .ok_or(CanvasLtiToolSigningError::InvalidVerificationMethod)?;
         let header = json!({
             "alg": ALGORITHM,
             "typ": "JWT",
@@ -174,6 +218,8 @@ impl CanvasLtiToolJwtSigner for IssuerDidCanvasLtiToolJwtSigner {
                 organization_id,
                 issuer_did,
                 &verification_method_id,
+                signing_key_reference,
+                &operation_id,
                 signing_input.as_bytes(),
             )
             .await?;
@@ -266,19 +312,31 @@ fn normalize_method_id(issuer_did: &str, method_id: &str) -> Option<String> {
     }
 }
 
-fn contains_private_material(jwk: &Map<String, Value>) -> bool {
-    PRIVATE_RSA_MEMBERS
-        .iter()
-        .any(|name| jwk.contains_key(*name))
-}
-
 fn valid_public_rsa_jwk(jwk: &Map<String, Value>) -> bool {
-    !contains_private_material(jwk)
+    !contains_private_signing_material(jwk)
         && jwk.get("kty").and_then(Value::as_str) == Some("RSA")
         && valid_rsa_algorithm(jwk.get("alg"))
         && valid_rsa_use(jwk.get("use"))
         && non_empty_string(jwk, "n")
         && non_empty_string(jwk, "e")
+}
+
+fn contains_private_signing_material(jwk: &Map<String, Value>) -> bool {
+    // Preserve the retired Python LTI profile's aliases, including empty/null
+    // members. Generic metadata scanning has different null-value semantics.
+    private_jwk_members(jwk).next().is_some()
+        || [
+            "rsa_d",
+            "private_key",
+            "private_key_pem",
+            "private_jwk",
+            "private_jwk_json",
+            "privateKey",
+            "privateKeyPem",
+            "secret_key",
+        ]
+        .iter()
+        .any(|member| jwk.contains_key(*member))
 }
 
 fn non_empty_string(jwk: &Map<String, Value>, member: &str) -> bool {
@@ -383,6 +441,19 @@ impl HttpCanvasLtiToolSignatureProvider {
                 .map_err(|cause| CanvasLtiToolSigningError::SigningFailed(cause.to_string()))?,
         })
     }
+
+    pub fn new_with_grant<M: GrantMinting + 'static>(
+        base_url: url::Url,
+        api_key: Option<&str>,
+        timeout: Duration,
+        minter: M,
+    ) -> Result<Self, CanvasLtiToolSigningError> {
+        Ok(Self {
+            signer: HttpDidSigner::new(base_url, api_key, timeout)
+                .map_err(|cause| CanvasLtiToolSigningError::SigningFailed(cause.to_string()))?
+                .with_grant_minter(SigningOrigin::IssuanceCanvas, minter),
+        })
+    }
 }
 
 #[async_trait]
@@ -392,17 +463,22 @@ impl CanvasLtiToolSignatureProvider for HttpCanvasLtiToolSignatureProvider {
         organization_id: &str,
         issuer_did: &str,
         verification_method_id: &str,
+        signing_key_reference: &str,
+        operation_id: &str,
         payload: &[u8],
     ) -> Result<String, CanvasLtiToolSigningError> {
         self.signer
             .sign_did(SignRequest {
                 organization_id: organization_id.to_owned(),
+                operation_id: operation_id.to_owned(),
                 issuer_did: issuer_did.to_owned(),
                 credential_format: CREDENTIAL_FORMAT.to_owned(),
                 key_purpose: KEY_PURPOSE.to_owned(),
                 payload: payload.to_vec(),
                 algorithm: ALGORITHM.to_owned(),
                 verification_method_id: verification_method_id.to_owned(),
+                expected_public_jwk: None,
+                signing_key_reference: signing_key_reference.to_owned(),
             })
             .await
             .map(|response| response.signature_b64)

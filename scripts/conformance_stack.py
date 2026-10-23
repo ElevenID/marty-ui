@@ -26,10 +26,9 @@ GHCR_FILE = "docker-compose.profile.ghcr.yml"
 LOCAL_BUILD_FILE = "docker-compose.profile.local-build.yml"
 IMMUTABLE_INFRA_FILE = "docker-compose.profile.conformance-images.yml"
 HAIP_FILE = "docker-compose.profile.oidf-haip.yml"
-DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-authcrypt.yml"
+DIDCOMM_AUTHCRYPT_FILE = "docker-compose.profile.issuance-native-authcrypt.yml"
 NATIVE_FILE = "docker-compose.profile.conformance-native.yml"
 NATIVE_IMAGES_FILE = "docker-compose.profile.issuance-native-images.yml"
-NATIVE_AUTHCRYPT_FILE = "docker-compose.profile.didcomm-native-authcrypt.yml"
 NATIVE_CA_FILE = "docker-compose.profile.didcomm-native-conformance.yml"
 ISOLATION_FILE = "docker-compose.profile.conformance.yml"
 PUBLIC_PORT_SERVICES = {"oidf-tls-proxy"}
@@ -40,16 +39,6 @@ ONE_SHOT_SERVICES = {
     "openbao-init",
 }
 PUBLIC_JWK_PRIVATE_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
-LOCAL_BUILD_ARGS = (
-    "MARTY_RS_URI",
-    "MARTY_RS_DIGEST",
-    "MARTY_VERIFICATION_URI",
-    "MARTY_VERIFICATION_DIGEST",
-    "MARTY_ISO18013_URI",
-    "MARTY_ISO18013_DIGEST",
-    "MARTY_COMMON_URI",
-    "MARTY_COMMON_DIGEST",
-)
 
 
 def validate_project(project: str) -> str:
@@ -83,10 +72,12 @@ def compose_command(
     command = ["docker", "compose", "--project-name", validate_project(project)]
     files = [*BASE_FILES]
     if use_ghcr:
-        files.insert(1, GHCR_FILE)
-        files.insert(2, IMMUTABLE_INFRA_FILE)
+        # The released image overlay must follow the OIDF source-build
+        # definition so its build reset also applies to the keyless edge.
+        files.insert(2, GHCR_FILE)
+        files.insert(3, IMMUTABLE_INFRA_FILE)
     else:
-        # The base stack defines every source-built Python service. The UI is
+        # The base stack defines the source-built Rust services. The UI is
         # deliberately supplied by a mode-specific profile because released
         # runs replace it with an immutable GHCR image. Without this profile,
         # --local-build cannot even render: the public TLS proxy depends on an
@@ -99,9 +90,9 @@ def compose_command(
         if use_ghcr:
             files.append(NATIVE_IMAGES_FILE)
     if include_didcomm_authcrypt:
+        if issuance_owner != "native":
+            raise ValueError("DIDComm authcrypt requires the native issuance owner")
         files.append(DIDCOMM_AUTHCRYPT_FILE)
-        if issuance_owner == "native":
-            files.append(NATIVE_AUTHCRYPT_FILE)
     if issuance_owner == "native":
         files.append(NATIVE_CA_FILE)
     files.append(ISOLATION_FILE)
@@ -416,19 +407,8 @@ def assert_ports_available(
 
 
 def local_build_arguments() -> list[str]:
-    """Return explicit immutable bootstrap build arguments for source runs."""
-    missing = [
-        name for name in LOCAL_BUILD_ARGS if not os.environ.get(name, "").strip()
-    ]
-    if missing:
-        raise ValueError(
-            "--local-build requires published, digest-pinned bootstrap artifacts: "
-            + ", ".join(missing)
-        )
-    values: list[str] = []
-    for name in LOCAL_BUILD_ARGS:
-        values.extend(["--build-arg", f"{name}={os.environ[name]}"])
-    return values
+    """The Rust migration image has no external Python wheel build inputs."""
+    return []
 
 
 def configure_oidf_internal_tls_port() -> None:

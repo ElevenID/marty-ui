@@ -171,9 +171,7 @@ impl CredentialManagementGrpcService {
 
     fn authorize<T>(&self, request: &Request<T>) -> Result<(), Status> {
         let Some(expected) = self.service_token.as_deref() else {
-            // Production configuration rejects a missing token. Preserve the
-            // Python adapter's open local/test server when no token is set.
-            return Ok(());
+            return Err(Status::unauthenticated("Service token is not configured"));
         };
         let supplied = request
             .metadata()
@@ -1391,15 +1389,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_token_preserves_the_legacy_open_development_server() {
+    async fn missing_token_rejects_requests() {
         let (mut service, calls) = candidate();
         service.service_token = None;
-        let response = service
+        let error = service
             .health_check(Request::new(HealthCheckRequest {}))
             .await
-            .expect("development health")
-            .into_inner();
-        assert_eq!(response.status, "serving");
+            .expect_err("missing service token must reject requests");
+        assert_eq!(error.code(), tonic::Code::Unauthenticated);
         assert!(calls.lock().expect("calls").is_empty());
     }
 

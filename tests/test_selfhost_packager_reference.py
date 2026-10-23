@@ -1,6 +1,5 @@
 """Frozen packager evidence and mandatory executable-gate connections."""
 
-import ast
 import hashlib
 import json
 from pathlib import Path
@@ -9,7 +8,6 @@ import re
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-CAPTURE = ROOT / "scripts/capture_selfhost_bundle_reference.py"
 ARTIFACT = ROOT / "contracts/selfhost-bundle-python-reference.json"
 SOURCE = "rust/crates/selfhost-bundle/tests/executable_bundle.rs"
 SHARED = "rust/crates/selfhost-bundle/tests/support/extracted_bundle.rs"
@@ -19,18 +17,12 @@ NAME = (
 
 
 def validate_reference(reference):
-    constants = {
-        node.targets[0].id: ast.literal_eval(node.value)
-        for node in ast.parse(CAPTURE.read_text(encoding="utf-8")).body
-        if isinstance(node, ast.Assign)
-        and len(node.targets) == 1
-        and isinstance(node.targets[0], ast.Name)
-        and node.targets[0].id in {"REVISION", "SOURCE", "BLOB"}
-    }
     assert reference["schema"] == "marty.selfhost-bundle-python-reference/v1"
-    assert reference["reference"]["revision"] == constants["REVISION"]
-    assert reference["reference"]["source"] == constants["SOURCE"]
-    assert reference["reference"]["blob"] == constants["BLOB"]
+    assert (
+        reference["reference"]["revision"] == "31287d26676872736820f97ae6d6d30d0d8e65f1"
+    )
+    assert reference["reference"]["source"] == "scripts/package-selfhost-bundle.py"
+    assert reference["reference"]["blob"] == "77c04ba60f7a31432d210526f50e136f6bde0545"
     assert len(reference["cases"]) == 18
     stage = reference["staging"]
     assert stage["archive_files_hex"] == {
@@ -98,7 +90,6 @@ def test_actual_pathlib_expansion_capture_and_native_connection():
     )
     assert "contracts/selfhost-bundle-path-reference.json" in source
     assert "mod user_path;" in read("rust/crates/selfhost-bundle/src/main.rs")
-    assert "Path.expanduser(path_type(value))" in CAPTURE.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("fault", ["stdlib", "case", "expanded", "error"])
@@ -153,7 +144,26 @@ def assert_connections(read):
     helper = read(SHARED)
     assert "inventory(&self.extracted), self.verified_inventory" in helper
     assert "inventory(&self.output), self.verified_inventory" in helper
-    assert "#[test]\nfn jointly_mutated_verified_bundle_is_refused()" in helper
+    prepared = read(
+        "rust/crates/selfhost-bundle/tests/support/resolved_selfhost_runtime.rs"
+    )
+    for shared, module, name in [
+        (helper, "extracted_bundle", "jointly_mutated_verified_bundle_is_refused"),
+        (
+            helper,
+            "extracted_bundle",
+            "extracted_inputs_survive_child_unwind_until_parent_removes_scratch",
+        ),
+        (
+            prepared,
+            "resolved_selfhost_runtime",
+            "prepared_inputs_survive_child_unwind_until_parent_removes_scratch",
+        ),
+    ]:
+        assert f"pub(super) fn assert_{name}()" in shared
+        assert f"#[test]\nfn {name}()" in executable
+        assert f"{module}::assert_{name}();" in executable
+        assert f"#[test]\nfn {name}()" not in shared
     shared = helper.split("pub(super) fn create", 1)[1].split(
         "pub(super) fn directory", 1
     )[0]

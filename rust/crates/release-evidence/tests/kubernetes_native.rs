@@ -106,9 +106,27 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
             json!([{"configMapRef":{"name":"issuance-native-config"}}])
         );
         let native_env = env(native_owner);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|v| v.starts_with("BAO") || v == "CANVAS_SYNC_PROCESSOR"));
+            .any(|v| (v.starts_with("BAO") && v != "BAO_ADDR") || v == "CANVAS_SYNC_PROCESSOR"));
+        for (name, path) in [
+            (
+                "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+                "credential",
+            ),
+            ("ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE", "canvas"),
+            ("ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE", "readiness"),
+            ("ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE", "passport"),
+        ] {
+            assert_eq!(
+                native_env[name]["value"],
+                format!("/run/secrets/issuance-sign-grants/{path}")
+            );
+        }
         for value in &mut after {
             if value["kind"] != "Deployment" {
                 continue;
@@ -128,6 +146,9 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","value":"http://issuance-native:8005"})
                 );
             } else if value["metadata"]["name"] == "issuance" {
+                assert_eq!(owner(value)["image"], values["MARTY_SERVICES_IMAGE"]);
+                owner_mut(value)["image"] =
+                    owner(&before[index(&before, "Deployment", "issuance")])["image"].clone();
                 assert_eq!(owner(value)["livenessProbe"]["httpGet"]["path"], "/health");
                 assert_eq!(owner(value)["readinessProbe"]["httpGet"]["path"], "/ready");
                 owner_mut(value)["readinessProbe"]["httpGet"]["path"] = json!("/health");
@@ -145,35 +166,38 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                         .unwrap()
                         .as_object_mut()
                         .unwrap();
-                    let volumes = pod.remove("volumes").unwrap();
-                    assert_eq!(volumes.as_array().unwrap().len(), 2);
-                    for volume in volumes.as_array().unwrap() {
+                    let volumes = pod["volumes"].as_array_mut().unwrap();
+                    assert_eq!(volumes.len(), 4);
+                    assert_eq!(volumes[1]["name"], "issuance-sign-grants");
+                    let added_volumes = volumes.split_off(2);
+                    for volume in &added_volumes {
                         assert_eq!(volume["secret"]["optional"], false);
                         assert_eq!(volume["secret"]["defaultMode"], 292);
                     }
                     let legacy_owner = owner_mut(value);
-                    let mounts = legacy_owner
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("volumeMounts")
-                        .unwrap();
-                    assert_eq!(mounts.as_array().unwrap().len(), 2);
-                    assert!(mounts
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .all(|v| v["readOnly"] == true));
+                    let mounts = legacy_owner["volumeMounts"].as_array_mut().unwrap();
+                    assert_eq!(mounts.len(), 4);
+                    assert_eq!(mounts[1]["name"], "issuance-sign-grants");
+                    let added_mounts = mounts.split_off(2);
+                    assert!(added_mounts.iter().all(|v| v["readOnly"] == true));
                     let entries = legacy_owner["env"].as_array_mut().unwrap();
                     assert_eq!(entries.pop().unwrap()["name"], "DIDCOMM_TLS_CA_FILE");
                     assert_eq!(
                         entries.pop().unwrap()["name"],
                         "DIDCOMM_ENCRYPTION_POLICY_FILE"
                     );
-                    assert_eq!(owner(native_owner)["volumeMounts"], mounts);
-                    assert_eq!(
-                        native_owner.pointer("/spec/template/spec/volumes").unwrap(),
-                        &volumes
-                    );
+                    let native_mounts = owner(native_owner)["volumeMounts"].as_array().unwrap();
+                    assert_eq!(native_mounts.len(), 7);
+                    assert_eq!(native_mounts[4]["name"], "issuance-sign-grants");
+                    assert_eq!(native_mounts[5..], added_mounts);
+                    let native_volumes = native_owner
+                        .pointer("/spec/template/spec/volumes")
+                        .unwrap()
+                        .as_array()
+                        .unwrap();
+                    assert_eq!(native_volumes.len(), 7);
+                    assert_eq!(native_volumes[4]["name"], "issuance-sign-grants");
+                    assert_eq!(native_volumes[5..], added_volumes);
                 }
                 let entries = owner_mut(value)["env"].as_array_mut().unwrap();
                 assert_eq!(
@@ -213,8 +237,8 @@ fn whole_model_preserves_legacy_and_all_siblings_with_only_closed_deltas() {
                     .iter_mut()
                     .find(|entry| entry["name"] == "ISSUANCE_GRPC_TARGET")
                     .unwrap();
-                assert_eq!(grpc["value"], "issuance-native:9005");
-                grpc["value"] = json!("issuance:9005");
+                assert_eq!(grpc["value"], "https://issuance-native:9005");
+                grpc["value"] = json!("https://issuance-native:9005");
             }
         }
         assert_eq!(
@@ -232,7 +256,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     assert_eq!(common.len(), 1);
     assert_eq!(
         common[0]["data"]["ISSUANCE_NATIVE_SERVICE_URL"],
-        "http://issuance:8005"
+        "http://issuance-native:8005"
     );
     let recovery_ref = json!({"name":"ISSUANCE_NATIVE_SERVICE_URL","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"ISSUANCE_NATIVE_SERVICE_URL"}}});
     for name in ["auth", "applicant", "presentation-policy"] {
@@ -249,7 +273,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     );
     assert_eq!(
         recovery_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance:9005"
+        "https://issuance-native:9005"
     );
 
     let expected = native::compose(&baseline, &template, &ready, &values).unwrap();
@@ -269,7 +293,7 @@ fn issuance_consumer_bindings_preserve_recovery_and_fail_closed_when_selected() 
     let selected_flow = env(&selected[index(selected, "Deployment", "flow")]);
     assert_eq!(
         selected_flow["ISSUANCE_GRPC_TARGET"]["value"],
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     );
     assert_eq!(
         selected_flow["ISSUANCE_SERVICE_URL"],
@@ -442,7 +466,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                 let model = native::compose(&baseline, &template, &ready, &values).unwrap();
                 let rows = model["items"].as_array().unwrap();
                 let shared = &rows[index(rows, "ConfigMap", "issuance-native-config")]["data"];
-                let mut common = json!({"BAO_ADDR":"must-not-reach-native","CANVAS_SYNC_PROCESSOR":"legacy-only"});
+                let mut common = json!({"BAO_ADDR":"https://vault.example.com","CANVAS_SYNC_PROCESSOR":"legacy-only"});
                 if let Some(value) = existing {
                     common["DIDCOMM_ALLOW_PRIVATE_IPS"] = json!(value);
                 }
@@ -465,7 +489,7 @@ fn absent_empty_and_explicit_settings_keep_both_owners_effectively_paired() {
                         .map(String::as_str),
                     expected
                 );
-                assert!(!native_values.contains_key("BAO_ADDR"));
+                assert_eq!(native_values["BAO_ADDR"], "https://vault.example.com");
                 assert!(!native_values.contains_key("CANVAS_SYNC_PROCESSOR"));
                 assert!(!legacy_values.contains_key("MARTY_UI_SHA"));
                 assert_eq!(native_values["MARTY_UI_SHA"], "native-only-revision");
@@ -488,9 +512,8 @@ fn parser_environment_and_new_canonical_image_policy_fail_closed() {
     let captured = native::capture_environment(|name| {
         names.push(name.to_owned());
         (name == "K8S_ISSUANCE_NATIVE_ENABLED").then(|| "false".into())
-    })
-    .unwrap();
-    assert!(!native::selected(&captured).unwrap());
+    });
+    assert!(captured.is_err());
     assert_eq!(names, ["K8S_ISSUANCE_NATIVE_ENABLED"]);
     let (_, _, _, mut values) = fixtures();
     for &name in native::OPTIONAL_SETTINGS {
@@ -521,6 +544,22 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
     let (baseline, template, ready, values) = fixtures();
     let deployment = index(&template, "Deployment", "issuance-native");
     for (path, value) in [
+        (
+            "/spec/template/spec/volumes/2/secret/items/0/key",
+            json!("OPENBAO_SERVICE_TOKEN"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/mountPath",
+            json!("/run/secrets/shared"),
+        ),
+        (
+            "/spec/template/spec/volumes/1/secret/secretName",
+            json!("untrusted-ca"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/1/readOnly",
+            json!(false),
+        ),
         (
             "/spec/template/spec/initContainers",
             json!([{"name":"extra"}]),
@@ -584,12 +623,36 @@ fn native_template_rejects_extra_topology_and_binding_mutations() {
         native::compose(&changed, &template, &ready, &values),
         Err(REFUSAL)
     );
+    let signer = index(&template, "Deployment", "signing-keys");
+    for (path, value) in [
+        (
+            "/spec/template/spec/volumes/0/secret/secretName",
+            json!("untrusted-server-tls"),
+        ),
+        (
+            "/spec/template/spec/containers/0/volumeMounts/0/readOnly",
+            json!(false),
+        ),
+        (
+            "/spec/template/spec/containers/0/ports/1/containerPort",
+            json!(8017),
+        ),
+    ] {
+        let mut changed = template.clone();
+        set_path(&mut changed[signer], path, value);
+        assert_eq!(
+            native::compose(&baseline, &changed, &ready, &values),
+            Err(REFUSAL),
+            "{path}"
+        );
+    }
 }
 
 fn api_defaults(model: &Value) -> Value {
     let mut actual = model.clone();
     let rows = actual["items"].as_array_mut().unwrap();
-    for selected in ["issuance-native", "signing-keys"] {
+    rows.push(selected_passport_config());
+    for selected in ["issuance-native", "issuance", "signing-keys"] {
         let native = index(rows, "Deployment", selected);
         rows[native]["metadata"]["resourceVersion"] = json!("1234");
         rows[native]["status"] = json!({"availableReplicas":1});
@@ -617,15 +680,19 @@ fn api_defaults(model: &Value) -> Value {
                 ("failureThreshold", 3),
                 ("timeoutSeconds", 1),
             ] {
-                owner[name][key] = json!(value);
+                if owner[name].get(key).is_none() {
+                    owner[name][key] = json!(value);
+                }
             }
-            owner[name]["httpGet"]["scheme"] = json!("HTTP");
+            if owner[name].get("httpGet").is_some() {
+                owner[name]["httpGet"]["scheme"] = json!("HTTP");
+            }
         }
         let service = index(rows, "Service", selected);
-        let allocated = if selected == "issuance-native" {
-            "10.96.0.123"
-        } else {
-            "10.96.0.124"
+        let allocated = match selected {
+            "issuance-native" => "10.96.0.123",
+            "issuance" => "10.96.0.125",
+            _ => "10.96.0.124",
         };
         rows[service]["spec"]["clusterIP"] = json!(allocated);
         rows[service]["spec"]["clusterIPs"] = json!([allocated]);
@@ -637,6 +704,117 @@ fn api_defaults(model: &Value) -> Value {
         }
     }
     actual
+}
+
+fn selected_passport_config() -> Value {
+    json!({
+        "apiVersion": "v1", "kind": "ConfigMap",
+        "metadata": {"name": "marty-config", "namespace": "marty-prod"},
+        "data": {
+            "PASSPORT_NATIVE_GATEWAY_ENABLED": "true",
+            "PASSPORT_NATIVE_FLOW_ENABLED": "true",
+            "PASSPORT_NATIVE_HTTP_ENABLED": "true",
+            "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED": "true",
+            "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED": "true",
+            "PASSPORT_KMS_ARTIFACTS_ENABLED": "true",
+            "PASSPORT_KMS_CALLBACKS_ENABLED": "true"
+        }
+    })
+}
+
+#[test]
+fn full_deploy_requires_reviewed_route_and_kms_config_before_writes() {
+    let source = fs::read_to_string(root().join("scripts/deploy-kubernetes.sh")).unwrap();
+    let script = format!(
+        "set -euo pipefail\n{}\nerror() {{ printf '%s\\n' \"$*\" >&2; exit 1; }}\nenvsubst() {{ command cat; }}\nrequire_kubernetes_passport_selection\n",
+        extracted_function(&source, "require_kubernetes_passport_selection")
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let manifest = directory.path().join("01-configmap.yaml");
+    let mut config = fs::read_to_string(root().join("k8s/oracle/01-configmap.yaml")).unwrap();
+    let bash = if cfg!(windows) {
+        "C:/Program Files/Git/bin/bash.exe"
+    } else {
+        "bash"
+    };
+    let run = || {
+        let mut command = fixture_command(bash);
+        command.args(["--noprofile", "--norc", "-c", &script]);
+        command.env("K8S_DIR", shell_path(directory.path()));
+        command.env("NAMESPACE", "marty-prod");
+        command.env("K8S_ISSUANCE_NATIVE_ENABLED", "true");
+        command.env(
+            "K8S_NATIVE_ISSUANCE_BIN",
+            shell_path(Path::new(env!("CARGO_BIN_EXE_kubernetes-native-issuance"))),
+        );
+        execute(command, b"").0
+    };
+    fs::write(&manifest, &config).unwrap();
+    assert!(!run(), "unselected source must block deployment");
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        config = config.replace(
+            &format!("  {key}: \"false\""),
+            &format!("  {key}: \"true\""),
+        );
+    }
+    fs::write(&manifest, &config).unwrap();
+    assert!(run(), "fully selected source should pass preflight");
+    fs::write(
+        &manifest,
+        config.replace(
+            "  PASSPORT_KMS_CALLBACKS_ENABLED: \"true\"",
+            "  PASSPORT_KMS_CALLBACKS_ENABLED: \"false\"",
+        ),
+    )
+    .unwrap();
+    assert!(!run(), "partial KMS selection must block deployment");
+    fs::write(
+        &manifest,
+        config.replace(
+            "  PASSPORT_NATIVE_GATEWAY_ENABLED: \"true\"",
+            "  PASSPORT_NATIVE_GATEWAY_ENABLED: \"true\"\n  PASSPORT_NATIVE_GATEWAY_ENABLED: \"false\"",
+        ),
+    )
+    .unwrap();
+    assert!(
+        !run(),
+        "duplicate effective route key must block deployment"
+    );
+}
+
+#[test]
+fn live_passport_config_requires_atomic_route_and_kms_selection() {
+    let selected = json!({"kind":"List","items":[selected_passport_config()]});
+    native::selected_passport_config(&selected, "marty-prod").unwrap();
+    for key in [
+        "PASSPORT_NATIVE_GATEWAY_ENABLED",
+        "PASSPORT_NATIVE_FLOW_ENABLED",
+        "PASSPORT_NATIVE_HTTP_ENABLED",
+        "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
+        "PASSPORT_MANAGED_ISSUER_SIGNING_ENABLED",
+        "PASSPORT_KMS_ARTIFACTS_ENABLED",
+        "PASSPORT_KMS_CALLBACKS_ENABLED",
+    ] {
+        let mut disabled = selected.clone();
+        disabled["items"][0]["data"][key] = json!("false");
+        assert_eq!(
+            native::selected_passport_config(&disabled, "marty-prod"),
+            Err(REFUSAL),
+            "{key}"
+        );
+    }
+    assert_eq!(
+        native::selected_passport_config(&json!({"kind":"List","items":[]}), "marty-prod"),
+        Err(REFUSAL)
+    );
 }
 
 #[test]
@@ -653,16 +831,46 @@ fn realistic_api_defaults_preserve_update_guard_and_hostile_changes_fail_closed(
     let rows = actual["items"].as_array().unwrap();
     let native = index(rows, "Deployment", "issuance-native");
     let legacy = index(rows, "Deployment", "issuance");
-    // Independent legacy image and unrelated topology are not owned by this
-    // native image update. Named-container lookup must not assume index zero.
+    // The alias can carry an older shared Rust digest during an image update.
     let mut independent = actual.clone();
-    owner_mut(&mut independent["items"][legacy])["image"] =
+    owner_mut(&mut independent["items"][legacy])["image"] = json!(format!(
+        "ghcr.io/elevenid/services@sha256:{}",
+        "b".repeat(64)
+    ));
+    native::check_update(&independent, &expected, "marty-prod").unwrap();
+    let mut invalid_image = independent.clone();
+    owner_mut(&mut invalid_image["items"][legacy])["image"] =
         json!("independent.invalid/external:reviewed");
+    assert_eq!(
+        native::check_update(&invalid_image, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
+    let mut invalid_command = independent.clone();
+    owner_mut(&mut invalid_command["items"][legacy])["command"] =
+        json!(["python", "-m", "uvicorn"]);
+    assert_eq!(
+        native::check_update(&invalid_command, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
+    let mut invalid_service = independent.clone();
+    let service = index(
+        invalid_service["items"].as_array().unwrap(),
+        "Service",
+        "issuance",
+    );
+    invalid_service["items"][service]["spec"]["selector"]["app"] = json!("wrong-owner");
+    assert_eq!(
+        native::check_update(&invalid_service, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
     independent["items"][legacy]["spec"]["template"]["spec"]["containers"]
         .as_array_mut()
         .unwrap()
         .insert(0, json!({"name":"unrelated-existing-sidecar"}));
-    native::check_update(&independent, &expected, "marty-prod").unwrap();
+    assert_eq!(
+        native::check_update(&independent, &expected, "marty-prod"),
+        Err(REFUSAL)
+    );
     for fault in [
         "shared-map",
         "management-key",
@@ -893,7 +1101,6 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         "ORG_GRPC_TARGET",
         "CT_GRPC_TARGET",
         "RP_GRPC_TARGET",
-        "SIGNING_KEYS_INTERNAL_URL",
     ] {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -908,13 +1115,27 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         let entries = owner_mut(&mut baseline[i])["env"].as_array_mut().unwrap();
         entries.retain(|entry| entry["name"] != name);
         entries.push(custom.clone());
-        let model = native::compose(&baseline, &template, &ready, &values).unwrap();
+        let model = native::compose(&baseline, &template, &ready, &values)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
         let rows = model["items"].as_array().unwrap();
         let selected = index(rows, "Deployment", "issuance-native");
         assert_eq!(env(&rows[i])[name], custom);
         assert_eq!(env(&rows[selected])[name], custom);
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
     }
+    let mut legacy_with_custom_signer = baseline.clone();
+    let legacy = index(&legacy_with_custom_signer, "Deployment", "issuance");
+    let signer = owner_mut(&mut legacy_with_custom_signer[legacy])["env"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|entry| entry["name"] == "SIGNING_KEYS_INTERNAL_URL")
+        .unwrap();
+    *signer = json!({"name":"SIGNING_KEYS_INTERNAL_URL","value":"https://custom-signer.example/internal"});
+    assert_eq!(
+        native::compose(&legacy_with_custom_signer, &template, &ready, &values),
+        Err(REFUSAL),
+    );
     for &name in native::SECRET_SETTINGS {
         let mut baseline = baseline.clone();
         let i = index(&baseline, "Deployment", "issuance");
@@ -929,13 +1150,16 @@ fn custom_shared_secret_and_control_plane_entries_are_paired_not_overwritten() {
         );
     }
     let legacy = index(&baseline, "Deployment", "issuance");
-    assert!(!env(&baseline[legacy]).contains_key("RP_GRPC_TARGET"));
+    assert_eq!(
+        env(&baseline[legacy])["RP_GRPC_TARGET"],
+        json!({"name":"RP_GRPC_TARGET","value":"https://revocation-profile:9013"})
+    );
     let model = native::compose(&baseline, &template, &ready, &values).unwrap();
     let rows = model["items"].as_array().unwrap();
     let selected = index(rows, "Deployment", "issuance-native");
     assert_eq!(
         env(&rows[selected])["RP_GRPC_TARGET"],
-        json!({"name":"RP_GRPC_TARGET","value":"revocation-profile:9013"})
+        json!({"name":"RP_GRPC_TARGET","value":"https://revocation-profile:9013"})
     );
 }
 
@@ -972,9 +1196,14 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
             }
         }
         let native_env = env(&rows[index(rows, "Deployment", "issuance-native")]);
+        assert_eq!(
+            native_env["BAO_ADDR"],
+            json!({"name":"BAO_ADDR","valueFrom":{"configMapKeyRef":{"name":"marty-config","key":"BAO_ADDR"}}})
+        );
         assert!(!native_env
             .keys()
-            .any(|name| name.starts_with("BAO") || name.starts_with("OPENBAO")));
+            .any(|name| (name.starts_with("BAO") && name != "BAO_ADDR")
+                || name.starts_with("OPENBAO")));
         let signing = env(&rows[index(rows, "Deployment", "signing-keys")]);
         assert_eq!(
             signing["SIGNING_KEYS_REDIS_URL"]["value"],
@@ -986,7 +1215,7 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
         );
         assert_eq!(
             signing["OPENBAO_SERVICE_TOKEN"],
-            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"OPENBAO_SERVICE_TOKEN"}}})
+            json!({"name":"OPENBAO_SERVICE_TOKEN","valueFrom":{"secretKeyRef":{"name":"marty-secrets","key":"SIGNING_KEYS_OPENBAO_TOKEN"}}})
         );
         native::check_update(&api_defaults(&model), &model, "marty-prod").unwrap();
         for fault in [
@@ -1059,6 +1288,31 @@ fn signing_dependency_preserves_existing_identity_metadata_and_closed_custody_ow
             "{fault}"
         );
     }
+}
+
+#[test]
+fn signing_template_refuses_tls_private_key_file_and_missing_remote_signer() {
+    let (baseline, template, ready, values) = fixtures();
+    let signing = index(&template, "Deployment", "signing-keys");
+    let mut with_file = template.clone();
+    owner_mut(&mut with_file[signing])["env"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"name":"SIGNING_KEYS_INTEGRATION_SECRET_TLS_KEY_FILE","value":"/run/secrets/integration-secret-tls/tls.key"}));
+    assert_eq!(
+        native::compose(&baseline, &with_file, &ready, &values),
+        Err(REFUSAL)
+    );
+
+    let mut without_signer = template.clone();
+    owner_mut(&mut without_signer[signing])["env"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|entry| entry["name"] != "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME");
+    assert_eq!(
+        native::compose(&baseline, &without_signer, &ready, &values),
+        Err(REFUSAL)
+    );
 }
 
 #[test]
@@ -1135,7 +1389,7 @@ fn full_deploy_preflights_before_first_write_and_apply_uses_captured_model() {
 error() { printf '%s\n' "$*" >&2; exit 1; }
 step() { :; }
 info() { :; }
-resolve_kubernetes_issuance_image() { printf '%s\n' "$MARTY_ISSUANCE_IMAGE"; }
+require_kubernetes_services_release() { :; }
 cmd_setup_secrets() { printf 'unexpected-setup\n' >> "$FIXTURE_LEDGER"; return 94; }
 kubectl() {
   printf '%s\n' "$*" >> "$FIXTURE_LEDGER"
@@ -1163,6 +1417,8 @@ fi
         "invalid-selector",
     ] {
         let dir = tempfile::tempdir().unwrap();
+        let harness = dir.path().join("harness.sh");
+        fs::write(&harness, &script).unwrap();
         let ledger = dir.path().join("ledger");
         let captured = dir.path().join("captured");
         let applied = dir.path().join("applied");
@@ -1219,7 +1475,7 @@ fi
             "bash"
         };
         let mut cmd = fixture_command(bash);
-        cmd.args(["--noprofile", "--norc", "-c", &script])
+        cmd.args(["--noprofile", "--norc", &shell_path(&harness)])
             .envs(&values)
             .env("REPO_ROOT", shell_path(&root()))
             .env("K8S_DIR", shell_path(&manifests))
@@ -1230,7 +1486,6 @@ fi
             .env("NAMESPACE", "marty-prod")
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
-            .env("MARTY_ISSUANCE_IMAGE", "synthetic.invalid/legacy:reviewed")
             .env("FIXTURE_FAULT", fault)
             .env("FIXTURE_LEDGER", shell_path(&ledger))
             .env("FIXTURE_CAPTURED", shell_path(&captured))
@@ -1301,6 +1556,7 @@ error() { printf '%s\n' "$*" >&2; exit 1; }
 step() { :; }
 success() { :; }
 warn() { :; }
+require_kubernetes_services_release() { :; }
 catalog_services() { printf 'issuance\ngateway\n'; }
 controlled_canvas_guard() { command cat >/dev/null; }
 kubectl() {
@@ -1311,6 +1567,7 @@ kubectl() {
     'set image') : ;;
     'rollout status')
       if [[ "$3" == deployment/issuance-native && "$FIXTURE_FAULT" == rollout ]]; then return 19; fi
+      if [[ "$3" == deployment/issuance && "$FIXTURE_FAULT" == issuance-rollout ]]; then return 20; fi
       if [[ "$3" == deployment/signing-keys && "$FIXTURE_FAULT" == signing-rollout ]]; then return 18; fi ;;
     *) return 93 ;;
   esac
@@ -1325,12 +1582,14 @@ cmd_update_images
         "policy-mount",
         "policy-path",
         "rollout",
+        "issuance-rollout",
         "signing-rollout",
         "signing-key",
         "gateway-signing-key",
         "signing-source-missing",
         "signing-service-missing",
         "auth-target",
+        "route-disabled",
         "missing-binary",
         "invalid-image",
         "disabled",
@@ -1341,7 +1600,7 @@ cmd_update_images
         let dir = tempfile::tempdir().unwrap();
         let snapshot = dir.path().join("snapshot.json");
         let ledger = dir.path().join("ledger");
-        let mutated = if [
+        let mut mutated = if [
             "shared-map",
             "management-key",
             "policy-volume",
@@ -1359,6 +1618,11 @@ cmd_update_images
         } else {
             expected.clone()
         };
+        if fault == "route-disabled" {
+            let rows = mutated["items"].as_array_mut().unwrap();
+            let config = index(rows, "ConfigMap", "marty-config");
+            rows[config]["data"]["PASSPORT_NATIVE_GATEWAY_ENABLED"] = json!("false");
+        }
         fs::write(&snapshot, serde_json::to_vec(&mutated).unwrap()).unwrap();
         fs::write(&ledger, []).unwrap();
         let bash = if cfg!(windows) {
@@ -1377,10 +1641,13 @@ cmd_update_images
             )
             .env("NAMESPACE", "marty-prod")
             .env("PYTHON_BIN", "controlled_canvas_guard")
+            .env(
+                "MARTY_KEYCLOAK_KMS_IMAGE",
+                format!("ghcr.io/elevenid/keycloak@sha256:{}", "b".repeat(64)),
+            )
             .env("OCIR_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_REGISTRY", "synthetic.registry.invalid")
             .env("IMAGE_TAG", "2026.08.0")
-            .env("MARTY_ISSUANCE_IMAGE", "synthetic.invalid/legacy:reviewed")
             .env("FIXTURE_LEDGER", shell_path(&ledger))
             .env("FIXTURE_SNAPSHOT", shell_path(&snapshot))
             .env("FIXTURE_FAULT", fault);
@@ -1408,7 +1675,7 @@ cmd_update_images
         let (passed, output, errors) = execute(cmd, b"");
         assert_eq!(
             passed,
-            fault == "none" || fault == "disabled" || fault == "absent",
+            fault == "none" || fault == "absent",
             "{fault}: {}",
             String::from_utf8_lossy(&errors)
         );
@@ -1419,21 +1686,27 @@ cmd_update_images
             .lines()
             .filter(|v| v.starts_with("set image "))
             .collect();
-        if fault == "none" || fault == "disabled" || fault == "absent" {
-            assert_eq!(writes.len(), if fault == "disabled" { 3 } else { 5 });
-            assert!(!writes
+        if fault == "none" || fault == "absent" {
+            assert_eq!(writes.len(), 7);
+            assert!(writes
                 .iter()
                 .any(|v| v.starts_with("set image deployment/issuance ")));
         } else if fault == "rollout" {
             assert_eq!(
                 writes.len(),
-                2,
+                3,
                 "No sibling writes after native rollout failure"
+            );
+        } else if fault == "issuance-rollout" {
+            assert_eq!(
+                writes.len(),
+                4,
+                "No sibling writes after issuance rollout failure"
             );
         } else if fault == "signing-rollout" {
             assert_eq!(
                 writes.len(),
-                1,
+                2,
                 "No native or sibling writes after signing rollout failure"
             );
         } else {
@@ -1442,6 +1715,7 @@ cmd_update_images
         if [
             "missing-binary",
             "invalid-image",
+            "disabled",
             "empty-selector",
             "invalid-selector",
         ]
@@ -1451,13 +1725,22 @@ cmd_update_images
         }
         if fault == "none" || fault == "absent" || fault == "rollout" {
             assert_eq!(
-                writes[1],
+                writes[2],
                 format!(
                     "set image deployment/issuance-native issuance-native={} -n marty-prod",
                     values["MARTY_SERVICES_IMAGE"]
                 )
             );
-            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/signing-keys configmap/issuance-native-config -n marty-prod -o json --request-timeout=10s\n"));
+            if fault != "rollout" {
+                assert_eq!(
+                    writes[3],
+                    format!(
+                        "set image deployment/issuance issuance={} -n marty-prod",
+                        values["MARTY_SERVICES_IMAGE"]
+                    )
+                );
+            }
+            assert!(calls.starts_with("get deployment/issuance-native deployment/gateway deployment/issuance deployment/signing-keys deployment/auth deployment/applicant deployment/presentation-policy deployment/flow service/issuance-native service/issuance service/signing-keys configmap/issuance-native-config configmap/marty-config -n marty-prod -o json --request-timeout=10s\n"));
             let signing = "rollout status deployment/signing-keys -n marty-prod --timeout=180s\n";
             assert!(
                 calls.find(signing).unwrap()
@@ -1483,7 +1766,6 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
             renderer.env(name, value);
         }
     }
-    renderer.env("MARTY_ISSUANCE_IMAGE","synthetic.invalid/legacy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     renderer
         .env("OCIR_REGISTRY", "synthetic.registry.invalid")
         .env("IMAGE_TAG", "2026.08.0");
@@ -1532,5 +1814,7 @@ fn actual_cli_arguments_bounded_input_and_real_envsubst_model() {
     cmd.arg("validate")
         .env("MARTY_SERVICES_IMAGE", "ignored-private-image");
     let (passed, output, errors) = execute(cmd, b"");
-    assert!(passed && output.is_empty() && errors.is_empty());
+    // Native issuance is selected by default. A missing or mutable image
+    // must fail preflight even when no explicit enable flag was supplied.
+    assert!(!passed && output.is_empty() && errors == format!("{REFUSAL}\n").as_bytes());
 }

@@ -1,0 +1,19 @@
+{
+  "schema": "marty.canvas-json-depth-current-inputs/v1",
+  "purpose": "Current-checkout JSON-depth published-probe inputs only. These hashes do not attest historical capture provenance or downstream image contents, qualify a release, or authorize skipping a live oracle.",
+  "normalization": "UTF-8 text with CRLF and CR converted to LF before SHA-256",
+  "sha256": {
+    "contracts/canvas-issued-review-scenarios.json": "68b85919047ed359bc7114c17003c5da1b50c045c0e32fa25d5d17dd4dc5865f",
+    "contracts/canvas-json-depth-scenarios.json": "712a4fd5f287228995e5e240db4aebf24ef7b0c430881784ddcb775394cb1a43",
+    "contracts/canvas-review-recovery-migration.json": "6b616575cf990ce82c4ac2591361343d296624b3ccf05787acd32f7be2b5a087",
+    "contracts/canvas-worker-consumer-range-oracle.json": "0459d9b3ae5409df9e5cb149e13167a13625518bb97dcbf8654631898cc63e0c",
+    "contracts/fixtures/canvas_review_recovery_claim.py": "b2bde4ce51071bcd8c33f044c66c9bf963243c13a5dec6bfcea951086aee5361",
+    "rust/services/issuance/tests/support/canvas_published_database.rs": "8b38d0680c3a0203864163727fd0d8f540f8ac8f2372765d87cce4d95d43e9b1",
+    "scripts/canvas_json_tree_observation.py": "bd80063c57350d3535e5655db8bfca6b04dfbed92909bdea888e6ebfbbe76ae8",
+    "scripts/canvas_observation_values.py": "91a6193ee484e128a8f992ec9072b26cb488caaf5a7adb7991edd29162afa609",
+    "scripts/prepare_canvas_published_schema.py": "8610ade9e03c08a8fb4984583b38e4cb6d2c6dfcf63258411f793414c8e9a45a",
+    "scripts/run_canvas_json_depth_oracle.py": "fa2bb5a9194e88db82620f794d09748dfcc9b8d8eb317ba06519877e12821cab",
+    "scripts/run_canvas_status_provider_oracle.py": "6a12abe6aa5e2f4b28da0a67dc07f6a881c96d93434151ee221745b4aa735ddb",
+    "scripts/run_canvas_validation_boundary_oracle.py": "856e978e39d89415b15858171cc863283814646176efeb7086a4b4efa76a7c30"
+  }
+}

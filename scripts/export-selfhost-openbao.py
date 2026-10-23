@@ -1,20 +1,38 @@
 #!/usr/bin/env python3
+"""Export a live self-host OpenBao Raft snapshot with snapshot-only authority."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import shutil
+import os
+import ssl
+import stat
+import sys
 import tempfile
+import urllib.error
+import urllib.request
+import uuid
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+sys.dont_write_bytecode = True
+from selfhost_operator_inputs import snapshot_origin  # noqa: E402
+from provision_selfhost_snapshot_identity import checked_login  # noqa: E402
+from selfhost_openbao_client import Bao  # noqa: E402
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise RuntimeError("OpenBao snapshot request redirected unexpectedly")
 
 
 def load_env_file(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
     if not path.exists():
         return env
-
     for line in path.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
@@ -25,70 +43,129 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def build_parser(repo_root: Path) -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Export the standalone self-host OpenBao state for backup or migration.")
-    parser.add_argument("--env-file", default=str(repo_root / ".env.selfhost.production.local"))
+    parser = argparse.ArgumentParser(
+        description="Export a live self-host OpenBao Raft snapshot for recovery."
+    )
+    parser.add_argument(
+        "--env-file", default=str(repo_root / ".env.selfhost.production.local")
+    )
     parser.add_argument("--state-dir", default="")
     parser.add_argument("--export-dir", default="")
-    parser.add_argument("--config-file", default=str(repo_root / "docker" / "openbao-selfhost.hcl"))
+    parser.add_argument(
+        "--config-file", default=str(repo_root / "docker/openbao-selfhost.hcl")
+    )
+    parser.add_argument("--bao-url", default="")
+    parser.add_argument("--snapshot-identity-dir", default="")
     return parser
+
+
+def snapshot_url(value: str) -> str:
+    return snapshot_origin(value) + "/v1/sys/storage/raft/snapshot"
+
+
+def stream_snapshot(url: str, token: str, output: Path, ca_file: Path) -> str:
+    request = urllib.request.Request(url, headers={"X-Vault-Token": token})
+    tls_context = ssl.create_default_context(cafile=str(ca_file))
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}),
+        urllib.request.HTTPSHandler(context=tls_context),
+        NoRedirect(),
+    )
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        descriptor = os.open(output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as sink, opener.open(request, timeout=300) as response:
+            if response.status != 200:
+                raise RuntimeError("OpenBao Raft snapshot request did not succeed")
+            while chunk := response.read(1024 * 1024):
+                sink.write(chunk)
+                digest.update(chunk)
+                size += len(chunk)
+    except (OSError, urllib.error.HTTPError) as error:
+        raise RuntimeError("OpenBao Raft snapshot request failed") from error
+    if size == 0:
+        raise RuntimeError("OpenBao returned an empty Raft snapshot")
+    return digest.hexdigest()
+
+
+def export(state_dir: Path, export_dir: Path, config_file: Path, bao_url: str,
+           snapshot_identity_dir: Path) -> Path:
+    state_dir = state_dir.expanduser().resolve()
+    export_dir = export_dir.expanduser().absolute()
+    config_file = config_file.expanduser().resolve()
+    if not state_dir.is_dir():
+        raise ValueError(f"OpenBao state directory does not exist: {state_dir}")
+    if not config_file.is_file():
+        raise ValueError(f"OpenBao config file does not exist: {config_file}")
+    if 'storage "raft"' not in config_file.read_text(encoding="utf-8"):
+        raise ValueError("self-host OpenBao export requires Raft storage")
+    url = snapshot_url(bao_url)
+    ca_file = state_dir / "tls" / "ca.crt"
+    if not ca_file.is_file() or ca_file.is_symlink():
+        raise ValueError("OpenBao public TLS CA is missing from KMS state")
+    if (export_dir.is_symlink() or not export_dir.is_dir()
+            or (os.name == "posix" and stat.S_IMODE(export_dir.stat().st_mode) != 0o700)):
+        raise ValueError("OpenBao export directory must already be owner-private")
+    export_dir = export_dir.resolve()
+    if export_dir == state_dir or state_dir in export_dir.parents:
+        raise ValueError("OpenBao export directory must be outside the state directory")
+    token = checked_login(Bao(bao_url, ca_file, ""), snapshot_identity_dir.expanduser().absolute())
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    archive = export_dir / f"openbao-raft-{timestamp}-{uuid.uuid4().hex[:8]}.zip"
+    partial = export_dir / (archive.name + ".partial")
+    try:
+        with tempfile.TemporaryDirectory() as temp:
+            snapshot = Path(temp) / "raft.snap"
+            snapshot_sha256 = stream_snapshot(url, token, snapshot, ca_file)
+            manifest = {
+                "created_at": datetime.now(timezone.utc)
+                .isoformat()
+                .replace("+00:00", "Z"),
+                "format": "marty-openbao-raft-snapshot-v2",
+                "snapshot_sha256": snapshot_sha256,
+                "warning": "Contains all OpenBao Raft key custody state; hold unseal material separately.",
+            }
+            descriptor = os.open(partial, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            with (
+                os.fdopen(descriptor, "wb") as output,
+                zipfile.ZipFile(output, "w") as bundle,
+            ):
+                bundle.write(snapshot, "raft.snap", compress_type=zipfile.ZIP_STORED)
+                bundle.write(
+                    config_file,
+                    "openbao-selfhost.hcl",
+                    compress_type=zipfile.ZIP_DEFLATED,
+                )
+                bundle.writestr("manifest.json", json.dumps(manifest, indent=2) + "\n")
+            os.replace(partial, archive)
+    finally:
+        partial.unlink(missing_ok=True)
+    return archive
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
-    parser = build_parser(repo_root)
-    args = parser.parse_args()
-
-    env_file = Path(args.env_file).expanduser().resolve()
-    env_values = load_env_file(env_file)
-
-    state_dir_value = args.state_dir or env_values.get("SELFHOST_OPENBAO_STATE_DIR", "")
-    export_dir_value = args.export_dir or env_values.get("SELFHOST_OPENBAO_EXPORT_DIR", "")
-    config_file = Path(args.config_file).expanduser().resolve()
-
-    if not state_dir_value:
-        raise SystemExit("SELFHOST_OPENBAO_STATE_DIR is required via --state-dir or the env file.")
-    if not export_dir_value:
-        raise SystemExit("SELFHOST_OPENBAO_EXPORT_DIR is required via --export-dir or the env file.")
-
-    state_dir = Path(state_dir_value).expanduser()
-    export_dir = Path(export_dir_value).expanduser()
-
-    state_dir = state_dir.resolve()
-    export_dir = export_dir.resolve()
-
-    if not state_dir.exists():
-        raise SystemExit(f"OpenBao state directory does not exist: {state_dir}")
-    if not config_file.exists():
-        raise SystemExit(f"OpenBao config file does not exist: {config_file}")
-
-    export_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
-    archive_base = export_dir / f"openbao-export-{timestamp}"
-
-    with tempfile.TemporaryDirectory() as temp_dir_raw:
-        temp_dir = Path(temp_dir_raw)
-        staged_root = temp_dir / archive_base.name
-        staged_root.mkdir(parents=True, exist_ok=True)
-
-        shutil.copy2(config_file, staged_root / "openbao-selfhost.hcl")
-        shutil.copytree(state_dir, staged_root / "state")
-        (staged_root / "manifest.json").write_text(
-            json.dumps(
-                {
-                    "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-                    "source_state_dir": str(state_dir),
-                    "config_file": str(config_file),
-                    "warning": "This archive contains OpenBao recovery material, including root token and unseal key data. Handle it like a top-tier secret.",
-                },
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
+    args = build_parser(repo_root).parse_args()
+    env_values = load_env_file(Path(args.env_file).expanduser().resolve())
+    state_dir = args.state_dir or env_values.get("SELFHOST_OPENBAO_STATE_DIR", "")
+    export_dir = args.export_dir or env_values.get("SELFHOST_OPENBAO_EXPORT_DIR", "")
+    identity_dir = (args.snapshot_identity_dir
+                    or env_values.get("SELFHOST_OPENBAO_SNAPSHOT_IDENTITY_DIR", ""))
+    if not state_dir or not export_dir or not identity_dir:
+        raise SystemExit(
+            "OpenBao state, export and snapshot identity directories are required"
         )
-
-        archive_path = shutil.make_archive(str(archive_base), "zip", root_dir=temp_dir, base_dir=staged_root.name)
-
-    print(f"Exported OpenBao state archive: {archive_path}")
+    port = env_values.get("SELFHOST_OPENBAO_HOST_PORT", "18200")
+    bao_url = args.bao_url or f"https://127.0.0.1:{port}"
+    try:
+        archive = export(
+            Path(state_dir), Path(export_dir), Path(args.config_file), bao_url,
+            Path(identity_dir),
+        )
+    except (OSError, ValueError, RuntimeError) as error:
+        raise SystemExit(str(error)) from error
+    print(f"Exported OpenBao Raft snapshot archive: {archive}")
     return 0
 
 

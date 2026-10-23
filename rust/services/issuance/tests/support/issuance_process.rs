@@ -10,6 +10,9 @@ use std::{
 
 use serde_json::Value;
 
+#[path = "remote_integration_secret.rs"]
+pub(super) mod remote_integration_secret;
+
 pub(super) struct ChildGuard(pub(super) Child);
 
 impl Drop for ChildGuard {
@@ -45,6 +48,13 @@ pub(super) fn issuance_binary() -> PathBuf {
 /// Retain the existing health/gRPC smoke tests' ambient-environment behavior.
 pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
     let mut command = Command::new(issuance_binary());
+    // These process-smoke probes do not authorize signing. Give startup a
+    // syntactically valid grant configuration whose token file cannot exist;
+    // an unexpected signing attempt must still fail closed.
+    let absent_grant_file = std::env::temp_dir().join(format!(
+        "marty-issuance-smoke-no-grant-{}/token",
+        uuid::Uuid::new_v4()
+    ));
     for (name, _) in std::env::vars().filter(|(name, _)| {
         name.starts_with("MARTY_ISSUANCE__")
             || matches!(
@@ -57,6 +67,10 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
                     | "INTEGRATION_SECRET_MASTER_KEY"
                     | "INTEGRATION_SECRET_MASTER_KEY_ENV"
                     | "INTEGRATION_SECRET_MASTER_KEY_FILE"
+                    | "SIGNING_KEYS_INTERNAL_URL"
+                    | "SIGNING_KEYS_INTERNAL_API_KEY"
+                    | "SIGNING_KEYS_ISSUER_SIGN_KEY"
+                    | "SIGNING_KEYS_INTEGRATION_SECRET_KEY"
                     | "MARTY_RELEASE_VERSION"
                     | "MARTY_UI_SHA"
                     | "ISSUER_BASE_URL"
@@ -76,8 +90,45 @@ pub(super) fn smoke_command(http_port: u16, grpc_port: u16) -> Command {
             format!("executable-smoke-{}", uuid::Uuid::new_v4()),
         )
         .env(
-            "INTEGRATION_SECRET_MASTER_KEY",
-            "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+            "SIGNING_KEYS_INTERNAL_URL",
+            remote_integration_secret::base_url().as_str(),
+        )
+        .env(
+            "INTEGRATION_SECRET_KMS_URL",
+            remote_integration_secret::base_url().as_str(),
+        )
+        .env(
+            "INTEGRATION_SECRET_KMS_CA_FILE",
+            remote_integration_secret::ca_file(),
+        )
+        .env(
+            "SIGNING_KEYS_INTERNAL_API_KEY",
+            remote_integration_secret::API_KEY,
+        )
+        .env(
+            "SIGNING_KEYS_ISSUER_SIGN_KEY",
+            "synthetic-issuance-issuer-sign-key-32-chars",
+        )
+        .env(
+            "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
+            remote_integration_secret::INTEGRATION_SECRET_KEY,
+        )
+        .env("BAO_ADDR", "https://127.0.0.1:1")
+        .env(
+            "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
+        )
+        .env(
+            "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE",
+            &absent_grant_file,
         )
         .env("MARTY_RELEASE_VERSION", "9.8.7")
         .env("MARTY_UI_SHA", "smoke-revision")

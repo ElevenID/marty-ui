@@ -39,6 +39,45 @@ def _require(condition: bool, message: str) -> None:
         raise NativeBatchProbeError(message)
 
 
+def _conflict_reason(code: Any, result: dict[str, Any]) -> str:
+    """Classify known Rust 409 details without copying private response data."""
+    if code != 409:
+        return "not_conflict"
+    known = {
+        "Physical document changed concurrently; retry the operation": "concurrent_change",
+        "Physical document has already been submitted to the bureau": "already_submitted",
+        "Previously signed SOD material is unavailable; regenerate SOD before submission":
+            "signed_material_unavailable",
+        "Document signer certificate is not trusted by an active organization CSCA":
+            "untrusted_dsc",
+        "Document is not ready for quality verification": "quality_not_ready",
+        "A passing quality result is required before activation": "activation_not_ready",
+    }
+    return known.get(result.get("detail"), "other") if isinstance(result.get("detail"), str) else "other"
+
+
+def _first_dispatch_failure(attempt: int, code: Any, result: dict[str, Any],
+                            batch_id: str) -> str:
+    """Report only bounded proof shape, never response values or identifiers."""
+    proof = result.get("wire_commitments")
+    jobs = result.get("jobs")
+    wire = result.get("wire_evidence_status")
+    if wire not in ("verified", "unavailable"):
+        wire = "missing" if wire is None else "other"
+    http = str(code) if type(code) is int and 100 <= code <= 599 else "invalid"
+    job_count = (str(len(jobs)) if len(jobs) <= 3 else "4+") if isinstance(jobs, list) else "invalid"
+    shape = lambda field: (isinstance(proof, dict)
+                           and isinstance(proof.get(field), str)
+                           and SHA256.fullmatch(proof[field]) is not None)
+    return ("Native batch did not return verified first-dispatch proof "
+            f"(attempt={attempt}, http={http}, conflict={_conflict_reason(code, result)}, "
+            f"batch_id_match={result.get('batch_id') == batch_id}, "
+            f"wire={wire}, wire_http_202={result.get('http_status') == 202}, "
+            f"batch_queued={result.get('batch_status') == 'QUEUED'}, "
+            f"request_commitment_shape={shape('request_commitment')}, "
+            f"response_commitment_shape={shape('response_commitment')}, jobs={job_count})")
+
+
 def _canonical_uuid(value: Any) -> str:
     try:
         parsed = str(UUID(value))
@@ -250,6 +289,7 @@ def exercise(
     new_key: Callable[[int], bytes] = secrets.token_bytes,
     now: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    on_owned_job: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     org = application.get("organization_id")
     issuer = application.get("issuer_did")
@@ -303,6 +343,11 @@ def exercise(
                           companion_source_job_id=companion_job,
                           state="preparing_signed_material")
     _write_private_state(private_state_path, private_record, initial=False)
+    if on_owned_job:
+        on_owned_job("companion_created", {"organization_id": org,
+            "id": companion_job, "application_id": companion_app,
+            "flow_execution_id": companion_flow_id, "issuer_did": issuer,
+            "flow_instance_created": False})
     base = "/v1/passport/applications/" + quote(companion_app, safe="")
     for suffix, expected in (("generate-data-groups", "DATA_GENERATED"),
                              ("generate-sod", "SOD_SIGNED")):
@@ -326,6 +371,7 @@ def exercise(
             "companion_application_id": companion_app}
     mapping = None
     commitments = None
+    request_attempt = 1
     try:
         code, result = private_request(native_container_id, batch_id, body, org,
                                        service_token, operator_token, wire_key)
@@ -333,28 +379,33 @@ def exercise(
         # A lost response is ambiguous. The native lease permits one exact
         # retry; it will still withhold first-dispatch proof if that was lost.
         sleep(131)
+        request_attempt += 1
         code, result = private_request(native_container_id, batch_id, body, org,
                                        service_token, operator_token, wire_key)
     else:
         if code in (409, 502, 503, 504):
             sleep(131)
+            request_attempt += 1
             code, result = private_request(native_container_id, batch_id, body, org,
                                            service_token, operator_token, wire_key)
     for attempt in range(2):
         if attempt:
+            request_attempt += 1
             code, result = private_request(native_container_id, batch_id, body, org,
                                            service_token, operator_token, wire_key)
         jobs = result.get("jobs")
         proof = result.get("wire_commitments")
-        _require(code == 200 and result.get("batch_id") == batch_id
-                 and result.get("wire_evidence_status") == "verified"
-                 and result.get("http_status") == 202
-                 and result.get("batch_status") == "QUEUED"
-                 and isinstance(proof, dict)
-                 and all(isinstance(proof.get(field), str) and SHA256.fullmatch(proof[field])
-                         for field in ("request_commitment", "response_commitment"))
-                 and isinstance(jobs, list) and len(jobs) == 2,
-                 "Native batch did not return verified first-dispatch proof")
+        proof_ok = (code == 200 and result.get("batch_id") == batch_id
+                    and result.get("wire_evidence_status") == "verified"
+                    and result.get("http_status") == 202
+                    and result.get("batch_status") == "QUEUED"
+                    and isinstance(proof, dict)
+                    and all(isinstance(proof.get(field), str) and SHA256.fullmatch(proof[field])
+                            for field in ("request_commitment", "response_commitment"))
+                    and isinstance(jobs, list) and len(jobs) == 2)
+        if not proof_ok:
+            raise NativeBatchProbeError(_first_dispatch_failure(request_attempt, code, result,
+                                                                  batch_id))
         observed = {}
         for job in jobs:
             _require(isinstance(job, dict) and job.get("organization_id") == org
@@ -379,6 +430,13 @@ def exercise(
             _require(current_mapping == mapping and proof == commitments,
                      "Native batch retry changed first-dispatch proof or bindings")
         mapping, commitments = current_mapping, proof
+    if on_owned_job:
+        on_owned_job("batch_bound", {"organization_id": org, "batch_id": batch_id,
+            "owned_flow_instance_ids": [selected_flow_instance_id],
+            "standalone_companion_execution_id": companion_flow_id,
+            "jobs": [{field: job[field] for field in (
+                "id", "organization_id", "application_id", "flow_execution_id", "bureau_job_id")}
+                for job in observed.values()]})
     receipts = {}
     for source, sod in ((selected_source_job_id, selected_sod_sha256),
                         (companion_job, companion_sod)):
@@ -447,6 +505,11 @@ def exercise(
              and active.get("bureau_job_id") == companion_bureau
              and active.get("status") == "ACTIVE" and bool(active.get("completed_at")),
              "Companion activation did not persist")
+    if on_owned_job:
+        on_owned_job("companion_terminal", {"organization_id": org,
+            "id": companion_job, "application_id": companion_app,
+            "flow_execution_id": companion_flow_id, "bureau_job_id": companion_bureau,
+            "status": active["status"], "completed_at": active["completed_at"]})
     return mapping[selected_source_job_id], {
         "verified": True,
         "evidence": {

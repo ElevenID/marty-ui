@@ -1,11 +1,23 @@
 name: marty-selfhost-openbao
 
 services:
+  openbao-tls-init:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    entrypoint: ["/usr/local/bin/selfhost-tls-init"]
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
+        target: /bao/data
+    restart: "no"
+
   openbao:
-    image: quay.io/openbao/openbao:2
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
     command:
       - server
       - -config=/bao/config/openbao.hcl
+    depends_on:
+      openbao-tls-init:
+        condition: service_completed_successfully
     ports:
       - "127.0.0.1:${SELFHOST_OPENBAO_HOST_PORT:-18200}:8200"
     volumes:
@@ -14,23 +26,48 @@ services:
         target: /bao/data
       - ./docker/openbao-selfhost.hcl:/bao/config/openbao.hcl:ro
     healthcheck:
-      test: ["CMD-SHELL", "bao status -address=http://127.0.0.1:8200 >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "bao status -address=https://127.0.0.1:8200 -ca-cert=/bao/data/tls/ca.crt >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
     restart: unless-stopped
 
+  openbao-unseal:
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    entrypoint: ["/usr/local/bin/selfhost-unseal"]
+    environment:
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/data/tls/ca.crt
+      BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
+    volumes:
+      - type: bind
+        source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
+        target: /bao/data
+        read_only: true
+    depends_on:
+      openbao:
+        condition: service_started
+    restart: unless-stopped
+
   openbao-bootstrap:
-    image: quay.io/openbao/openbao:2
+    image: ${MARTY_OPENBAO_DIDCOMM_IMAGE:?set MARTY_OPENBAO_DIDCOMM_IMAGE to the reviewed plugin image digest}
+    profiles: ["kms-init"]
     entrypoint: ["/bin/sh", "/scripts/openbao-selfhost-init.sh"]
     environment:
-      BAO_ADDR: http://openbao:8200
+      BAO_ADDR: https://openbao:8200
+      BAO_CACERT: /bao/data/tls/ca.crt
       BAO_INIT_FILE: /bao/data/selfhost-init.json
       BAO_ROOT_TOKEN_FILE: /bao/data/root.token
       BAO_UNSEAL_KEY_FILE: /bao/data/unseal.key
       BAO_SERVICE_TOKEN_FILE: /bao/runtime/openbao_service_token
+      BAO_BOOTSTRAP_TOKEN_FILE: /bao/runtime/openbao_bootstrap_token
+      BAO_SIGNING_KEYS_TOKEN_FILE: /bao/runtime/signing_keys_openbao_token
+      BAO_DIDCOMM_ISSUANCE_TOKEN_FILE: /bao/runtime/didcomm_issuance_openbao_token
       BAO_NOTIFICATION_TOKEN_FILE: /bao/runtime/notification_openbao_token
+      BAO_HAIP_TOKEN_FILE: /bao/runtime/haip_kms_token
+      BAO_HAIP_POLICY_FILE: /scripts/openbao-haip-workload-policy.hcl
+      DIDCOMM_KMS_PLUGIN_REQUIRED: "true"
     volumes:
       - type: bind
         source: ${SELFHOST_OPENBAO_STATE_DIR:-../marty-selfhost-prod/openbao/state}
@@ -39,6 +76,7 @@ services:
         source: ${SELFHOST_SECRET_DIR:-./docker/secrets/selfhost.example}
         target: /bao/runtime
       - ./docker/openbao-init.sh:/scripts/openbao-init.sh:ro
+      - ./docker/openbao-haip-workload-policy.hcl:/scripts/openbao-haip-workload-policy.hcl:ro
       - ./docker/openbao-selfhost-init.sh:/scripts/openbao-selfhost-init.sh:ro
     depends_on:
       openbao:

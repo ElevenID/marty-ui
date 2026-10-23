@@ -22,6 +22,7 @@ const SOURCES: &[&str] = &[
 const READY: &str = "auth,organizations,credential-templates,trust-profiles,presentation-policies,deployment-profiles,signing-keys,flows,issuance,issuance-native";
 const DATABASE_TEMPLATE: &str =
     "postgresql+asyncpg://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty";
+const RUST_DATABASE_TEMPLATE: &str = "postgresql://marty:$${MARTY_DB_PASSWORD}@postgres:5432/marty";
 
 #[track_caller]
 fn require(value: bool) -> Result<()> {
@@ -150,19 +151,19 @@ const MAPPINGS: &[(&str, &str, Role, &str)] = &[
         "issuance-native",
         "ORG_GRPC_TARGET",
         Role::OrganizationGrpc,
-        "organization:9002",
+        "https://organization:9002",
     ),
     (
         "issuance-native",
         "CT_GRPC_TARGET",
         Role::TemplateGrpc,
-        "credential-template:9003",
+        "https://credential-template:9003",
     ),
     (
         "issuance-native",
         "RP_GRPC_TARGET",
         Role::RevocationGrpc,
-        "revocation-profile:9013",
+        "https://revocation-profile:9013",
     ),
     (
         "issuance-native",
@@ -272,36 +273,41 @@ const MAPPINGS: &[(&str, &str, Role, &str)] = &[
         Role::SigningHttp,
         "http://signing-keys:8017",
     ),
-    ("gateway", "AUTH_GRPC_TARGET", Role::AuthGrpc, "auth:9001"),
+    (
+        "gateway",
+        "AUTH_GRPC_TARGET",
+        Role::AuthGrpc,
+        "https://auth:9001",
+    ),
     (
         "gateway",
         "ORG_GRPC_TARGET",
         Role::OrganizationGrpc,
-        "organization:9002",
+        "https://organization:9002",
     ),
     (
         "flow",
         "ORG_GRPC_TARGET",
         Role::OrganizationGrpc,
-        "organization:9002",
+        "https://organization:9002",
     ),
     (
         "flow",
         "PP_GRPC_TARGET",
         Role::PolicyGrpc,
-        "presentation-policy:9009",
+        "https://presentation-policy:9009",
     ),
     (
         "flow",
         "CT_GRPC_TARGET",
         Role::TemplateGrpc,
-        "credential-template:9003",
+        "https://credential-template:9003",
     ),
     (
         "flow",
         "ISSUANCE_GRPC_TARGET",
         Role::NativeGrpc,
-        "issuance-native:9005",
+        "https://issuance-native:9005",
     ),
     (
         "flow",
@@ -335,22 +341,40 @@ const MAPPINGS: &[(&str, &str, Role, &str)] = &[
     ),
 ];
 
-fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
+pub(super) fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
     match owner {
         "issuance-native" => [
             "marty_db_password",
             "issuance_api_key",
-            "integration_secret_master_key",
+            "signing_keys_issuer_sign_key",
+            "signing_keys_integration_secret_key",
+            "didcomm_issuance_openbao_token",
+            "sign_grant_mint_issuance_credential_token",
+            "sign_grant_mint_issuance_canvas_token",
+            "sign_grant_mint_issuance_readiness_token",
+            "sign_grant_mint_issuance_passport_token",
             "token_hmac_key",
             "canvas_credentials_shared_secret",
             "grpc_service_token",
+            "workload_identity_ca_cert",
+            "issuance_workload_server_cert",
+            "openbao_tls_ca_cert",
+            "issuance_tls_kms_token",
         ]
         .into_iter()
         .collect(),
         "gateway" => [
             "issuance_api_key",
-            "openbao_service_token",
+            "signing_keys_service_sign_gateway_key",
+            "sign_grant_mint_gateway_service_token",
+            "sign_grant_mint_gateway_issuer_did_token",
+            "signing_keys_issuer_sign_key",
             "grpc_service_token",
+            "device_registration_gateway_key",
+            "workload_identity_ca_cert",
+            "gateway_workload_client_cert",
+            "gateway_tls_kms_token",
+            "openbao_tls_ca_cert",
         ]
         .into_iter()
         .collect(),
@@ -358,13 +382,16 @@ fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
             "marty_db_password",
             "grpc_service_token",
             "flow_workload_client_cert",
-            "flow_workload_client_key",
+            "flow_client_tls_kms_token",
             "flow_workload_server_cert",
-            "flow_workload_server_key",
+            "flow_server_tls_kms_token",
+            "openbao_tls_ca_cert",
             "workload_identity_ca_cert",
             "flow_webhook_secret",
             "flow_application_event_hmac_key",
             "issuance_api_key",
+            "signing_keys_issuer_sign_key",
+            "sign_grant_mint_flow_wallet_token",
         ]
         .into_iter()
         .collect(),
@@ -372,22 +399,58 @@ fn expected_secrets(owner: &str) -> BTreeSet<&'static str> {
     }
 }
 
-fn secret_field(key: &str) -> Result<&'static str> {
+fn secret_field(owner: &str, key: &str) -> Result<&'static str> {
     match key {
         "MARTY_DB_PASSWORD_FILE" => Ok("marty_db_password"),
         "GRPC_SERVICE_TOKEN_FILE" => Ok("grpc_service_token"),
+        "DEVICE_REGISTRATION_GATEWAY_KEY_FILE" => Ok("device_registration_gateway_key"),
         "ISSUANCE_API_KEY_FILE" | "SIGNING_KEYS_INTERNAL_API_KEY_FILE" => Ok("issuance_api_key"),
-        "INTEGRATION_SECRET_MASTER_KEY_FILE" => Ok("integration_secret_master_key"),
+        "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY_FILE" => Ok("signing_keys_service_sign_gateway_key"),
+        "GATEWAY_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_gateway_service_token"),
+        "GATEWAY_ISSUER_CSR_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_gateway_issuer_did_token")
+        }
+        "FLOW_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_flow_wallet_token"),
+        "ISSUANCE_CREDENTIAL_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_credential_token")
+        }
+        "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE" => Ok("sign_grant_mint_issuance_canvas_token"),
+        "ISSUANCE_READINESS_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_readiness_token")
+        }
+        "ISSUANCE_PASSPORT_SIGN_GRANT_MINT_TOKEN_FILE" => {
+            Ok("sign_grant_mint_issuance_passport_token")
+        }
+        "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE" => Ok("signing_keys_issuer_sign_key"),
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE" => Ok("signing_keys_integration_secret_key"),
+        "DIDCOMM_KMS_TOKEN_FILE" => Ok("didcomm_issuance_openbao_token"),
+        "DIDCOMM_KMS_CA_CERT_FILE" | "BAO_CACERT" => Ok("openbao_tls_ca_cert"),
+        "INTEGRATION_SECRET_KMS_CA_FILE" => Ok("workload_identity_ca_cert"),
         "TOKEN_HMAC_KEY_FILE" => Ok("token_hmac_key"),
         "CANVAS_CREDENTIALS_SHARED_SECRET_FILE" => Ok("canvas_credentials_shared_secret"),
         "BAO_TOKEN_FILE" => Ok("openbao_service_token"),
         "FLOW_WEBHOOK_SECRET_FILE" => Ok("flow_webhook_secret"),
         "FLOW_APPLICATION_EVENT_HMAC_KEY_FILE" => Ok("flow_application_event_hmac_key"),
+        "GRPC_WORKLOAD_TLS_CLIENT_CERT" if owner == "gateway" => Ok("gateway_workload_client_cert"),
         "GRPC_WORKLOAD_TLS_CLIENT_CERT" => Ok("flow_workload_client_cert"),
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY" => Ok("flow_workload_client_key"),
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT" | "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT" => {
+            Ok("openbao_tls_ca_cert")
+        }
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE" if owner == "gateway" => {
+            Ok("gateway_tls_kms_token")
+        }
+        "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE" => Ok("flow_client_tls_kms_token"),
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE" if owner == "issuance-native" => {
+            Ok("issuance_tls_kms_token")
+        }
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE" => Ok("flow_server_tls_kms_token"),
+        "GRPC_WORKLOAD_TLS_SERVER_CERT" if owner == "issuance-native" => {
+            Ok("issuance_workload_server_cert")
+        }
         "GRPC_WORKLOAD_TLS_SERVER_CERT" => Ok("flow_workload_server_cert"),
-        "GRPC_WORKLOAD_TLS_SERVER_KEY" => Ok("flow_workload_server_key"),
         "GRPC_WORKLOAD_TLS_CA_CERT" => Ok("workload_identity_ca_cert"),
+        "GRPC_TLS_CA_CERT" => Ok("workload_identity_ca_cert"),
+        "ORG_GRPC_CA_CERT" | "ES_GRPC_CA_CERT" => Ok("workload_identity_ca_cert"),
         _ => Err(ERROR),
     }
 }
@@ -453,10 +516,15 @@ impl ClosedSelfhostModel {
             for raw in [
                 "ISSUANCE_API_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
+                "SIGNING_KEYS_INTEGRATION_SECRET_KEY",
                 "GRPC_SERVICE_TOKEN",
+                "DEVICE_REGISTRATION_GATEWAY_KEY",
                 "MARTY_DB_PASSWORD",
                 "DATABASE_URL",
                 "INTEGRATION_SECRET_MASTER_KEY",
+                "INTEGRATION_SECRET_MASTER_KEY_FILE",
                 "TOKEN_HMAC_KEY",
             ] {
                 require(!environment.contains_key(raw))?;
@@ -487,9 +555,15 @@ impl ClosedSelfhostModel {
                 if key == "PASSPORT_TENANT_API_KEYS_FILE" {
                     continue;
                 }
-                if key.ends_with("_FILE") || key.starts_with("GRPC_WORKLOAD_TLS_") {
+                if key == "BAO_CACERT"
+                    || key.ends_with("_FILE")
+                    || key.ends_with("_CERT")
+                        && (key.starts_with("GRPC_WORKLOAD_TLS_")
+                            || key == "GRPC_TLS_CA_CERT"
+                            || key == "ORG_GRPC_CA_CERT")
+                {
                     let source = text(value)?.strip_prefix("/run/secrets/").ok_or(ERROR)?;
-                    require(mounts.contains(source) && source == secret_field(key)?)?;
+                    require(mounts.contains(source) && source == secret_field(owner, key)?)?;
                 }
             }
         }
@@ -504,22 +578,40 @@ impl ClosedSelfhostModel {
                 && native["command"] == json!([]),
         )?;
         require(native["environment"]["DIDCOMM_ALLOW_PRIVATE_IPS"] == "false")?;
+        require(native["environment"]["DIDCOMM_KMS_ADDR"] == "https://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_ADDR"] == "https://openbao.invalid:8200")?;
+        require(native["environment"]["BAO_CACERT"] == "/run/secrets/openbao_tls_ca_cert")?;
         require(
-            !object(&native["environment"])?
-                .keys()
-                .any(|key| key.starts_with("BAO_") || key.starts_with("OPENBAO_")),
+            native["environment"]["DIDCOMM_KMS_CA_CERT_FILE"] == "/run/secrets/openbao_tls_ca_cert",
         )?;
+        require(
+            native["environment"]["DIDCOMM_KMS_TOKEN_FILE"]
+                == "/run/secrets/didcomm_issuance_openbao_token",
+        )?;
+        require(!object(&native["environment"])?.keys().any(|key| {
+            (key.starts_with("BAO_") && key != "BAO_ADDR" && key != "BAO_CACERT")
+                || key.starts_with("OPENBAO_")
+        }))?;
         require(services["gateway"]["environment"]["GATEWAY_REQUIRED_READY_SERVICES"] == READY)?;
         require(services["gateway"]["environment"]["REDIS_DB_GATEWAY"] == "2")?;
         require(services["flow"]["environment"]["REDIS_DB_FLOW"] == "3")?;
-        for owner in ["issuance-native", "flow"] {
-            require(services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == DATABASE_TEMPLATE)?;
+        for (owner, expected, anchor) in [
+            (
+                "issuance-native",
+                RUST_DATABASE_TEMPLATE,
+                "x-database-url-sync-template",
+            ),
+            ("flow", DATABASE_TEMPLATE, "x-database-url-template"),
+        ] {
+            require(services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == expected)?;
             require(
-                services[owner]["environment"]["DATABASE_URL_TEMPLATE"]
-                    == self.full_model["x-database-url-template"],
+                services[owner]["environment"]["DATABASE_URL_TEMPLATE"] == self.full_model[anchor],
             )?;
         }
         for (owner, key, _, original) in MAPPINGS {
+            if services[*owner]["environment"][*key] != *original {
+                eprintln!("Closed model target differs for {owner}.{key}");
+            }
             require(services[*owner]["environment"][*key] == *original)?;
         }
         Ok(())
@@ -538,21 +630,28 @@ impl ClosedSelfhostModel {
                     .map_err(|_| ERROR)?;
             for (_, key, role, original) in MAPPINGS.iter().filter(|(service, ..)| service == owner)
             {
-                let target = if original.starts_with("http://") {
+                let target = if original.starts_with("http://") || original.starts_with("https://")
+                {
+                    let scheme = if original.starts_with("https://") {
+                        "https"
+                    } else {
+                        "http"
+                    };
                     let path = original
                         .trim_start_matches("http://")
+                        .trim_start_matches("https://")
                         .split_once('/')
                         .map_or("".into(), |(_, path)| format!("/{path}"));
-                    format!("http://127.0.0.1:{}{path}", endpoints.port(*role))
+                    format!("{scheme}://127.0.0.1:{}{path}", endpoints.port(*role))
                 } else {
                     format!("127.0.0.1:{}", endpoints.port(*role))
                 };
                 environment.insert((*key).into(), target);
             }
-            require(environment["ES_GRPC_TARGET"] == "event-stream:9015")?;
+            require(environment["ES_GRPC_TARGET"] == "https://event-stream:9015")?;
             environment.insert(
                 "ES_GRPC_TARGET".into(),
-                format!("127.0.0.1:{}", endpoints.port(Role::EventGrpc)),
+                format!("https://127.0.0.1:{}", endpoints.port(Role::EventGrpc)),
             );
             if *owner != "gateway" {
                 let prefix = environment["DATABASE_URL_TEMPLATE"]
@@ -565,7 +664,7 @@ impl ClosedSelfhostModel {
                 environment.insert("DATABASE_URL_TEMPLATE".into(), mapped);
             }
             if *owner != "issuance-native" {
-                require(environment["REDIS_URL"] == "redis://redis:6379")?;
+                require(environment["REDIS_URL"] == "unix:///run/marty-redis/redis.sock")?;
                 environment.insert(
                     "REDIS_URL".into(),
                     format!("redis://127.0.0.1:{}", endpoints.port(Role::Redis)),
@@ -707,6 +806,11 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     let env_file = owned.path().join("synthetic.env");
     let mut inputs: BTreeMap<String, String> = [
         ("SELFHOST_IMAGE_TAG", "synthetic-immutable-v1"),
+        ("PUBLIC_DOMAIN", "issuer.example"),
+        ("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001"),
+        ("BAO_ADDR", "https://openbao.invalid:8200"),
+        ("KEYCLOAK_KMS_ADDR", "https://openbao.invalid:8200"),
+        ("KEYCLOAK_KMS_KEY_VERSION", "1"),
         ("KEYCLOAK_SOCIAL_LOGIN_ENABLED", "false"),
         ("CORS_ORIGINS", "https://issuer.example"),
         (
@@ -728,9 +832,44 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     .into_iter()
     .map(|(key, value)| (key.into(), value.into()))
     .collect();
+    for name in [
+        "SIGNING_KEYS",
+        "ORG",
+        "ES",
+        "NOTIFICATION",
+        "RP",
+        "CT",
+        "PP",
+        "FLOW_CLIENT",
+        "FLOW_SERVER",
+        "AUTH",
+        "AUTH_SERVER",
+        "GATEWAY",
+        "ISSUANCE",
+        "VERIFICATION",
+        "DEPLOYMENT_PROFILE",
+        "COMPLIANCE_PROFILE",
+    ] {
+        inputs.insert(
+            format!("{name}_TLS_KMS_ADDR"),
+            "https://openbao.invalid:8200".into(),
+        );
+        inputs.insert(
+            format!("{name}_TLS_KMS_KEY_NAME"),
+            format!(
+                "workload-tls-{}",
+                name.to_ascii_lowercase().replace('_', "-")
+            ),
+        );
+        inputs.insert(format!("{name}_TLS_KMS_KEY_VERSION"), "1".into());
+    }
     inputs.insert(
         "MARTY_ISSUANCE_IMAGE".into(),
         format!("synthetic.invalid/issuance@sha256:{}", "a".repeat(64)),
+    );
+    inputs.insert(
+        "MARTY_KEYCLOAK_KMS_IMAGE".into(),
+        format!("synthetic.invalid/keycloak@sha256:{}", "b".repeat(64)),
     );
     inputs.insert(
         "SELFHOST_SECRET_DIR".into(),
@@ -832,8 +971,9 @@ pub(super) fn prepare(repo: &Path, extracted: &Path) -> PreparedCompose {
     }
 }
 
-#[test]
-fn prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
+// Acceptance reuses the fixture; the bundle test owns its cleanup control.
+#[allow(dead_code)]
+pub(super) fn assert_prepared_inputs_survive_child_unwind_until_parent_removes_scratch() {
     // Cleanup-only owner control: this intentionally does not qualify a model.
     let parent = tempfile::tempdir().unwrap();
     let owned = tempfile::tempdir_in(parent.path()).unwrap();
@@ -877,7 +1017,7 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
     assert!(prepared.directory().is_dir());
     assert_eq!(
         prepared.raw_model()["services"]["issuance-native"]["environment"]["DATABASE_URL_TEMPLATE"],
-        DATABASE_TEMPLATE
+        RUST_DATABASE_TEMPLATE
     );
     let endpoints = OwnedEndpoints(
         ROLES
@@ -936,11 +1076,14 @@ pub(super) fn qualify(repo: &Path, extracted: &Path) {
             }
         }
     }
-    for owner in ["issuance-native", "flow"] {
+    for (owner, scheme) in [
+        ("issuance-native", "postgresql"),
+        ("flow", "postgresql+asyncpg"),
+    ] {
         assert_eq!(
             mapped.environments[owner]["DATABASE_URL_TEMPLATE"],
             format!(
-                "postgresql+asyncpg://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
+                "{scheme}://marty:$${{MARTY_DB_PASSWORD}}@127.0.0.1:{}/marty",
                 endpoints.port(Role::Database)
             )
         );
@@ -1084,6 +1227,10 @@ fn negative_controls(
             json!("/run/secrets/token_hmac_key"),
         ),
         (
+            "/services/gateway/environment/DEVICE_REGISTRATION_GATEWAY_KEY_FILE",
+            json!("/run/secrets/grpc_service_token"),
+        ),
+        (
             "/services/issuance/environment/BAO_ADDR",
             json!("changed-unselected-sibling"),
         ),
@@ -1117,6 +1264,10 @@ fn negative_controls(
     }
     let mut changed = model.full_model.clone();
     changed["services"]["issuance-native"]["environment"]["ISSUANCE_API_KEY"] =
+        json!("raw-must-not-hide-file");
+    assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
+    let mut changed = model.full_model.clone();
+    changed["services"]["gateway"]["environment"]["DEVICE_REGISTRATION_GATEWAY_KEY"] =
         json!("raw-must-not-hide-file");
     assert!(ClosedSelfhostModel::from_rendered(&changed, changed.clone(), directory).is_err());
 }

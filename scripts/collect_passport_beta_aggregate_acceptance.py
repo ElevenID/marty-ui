@@ -20,6 +20,7 @@ try:
     from .prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
     from .prepare_passport_beta_aggregate_handoff import verify_fence
     from .probe_passport_beta_host import beta_psql, ids, run as host_run
+    from .qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
 except ImportError:
     from check_passport_beta_fence_authority import (
         manifest_source, verify_issuance_attestation,
@@ -33,6 +34,7 @@ except ImportError:
     from prepare_passport_beta_aggregate_compose import SIGNED_APPLICATIONS, INGRESS
     from prepare_passport_beta_aggregate_handoff import verify_fence
     from probe_passport_beta_host import beta_psql, ids, run as host_run
+    from qualify_selfhost_migrations import PRIVATE_KEY_SCHEMA_QUERY
 
 
 SHA = re.compile(r"[0-9a-f]{40}\Z")
@@ -41,6 +43,14 @@ CONTAINER = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUNTIME_KEYS = {"container_id", "image_id", "configured_image", "started_at",
                 "config_hash", "networks"}
+ISSUANCE_MIGRATION_VERSIONS = sorted((
+    "issuance_service_baseline_v1",
+    "0001_oid4vci_public_protocol",
+    "0002_physical_document_jobs", "0003_passport_bureau_provider_binding",
+    "0004_passport_submission_intent", "0005_passport_submission_provenance",
+    "0006_passport_beta_batch_identity", "0007_passport_beta_batch_provenance",
+    "0008_passport_beta_batch_wire_evidence",
+))
 
 
 def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
@@ -56,6 +66,16 @@ def _probe_native_marker(plan: dict[str, Any], intent: dict[str, Any]) -> None:
                 f"{plan['migration_set_sha256']}|true|false")
     require(beta_psql(sql, host_run, plan["postgres_container_id"]) == expected,
             "Aggregate beta native migration marker or role state differs")
+    ledger = beta_psql(
+        "SELECT string_agg(version, ',' ORDER BY version) "
+        "FROM issuance_service.rust_schema_migrations",
+        host_run, plan["postgres_container_id"],
+    )
+    require(ledger == ",".join(ISSUANCE_MIGRATION_VERSIONS),
+            "Aggregate beta Rust issuance migration ledger differs")
+    require(not beta_psql(PRIVATE_KEY_SCHEMA_QUERY, host_run,
+                          plan["postgres_container_id"]),
+            "Aggregate beta database contains private-key storage")
     verify_fence(intent, host_run)
 
 
@@ -207,12 +227,100 @@ def collect_aggregate(
             and isinstance(plan.get("production_attachments_sha256"), str)
             and SHA256.fullmatch(plan["production_attachments_sha256"]) is not None,
             "Aggregate beta receipt, plan or source differs")
+    migration_path = artifact_dir / "aggregate-deployment.json.issuance-migration.json"
+    migration = read_json(migration_path)
+    require(receipt.get("issuance_migration_receipt_sha256")
+                == digest_file(migration_path).removeprefix("sha256:")
+            and migration.get("schema") == "marty.passport-beta-issuance-migration/v1"
+            and migration.get("source_commit") == source
+            and migration.get("services_image") == plan.get("services_image")
+            and migration.get("postgres_container_id")
+                == plan.get("postgres_container_id")
+            and migration.get("versions") == ISSUANCE_MIGRATION_VERSIONS,
+            "Aggregate beta Rust issuance migration receipt differs")
+    dependency_path = artifact_dir / "aggregate-deployment.json.issuance-dependency.json"
+    dependency = read_json(dependency_path)
+    recorded_runtime = receipt.get("beta_runtime")
+    recorded_issuance = (recorded_runtime.get("issuance")
+                         if isinstance(recorded_runtime, dict) else None)
+    require(receipt.get("issuance_dependency_receipt_sha256")
+                == digest_file(dependency_path).removeprefix("sha256:")
+            and dependency.get("schema") == "marty.passport-beta-issuance-dependency/v1"
+            and dependency.get("verified") is True
+            and dependency.get("source_commit") == source
+            and dependency.get("services_image") == plan.get("services_image")
+            and dependency.get("postgres_container_id")
+                == plan.get("postgres_container_id")
+            and dependency.get("issuance_container_id")
+                == (recorded_issuance.get("container_id")
+                    if isinstance(recorded_issuance, dict) else None),
+            "Aggregate beta Rust issuance dependency receipt differs")
     require(attest is not None,
             "Aggregate beta acceptance requires signed release attestations")
     require(isinstance(api_key, str) and len(api_key) >= 32,
             "Aggregate beta acceptance requires a governed organization key")
+    ceremony_path = artifact_dir / "aggregate-deployment.json.issuer-ceremony.json"
+    ceremony = read_json(ceremony_path)
+    ceremony_intent_path = artifact_dir / "aggregate-deployment.json.issuer-ceremony-intent.json"
+    ceremony_intent = read_json(ceremony_intent_path)
+    runtime = receipt.get("beta_runtime")
+    gateway = runtime.get("gateway") if isinstance(runtime, dict) else None
+    require(receipt.get("issuer_ceremony_receipt_sha256")
+                == digest_file(ceremony_path).removeprefix("sha256:")
+            and receipt.get("issuer_ceremony") == ceremony
+            and ceremony.get("schema") == "marty.passport-beta-aggregate-ceremony/v1"
+            and ceremony.get("verified") is True
+            and ceremony.get("source_commit") == source
+            and ceremony.get("gateway_container_id")
+                == (gateway.get("container_id") if isinstance(gateway, dict) else None)
+            and ceremony.get("intent_file_sha256")
+                == digest_file(ceremony_intent_path).removeprefix("sha256:")
+            and ceremony_intent.get("schema")
+                == "marty.passport-beta-aggregate-ceremony-intent/v1"
+            and all(ceremony_intent.get(key) == ceremony.get(key)
+                    for key in ("source_commit", "gateway_container_id",
+                                "application_file_sha256", "issuer_chain_file_sha256",
+                                "ceremony_file_sha256"))
+            and ceremony.get("gateway_request_traces_verified") is True
+            and ceremony.get("profile_creation_verified") is True
+            and ceremony.get("certificate_chain_verified") is True
+            and all(isinstance(ceremony.get(name), str)
+                    and SHA256.fullmatch(ceremony[name]) is not None
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "ceremony_file_sha256", "csca_certificate_sha256",
+                                 "dsc_certificate_sha256")),
+            "Aggregate beta governed issuer ceremony differs from deployment")
+    kms_path = artifact_dir / "aggregate-deployment.json.kms-pretransition.json"
+    kms = read_json(kms_path)
+    key_versions = kms.get("key_versions")
+    signing_keys = runtime.get("signing-keys") if isinstance(runtime, dict) else None
+    require(receipt.get("kms_pretransition_receipt_sha256")
+                == digest_file(kms_path).removeprefix("sha256:")
+            and receipt.get("kms_pretransition") == kms
+            and kms.get("schema") == "marty.passport-beta-aggregate-kms-pretransition/v1"
+            and kms.get("verified") is True
+            and kms.get("source_commit") == source
+            and kms.get("signing_keys_container_id")
+                == (signing_keys.get("container_id") if isinstance(signing_keys, dict) else None)
+            and kms.get("openbao_container_id")
+                == plan.get("old_container_ids_by_service", {}).get("openbao")
+            and kms.get("managed_kms_custody_verified") is True
+            and kms.get("chain_verified") is True
+            and kms.get("private_key_exported") is False
+            and all(kms.get(name) == ceremony.get(name)
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "csca_certificate_sha256", "dsc_certificate_sha256"))
+            and all(isinstance(kms.get(name), str)
+                    and SHA256.fullmatch(kms[name]) is not None
+                    for name in ("application_file_sha256", "issuer_chain_file_sha256",
+                                 "csca_certificate_sha256", "dsc_certificate_sha256"))
+            and isinstance(key_versions, dict) and set(key_versions) == {"csca", "dsc"}
+            and all(type(version) is int and version > 0
+                    for version in key_versions.values()),
+            "Aggregate beta managed issuer proof differs from deployment")
     try:
-        signed = manifest_source(manifest_path, source, attest, attest_issuance)
+        signed = manifest_source(manifest_path, source, attest, attest_issuance,
+                                 rust_only=True)
     except (OSError, ValueError) as exc:
         raise EvidenceError("Aggregate signed release did not verify") from exc
     require(signed["manifest_sha256"] == plan["stack_manifest_sha256"]
@@ -278,7 +386,7 @@ def collect_aggregate(
     require(isinstance(hashes, dict) and recreate.issubset(runtime),
             "Aggregate beta signed application set is incomplete")
     for name in recreate:
-        image = plan["issuance_image"] if name == "issuance" else plan["services_image"]
+        image = plan["services_image"]
         require(observed[name]["oci_reference"] == image
                 and isinstance(hashes.get(name), str)
                 and SHA256.fullmatch(hashes[name]) is not None

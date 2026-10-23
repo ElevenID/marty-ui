@@ -13,6 +13,8 @@ from scripts.probe_passport_beta_host import HostProbeError
 
 UI_HEAD = "a" * 40
 DELETION_HEAD = "b" * 40
+DELETION_MERGE = "2" * 40
+MAIN_HEAD = "3" * 40
 ISSUANCE = "ghcr.io/elevenid/issuance@sha256:" + "c" * 64
 SERVICES = "ghcr.io/elevenid/services@sha256:" + "d" * 64
 UI = "ghcr.io/elevenid/ui@sha256:" + "1" * 64
@@ -27,6 +29,7 @@ def fixture(tmp_path: Path):
     target = {
         "schema": "marty.passport-beta-fence-target/v1",
         "authority": "discovery_only_requires_protected_baseline",
+        "docker": {"context": "default"},
         "observation_sha256": "e" * 64,
         "production_attachments_sha256": "f" * 64,
         "beta": {
@@ -45,22 +48,48 @@ def fixture(tmp_path: Path):
         "ui_image": UI,
         "services_image": SERVICES,
     }
-    deletion = {"state": "OPEN", "isDraft": True,
-                "headRefOid": DELETION_HEAD}
+    deletion = {"number": 305, "state": "closed", "merged": True,
+                "merged_at": "2026-10-08T00:00:00Z",
+                "merge_commit_sha": DELETION_MERGE,
+                "base": {"ref": "main", "repo": {
+                    "full_name": "ElevenID/marty-credentials"}},
+                "head": {"sha": DELETION_HEAD, "repo": {
+                    "full_name": "ElevenID/marty-credentials"}}}
     return manifest, target, signed, deletion
+
+
+def runner_for(deletion):
+    def runner(args):
+        if args[-1] == "repos/ElevenID/marty-credentials/pulls/305":
+            return json.dumps(deletion)
+        if args[-1] == "repos/ElevenID/marty-credentials/branches/main":
+            return json.dumps({"protected": True, "commit": {"sha": MAIN_HEAD}})
+        if args[-1].endswith(f"/compare/{DELETION_MERGE}...{MAIN_HEAD}"):
+            return json.dumps({"status": "ahead", "behind_by": 0,
+                               "merge_base_commit": {"sha": DELETION_MERGE}})
+        pytest.fail(f"Unexpected command: {args}")
+    return runner
 
 
 def test_prepare_binds_signed_live_target_and_deletion(tmp_path: Path) -> None:
     manifest, target, signed, deletion = fixture(tmp_path)
     result = prepare(
         manifest, observer=lambda: target,
-        runner=lambda _: json.dumps(deletion),
+        runner=runner_for(deletion),
         source=lambda path, head: signed if (path, head) == (manifest, UI_HEAD)
             else pytest.fail("Wrong signed baseline source"),
     )
     assert result["credentials_deletion_head"] == DELETION_HEAD
     assert result["observation_sha256"] == "e" * 64
     assert result["beta_baseline_source_commit"] == UI_HEAD
+
+
+def test_prepare_rejects_non_runner_docker_context(tmp_path: Path) -> None:
+    manifest, target, signed, deletion = fixture(tmp_path)
+    target["docker"]["context"] = "desktop-linux"
+    with pytest.raises(HostProbeError, match="protected passport runner Docker context"):
+        prepare(manifest, observer=lambda: target,
+                runner=runner_for(deletion), source=lambda *_: signed)
 
 
 @pytest.mark.parametrize("change", [
@@ -80,19 +109,20 @@ def test_prepare_rejects_changed_or_invalid_live_target(
     change(target)
     with pytest.raises(HostProbeError):
         prepare(manifest, observer=lambda: target,
-                runner=lambda _: json.dumps(deletion), source=lambda *_: signed)
+                runner=runner_for(deletion), source=lambda *_: signed)
 
 
 @pytest.mark.parametrize("change", [
-    lambda deletion: deletion.update(headRefOid="not-a-commit"),
-    lambda deletion: deletion.update(isDraft=False),
-    lambda deletion: deletion.update(state="MERGED"),
+    lambda deletion: deletion["head"].update(sha="not-a-commit"),
+    lambda deletion: deletion.update(merged=False),
+    lambda deletion: deletion.update(state="open"),
+    lambda deletion: deletion.update(merge_commit_sha="not-a-commit"),
 ])
 def test_prepare_rejects_changed_deletion_head(
     tmp_path: Path, change,
 ) -> None:
     manifest, target, signed, deletion = fixture(tmp_path)
     change(deletion)
-    with pytest.raises(HostProbeError, match="Python deletion PR"):
+    with pytest.raises(HostProbeError, match="Credentials passport deletion"):
         prepare(manifest, observer=lambda: target,
-                runner=lambda _: json.dumps(deletion), source=lambda *_: signed)
+                runner=runner_for(deletion), source=lambda *_: signed)

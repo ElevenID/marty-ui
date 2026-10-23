@@ -1,0 +1,87 @@
+# Post-deletion Rust passport beta cutover
+
+Historical handoff, superseded on 2026-10-16. The non-public beta and
+self-host installations are replaced with fresh KMS-only stacks; do not run
+this in-place fence or data-migration procedure. Follow the
+[installed KMS-only cutover](../keycloak-kms-installed-cutover.md) instead.
+
+The original handoff for the first Rust-only aggregate beta release follows.
+Run it from a clean checkout of the exact protected-main source behind the
+published signed stack manifest. Keep all receipts and operator session files
+outside the checkout. The target is `elevenid-beta`; production is a continuity
+check and is never a deployment target.
+
+1. Verify the published stack manifest, annotated tag, OCI digests, and the
+   merged Credentials Python deletion lineage. Record the source commit and
+   release run. The fence installer checks the signed release and approved
+   deployed beta baseline again before it changes beta.
+2. Run `scripts/install-passport-beta-fence.ps1` with the signed stack manifest,
+   approved beta baseline manifest, and a new absolute Windows receipt path.
+   It installs the passport-scoped write fence, verifies direct database write
+   rejection, and records the exact old beta and production generation.
+   If the 2026-10-10 v1.1.237 installation stopped after creating the host
+   intent markers, use the same installer from a newer signed protected-main
+   release with `-CompatiblePriorStackManifest` pointing to the signed
+   v1.1.237 manifest and `-PreinstallTargetFile` pointing to the saved approved
+   target observation. Run first with `-RecoveryPreflightOnly` to check the
+   signed source, intent markers, live target, and SQL verifier without writing
+   a receipt or changing markers. Then run without that switch. Recovery
+   verifies the existing fence and all write
+   probes without reinstalling SQL. The prior manifest proves SQL compatibility;
+   it does not independently prove which process installed the fence. Preserve
+   the pending markers until recovery completes and writes its receipt.
+   The v1.1.240 fence recovery completed, but its first readiness workflow run
+   wrote an artifact into the protected checkout before checking source
+   cleanliness. The signed v1.1.241 release passed qualification, but the
+   read-only fence rebind exposed `psql` status lines before its JSON result.
+   The signed v1.1.242 and v1.1.243 releases were rebound to the live fence,
+   then protected main advanced before maintenance. Rebind the current host
+   record from its v1.1.243 receipt to the next signed source: supply that receipt,
+   its signed v1.1.243 manifest, the new signed manifest, approved beta
+   baseline, saved preinstallation target, and a fresh private output path.
+   The operator checks signed receipt lineage, unchanged SQL and the live
+   fence, repeats rollback-only direct write probes, preserves earlier
+   rebind evidence, and atomically replaces only the host receipt record.
+   Preserve every prior receipt and host-record backup. Use the latest receipt
+   in every subsequent step.
+3. Dispatch `passport-beta-rust-readiness.yml` on the exact annotated release
+   tag (`gh workflow run passport-beta-rust-readiness.yml --ref v1.1.248`) with
+   the merged `marty-credentials` PR #305 head and the fenced receipt's WSL
+   path. Download its three artifacts: the exact fence installation receipt,
+   fresh cutover snapshot, and Rust readiness report. Keep their bytes intact.
+   This producer checks zero passport jobs and active physical Flows on the
+   current beta. A read-only query on 2026-10-09 found zero rows in
+   `issuance_service.physical_document_jobs`. This is a fail-closed check of
+   that observed beta state, with no drain operation or wait. If records appear
+   before fencing, prove each record is readable by Rust before changing the
+   gate. The workflow does not require an obsolete predeletion run.
+4. Pass those artifact paths to `scripts/start-passport-beta-db-maintenance.ps1`
+   as `-FenceReceipt`, `-CutoverSnapshot`, and `-CutoverReport`, together with
+   the signed stack manifest. The operator verifies the protected run, artifact
+   attestations, source, fence, old writer, current Docker and database identity,
+   and unchanged production before stopping old beta applications. Retain the
+   maintenance receipt and adjacent durable intent.
+5. Run `scripts/run-passport-beta-native-db-gates.ps1` with the same stack and
+   fence receipt, the maintenance receipt, and a new native receipt path. It
+   rechecks the sealed readiness inputs and stopped generation before native
+   migrations. The aggregate operator consumes these three receipts.
+6. Run `scripts/run-passport-beta-aggregate-deploy.ps1` once with the signed
+   manifest, fence, maintenance, and native receipts; the private application
+   and Flow output paths; selected issuer chain and ceremony files; distinct
+   CSCA and DSC operator sessions; and the governed Flow session. It creates
+   managed issuer profiles and the Marty CSCA/DSC chain through the staged
+   Gateway and KMS, proves the chain, then switches to the signed Rust owner.
+   The aggregate receipt must bind the source, service images, references,
+   native migration, KMS proof, and production postflight.
+7. Dispatch preliminary recording, D-12 publication, soak samples, and final
+   acceptance on that same release tag. Complete public beta Flow, passport
+   lifecycle, recording and YouTube evidence, and the uninterrupted beta soak
+   against the same release and
+   aggregate receipt. Accept only the source-bound protected evidence. A failed
+   cutover retains its pending marker and separate production postflight;
+   resolve that state before another attempt.
+
+The older predeletion producer and Python deletion cutover workflow are
+historical evidence paths. Their run IDs are not inputs to this post-deletion
+release. The new readiness gate still fails closed if the live beta has an
+unproven passport job, incompatible artifact, or active physical Flow.

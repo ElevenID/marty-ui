@@ -1,5 +1,13 @@
 # DIDComm consumer retirement gates
 
+This document preserves historical migration audits and their unclosed runtime
+requirements. Python issuance source and its one-time Credentials image gates
+are now retired; descriptions below of retained Python routes or a pending
+0.1.78 image release apply to the cited historical checkpoints. They are not
+current deployment instructions. See [issuance regression ownership](../issuance-contract-ownership.md)
+for the maintained native checks and retired receipt reference. Source retirement
+does not close KMS, transport, provider or deployed acceptance requirements.
+
 Source audit: UI `79b2e3645`, Credentials protected main `ddd6b4e4383fe1000e3255f3e4237dc5b6020a2a`.
 This is a source inventory, not deployed configuration or acceptance evidence.
 DIDComm KMS corrections remain deferred. Production is unchanged.
@@ -106,11 +114,14 @@ specific overlays; it does not restore full Python ownership now that the base
 composition is native.
 
 Beta and conformance share `docker-compose.service.issuance-native.yml` at the
-repository root. The former beta definition is frozen at `cb1a01656703896ce552bff42c140f154a97026a`
-in `tests/fixtures/issuance-native-compose-before-extraction.yml`. Full rendered
-beta equality covers unset, empty and custom optional values, including exact
-required-variable failure text (Compose's map/list diagnostic location is not
-part of that behavior). The service file is required alongside the Compose files
+repository root. The current-model Compose gate pins the complete shared native
+service in `tests/fixtures/issuance-native-compose-kms-only.yml`. It checks
+reviewed shared inputs, native custody exclusions, unset/empty/custom optional
+values, and missing
+required-variable failures. It also checks native conformance selection against
+the current base composition. The historical pre-extraction beta fixture was
+retired because it contained the raw integration-secret master-key input. The
+service file is required alongside the Compose files
 in the source checkout; it is not a runtime bind asset and must not be copied
 into the self-host runtime-asset directory. Existing beta deployment uses its
 source-verified full checkout. Self-host release bundle selection is unchanged.

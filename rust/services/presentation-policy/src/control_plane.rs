@@ -1,8 +1,11 @@
-use std::{collections::BTreeSet, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, path::Path, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use marty_verification::credential_format::DetectedCredentialFormat;
+use mmf_platform::{
+    GrpcChannelConfig, GrpcChannelFactory, GrpcTlsMaterial, GrpcTransportSecurity, GrpcTrustMode,
+};
 use reqwest::{Client, StatusCode};
 use serde_json::{Map, Value};
 use tonic::{
@@ -64,7 +67,64 @@ impl NativePresentationControlPlane {
         if timeout.is_zero() {
             return Err(failed("dependency timeout must be positive"));
         }
-        let organizations = OrganizationServiceClient::new(channel(organization_target, timeout)?);
+        Self::from_channel(
+            channel(organization_target, timeout)?,
+            trust_profile_url,
+            status_url_template,
+            service_token,
+            issuance_api_key,
+            timeout,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn connect_with_ca(
+        organization_target: &str,
+        ca_certificate: &Path,
+        trust_profile_url: &str,
+        status_url_template: &str,
+        service_token: Option<&str>,
+        issuance_api_key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, PresentationVerificationError> {
+        if !organization_target.starts_with("https://") || timeout.is_zero() {
+            return Err(failed("Organization TLS target or timeout is invalid"));
+        }
+        let channel = GrpcChannelFactory::new(
+            GrpcChannelConfig {
+                target: organization_target.into(),
+                security: GrpcTransportSecurity::ServerTls,
+                trust: GrpcTrustMode::CustomCa,
+                connect_timeout_ms: timeout.as_millis() as u64,
+                request_timeout_ms: timeout.as_millis() as u64,
+                ..GrpcChannelConfig::default()
+            },
+            GrpcTlsMaterial::from_ca_pem_file(Some(ca_certificate))
+                .map_err(|_| failed("Organization TLS CA is invalid"))?,
+        )
+        .map_err(|_| failed("Organization TLS configuration is invalid"))?
+        .connect()
+        .await
+        .map_err(|_| failed("Organization TLS connection is unavailable"))?;
+        Self::from_channel(
+            channel,
+            trust_profile_url,
+            status_url_template,
+            service_token,
+            issuance_api_key,
+            timeout,
+        )
+    }
+
+    fn from_channel(
+        channel: Channel,
+        trust_profile_url: &str,
+        status_url_template: &str,
+        service_token: Option<&str>,
+        issuance_api_key: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, PresentationVerificationError> {
+        let organizations = OrganizationServiceClient::new(channel);
         let service_token_metadata = service_token
             .map(str::parse)
             .transpose()
@@ -116,7 +176,7 @@ impl NativePresentationControlPlane {
                     Code::NotFound | Code::InvalidArgument | Code::Unknown
                 ) =>
             {
-                return Err("membership required".into())
+                return Err("membership required".into());
             }
             Err(_) => return Err("organization membership service unavailable".into()),
         };
@@ -147,13 +207,8 @@ impl PolicyAuthorization for NativePresentationControlPlane {
         action: &'static str,
     ) -> Result<(), String> {
         let member = self.membership(principal_id, organization_id).await?;
-        let permission = match action {
-            "view" | "evaluate" => "presentation-policy:view",
-            "create" => "presentation-policy:create",
-            "edit" | "activate" | "suspend" | "version" => "presentation-policy:edit",
-            "delete" => "presentation-policy:delete",
-            _ => return Err("unsupported presentation-policy action".into()),
-        };
+        let permission = crate::application::action_permission(action)
+            .ok_or_else(|| "unsupported presentation-policy action".to_owned())?;
         if member.is_owner
             || member.has_org_console_access
             || member.permissions.iter().any(|value| value == permission)

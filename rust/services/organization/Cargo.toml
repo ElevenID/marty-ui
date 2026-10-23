@@ -9,12 +9,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 mmf-data.workspace = true
 mmf-core.workspace = true
 mmf-messaging.workspace = true
+mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
 prost.workspace = true

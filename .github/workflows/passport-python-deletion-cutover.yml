@@ -4,10 +4,10 @@ on:
   workflow_dispatch:
     inputs:
       predeletion_acceptance_run_id:
-        description: Successful protected KMS Rust predeletion acceptance run.
+        description: Successful protected KMS Rust acceptance before beta deployment.
         required: true
       deletion_head:
-        description: "Exact open marty-credentials #305 deletion head."
+        description: "Exact merged marty-credentials #305 deletion head."
         required: true
       fence_installation_receipt:
         description: Absolute WSL path to the protected beta fence installation receipt.

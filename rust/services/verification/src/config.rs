@@ -208,10 +208,17 @@ impl VerificationServiceConfig {
         if environment.is_deployed() && redis_url.is_none() {
             return Err(VerificationConfigError::Missing { name: "REDIS_URL" });
         }
-        if redis_url
-            .as_deref()
-            .is_some_and(|url| !(url.starts_with("redis://") || url.starts_with("rediss://")))
-        {
+        if redis_url.as_deref().is_some_and(|url| {
+            !Url::parse(url).is_ok_and(|parsed| match parsed.scheme() {
+                "redis" | "rediss" => parsed.host_str().is_some() && parsed.fragment().is_none(),
+                "unix" => {
+                    parsed.host_str().is_none()
+                        && parsed.path().starts_with('/')
+                        && parsed.fragment().is_none()
+                }
+                _ => false,
+            })
+        }) {
             return Err(invalid("REDIS_URL"));
         }
         let workload_tls = workload_tls(&values, environment)?;
@@ -311,6 +318,30 @@ impl VerificationServiceConfig {
             1,
             120,
         )?;
+        let organization_target = value(&values, "ORG_GRPC_TARGET")
+            .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
+            .unwrap_or("organization:9002");
+        let credential_template_target =
+            value(&values, "CT_GRPC_TARGET").unwrap_or("credential-template:9003");
+        let presentation_policy_target =
+            value(&values, "PP_GRPC_TARGET").unwrap_or("presentation-policy:9009");
+        if workload_tls.is_some() {
+            for (name, target) in [
+                ("ORG_GRPC_TARGET", organization_target),
+                ("CT_GRPC_TARGET", credential_template_target),
+                ("PP_GRPC_TARGET", presentation_policy_target),
+            ] {
+                if !target.starts_with("https://") {
+                    return Err(invalid(name));
+                }
+            }
+            if inspection_target
+                .as_deref()
+                .is_some_and(|target| !target.starts_with("https://"))
+            {
+                return Err(invalid("INSPECTION_SYSTEM_TARGET"));
+            }
+        }
         Ok(Self {
             environment,
             http_addr,
@@ -324,16 +355,9 @@ impl VerificationServiceConfig {
             credentials_processing_lease,
             credentials_resolver,
             providers: GrpcProviderConfig {
-                organization_target: value(&values, "ORG_GRPC_TARGET")
-                    .or_else(|| value(&values, "ORGANIZATION_GRPC_TARGET"))
-                    .unwrap_or("organization:9002")
-                    .into(),
-                credential_template_target: value(&values, "CT_GRPC_TARGET")
-                    .unwrap_or("credential-template:9003")
-                    .into(),
-                presentation_policy_target: value(&values, "PP_GRPC_TARGET")
-                    .unwrap_or("presentation-policy:9009")
-                    .into(),
+                organization_target: organization_target.into(),
+                credential_template_target: credential_template_target.into(),
+                presentation_policy_target: presentation_policy_target.into(),
                 inspection_target,
                 inspection_method,
                 service_token,
@@ -354,9 +378,16 @@ fn workload_tls(
 ) -> Result<Option<WorkloadClientTlsFiles>, VerificationConfigError> {
     let names = [
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
     ];
+    if values.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
+    }
     let configured = names
         .iter()
         .filter(|name| value(values, name).is_some())
@@ -373,8 +404,17 @@ fn workload_tls(
     }
     Ok(Some(WorkloadClientTlsFiles {
         certificate: PathBuf::from(value(values, names[0]).unwrap_or_default()),
-        private_key: PathBuf::from(value(values, names[1]).unwrap_or_default()),
-        ca_certificate: PathBuf::from(value(values, names[2]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(value(values, names[1]).unwrap_or_default()),
+        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
+        kms_ca_certificate: PathBuf::from(value(values, names[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, names[4]).unwrap_or_default()),
+        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
+        kms_key_version: value(values, names[6])
+            .unwrap_or_default()
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| invalid(names[6]))?,
     }))
 }
 
@@ -520,22 +560,70 @@ mod tests {
 
     #[test]
     fn complete_beta_configuration_is_accepted_and_inbound_grpc_is_closed() {
-        let config = VerificationServiceConfig::from_values([
+        let configured = vec![
             ("ENVIRONMENT".into(), "beta".into()),
             ("PUBLIC_BASE_URL".into(), "https://beta.example".into()),
             ("REDIS_URL".into(), "rediss://redis/3".into()),
             ("GRPC_SERVICE_TOKEN".into(), "x".repeat(32)),
+            ("ORG_GRPC_TARGET".into(), "https://organization:9002".into()),
+            (
+                "CT_GRPC_TARGET".into(),
+                "https://credential-template:9003".into(),
+            ),
+            (
+                "PP_GRPC_TARGET".into(),
+                "https://presentation-policy:9009".into(),
+            ),
             ("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.crt".into()),
-            ("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "client.key".into()),
             ("GRPC_WORKLOAD_TLS_CA_CERT".into(), "ca.crt".into()),
+            (
+                "GRPC_WORKLOAD_TLS_KMS_ADDR".into(),
+                "https://bao:8200".into(),
+            ),
+            ("GRPC_WORKLOAD_TLS_KMS_CA_CERT".into(), "bao-ca.crt".into()),
+            ("GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE".into(), "token".into()),
+            (
+                "GRPC_WORKLOAD_TLS_KMS_KEY_NAME".into(),
+                "verification-client".into(),
+            ),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION".into(), "1".into()),
             ("VERIF_GRPC_ENABLED".into(), "false".into()),
-        ])
-        .unwrap();
+        ];
+        let config = VerificationServiceConfig::from_values(configured.clone()).unwrap();
         assert_eq!(config.environment, Environment::Beta);
         assert!(!config.grpc_enabled);
+        let mut socket_config = configured.clone();
+        socket_config.retain(|(name, _)| name != "REDIS_URL");
+        socket_config.push((
+            "REDIS_URL".into(),
+            "unix:///run/marty-redis/redis.sock?db=3".into(),
+        ));
+        assert!(VerificationServiceConfig::from_values(socket_config.clone()).is_ok());
+        socket_config.last_mut().unwrap().1 = "unix://remote/run/redis.sock".into();
+        assert!(matches!(
+            VerificationServiceConfig::from_values(socket_config),
+            Err(VerificationConfigError::Invalid { name: "REDIS_URL" })
+        ));
         assert!(config.providers.workload_tls.is_some());
         assert!(config.credentials_governance.is_none());
         assert!(!config.credentials_compat_enabled);
+
+        for (name, target) in [
+            ("ORG_GRPC_TARGET", "organization:9002"),
+            ("CT_GRPC_TARGET", "http://credential-template:9003"),
+            ("PP_GRPC_TARGET", "presentation-policy:9009"),
+        ] {
+            let mut changed = configured.clone();
+            changed
+                .iter_mut()
+                .find(|(setting, _)| setting == name)
+                .unwrap()
+                .1 = target.into();
+            assert_eq!(
+                VerificationServiceConfig::from_values(changed).unwrap_err(),
+                VerificationConfigError::Invalid { name }
+            );
+        }
 
         let error = VerificationServiceConfig::from_values([
             ("ENVIRONMENT".into(), "beta".into()),
@@ -546,6 +634,21 @@ mod tests {
             error,
             VerificationConfigError::Invalid {
                 name: "VERIF_GRPC_ENABLED"
+            }
+        );
+    }
+
+    #[test]
+    fn retired_workload_private_key_file_is_rejected() {
+        let error = VerificationServiceConfig::from_values([
+            ("ENVIRONMENT".into(), "test".into()),
+            ("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "client.key".into()),
+        ])
+        .unwrap_err();
+        assert_eq!(
+            error,
+            VerificationConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_KEY"
             }
         );
     }

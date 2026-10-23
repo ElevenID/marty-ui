@@ -54,6 +54,7 @@ impl CanvasLtiProbeClient for FixedProbe {
     async fn probe(
         &self,
         _canvas_base_url: &str,
+        _trust_profile: &str,
         _config: &CanvasLtiJwksRefreshConfig,
     ) -> Result<CanvasLtiPlatformProbe, String> {
         Ok(self.0.clone())

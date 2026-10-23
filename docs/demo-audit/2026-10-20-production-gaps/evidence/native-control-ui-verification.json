@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "native-browser-control-identifier-verification",
+  "verifiedAt": "2026-10-20T04:49:36.476227+00:00",
+  "scope": "Three attributes expose two existing controls and the current claim dialog application ID; no action or routing logic changed",
+  "status": "SOURCE_REVIEW_PASS_FOCUSED_TESTS_HAVE_MATCHING_BASELINE_FAILURES",
+  "repository": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps",
+  "baseRevision": "e32058bd2309866235b2daeb1ea413c0c0d8f216",
+  "changedSources": [
+    {
+      "path": "ui/src/components/applicant/ApplicationForm.jsx",
+      "sha256": "1cb52cd1ea437b0b827db111192d9a849ee69994fe02ce28f9ae173d3d542eac",
+      "baseSha256": "85f4f960497c9ea6bf2cb7fd40277c37b888706be7403787b28757b91f680298"
+    },
+    {
+      "path": "ui/src/components/console/applicant/ClaimCredentialDialog.jsx",
+      "sha256": "90974fd6391bab40b7bd14ae59fe8c7e36411a515d3836fa87d3ad8d8b5e201f",
+      "baseSha256": "fd259545ac11d07cf2a491fb527be2b06cfd0c6a73e8ac22c004f3fa9c7c059b"
+    }
+  ],
+  "byteComparison": "Removing only the two added data-testid lines and the data-application-id={applicationId} line exactly reproduces the base component bytes.",
+  "commands": [
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/marty-ui-production-gaps/ui",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ApplicationForm.test.tsx src/components/__tests__/ClaimCredentialDialog.test.tsx --maxWorkers=2",
+      "exitCode": 1,
+      "passed": 8,
+      "failed": 5,
+      "skipped": 0,
+      "log": "native-control-ui-current.log"
+    },
+    {
+      "cwd": "/workspace/scratch/d8b5d3d3b0dd/verification-worktrees/ui-native-control-baseline/ui",
+      "revision": "e32058bd2309866235b2daeb1ea413c0c0d8f216",
+      "command": "node node_modules/vitest/vitest.mjs run src/components/__tests__/ApplicationForm.test.tsx src/components/__tests__/ClaimCredentialDialog.test.tsx --maxWorkers=2",
+      "exitCode": 1,
+      "passed": 8,
+      "failed": 5,
+      "skipped": 0,
+      "log": "native-control-ui-baseline.log"
+    }
+  ],
+  "matchingFailedCases": [
+    "src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > explains when the issuer has not activated an OID4VCI issuance flow",
+    "src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > lets the applicant select a browser wallet in the claim flow",
+    "src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > loads a fresh wallet offer once a wallet app is selected",
+    "src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > uses the selected Spruce wallet-specific offer for the mobile open-wallet handoff",
+    "src/components/__tests__/ClaimCredentialDialog.test.tsx > ClaimCredentialDialog > keeps Canvas Credentials as an optional post-issuance mirror"
+  ],
+  "matchingFailure": "MUI FocusTrap teardown: nodeToRestore.current.focus is not a function",
+  "baselineComparison": "Same five named failures and same 8/13 passing count reproduced in a clean detached worktree at the exact pre-change revision with the same dependencies. The complete suite is not reported as passing.",
+  "testConfigurationModified": false,
+  "productionBuildOrTypecheckRerun": false,
+  "qualification": "No native wallet execution, deployment, new recordings or release qualification.",
+  "changedAttributes": 3,
+  "initialAttempt": "The two-control-ID state was checked first; after adding the exact application ID observation attribute, the same two suites were rerun and again produced the same 8 passes / 5 named baseline failures."
+}

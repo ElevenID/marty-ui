@@ -39,6 +39,7 @@ struct CreateExpected {
     is_discoverable: bool,
     owner_status: marty_organization::MemberStatus,
     permission_count: usize,
+    required_permission_keys: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -142,6 +143,12 @@ fn creation_defaults_owner_and_catalog_match_the_language_neutral_contract() {
     assert_eq!(plan.owner.user_id, plan.organization.owner_id);
     assert_eq!(plan.owner.status, case.expected.owner_status);
     assert_eq!(plan.permissions.len(), case.expected.permission_count);
+    for key in case.expected.required_permission_keys {
+        assert!(
+            plan.permissions.contains_key(&key),
+            "missing permission {key}"
+        );
+    }
 }
 
 #[test]
@@ -186,6 +193,33 @@ fn partial_updates_clear_nullable_fields_merge_settings_and_report_exact_changes
         case.expected_existing_setting
     );
     assert_eq!(updated.updated_at, now());
+}
+
+#[test]
+fn settings_patch_rejects_private_material_without_changing_organization() {
+    let existing = existing_organization();
+    for payload in [
+        json!({"privateKeyJwk": "opaque"}),
+        json!({"nested": {"kty": "EC", "d": "opaque"}}),
+        json!({"nested": "{\"kty\":\"EC\",\"d\":\"opaque\"}"}),
+        json!({"certificate": "-----BEGIN PRIVATE KEY-----\nopaque\n-----END PRIVATE KEY-----"}),
+    ] {
+        let patch = UpdateOrganizationPatch {
+            settings: Some(payload.as_object().unwrap().clone()),
+            ..UpdateOrganizationPatch::default()
+        };
+        assert!(matches!(
+            plan_organization_update(&existing, patch, now()),
+            Err(OrganizationApplicationError::InvalidCommand(_))
+        ));
+        assert_eq!(existing.settings["existing_setting"], "preserved");
+    }
+
+    let public = UpdateOrganizationPatch {
+        settings: Some(json!({"public_jwk": {"kty": "OKP", "crv": "Ed25519", "x": "public"}, "key_reference": "transit/keys/issuer-v4"}).as_object().unwrap().clone()),
+        ..UpdateOrganizationPatch::default()
+    };
+    assert!(plan_organization_update(&existing, public, now()).is_ok());
 }
 
 #[test]

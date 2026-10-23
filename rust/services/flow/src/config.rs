@@ -62,6 +62,9 @@ pub struct FlowServiceConfig {
     pub trust_profile_url: String,
     pub deployment_profile_url: String,
     pub signing_keys_api_key: Option<String>,
+    pub issuer_sign_key: Option<String>,
+    pub sign_grant_bao_addr: Option<String>,
+    pub sign_grant_mint_token_file: Option<PathBuf>,
     pub issuance_url: String,
     pub issuance_native_url: String,
     pub issuance_api_key: Option<String>,
@@ -82,16 +85,15 @@ pub struct FlowServiceConfig {
 #[derive(Clone, Eq, PartialEq)]
 pub struct WorkloadClientTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
-#[derive(Clone, Eq, PartialEq)]
-pub struct WorkloadServerTlsFiles {
-    pub certificate: PathBuf,
-    pub private_key: PathBuf,
-    pub ca_certificate: PathBuf,
-}
+pub type WorkloadServerTlsFiles = WorkloadClientTlsFiles;
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
 pub enum FlowConfigError {
@@ -174,6 +176,12 @@ impl fmt::Debug for FlowServiceConfig {
                 "signing_keys_api_key",
                 &redacted(&self.signing_keys_api_key),
             )
+            .field("issuer_sign_key", &redacted(&self.issuer_sign_key))
+            .field("sign_grant_bao_addr", &self.sign_grant_bao_addr)
+            .field(
+                "sign_grant_mint_token_file",
+                &self.sign_grant_mint_token_file,
+            )
             .field("issuance_url", &self.issuance_url)
             .field("issuance_native_url", &self.issuance_native_url)
             .field("issuance_api_key", &redacted(&self.issuance_api_key))
@@ -232,6 +240,7 @@ impl FlowServiceConfig {
                 "FLOW_WEBHOOK_SECRET",
                 "FLOW_APPLICATION_EVENT_HMAC_KEY",
                 "SIGNING_KEYS_INTERNAL_API_KEY",
+                "SIGNING_KEYS_ISSUER_SIGN_KEY",
                 "ISSUANCE_API_KEY",
                 "PASSPORT_TENANT_API_KEYS",
             ],
@@ -369,7 +378,17 @@ impl FlowServiceConfig {
             100,
         )?;
         let redis_url = required(&values, "REDIS_URL")?;
-        validate_url(&redis_url, "REDIS_URL", &["redis", "rediss"])?;
+        let parsed_redis = Url::parse(&redis_url).map_err(|_| invalid("REDIS_URL"))?;
+        if parsed_redis.scheme() == "unix" {
+            if parsed_redis.host_str().is_some()
+                || !parsed_redis.path().starts_with('/')
+                || parsed_redis.fragment().is_some()
+            {
+                return Err(invalid("REDIS_URL"));
+            }
+        } else {
+            validate_url(&redis_url, "REDIS_URL", &["redis", "rediss"])?;
+        }
         let redis_database = u8::try_from(parse_bounded(
             value(&values, "REDIS_DB_FLOW").unwrap_or("3"),
             "REDIS_DB_FLOW",
@@ -466,7 +485,19 @@ impl FlowServiceConfig {
         )?;
         let signing_keys_api_key =
             optional_secret(&values, "SIGNING_KEYS_INTERNAL_API_KEY", environment)?;
+        let issuer_sign_key =
+            optional_secret(&values, "SIGNING_KEYS_ISSUER_SIGN_KEY", environment)?;
+        let sign_grant_bao_addr = value(&values, "BAO_ADDR").map(str::to_owned);
+        let sign_grant_mint_token_file =
+            value(&values, "FLOW_SIGN_GRANT_MINT_TOKEN_FILE").map(PathBuf::from);
         let issuance_api_key = optional_secret(&values, "ISSUANCE_API_KEY", environment)?;
+        if issuer_sign_key.as_ref().is_some_and(|key| {
+            signing_keys_api_key.as_ref() == Some(key)
+                || issuance_api_key.as_ref() == Some(key)
+                || service_token.as_ref() == Some(key)
+        }) {
+            return Err(invalid("SIGNING_KEYS_ISSUER_SIGN_KEY"));
+        }
         let passport_internal_service_auth_enabled = parse_boolean(
             value(&values, "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED").unwrap_or("false"),
             "PASSPORT_INTERNAL_SERVICE_AUTH_ENABLED",
@@ -510,13 +541,31 @@ impl FlowServiceConfig {
             value(&values, "GRPC_INSECURE_ALLOWED").unwrap_or("false"),
             "GRPC_INSECURE_ALLOWED",
         )?;
+        if environment.is_deployed() && allow_plaintext_grpc {
+            return Err(invalid("GRPC_INSECURE_ALLOWED"));
+        }
         let workload_client_tls = workload_client_tls(&values, environment)?;
         let workload_server_tls = workload_server_tls(&values, environment)?;
+        if workload_client_tls.is_some() && !organization_grpc_target.starts_with("https://") {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
+        if workload_client_tls.is_some() && !credential_template_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("CT_GRPC_TARGET"));
+        }
+        if workload_client_tls.is_some() && !presentation_policy_grpc_target.starts_with("https://")
+        {
+            return Err(invalid("PP_GRPC_TARGET"));
+        }
+        if workload_client_tls.is_some() && !issuance_grpc_target.starts_with("https://") {
+            return Err(invalid("ISSUANCE_GRPC_TARGET"));
+        }
         if environment.is_deployed()
             && !allow_plaintext_grpc
             && [
                 &organization_grpc_target,
                 &credential_template_grpc_target,
+                &presentation_policy_grpc_target,
                 &issuance_grpc_target,
             ]
             .into_iter()
@@ -557,6 +606,9 @@ impl FlowServiceConfig {
             trust_profile_url,
             deployment_profile_url,
             signing_keys_api_key,
+            issuer_sign_key,
+            sign_grant_bao_addr,
+            sign_grant_mint_token_file,
             issuance_url,
             issuance_native_url,
             issuance_api_key,
@@ -868,50 +920,51 @@ fn workload_client_tls(
     values: &BTreeMap<String, String>,
     environment: Environment,
 ) -> Result<Option<WorkloadClientTlsFiles>, FlowConfigError> {
-    let paths = complete_path_group(
+    workload_keyless_tls(
         values,
         &[
             "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-            "GRPC_WORKLOAD_TLS_CLIENT_KEY",
             "GRPC_WORKLOAD_TLS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_ADDR",
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_TOKEN_FILE",
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+            "GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_VERSION",
         ],
+        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
         environment,
-        "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-    )?;
-    Ok(paths.map(|paths| WorkloadClientTlsFiles {
-        certificate: paths[0].clone(),
-        private_key: paths[1].clone(),
-        ca_certificate: paths[2].clone(),
-    }))
+    )
 }
 
 fn workload_server_tls(
     values: &BTreeMap<String, String>,
     environment: Environment,
 ) -> Result<Option<WorkloadServerTlsFiles>, FlowConfigError> {
-    let paths = complete_path_group(
+    workload_keyless_tls(
         values,
         &[
             "GRPC_WORKLOAD_TLS_SERVER_CERT",
-            "GRPC_WORKLOAD_TLS_SERVER_KEY",
             "GRPC_WORKLOAD_TLS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
         ],
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
         environment,
-        "GRPC_WORKLOAD_TLS_SERVER_CERT",
-    )?;
-    Ok(paths.map(|paths| WorkloadServerTlsFiles {
-        certificate: paths[0].clone(),
-        private_key: paths[1].clone(),
-        ca_certificate: paths[2].clone(),
-    }))
+    )
 }
 
-fn complete_path_group<const N: usize>(
+fn workload_keyless_tls(
     values: &BTreeMap<String, String>,
-    names: &[&'static str; N],
+    names: &[&'static str; 7],
+    retired_key_name: &'static str,
     environment: Environment,
-    error_name: &'static str,
-) -> Result<Option<[PathBuf; N]>, FlowConfigError> {
+) -> Result<Option<WorkloadClientTlsFiles>, FlowConfigError> {
+    if values.contains_key(retired_key_name) {
+        return Err(invalid(retired_key_name));
+    }
     let configured = names
         .iter()
         .filter(|name| value(values, name).is_some())
@@ -919,24 +972,28 @@ fn complete_path_group<const N: usize>(
     if configured == 0 && !environment.is_deployed() {
         return Ok(None);
     }
-    if configured != N {
+    if configured != names.len() {
         return Err(if configured == 0 {
-            FlowConfigError::Missing { name: error_name }
+            FlowConfigError::Missing { name: names[0] }
         } else {
-            invalid(error_name)
+            invalid(names[0])
         });
     }
-    names
-        .iter()
-        .map(|name| {
-            value(values, name)
-                .map(PathBuf::from)
-                .ok_or(FlowConfigError::Missing { name: error_name })
-        })
-        .collect::<Result<Vec<_>, _>>()?
-        .try_into()
-        .map(Some)
-        .map_err(|_| invalid(error_name))
+    let version = value(values, names[6])
+        .unwrap_or_default()
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| invalid(names[6]))?;
+    Ok(Some(WorkloadClientTlsFiles {
+        certificate: PathBuf::from(value(values, names[0]).unwrap_or_default()),
+        ca_certificate: PathBuf::from(value(values, names[1]).unwrap_or_default()),
+        kms_endpoint: value(values, names[2]).unwrap_or_default().into(),
+        kms_ca_certificate: PathBuf::from(value(values, names[3]).unwrap_or_default()),
+        kms_token_file: PathBuf::from(value(values, names[4]).unwrap_or_default()),
+        kms_key_name: value(values, names[5]).unwrap_or_default().into(),
+        kms_key_version: version,
+    }))
 }
 
 const fn invalid(name: &'static str) -> FlowConfigError {

@@ -16,9 +16,9 @@ use uuid::Uuid;
 use crate::{
     application_template_domain::ApplicationTemplateRecord,
     canvas_award_candidate_approval::{
-        plan_canvas_approval_transaction, plan_canvas_offer_transaction,
-        plan_legacy_canvas_approval_transaction, resolve_and_attach_canvas_issuer,
-        resolve_and_attach_required_issuer, reuse_canvas_approval_transaction,
+        canvas_claim_time, plan_legacy_canvas_approval_transaction,
+        plan_projected_canvas_transaction, resolve_and_attach_canvas_issuer,
+        resolve_and_attach_required_issuer, reuse_projected_canvas_approval_transaction,
         CanvasApplicationApprovalSnapshot, CanvasAwardApprovalSeedGenerator,
     },
     canvas_event_status::CanvasEventReceipt,
@@ -184,8 +184,17 @@ impl InternalApplicationReconciliationPreparer for CanvasEvidenceReconciliationP
             application_template: Value::Object(template_policy_json(template)),
             platform: Value::Object(platform.clone()),
             binding: Value::Object(binding.clone()),
-            evidence_facts: Vec::new(),
-            policy_set: None,
+            evidence_facts: snapshot
+                .facts
+                .iter()
+                .map(|fact| {
+                    serde_json::to_value(
+                        crate::internal_application_domain::EvidenceFactResponse::from(fact),
+                    )
+                    .unwrap_or(Value::Null)
+                })
+                .collect(),
+            policy_set: snapshot.policy_set.clone().map(Value::Object),
         };
         match snapshot.application.status {
             ApplicationStatus::Pending => evaluate_canvas_approval_snapshot(
@@ -212,12 +221,28 @@ impl InternalApplicationReconciliationPreparer for CanvasEvidenceReconciliationP
         let seed = self.seeds.generate();
         let planned = if strict_snapshot {
             match snapshot.application.status {
-                ApplicationStatus::Pending => {
-                    plan_canvas_approval_transaction(&projected, binding, &seed, now)
-                }
-                ApplicationStatus::Approved => {
-                    plan_canvas_offer_transaction(&projected, binding, &seed, now)
-                }
+                ApplicationStatus::Pending => plan_projected_canvas_transaction(
+                    &projected,
+                    &template_policy_json(template),
+                    binding,
+                    &guard.evidence_facts,
+                    &seed,
+                    now,
+                    canvas_claim_time(snapshot.existing_transaction.as_ref(), now),
+                    self.guard_config.evidence_max_age,
+                    "pending",
+                ),
+                ApplicationStatus::Approved => plan_projected_canvas_transaction(
+                    &projected,
+                    &template_policy_json(template),
+                    binding,
+                    &guard.evidence_facts,
+                    &seed,
+                    now,
+                    canvas_claim_time(snapshot.existing_transaction.as_ref(), now),
+                    self.guard_config.evidence_max_age,
+                    "approved",
+                ),
                 _ => None,
             }
         } else {
@@ -234,7 +259,12 @@ impl InternalApplicationReconciliationPreparer for CanvasEvidenceReconciliationP
             existing.status == CredentialTransactionStatus::Pending && now <= existing.expires_at
         });
         let mut transaction = reusable.map_or(planned.clone(), |existing| {
-            reuse_canvas_approval_transaction(existing, &planned, strict_snapshot)
+            reuse_projected_canvas_approval_transaction(
+                existing,
+                &planned,
+                strict_snapshot,
+                &template_policy_json(template),
+            )
         });
         if strict_snapshot {
             resolve_and_attach_canvas_issuer(
@@ -1031,6 +1061,16 @@ fn approval_snapshot(
     binding: &Map<String, Value>,
 ) -> CanvasApplicationApprovalSnapshot {
     CanvasApplicationApprovalSnapshot {
+        evidence_facts: snapshot
+            .facts
+            .iter()
+            .map(|fact| {
+                serde_json::to_value(
+                    crate::internal_application_domain::EvidenceFactResponse::from(fact),
+                )
+                .unwrap_or(Value::Null)
+            })
+            .collect(),
         application: application_approval_json(&snapshot.application),
         application_template: approval_template_json(template),
         platform: platform.clone(),
@@ -1041,6 +1081,26 @@ fn approval_snapshot(
 
 fn template_policy_json(template: &ApplicationTemplateRecord) -> Map<String, Value> {
     Map::from_iter([
+        (
+            "claim_collection_rules".into(),
+            serde_json::to_value(&template.claim_collection_rules).unwrap_or(Value::Null),
+        ),
+        (
+            "form_fields".into(),
+            serde_json::to_value(&template.form_fields).unwrap_or(Value::Null),
+        ),
+        (
+            "name".into(),
+            serde_json::to_value(&template.name).unwrap_or(Value::Null),
+        ),
+        (
+            "description".into(),
+            serde_json::to_value(&template.description).unwrap_or(Value::Null),
+        ),
+        (
+            "application_validity_days".into(),
+            Value::from(template.application_validity_days),
+        ),
         ("id".to_owned(), Value::String(template.id.clone())),
         (
             "organization_id".to_owned(),

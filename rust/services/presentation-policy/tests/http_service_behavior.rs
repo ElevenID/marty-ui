@@ -20,6 +20,24 @@ use uuid::Uuid;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 
+#[test]
+fn http_json_cannot_claim_internal_oid4vp_transport_or_trust() {
+    let base = json!({
+        "vp_token": "header.payload.signature",
+        "trust_profile_id": null,
+        "nonce": null,
+        "audience": null,
+        "context": {"oid4vp_verifier_context": true}
+    });
+    let parsed: EvaluatePresentationRequest = serde_json::from_value(base.clone()).unwrap();
+    assert!(!parsed.trusted_internal_context);
+    assert!(parsed.oid4vp_transport.is_none());
+    let mut spoofed = base;
+    spoofed["trusted_internal_context"] = json!(true);
+    spoofed["oid4vp_transport"] = json!({"query_kind": "dcql"});
+    assert!(serde_json::from_value::<EvaluatePresentationRequest>(spoofed).is_err());
+}
+
 #[derive(Default)]
 struct Repository(Mutex<BTreeMap<Uuid, PresentationPolicy>>);
 
@@ -115,6 +133,127 @@ impl PresentationVerificationOrchestrator for VerifiedFacts {
 }
 
 struct Unavailable;
+
+struct VerifiedMdocFacts {
+    extra_disclosure: bool,
+    authenticated: bool,
+    duplicate_match: bool,
+}
+
+#[async_trait]
+impl PresentationVerificationOrchestrator for VerifiedMdocFacts {
+    async fn verify(
+        &self,
+        policy: &PresentationPolicy,
+        request: &EvaluatePresentationRequest,
+    ) -> Result<Value, PresentationVerificationError> {
+        let mut facts = VerifiedFacts.verify(policy, request).await?;
+        facts["presentation_verified"] = json!(self.authenticated);
+        facts["holder_binding_verified"] = json!(self.authenticated);
+        facts["holder_binding_method"] = json!("DEVICE_KEY");
+        facts["proof_profile"] = json!("OID4VP_VERIFIABLE_PRESENTATION");
+        facts["credentials"][0]["credential_format"] = json!("mdoc");
+        facts["credentials"][0]["signature_verified"] = json!(self.authenticated);
+        let mut disclosed = json!({"age_over_21": true});
+        if self.extra_disclosure {
+            disclosed["birth_date"] = json!("1990-01-01");
+        }
+        facts["credentials"][0]["claims"] = json!({
+            "age_over_21": true,
+            "birth_date": "1990-01-01",
+            "_mdoc": {"documents": [{
+                "doc_type": "org.iso.18013.5.1.mDL",
+                "namespaces": {"org.iso.18013.5.1": disclosed}
+            }]}
+        });
+        if self.duplicate_match {
+            let duplicate = facts["credentials"][0].clone();
+            facts["credentials"].as_array_mut().unwrap().push(duplicate);
+        }
+        Ok(facts)
+    }
+}
+
+async fn evaluate_mdoc_disclosures(
+    extra_disclosure: bool,
+    authenticated: bool,
+    duplicate_match: bool,
+) -> Value {
+    let organization_id = Uuid::new_v4();
+    let app = router(
+        organization_id,
+        Arc::new(VerifiedMdocFacts {
+            extra_disclosure,
+            authenticated,
+            duplicate_match,
+        }),
+    );
+    let response = app
+        .oneshot(request(
+            "POST",
+            "/v1/presentation-policies/evaluate",
+            json!({
+                "organization_id": organization_id,
+                "vp_token": "mdoc:untrusted-transport-is-not-the-evidence-source",
+                "credential_requirements": [{
+                    "credential_template_id": "age-template",
+                    "credential_payload_format": "MDOC",
+                    "requested_claims": [{
+                        "claim_name": "age_over_21",
+                        "constraints": [{"claim_name": "age_over_21", "constraint_type": "presence"}]
+                    }]
+                }]
+            }),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body(response).await
+}
+
+#[tokio::test]
+async fn authenticated_mdoc_disclosure_names_include_unrequested_fields_without_their_values() {
+    let result = evaluate_mdoc_disclosures(true, true, false).await;
+    assert_eq!(result["decision"], "allow", "{result}");
+    assert_eq!(result["verified_claims"], json!({"age_over_21": true}));
+    let disclosures = &result["credential_results"][0]["authenticated_disclosures"];
+    assert_eq!(
+        disclosures,
+        &json!({"format": "mso_mdoc", "documents": [{
+            "doc_type": "org.iso.18013.5.1.mDL",
+            "namespaces": {"org.iso.18013.5.1": ["age_over_21", "birth_date"]}
+        }]})
+    );
+    assert!(!disclosures.to_string().contains("1990-01-01"));
+}
+
+#[tokio::test]
+async fn authenticated_mdoc_disclosure_names_do_not_come_from_flat_or_policy_claims() {
+    let result = evaluate_mdoc_disclosures(false, true, false).await;
+    assert_eq!(
+        result["credential_results"][0]["authenticated_disclosures"]["documents"][0]["namespaces"]
+            ["org.iso.18013.5.1"],
+        json!(["age_over_21"])
+    );
+}
+
+#[tokio::test]
+async fn unauthenticated_mdoc_data_never_produces_disclosure_evidence() {
+    let result = evaluate_mdoc_disclosures(true, false, false).await;
+    assert_eq!(result["decision"], "deny", "{result}");
+    assert!(result["credential_results"][0]
+        .get("authenticated_disclosures")
+        .is_none());
+}
+
+#[tokio::test]
+async fn ambiguous_authenticated_credentials_never_produce_a_guessed_disclosure_inventory() {
+    let result = evaluate_mdoc_disclosures(true, true, true).await;
+    for credential in result["credential_results"].as_array().unwrap() {
+        assert!(credential.get("authenticated_disclosures").is_none());
+    }
+}
 
 #[async_trait]
 impl PresentationVerificationOrchestrator for Unavailable {
@@ -373,5 +512,207 @@ async fn missing_service_identity_and_native_verifier_fail_closed() {
     assert_eq!(
         body(response).await["detail"],
         "PRESENTATION_POLICY.NATIVE_BACKEND_UNAVAILABLE"
+    );
+}
+fn scoped_policy_request(
+    method: &str,
+    uri: &str,
+    payload: Value,
+    org: Uuid,
+    scopes: &str,
+) -> Request<Body> {
+    let mut value = request(method, uri, payload, true);
+    value.headers_mut().insert(
+        "x-api-key-id",
+        "11111111-1111-4111-8111-111111111111".parse().unwrap(),
+    );
+    value
+        .headers_mut()
+        .insert("x-organization-id", org.to_string().parse().unwrap());
+    value
+        .headers_mut()
+        .insert("x-api-key-scopes", scopes.parse().unwrap());
+    value
+}
+
+async fn owned_policy(app: &axum::Router, org: Uuid) -> String {
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/presentation-policies",
+            create_body(org),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    body(response).await["id"].as_str().unwrap().to_owned()
+}
+
+#[tokio::test]
+async fn scoped_api_policy_reader_obeys_exact_organization_and_existing_grants() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/v1/presentation-policies/{id}");
+    for (actor_org, scopes, expected) in [
+        (org, "trust:read", StatusCode::OK),
+        (org, "templates:read", StatusCode::FORBIDDEN),
+        (Uuid::new_v4(), "trust:read", StatusCode::FORBIDDEN),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(scoped_policy_request(
+                "GET",
+                &path,
+                json!({}),
+                actor_org,
+                scopes,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected);
+    }
+    let response = app
+        .clone()
+        .oneshot(scoped_policy_request(
+            "GET",
+            &format!("/v1/presentation-policies?organization_id={org}"),
+            json!({}),
+            org,
+            "trust:read",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await.as_array().unwrap().len(), 1);
+    // Human identity continues through the membership authorization implementation.
+    assert_eq!(
+        app.oneshot(request("GET", &path, json!({}), true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK
+    );
+}
+
+#[tokio::test]
+async fn scoped_api_policy_reader_cannot_gain_any_policy_mutation() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    for (method, path, payload) in [
+        ("POST", "/v1/presentation-policies".into(), create_body(org)),
+        (
+            "PATCH",
+            format!("/v1/presentation-policies/{id}"),
+            json!({"name":"changed"}),
+        ),
+        (
+            "DELETE",
+            format!("/v1/presentation-policies/{id}"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/activate"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/suspend"),
+            json!({}),
+        ),
+        (
+            "POST",
+            format!("/v1/presentation-policies/{id}/new-version"),
+            json!({}),
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(scoped_policy_request(
+                method,
+                &path,
+                payload,
+                org,
+                "trust:read",
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+    }
+    let response = app
+        .oneshot(request(
+            "GET",
+            &format!("/v1/presentation-policies/{id}"),
+            json!({}),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(body(response).await["name"], "Member login");
+}
+
+#[tokio::test]
+async fn scoped_api_policy_headers_require_service_authentication_and_complete_identity() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/v1/presentation-policies/{id}");
+    for missing in ["x-service-token", "x-organization-id", "x-api-key-id"] {
+        let mut request = scoped_policy_request("GET", &path, json!({}), org, "trust:read");
+        request.headers_mut().remove(missing);
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    for invalid in ["", "not-a-key-uuid"] {
+        let mut request = scoped_policy_request("GET", &path, json!({}), org, "trust:read");
+        request
+            .headers_mut()
+            .insert("x-api-key-id", invalid.parse().unwrap());
+        assert_eq!(
+            app.clone().oneshot(request).await.unwrap().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+}
+
+#[tokio::test]
+async fn scoped_api_policy_owner_is_authenticated_minimal_projection() {
+    let org = Uuid::new_v4();
+    let app = router(org, Arc::new(VerifiedFacts));
+    let id = owned_policy(&app, org).await;
+    let path = format!("/internal/v1/resource-owners/presentation-policies/{id}");
+    let mut value = request("GET", &path, json!({}), true);
+    value.headers_mut().remove("x-user-id");
+    let response = app.clone().oneshot(value).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(body(response).await, json!({"id":id,"organization_id":org}));
+    assert_eq!(
+        app.clone()
+            .oneshot(request("GET", &path, json!({}), false))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.oneshot(request(
+            "GET",
+            &format!(
+                "/internal/v1/resource-owners/presentation-policies/{}",
+                Uuid::new_v4()
+            ),
+            json!({}),
+            true
+        ))
+        .await
+        .unwrap()
+        .status(),
+        StatusCode::NOT_FOUND
     );
 }

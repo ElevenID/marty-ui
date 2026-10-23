@@ -42,6 +42,7 @@ const CLAIM_SOURCES: &[&str] = &[
     "SYSTEM",
 ];
 const SYSTEM_FIELDS: &[&str] = &[
+    "canvas.course_name",
     "applicant.user_id",
     "applicant.email",
     "applicant.given_name",
@@ -195,6 +196,11 @@ impl ApplicationTemplatePatch {
         template
             .require_draft_patch()
             .map_err(|_| ApplicationTemplateRequestError::NotDraft)?;
+        if marty_key_material_policy::contains_private_key_map(&self.changes) {
+            return Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned(),
+            ));
+        }
         for (name, value) in self.changes {
             match name.as_str() {
                 "name" => {
@@ -271,6 +277,13 @@ impl ApplicationTemplatePatch {
 
 impl ApplicationTemplateCreate {
     pub fn validate_transport(&self) -> Result<(), ApplicationTemplateRequestError> {
+        let request =
+            serde_json::to_value(self).map_err(|_| ApplicationTemplateRequestError::Projection)?;
+        if marty_key_material_policy::contains_private_key(&request) {
+            return Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned(),
+            ));
+        }
         require_length("name", &self.name, 1, 128)?;
         if !matches!(
             self.approval_strategy.as_str(),
@@ -518,6 +531,8 @@ impl ApplicationTemplateRecord {
 pub struct CredentialTemplateValidationView {
     pub organization_id: String,
     pub status: String,
+    pub credential_payload_format: String,
+    pub issuance_protocol: String,
     pub revocation_profile_id: Option<String>,
     pub claims: BTreeSet<String>,
 }
@@ -611,10 +626,23 @@ pub fn validate_application_template(
                     "Credential Template must be active.",
                 );
             }
-            if value
-                .revocation_profile_id
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
+            let physical_passport = value
+                .credential_payload_format
+                .eq_ignore_ascii_case("icao_emrtd")
+                && value.issuance_protocol == "PHYSICAL_DOCUMENT";
+            if physical_passport && value.revocation_profile_id.is_some() {
+                add(
+                    "credential_template",
+                    "credential_template_id".to_owned(),
+                    "REVOCATION_PROFILE_FORBIDDEN",
+                    "Physical Credential Template must not reference a digital Revocation Profile.",
+                );
+            }
+            if !physical_passport
+                && value
+                    .revocation_profile_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
             {
                 add(
                     "credential_template",
@@ -853,6 +881,11 @@ pub fn validate_application_template(
                 "UNKNOWN_FIELD",
                 "Claim source must reference a configured form field.",
             );
+        } else if source == "EVIDENCE_EXTRACTION"
+            && !marty_claim_collection::valid_evidence_config(source_config)
+        {
+            add("claim_mappings", format!("claim_collection_rules.{index}.source_config"), "INVALID",
+                "Evidence mappings require an unambiguous requirement or fact type and a public fact JSON pointer.");
         } else if source == "SYSTEM" {
             let system_field = text(source_config.get("system_field"));
             if !SYSTEM_FIELDS.contains(&system_field.as_str()) {
@@ -1164,6 +1197,47 @@ mod tests {
     }
 
     #[test]
+    fn application_template_transport_rejects_private_material_but_keeps_remote_references() {
+        let mut request = canonical_request();
+        request.ui_config = json!({"issuer": {"private_jwk": {"kty": "EC", "d": "synthetic"}}})
+            .as_object()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            request.validate_transport(),
+            Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned()
+            ))
+        );
+
+        let mut record = canonical_request()
+            .into_record("template-1".to_owned(), now())
+            .unwrap();
+        let patch: ApplicationTemplatePatch = serde_json::from_value(json!({
+            "notification_config": {"key_reference": "transit/keys/issuer-v4"}
+        }))
+        .unwrap();
+        patch.apply(&mut record, now()).unwrap();
+        assert_eq!(
+            record.notification_config["key_reference"],
+            "transit/keys/issuer-v4"
+        );
+
+        let patch: ApplicationTemplatePatch = serde_json::from_value(json!({
+            "notification_config": {"note": "-----BEGIN PRIVATE KEY-----synthetic-----END PRIVATE KEY-----"}
+        }))
+        .unwrap();
+        let before = record.clone();
+        assert_eq!(
+            patch.apply(&mut record, now()),
+            Err(ApplicationTemplateRequestError::InvalidField(
+                "private_key_material".to_owned()
+            ))
+        );
+        assert_eq!(record, before);
+    }
+
+    #[test]
     fn transport_rejects_removed_aliases_and_invalid_public_shapes() {
         let mut value = serde_json::to_value(canonical_request()).expect("request JSON");
         value["status"] = json!("ACTIVE");
@@ -1249,6 +1323,58 @@ mod tests {
                 && error.field == "approval_policy_set_id"
                 && error.code == "NOT_FOUND"
         }));
+    }
+
+    #[test]
+    fn physical_passport_exempts_only_matching_format_and_protocol_from_digital_revocation() {
+        let record = canonical_request()
+            .into_record("template-1".to_owned(), now())
+            .expect("record");
+        for (format, protocol, requires_profile) in [
+            ("icao_emrtd", "PHYSICAL_DOCUMENT", false),
+            ("icao_emrtd", "OID4VCI", true),
+            ("W3C_VCDM_V2_SD_JWT", "PHYSICAL_DOCUMENT", true),
+            ("W3C_VCDM_V2_SD_JWT", "OID4VCI", true),
+        ] {
+            let view = CredentialTemplateValidationView {
+                organization_id: record.organization_id.clone(),
+                status: "ACTIVE".to_owned(),
+                credential_payload_format: format.to_owned(),
+                issuance_protocol: protocol.to_owned(),
+                revocation_profile_id: None,
+                claims: BTreeSet::new(),
+            };
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::Found(view),
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert_eq!(
+                errors
+                    .iter()
+                    .any(|error| error.code == "REVOCATION_PROFILE_REQUIRED"),
+                requires_profile,
+                "{format}/{protocol}"
+            );
+        }
+        for profile in ["revocation-profile-1", "  "] {
+            let view = CredentialTemplateValidationView {
+                organization_id: record.organization_id.clone(),
+                status: "ACTIVE".to_owned(),
+                credential_payload_format: "ICAO_EMRTD".to_owned(),
+                issuance_protocol: "PHYSICAL_DOCUMENT".to_owned(),
+                revocation_profile_id: Some(profile.to_owned()),
+                claims: BTreeSet::new(),
+            };
+            let errors = validate_application_template(
+                &record,
+                &CredentialTemplateValidationState::Found(view),
+                &ApprovalPolicyValidationState::NotRequested,
+            );
+            assert!(errors
+                .iter()
+                .any(|error| error.code == "REVOCATION_PROFILE_FORBIDDEN"));
+        }
     }
 
     #[test]

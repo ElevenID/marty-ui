@@ -14,16 +14,15 @@ def startup(monkeypatch):
     return importlib.import_module("test_canvas_worker_image_startup")
 
 
-def test_every_reference_case_is_used_in_each_configuration_mode(startup):
+def test_every_startup_case_is_used_in_each_configuration_mode(startup):
     spec = startup.contract("canvas-worker-image-startup-scenarios.json")
     cases = startup.contract(spec["startup_scenarios"])["cases"]
-    references = startup.contract(spec["startup_reference"])["cases"]
-    assert len(cases) == len(references) == 8
-    assert {case["name"] for case in cases} == {case["name"] for case in references}
+    assert len(cases) == 8
+    assert len({case["name"] for case in cases}) == len(cases)
+    assert "startup_reference" not in spec
     assert [mode["name"] for mode in spec["modes"]] == [
         "direct",
         "files_template",
-        "selected_environment",
     ]
     identities = set()
     for mode in spec["modes"]:
@@ -36,6 +35,16 @@ def test_every_reference_case_is_used_in_each_configuration_mode(startup):
             }
             assert "CANVAS_SYNC_PROCESSOR" not in environment
             assert environment["CANVAS_SYNC_WORKER_POLL_SECONDS"] == "60"
+            assert environment["BAO_ADDR"] == "https://127.0.0.1:1"
+            assert environment["INTEGRATION_SECRET_KMS_URL"] == (
+                "https://synthetic-secret-service:8018/internal"
+            )
+            assert environment["INTEGRATION_SECRET_KMS_CA_FILE"] == (
+                "/synthetic-secrets/ca.crt"
+            )
+            assert environment["ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE"].startswith(
+                "/nonexistent/"
+            )
             assert all(
                 environment[key] == value for key, value in case["environment"].items()
             )
@@ -45,23 +54,23 @@ def test_every_reference_case_is_used_in_each_configuration_mode(startup):
                 for key in startup.SECRETS:
                     assert key not in environment
                     assert environment[f"{key}_FILE"] == f"/synthetic-secrets/{key}"
-            elif mode["name"] == "selected_environment":
-                assert "INTEGRATION_SECRET_MASTER_KEY" not in environment
-                assert "INTEGRATION_SECRET_MASTER_KEY_FILE" not in environment
-                selected = environment["INTEGRATION_SECRET_MASTER_KEY_ENV"]
-                assert environment[selected] == startup.MASTER_KEY
             else:
-                assert (
-                    environment["INTEGRATION_SECRET_MASTER_KEY"] == startup.MASTER_KEY
-                )
-    assert len(identities) == 24
+                assert environment["SIGNING_KEYS_INTERNAL_API_KEY"] == startup.SECRETS[
+                    "SIGNING_KEYS_INTERNAL_API_KEY"
+                ]
+            assert all(
+                not key.startswith("INTEGRATION_SECRET_MASTER_KEY")
+                for key in environment
+            )
+    assert len(identities) == 16
 
 
 @pytest.mark.parametrize("mutation", ["exit", "alive", "job", "heartbeat", "extra"])
 def test_comparison_does_not_relax_startup_observations(startup, mutation):
-    expected = startup.contract("canvas-worker-startup-oracle.json")["cases"][0]
-    native = {**expected, "exit_code_after_interrupt": 130}
-    startup.assert_observation(native, expected)
+    name = "disabled_missing_identity"
+    expected = startup.contract("canvas-worker-startup-expected.json")
+    native = {"name": name, **{key: value for key, value in expected.items() if key != "schema"}}
+    startup.assert_observation(native, name)
     if mutation == "exit":
         native["exit_code_after_interrupt"] = 0
     elif mutation == "alive":
@@ -73,7 +82,7 @@ def test_comparison_does_not_relax_startup_observations(startup, mutation):
     else:
         native["unexpected"] = True
     with pytest.raises(AssertionError):
-        startup.assert_observation(native, expected)
+        startup.assert_observation(native, name)
 
 
 @pytest.mark.parametrize("failure", [None, "start", "query", "comparison"])
@@ -81,7 +90,9 @@ def test_packaged_worker_is_cleaned_up_on_all_observation_paths(
     startup, monkeypatch, tmp_path, failure
 ):
     owner = importlib.import_module("test_canvas_worker_image_entrypoint")
-    expected = startup.contract("canvas-worker-startup-oracle.json")["cases"][0]
+    expected_heartbeat = startup.contract("canvas-worker-startup-expected.json")[
+        "heartbeat"
+    ]
     case = startup.contract("canvas-worker-startup-scenarios.json")["cases"][0]
     mode = startup.contract("canvas-worker-image-startup-scenarios.json")["modes"][0]
     owned_id = "b" * 64
@@ -101,7 +112,7 @@ def test_packaged_worker_is_cleaned_up_on_all_observation_paths(
         if operation == "exec":
             if "count(*)" in arguments[-1]:
                 return "1" if failure == "comparison" else "0"
-            return json.dumps(expected["heartbeat"])
+            return json.dumps(expected_heartbeat)
         if operation == "wait":
             return "130"
         return ""
@@ -110,11 +121,9 @@ def test_packaged_worker_is_cleaned_up_on_all_observation_paths(
     monkeypatch.setattr(startup, "docker", docker)
     if failure:
         with pytest.raises((subprocess.CalledProcessError, AssertionError)):
-            startup.exercise(
-                "synthetic-image", "a" * 64, tmp_path, case, mode, expected
-            )
+            startup.exercise("synthetic-image", "a" * 64, tmp_path, case, mode)
     else:
-        startup.exercise("synthetic-image", "a" * 64, tmp_path, case, mode, expected)
+        startup.exercise("synthetic-image", "a" * 64, tmp_path, case, mode)
         assert (("kill", "--signal=SIGINT", owned_id), {}) in calls
     assert calls[-1][0] == ("rm", "--force", owned_id)
     create = calls[0][0]

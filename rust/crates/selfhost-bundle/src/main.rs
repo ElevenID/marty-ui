@@ -6,12 +6,13 @@ fn run() -> Result<()> {
     let mut repo = std::env::current_dir().map_err(|_| "Cannot determine repository root")?;
     let mut output = None;
     let mut archive = None;
+    let mut image_lock = None;
     let mut compose = None;
     let mut replace = false;
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         if arg == "--help" || arg == "-h" {
-            println!("Stage the image-based self-host customer bundle.\nUsage: package-selfhost-bundle [--repo-root DIR] [--output-dir DIR] [--archive ZIP_BASENAME] [--replace] [--compose-executable PATH]\nExisting outputs are preserved unless --replace verifies an unchanged owned bundle. ZIP paths must always be new.");
+            println!("Stage the image-based self-host customer bundle.\nUsage: package-selfhost-bundle [--repo-root DIR] [--output-dir DIR] [--archive ZIP_BASENAME] [--image-lock JSON] [--replace] [--compose-executable PATH]\nExisting outputs are preserved unless --replace verifies an unchanged owned bundle. ZIP paths must always be new.");
             return Ok(());
         } else if arg == "--replace" {
             replace = true;
@@ -26,6 +27,10 @@ fn run() -> Result<()> {
             if !base.is_empty() {
                 archive = Some(PathBuf::from(base));
             }
+        } else if arg == "--image-lock" {
+            image_lock = Some(user_path::expand(PathBuf::from(
+                args.next().ok_or("--image-lock needs a JSON path")?,
+            ))?);
         } else if arg == "--compose-executable" {
             compose = Some(args.next().ok_or("--compose-executable needs a path")?);
         } else {
@@ -42,9 +47,17 @@ fn run() -> Result<()> {
         archive: archive.map(user_path::archive).transpose()?,
         replace,
     };
-    let published = marty_selfhost_bundle::package(&options, |dir, args| {
-        marty_selfhost_bundle::process::compose(dir, args, compose.as_ref())
-    })?;
+    let published = if let Some(lock) = image_lock.as_deref() {
+        marty_selfhost_bundle::package_with_image_lock(
+            &options,
+            |dir, args| marty_selfhost_bundle::process::compose(dir, args, compose.as_ref()),
+            lock,
+        )?
+    } else {
+        marty_selfhost_bundle::package(&options, |dir, args| {
+            marty_selfhost_bundle::process::compose(dir, args, compose.as_ref())
+        })?
+    };
     println!("Staged self-host bundle at {}", published.output.display());
     if let Some(path) = published.archive {
         println!("Created archive {}", path.display());

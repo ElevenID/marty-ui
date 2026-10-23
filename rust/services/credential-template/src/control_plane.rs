@@ -61,9 +61,33 @@ impl NativeCredentialTemplateControlPlane {
         if timeout.is_zero() {
             return Err(unavailable("dependency timeout must be positive"));
         }
-        let organizations = OrganizationServiceClient::new(channel(organization_target, timeout)?);
-        let revocation_profiles =
-            RevocationProfileServiceClient::new(channel(revocation_target, timeout)?);
+        let organization_channel = channel(organization_target, timeout)?;
+        let revocation_channel = channel(revocation_target, timeout)?;
+        Self::with_channels(
+            organization_channel,
+            revocation_channel,
+            service_token,
+            signing_keys_internal_url,
+            signing_keys_internal_api_key,
+            trust_profile_service_url,
+            timeout,
+        )
+    }
+
+    pub fn with_channels(
+        organization_channel: Channel,
+        revocation_channel: Channel,
+        service_token: Option<&str>,
+        signing_keys_internal_url: impl Into<Arc<str>>,
+        signing_keys_internal_api_key: Option<&str>,
+        trust_profile_service_url: impl Into<Arc<str>>,
+        timeout: Duration,
+    ) -> Result<Self, ControlPlaneError> {
+        if timeout.is_zero() {
+            return Err(unavailable("dependency timeout must be positive"));
+        }
+        let organizations = OrganizationServiceClient::new(organization_channel);
+        let revocation_profiles = RevocationProfileServiceClient::new(revocation_channel);
         let service_token = service_token
             .map(str::parse)
             .transpose()
@@ -82,6 +106,31 @@ impl NativeCredentialTemplateControlPlane {
             trust_profile_service_url: trust_profile_service_url.into(),
             timeout,
         })
+    }
+
+    pub async fn check_organization_health(&self) -> Result<(), ControlPlaneError> {
+        let request = self.grpc_request(GetMemberRequest {
+            organization_id: "00000000-0000-0000-0000-000000000000".into(),
+            user_id: "credential-template-native-health".into(),
+        });
+        let mut client = self.organizations.clone();
+        match client.get_member(request).await {
+            Ok(_) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => Ok(()),
+            Err(status) => Err(grpc_unavailable("organization health", status)),
+        }
+    }
+
+    pub async fn check_revocation_health(&self) -> Result<(), ControlPlaneError> {
+        let request = self.grpc_request(GetRevocationProfileRequest {
+            profile_id: "00000000-0000-0000-0000-000000000000".into(),
+        });
+        let mut client = self.revocation_profiles.clone();
+        match client.get_revocation_profile(request).await {
+            Ok(_) => Ok(()),
+            Err(status) if status.code() == Code::NotFound => Ok(()),
+            Err(status) => Err(grpc_unavailable("revocation profile health", status)),
+        }
     }
 
     fn grpc_request<T>(&self, body: T) -> Request<T> {

@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
+use crate::private_material::{contains_private_key, has_private_key_marker};
+
 const MAX_SAFE_REDIS_REVISION: u64 = 9_007_199_254_740_991;
 const CSCA_LIFECYCLE_SCHEMA_VERSION: u32 = 3;
 const MAX_OUTBOX_EVENTS: usize = 10_000;
@@ -743,6 +745,11 @@ fn build_record(
             "metadata must not contain private key material".to_string(),
         ));
     }
+    if contains_private_key(&request.expected_public_jwk) {
+        return Err(CscaLifecycleError::Invalid(
+            "expected_public_jwk must not contain private key material".to_string(),
+        ));
+    }
     let der = load_certificate_pem(&request.cert_pem)
         .map_err(|error| CscaLifecycleError::Invalid(format!("invalid cert_pem: {error}")))?;
     let info = get_certificate_info(&der)
@@ -1007,37 +1014,6 @@ fn verify_certificate_link(
     Ok(())
 }
 
-fn contains_private_key(value: &Value) -> bool {
-    match value {
-        Value::String(value) => has_private_key_marker(value),
-        Value::Array(values) => values.iter().any(contains_private_key),
-        Value::Object(values) => {
-            let private_named_field = values.iter().any(|(name, value)| {
-                let normalized = name
-                    .chars()
-                    .filter(|character| character.is_ascii_alphanumeric())
-                    .flat_map(char::to_lowercase)
-                    .collect::<String>();
-                !value.is_null()
-                    && matches!(
-                        normalized.as_str(),
-                        "privatekey" | "privatekeypem" | "secretkey" | "secretkeypem" | "pkcs8"
-                    )
-            });
-            let private_jwk = values.contains_key("kty")
-                && ["d", "p", "q", "dp", "dq", "qi", "oth", "k"]
-                    .iter()
-                    .any(|name| values.get(*name).is_some_and(|value| !value.is_null()));
-            private_named_field || private_jwk || values.values().any(contains_private_key)
-        }
-        _ => false,
-    }
-}
-
-fn has_private_key_marker(value: &str) -> bool {
-    value.contains("-----BEGIN") && value.contains("PRIVATE KEY-----")
-}
-
 fn as_corrupt(error: CscaLifecycleError) -> CscaLifecycleError {
     CscaLifecycleError::Corrupt(error.to_string())
 }
@@ -1069,8 +1045,7 @@ fn timestamp(value: DateTime<Utc>) -> String {
 #[cfg(test)]
 mod ceremony_tests {
     use super::*;
-    use der::{Decode, EncodePem};
-    use marty_crypto::{cert_builder::create_csca_certificate, keygen::KeyType};
+    use der::DecodePem;
     use x509_cert::Certificate;
 
     #[tokio::test]
@@ -1098,12 +1073,8 @@ mod ceremony_tests {
         let tenant = format!("test-csca-ceremony-{}", uuid::Uuid::new_v4().simple());
         let foreign = format!("test-csca-foreign-{}", uuid::Uuid::new_v4().simple());
         let store = CscaLifecycleStore::from_connection(registry.connection());
-        let (der, _) =
-            create_csca_certificate("US", "Disposable CSCA", 365, KeyType::EcdsaP256).unwrap();
-        let pem = Certificate::from_der(&der)
-            .unwrap()
-            .to_pem(der::pem::LineEnding::LF)
-            .unwrap();
+        let pem = include_str!("../tests/fixtures/public_certificates/root-ca.pem").to_string();
+        let _certificate = Certificate::from_pem(&pem).unwrap();
         let jwk = serde_json::to_value(certificate_pem_to_jwk(&pem).unwrap()).unwrap();
         let request = || ImportCscaCertificateRequest {
             cert_pem: pem.clone(),

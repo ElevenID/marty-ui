@@ -7,6 +7,10 @@ use axum::{
 };
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
 use base64::Engine;
+use marty_signing_grant::{
+    payload_digest,
+    replay::{ApprovedIssuerCsrSign, ConsumedGrant, FinalSignBinding},
+};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use thiserror::Error;
@@ -28,6 +32,134 @@ pub struct SigningCompatibilityService {
     documents: DocumentStore,
     profiles: ProfileStore,
     public_domain: Option<String>,
+}
+
+/// A one-use grant, or an exact certificate ceremony approved by its HTTP
+/// handler. Both forms are consumed when the resolved remote key is signed.
+pub(crate) enum SignAuthorization {
+    Grant {
+        consumed: ConsumedGrant,
+        route: String,
+        issuer_did: Option<String>,
+    },
+    IssuerCsr {
+        approved: ApprovedIssuerCsrSign,
+        issuer_did: String,
+    },
+    Certificate {
+        organization_id: String,
+        issuer_did: String,
+        service_id: String,
+        key_reference: String,
+        key_purpose: String,
+        algorithm: String,
+        payload_sha256_b64: String,
+    },
+}
+
+impl SignAuthorization {
+    fn authorizes_issuer_request(&self, request: &IssuerDidSignRequest) -> bool {
+        match self {
+            Self::Grant {
+                issuer_did: Some(issuer_did),
+                ..
+            }
+            | Self::IssuerCsr { issuer_did, .. } => issuer_did == &request.issuer_did,
+            Self::Certificate {
+                organization_id,
+                issuer_did,
+                ..
+            } => organization_id == &request.organization_id && issuer_did == &request.issuer_did,
+            Self::Grant {
+                issuer_did: None, ..
+            } => false,
+        }
+    }
+
+    pub(crate) fn grant(
+        consumed: ConsumedGrant,
+        route: impl Into<String>,
+        issuer_did: Option<String>,
+    ) -> Self {
+        Self::Grant {
+            consumed,
+            route: route.into(),
+            issuer_did,
+        }
+    }
+
+    pub(crate) fn issuer_csr(approved: ApprovedIssuerCsrSign, issuer_did: String) -> Self {
+        Self::IssuerCsr {
+            approved,
+            issuer_did,
+        }
+    }
+
+    pub(crate) fn certificate(
+        request: &IssuerDidSignRequest,
+        profile: &Value,
+    ) -> Result<Self, CompatibilityError> {
+        let payload = signing_payload(
+            request.payload_b64.as_deref(),
+            request.payload_hex.as_deref(),
+        )?;
+        let service_id = required(profile, "signing_service_id")?;
+        let key_reference = required(profile, "signing_key_reference")?;
+        Ok(Self::Certificate {
+            organization_id: request.organization_id.clone(),
+            issuer_did: request.issuer_did.clone(),
+            service_id: service_id.to_owned(),
+            key_reference: key_reference.to_owned(),
+            key_purpose: request.key_purpose.clone(),
+            algorithm: request.algorithm.clone(),
+            payload_sha256_b64: payload_digest(&payload),
+        })
+    }
+
+    fn authorizes(self, actual: FinalSignBinding<'_>) -> bool {
+        match self {
+            Self::Grant {
+                consumed,
+                route,
+                issuer_did,
+            } => consumed.authorizes_final(&FinalSignBinding {
+                route: &route,
+                service_id: if issuer_did.is_some() {
+                    None
+                } else {
+                    actual.service_id
+                },
+                issuer_did: issuer_did.as_deref(),
+                ..actual
+            }),
+            Self::IssuerCsr {
+                approved,
+                issuer_did,
+            } => approved.authorizes(&FinalSignBinding {
+                route: "/v1/signing-keys/issuer-identities/certificate-csr",
+                issuer_did: Some(&issuer_did),
+                ..actual
+            }),
+            Self::Certificate {
+                organization_id,
+                issuer_did,
+                service_id,
+                key_reference,
+                key_purpose,
+                algorithm,
+                payload_sha256_b64,
+            } => {
+                organization_id == actual.organization_id
+                    && actual.issuer_did.is_none()
+                    && !issuer_did.is_empty()
+                    && Some(service_id.as_str()) == actual.service_id
+                    && Some(key_reference.as_str()) == actual.key_reference
+                    && key_purpose == actual.key_purpose
+                    && algorithm == actual.algorithm
+                    && payload_sha256_b64 == payload_digest(actual.payload)
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -87,6 +219,12 @@ pub struct IssuerDidSignRequest {
     pub credential_format: String,
     pub key_purpose: String,
     pub algorithm: String,
+    #[serde(default)]
+    pub key_reference: Option<String>,
+    #[serde(default)]
+    pub verification_method_id: Option<String>,
+    #[serde(default)]
+    pub expected_public_jwk: Option<Value>,
     #[serde(default)]
     pub payload_b64: Option<String>,
     #[serde(default)]
@@ -222,6 +360,17 @@ impl SigningCompatibilityService {
     ) -> Result<Value, CompatibilityError> {
         let service_id = required(profile, "signing_service_id")?;
         let key_reference = required(profile, "signing_key_reference")?;
+        if service_id == "managed-openbao-transit"
+            && !crate::registry::managed_profile_key_belongs_to_tenant(
+                organization_id,
+                profile,
+                key_reference,
+            )
+        {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key does not belong to this tenant and profile.".into(),
+            ));
+        }
         let registry = self
             .registry
             .load(organization_id)
@@ -355,10 +504,11 @@ impl SigningCompatibilityService {
         }
     }
 
-    pub async fn sign_with_service(
+    pub(crate) async fn sign_with_service(
         &self,
         service_id: &str,
         request: &ServiceSignRequest,
+        authorization: SignAuthorization,
     ) -> Result<Value, CompatibilityError> {
         if request.organization_id.trim().is_empty() {
             return Err(CompatibilityError::Invalid(
@@ -379,6 +529,32 @@ impl SigningCompatibilityService {
         )?;
         let key_reference = clean(request.key_reference.as_deref())
             .or_else(|| clean(service.get("key_reference").and_then(Value::as_str)));
+        if service_id == "managed-openbao-transit"
+            && !key_reference.as_deref().is_some_and(|reference| {
+                service
+                    .get("key_aliases")
+                    .and_then(Value::as_array)
+                    .is_some_and(|aliases| {
+                        aliases
+                            .iter()
+                            .any(|alias| alias.as_str() == Some(reference))
+                    })
+                    && service
+                        .get("key_algorithms")
+                        .and_then(|algorithms| algorithms.get(reference))
+                        .and_then(Value::as_str)
+                        .is_some_and(|algorithm| {
+                            request
+                                .algorithm
+                                .as_deref()
+                                .is_none_or(|requested| requested == algorithm)
+                        })
+            })
+        {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key is not available for this tenant and algorithm.".into(),
+            ));
+        }
         if let Some(reference) = &key_reference {
             service.insert("key_reference".into(), Value::String(reference.clone()));
         }
@@ -404,6 +580,18 @@ impl SigningCompatibilityService {
         }
         let algorithm = selected_algorithm(&service, request.algorithm.as_deref())?;
         service.insert("algorithm".into(), Value::String(algorithm.clone()));
+        if !authorization.authorizes(FinalSignBinding {
+            organization_id: &request.organization_id,
+            route: &format!("/v1/signing-keys/services/{service_id}/sign"),
+            service_id: Some(service_id),
+            issuer_did: None,
+            key_reference: key_reference.as_deref(),
+            key_purpose: request.key_purpose.as_deref().unwrap_or_default(),
+            algorithm: &algorithm,
+            payload: &payload,
+        }) {
+            return Err(CompatibilityError::Unauthorized);
+        }
         let signed = kms::sign(kms::SignRequest {
             service_config: Value::Object(service),
             payload_b64: URL_SAFE_NO_PAD.encode(&payload),
@@ -429,10 +617,14 @@ impl SigningCompatibilityService {
         Ok(response)
     }
 
-    pub async fn sign_with_issuer_did(
+    pub(crate) async fn sign_with_issuer_did(
         &self,
         request: &IssuerDidSignRequest,
+        authorization: SignAuthorization,
     ) -> Result<Value, CompatibilityError> {
+        if !authorization.authorizes_issuer_request(request) {
+            return Err(CompatibilityError::Unauthorized);
+        }
         if request.credential_format.trim().is_empty() {
             return Err(CompatibilityError::Invalid(
                 "credential_format is required for DID-mediated signing.".into(),
@@ -452,7 +644,7 @@ impl SigningCompatibilityService {
             .resolve_issuer_did(&ResolveIssuerDidRequest {
                 organization_id: request.organization_id.clone(),
                 issuer_did: request.issuer_did.clone(),
-                verification_method_id: None,
+                verification_method_id: request.verification_method_id.clone(),
                 credential_format: Some(request.credential_format.clone()),
                 key_purpose: Some(request.key_purpose.clone()),
                 algorithm: Some(request.algorithm.clone()),
@@ -470,6 +662,16 @@ impl SigningCompatibilityService {
             required(&Value::Object(profile.clone()), "signing_service_id")?.to_owned();
         let key_reference =
             required(&Value::Object(profile.clone()), "signing_key_reference")?.to_owned();
+        if request
+            .key_reference
+            .as_deref()
+            .is_some_and(|requested| requested != key_reference)
+        {
+            return Err(CompatibilityError::Conflict(
+                "Issuer signing key changed after identity resolution.".into(),
+            ));
+        }
+        validate_prepared_issuer_binding(request, &identity)?;
         let profile_purpose = required(&Value::Object(profile.clone()), "key_purpose")?.to_owned();
         let profile_algorithm = profile
             .get("algorithm")
@@ -480,6 +682,20 @@ impl SigningCompatibilityService {
             return Err(CompatibilityError::Conflict(
                 "Signing algorithm must match the DID-resolved issuer profile binding.".into(),
             ));
+        }
+        if service_id == "managed-openbao-transit" {
+            let current = self
+                .provider_public_key_for_profile(
+                    &request.organization_id,
+                    &Value::Object(profile.clone()),
+                )
+                .await?;
+            if !documents::same_public_jwk(&identity["public_jwk"], &current) {
+                return Err(CompatibilityError::Conflict(
+                    "DID verification method does not match the current managed signing key."
+                        .into(),
+                ));
+            }
         }
         let mut signed = self
             .sign_with_service(
@@ -492,6 +708,7 @@ impl SigningCompatibilityService {
                     key_reference: Some(key_reference),
                     key_purpose: Some(profile_purpose),
                 },
+                authorization,
             )
             .await?;
         let body = signed
@@ -1290,6 +1507,7 @@ pub async fn resolve_issuer_identity(
             "organization_id": request.organization_id,
             "issuer_did": request.issuer_did,
             "verification_method_id": method_id,
+            "signing_key_reference": key_reference,
             "public_jwk": public_jwk,
             "verification_method": method,
             "did_document": did_document,
@@ -1330,7 +1548,7 @@ fn validate_resolve_request(request: &ResolveIssuerDidRequest) -> Result<(), Com
     Ok(())
 }
 
-fn signing_payload(
+pub(crate) fn signing_payload(
     payload_b64: Option<&str>,
     payload_hex: Option<&str>,
 ) -> Result<Vec<u8>, CompatibilityError> {
@@ -1535,6 +1753,16 @@ async fn complete_profile_binding(
                 "Issuer profiles require an explicit signing key reference.".into(),
             )
         })?;
+        let organization_id = required(profile, "organization_id")?;
+        if !crate::registry::managed_profile_key_belongs_to_tenant(
+            organization_id,
+            profile,
+            reference,
+        ) {
+            return Err(CompatibilityError::Conflict(
+                "Managed signing key does not belong to this tenant and profile.".into(),
+            ));
+        }
         let purpose = required(profile, "key_purpose")?;
         if !managed_key_purposes(reference).contains(&purpose) {
             return Err(CompatibilityError::Invalid(format!(
@@ -2018,6 +2246,48 @@ fn escape_pointer(value: &str) -> String {
     value.replace('~', "~0").replace('/', "~1")
 }
 
+fn validate_prepared_issuer_binding(
+    request: &IssuerDidSignRequest,
+    identity: &Value,
+) -> Result<(), CompatibilityError> {
+    if request
+        .verification_method_id
+        .as_deref()
+        .is_some_and(|expected| {
+            identity
+                .get("verification_method_id")
+                .and_then(Value::as_str)
+                != Some(expected)
+        })
+    {
+        return Err(CompatibilityError::Conflict(
+            "Issuer verification method changed after credential preparation.".into(),
+        ));
+    }
+    if let Some(expected) = &request.expected_public_jwk {
+        if request
+            .verification_method_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            return Err(CompatibilityError::Invalid(
+                "An expected issuer public key requires its verification method.".into(),
+            ));
+        }
+        let expected = documents::public_jwk_projection(expected).map_err(|_| {
+            CompatibilityError::Invalid(
+                "Expected issuer key must be valid public key material.".into(),
+            )
+        })?;
+        if !documents::same_public_jwk(&expected, &identity["public_jwk"]) {
+            return Err(CompatibilityError::Conflict(
+                "Issuer public key changed after credential preparation.".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn required<'a>(value: &'a Value, name: &str) -> Result<&'a str, CompatibilityError> {
     value
         .get(name)
@@ -2070,6 +2340,109 @@ mod tests {
     use serde::Deserialize;
 
     use super::*;
+
+    #[test]
+    fn prepared_issuer_binding_rejects_rotation_or_method_change() {
+        let key = json!({"kty":"OKP", "crv":"Ed25519", "x":"AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE"});
+        let request = IssuerDidSignRequest {
+            organization_id: "tenant-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            credential_format: "dc+sd-jwt".into(),
+            key_purpose: "vc_jwt_issuer".into(),
+            algorithm: "EdDSA".into(),
+            key_reference: Some("same-managed-reference".into()),
+            verification_method_id: Some("did:web:issuer.example#key-1".into()),
+            expected_public_jwk: Some(key.clone()),
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(b"prepared signing input")),
+            payload_hex: None,
+        };
+        let identity = json!({
+            "verification_method_id":"did:web:issuer.example#key-1",
+            "public_jwk":key
+        });
+        assert!(validate_prepared_issuer_binding(&request, &identity).is_ok());
+        let mut rotated = identity.clone();
+        rotated["public_jwk"]["x"] = json!("AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&request, &rotated),
+            Err(CompatibilityError::Conflict(_))
+        ));
+        let mut changed_method = identity.clone();
+        changed_method["verification_method_id"] = json!("did:web:issuer.example#other");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&request, &changed_method),
+            Err(CompatibilityError::Conflict(_))
+        ));
+        let unbound = IssuerDidSignRequest {
+            verification_method_id: None,
+            ..request.clone()
+        };
+        assert!(matches!(
+            validate_prepared_issuer_binding(&unbound, &identity),
+            Err(CompatibilityError::Invalid(_))
+        ));
+        let mut private = request;
+        private.expected_public_jwk.as_mut().unwrap()["d"] =
+            json!("must-not-accept-private-material");
+        assert!(matches!(
+            validate_prepared_issuer_binding(&private, &identity),
+            Err(CompatibilityError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn certificate_authorization_rejects_resolved_key_or_payload_change() {
+        let request = IssuerDidSignRequest {
+            organization_id: "tenant-1".into(),
+            issuer_did: "did:web:issuer.example".into(),
+            credential_format: "ICAO_EMRTD".into(),
+            key_purpose: "csca".into(),
+            algorithm: "ES256".into(),
+            key_reference: None,
+            payload_b64: Some(URL_SAFE_NO_PAD.encode(b"certificate bytes")),
+            verification_method_id: None,
+            expected_public_jwk: None,
+            payload_hex: None,
+        };
+        let profile = json!({
+            "signing_service_id": "managed-openbao-transit",
+            "signing_key_reference": "csca-key-1"
+        });
+        let actual = FinalSignBinding {
+            organization_id: "tenant-1",
+            route: "/v1/signing-keys/services/managed-openbao-transit/sign",
+            service_id: Some("managed-openbao-transit"),
+            issuer_did: None,
+            key_reference: Some("csca-key-1"),
+            key_purpose: "csca",
+            algorithm: "ES256",
+            payload: b"certificate bytes",
+        };
+        assert!(SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes(actual));
+        assert!(SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes_issuer_request(&request));
+        assert!(!SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes_issuer_request(&IssuerDidSignRequest {
+                issuer_did: "did:web:other.example".into(),
+                ..request.clone()
+            }));
+        assert!(!SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes(FinalSignBinding {
+                key_reference: Some("other-key"),
+                ..actual
+            }));
+        assert!(!SignAuthorization::certificate(&request, &profile)
+            .unwrap()
+            .authorizes(FinalSignBinding {
+                payload: b"different bytes",
+                ..actual
+            }));
+    }
 
     #[test]
     fn managed_issuer_fragment_is_opaque_scoped_and_legacy_nonmanaged_is_unchanged() {

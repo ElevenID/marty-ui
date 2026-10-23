@@ -301,7 +301,7 @@ pub async fn process_outbox_event(
         .ok()
         .flatten();
     let test_delivery = is_webhook_test_event(&event);
-    let mut webhook = repository
+    let webhook = repository
         .get_webhook(&event.webhook_id)
         .await
         .ok()
@@ -412,22 +412,17 @@ pub async fn process_outbox_event(
     if !marked {
         return None;
     }
-    if let Some(value) = webhook.as_mut().filter(|_| attempted) {
-        if outcome.success {
-            value.failure_count = 0;
-            value.last_triggered_at = Some(completed);
-            value.circuit_breaker_open_until = None;
-        } else {
-            value.failure_count += 1;
-            value.last_failure_at = Some(completed);
-            let threshold =
-                bounded("WEBHOOK_CIRCUIT_BREAKER_THRESHOLD", 5, 1, 100).unwrap_or(5) as i32;
-            if value.failure_count >= threshold {
-                value.circuit_breaker_open_until = Some(completed + ChronoDuration::hours(1));
-            }
-        }
-        value.updated_at = completed;
-        let _ = repository.save_webhook(value.clone()).await;
+    if attempted {
+        let threshold = bounded("WEBHOOK_CIRCUIT_BREAKER_THRESHOLD", 5, 1, 100).unwrap_or(5) as i32;
+        let _ = repository
+            .record_webhook_attempt(
+                &event.webhook_id,
+                &event.organization_id,
+                outcome.success,
+                completed,
+                threshold,
+            )
+            .await;
     }
     if webhook
         .as_ref()

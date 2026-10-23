@@ -1,6 +1,113 @@
 //! Original packaging text rules, with separately governed safety validation.
+use std::collections::{BTreeMap, BTreeSet};
+
 use regex::Regex;
 use serde_yaml::Value;
+
+/// Compose expands project-scoped network and volume names during `config`.
+/// Remove only renderer-generated names so a customer can use `--project-name`
+/// without joining another installation's network or Redis socket volume.
+pub fn restore_project_scoped_resources(text: &str) -> Result<String, String> {
+    let mut compose: Value =
+        serde_yaml::from_str(text).map_err(|_| "Rendered Compose is invalid YAML")?;
+    if compose.get("networks").is_none() && compose.get("volumes").is_none() {
+        return Ok(text.into());
+    }
+    let project = compose
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or("Rendered Compose has no project name")?
+        .to_owned();
+    if let Some(networks) = compose.get_mut("networks") {
+        let default = networks
+            .get_mut("default")
+            .and_then(Value::as_mapping_mut)
+            .ok_or("Rendered Compose has no default network")?;
+        let generated = format!("{project}_default");
+        if default.len() != 1
+            || default
+                .get(Value::String("name".into()))
+                .and_then(Value::as_str)
+                != Some(generated.as_str())
+        {
+            return Err("Rendered default network is not project-scoped".into());
+        }
+        default.remove(Value::String("name".into()));
+    }
+    if let Some(volumes) = compose.get_mut("volumes") {
+        let volumes = volumes
+            .as_mapping_mut()
+            .ok_or("Rendered Compose volumes are invalid")?;
+        if volumes.len() != 1 {
+            return Err("Rendered Redis socket volume is not project-scoped".into());
+        }
+        let socket = volumes
+            .get_mut(Value::String("redis-socket".into()))
+            .and_then(Value::as_mapping_mut)
+            .ok_or("Rendered Compose has no Redis socket volume")?;
+        let generated = format!("{project}_redis-socket");
+        if socket.len() != 1
+            || socket
+                .get(Value::String("name".into()))
+                .and_then(Value::as_str)
+                != Some(generated.as_str())
+        {
+            return Err("Rendered Redis socket volume is not project-scoped".into());
+        }
+        socket.remove(Value::String("name".into()));
+    }
+    serde_yaml::to_string(&compose).map_err(|_| "Cannot serialize project-scoped Compose".into())
+}
+
+/// Bind every rendered service to an exact OCI digest. Keep this separate from
+/// the legacy text rules so the default package path remains byte-compatible.
+pub fn pin_service_images(
+    text: &str,
+    references: &BTreeMap<String, String>,
+) -> Result<String, String> {
+    let reference = Regex::new(
+        r"^[a-z0-9]+(?:-+[a-z0-9]+)*(?:\.[a-z0-9]+(?:-+[a-z0-9]+)*)*(?::[0-9]+)?/[a-z0-9]+(?:[._-]+[a-z0-9]+)*(?:/[a-z0-9]+(?:[._-]+[a-z0-9]+)*)*@sha256:[0-9a-f]{64}$",
+    )
+    .unwrap();
+    if references.is_empty() || references.values().any(|value| !reference.is_match(value)) {
+        return Err("Image lock must contain only exact OCI sha256 references".into());
+    }
+    let mut compose: Value =
+        serde_yaml::from_str(text).map_err(|_| "Rendered Compose is invalid YAML")?;
+    let services = compose
+        .as_mapping_mut()
+        .and_then(|root| root.get_mut(Value::String("services".into())))
+        .and_then(Value::as_mapping_mut)
+        .ok_or("Rendered Compose has no services mapping")?;
+    let actual: BTreeSet<String> = services
+        .keys()
+        .map(|key| {
+            key.as_str()
+                .map(str::to_owned)
+                .ok_or("Compose service names must be strings")
+        })
+        .collect::<Result<_, _>>()?;
+    let expected: BTreeSet<String> = references.keys().cloned().collect();
+    if actual != expected {
+        return Err("Image lock must cover exactly the rendered Compose services".into());
+    }
+    for (key, service) in services {
+        let name = key
+            .as_str()
+            .ok_or("Compose service names must be strings")?;
+        let fields = service
+            .as_mapping_mut()
+            .ok_or("Compose service must be a mapping")?;
+        if !fields.contains_key(Value::String("image".into())) {
+            return Err(format!("Compose service {name} has no image"));
+        }
+        fields.insert(
+            Value::String("image".into()),
+            Value::String(references[name].clone()),
+        );
+    }
+    serde_yaml::to_string(&compose).map_err(|_| "Cannot serialize digest-pinned Compose".into())
+}
 
 pub fn strip_build_blocks(input: &str) -> String {
     let mut lines = Vec::new();
@@ -204,4 +311,129 @@ pub fn validate_customer_text(text: &str) -> Result<(), String> {
         return Err("Customer bundle contains mutable image tags".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod network_tests {
+    use super::restore_project_scoped_resources;
+
+    #[test]
+    fn rendered_default_network_stays_scoped_to_the_install_project() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\nservices:\n  postgres:\n    image: postgres@example\n    networks:\n      default: null\n";
+        let output = restore_project_scoped_resources(rendered).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert!(parsed["networks"]["default"].get("name").is_none());
+        assert!(parsed["services"]["postgres"]["networks"]
+            .get("default")
+            .is_some());
+    }
+
+    #[test]
+    fn never_rewrites_an_explicit_or_unexpected_default_network() {
+        let rendered = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: shared-production-network\nservices: {}\n";
+        assert!(restore_project_scoped_resources(rendered).is_err());
+        let external = "name: marty-selfhost-prod\nnetworks:\n  default:\n    name: marty-selfhost-prod_default\n    external: true\nservices: {}\n";
+        assert!(restore_project_scoped_resources(external).is_err());
+    }
+
+    #[test]
+    fn rendered_redis_socket_volume_stays_scoped_to_install_project() {
+        let rendered = "name: marty-selfhost-prod\nvolumes:\n  redis-socket:\n    name: marty-selfhost-prod_redis-socket\nservices: {}\n";
+        let output = restore_project_scoped_resources(rendered).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert!(parsed["volumes"]["redis-socket"].get("name").is_none());
+        for named in ["shared-socket", "marty-selfhost-prod_redis-socket"] {
+            let bad = rendered.replace(
+                "name: marty-selfhost-prod_redis-socket\nservices",
+                &format!("name: {named}\n    external: true\nservices"),
+            );
+            assert!(restore_project_scoped_resources(&bad).is_err());
+        }
+        assert!(restore_project_scoped_resources(
+            &rendered.replace("marty-selfhost-prod_redis-socket", "shared-socket")
+        )
+        .is_err());
+    }
+}
+
+#[cfg(test)]
+mod image_lock_tests {
+    use super::pin_service_images;
+    use std::collections::BTreeMap;
+
+    const COMPOSE: &str =
+        "services:\n  app:\n    image: example:v1\n  worker:\n    image: example:v1\n";
+
+    fn references() -> BTreeMap<String, String> {
+        [
+            (
+                "app".into(),
+                format!("ghcr.io/elevenid/app@sha256:{}", "a".repeat(64)),
+            ),
+            (
+                "worker".into(),
+                format!("ghcr.io/elevenid/worker@sha256:{}", "b".repeat(64)),
+            ),
+        ]
+        .into()
+    }
+
+    #[test]
+    fn pins_every_rendered_service_to_its_exact_digest() {
+        let output = pin_service_images(COMPOSE, &references()).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&output).unwrap();
+        assert_eq!(
+            parsed["services"]["app"]["image"].as_str().unwrap(),
+            references()["app"]
+        );
+        assert_eq!(
+            parsed["services"]["worker"]["image"].as_str().unwrap(),
+            references()["worker"]
+        );
+        assert!(!output.contains("example:v1"));
+    }
+
+    #[test]
+    fn rejects_missing_extra_and_mutable_image_references() {
+        let mut values = references();
+        values.remove("worker");
+        assert!(pin_service_images(COMPOSE, &values).is_err());
+        values.insert("worker".into(), "ghcr.io/elevenid/worker:latest".into());
+        assert!(pin_service_images(COMPOSE, &values).is_err());
+        values.insert(
+            "worker".into(),
+            format!("ghcr.io/x@sha256:{}", "b".repeat(64)),
+        );
+        values.insert(
+            "unknown".into(),
+            format!("ghcr.io/x@sha256:{}", "c".repeat(64)),
+        );
+        assert!(pin_service_images(COMPOSE, &values).is_err());
+    }
+
+    #[test]
+    fn rejects_services_without_an_image_instead_of_creating_one() {
+        let input = "services:\n  app:\n    command: run\n";
+        let values = [("app".into(), format!("ghcr.io/x@sha256:{}", "a".repeat(64)))].into();
+        assert!(pin_service_images(input, &values).is_err());
+    }
+
+    #[test]
+    fn accepts_private_registry_port_and_one_character_repository() {
+        let input = "services:\n  app:\n    image: example:v1\n";
+        let image = format!("registry.example:5000/a@sha256:{}", "a".repeat(64));
+        let values = [("app".into(), image.clone())].into();
+        let output = pin_service_images(input, &values).unwrap();
+        assert!(output.contains(&image));
+    }
+
+    #[test]
+    fn rejects_empty_or_dot_repository_segments() {
+        let input = "services:\n  app:\n    image: example:v1\n";
+        for path in ["/app", "../app", "./app", "app/../worker", "app//worker"] {
+            let image = format!("ghcr.io/{path}@sha256:{}", "a".repeat(64));
+            let values = [("app".into(), image)].into();
+            assert!(pin_service_images(input, &values).is_err(), "{path}");
+        }
+    }
 }

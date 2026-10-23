@@ -12,7 +12,6 @@ autotests = false
 [features]
 default = []
 feature-regression-observer = []
-passport-self-signed-test = ["marty-verification/authority-issuance"]
 
 [[bin]]
 name = "marty-issuance-service"
@@ -35,14 +34,13 @@ path = "src/bin/passport_provider_ingress.rs"
 test = true
 
 [dependencies]
-aes-gcm.workspace = true
+marty-claim-collection.workspace = true
 axum.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 chrono.workspace = true
 fancy-regex.workspace = true
-fernet.workspace = true
 futures-core.workspace = true
 # Keep the zlib-rs-only feature policy; the shared flate2 declaration retains
 # defaults for release evidence and self-host packaging.
@@ -59,16 +57,20 @@ hyper-util.workspace = true
 log.workspace = true
 mmf-config.workspace = true
 mmf-core.workspace = true
+mmf-platform.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true
-marty-oid4vci = { workspace = true, features = ["lti"] }
-marty-didcomm = { workspace = true, features = ["did_web"] }
+marty-oid4vci = { workspace = true, features = ["issuer", "jwt_vc_json", "lti", "mso_mdoc", "sd_jwt"] }
+marty-didcomm = { workspace = true, features = ["did_web", "encrypted-envelope"] }
 marty-crypto.workspace = true
 marty-verification = { workspace = true, features = ["csca"] }
-marty-emrtd-issuance = { version = "=0.2.0", git = "https://github.com/ElevenID/marty-core", rev = "83cdaeb5657679a256b7b605178a222157e2d486" }
+marty-emrtd-issuance = { version = "=0.2.2", git = "https://github.com/ElevenID/marty-core", rev = "3f5dbb20999f773a765fd0b427a9050a6dc99fed" }
 marty-passport-auth = { path = "../../crates/passport-auth" }
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 marty-schema-startup = { path = "../../crates/schema-startup" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-platform-clock = { path = "../../crates/platform-clock" }
+marty-openbao-http = { path = "../../crates/openbao-http" }
 marty-response-compat = { path = "../../crates/response-compat", features = ["postgres"] }
 num-bigint.workspace = true
 num-traits.workspace = true
@@ -100,6 +102,10 @@ uuid.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+axum-server.workspace = true
+affinidi-messaging-didcomm.workspace = true
+x25519-dalek = "2"
 const-oid.workspace = true
 der.workspace = true
 redis.workspace = true
@@ -110,10 +116,9 @@ zip.workspace = true
 serde_yaml.workspace = true
 ed25519-dalek.workspace = true
 jsonwebtoken.workspace = true
-mmf-platform.workspace = true
 rand08.workspace = true
 rsa.workspace = true
-rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs"] }
+rcgen.workspace = true
 tower.workspace = true
 
 [build-dependencies]
@@ -256,6 +261,10 @@ path = "tests/credential_signing_behavior.rs"
 [[test]]
 name = "didcomm_delivery_atomicity"
 path = "tests/didcomm_delivery_atomicity.rs"
+
+[[test]]
+name = "didcomm_remote_kms_live"
+path = "tests/didcomm_remote_kms_live.rs"
 
 [[test]]
 name = "didcomm_delivery_behavior"

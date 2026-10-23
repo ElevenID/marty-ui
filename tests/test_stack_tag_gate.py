@@ -106,6 +106,8 @@ def run(run_id: int, path: str, event: str, **updates: object) -> dict[str, obje
         "conclusion": "success",
         "head_sha": COMMIT,
         "head_branch": "main",
+        "created_at": f"2026-10-14T00:00:{run_id:02d}Z",
+        "run_started_at": f"2026-10-14T00:00:{run_id:02d}Z",
     }
     value.update(updates)
     return value
@@ -125,6 +127,28 @@ def payload() -> dict[str, object]:
 def test_exact_head_terminal_workflows_pass() -> None:
     accepted = stack_tag_gate.validate_workflow_runs(payload(), POLICY, COMMIT, 99)
     assert [item["run_id"] for item in accepted] == [10, 11, 12, 13]
+
+
+def test_required_workflow_uses_latest_attempt_and_still_rejects_pending() -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[0]["run_started_at"] = "2026-10-14T02:00:00Z"
+    workflow_runs.append(
+        run(
+            14,
+            ".github/workflows/ci.yml",
+            "merge_group",
+            conclusion="cancelled",
+            run_started_at="2026-10-14T01:00:00Z",
+        )
+    )
+    assert stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)[0][
+        "run_id"
+    ] == 10
+    workflow_runs[0].update(status="in_progress", conclusion=None)
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="still pending"):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
 
 
 @pytest.mark.parametrize(
@@ -165,6 +189,57 @@ def test_latest_full_canvas_qualification_controls_release_claim() -> None:
         "run_id": 14,
         "conclusion": "success",
     }
+
+
+def test_successful_rerun_after_newer_cancelled_run_qualifies() -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[-1]["run_started_at"] = "2026-10-14T02:00:00Z"
+    workflow_runs.append(
+        run(
+            14,
+            ".github/workflows/ci.yml",
+            "workflow_dispatch",
+            conclusion="cancelled",
+            run_started_at="2026-10-14T01:00:00Z",
+        )
+    )
+    accepted = stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+    assert accepted[-1]["run_id"] == 13
+
+
+def test_newer_failed_rerun_still_blocks_claim() -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[-1].update(
+        conclusion="failure", run_started_at="2026-10-14T02:00:00Z"
+    )
+    workflow_runs.append(
+        run(
+            14,
+            ".github/workflows/ci.yml",
+            "workflow_dispatch",
+            run_started_at="2026-10-14T01:00:00Z",
+        )
+    )
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="did not succeed"):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
+
+
+@pytest.mark.parametrize("timestamp", [None, "not-a-timestamp", "2026-10-14T00:00:00"])
+def test_qualification_rejects_missing_or_ambiguous_execution_time(
+    timestamp: object,
+) -> None:
+    document = payload()
+    workflow_runs = document["workflow_runs"]
+    assert isinstance(workflow_runs, list)
+    workflow_runs[-1]["run_started_at"] = timestamp
+    if timestamp is None:
+        workflow_runs[-1].pop("created_at")
+    with pytest.raises(stack_tag_gate.StackTagGateError, match="timestamp"):
+        stack_tag_gate.validate_workflow_runs(document, POLICY, COMMIT, 99)
 
 
 def test_full_canvas_qualification_policy_cannot_be_removed() -> None:

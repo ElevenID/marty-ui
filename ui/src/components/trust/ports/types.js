@@ -150,10 +150,13 @@ export const HealthStatus = Object.freeze({
 
 /**
  * @typedef {Object} BYOKCertificateUpload
- * @property {string} rootCaCertificate - PEM-encoded root CA certificate
+ * @property {string} issuerDid - DID of an existing managed issuer identity
+ * @property {string} keyPurpose - Identity key purpose
+ * @property {string} credentialFormat - Identity credential format
+ * @property {string} algorithm - Identity signing algorithm
+ * @property {string} [rootCaCertificate] - PEM-encoded root CA certificate
  * @property {string} [intermediateCertificates] - PEM-encoded intermediate certs
  * @property {string} issuerCertificate - PEM-encoded issuer signing certificate
- * @property {string} privateKeyPem - PEM-encoded private key (only for direct upload)
  */
 
 /**

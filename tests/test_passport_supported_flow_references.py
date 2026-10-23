@@ -7,8 +7,9 @@ from copy import deepcopy
 import pytest
 
 from scripts.passport_supported_flow_references import (
-    DISPOSABLE_REVOCATION_PROFILE_ID, PASSPORT_COMPLIANCE_PROFILE_ID,
+    PASSPORT_COMPLIANCE_PROFILE_ID,
     FlowReferenceError,
+    provision_beta_physical_passport_references,
     provision_physical_passport_references,
 )
 
@@ -27,7 +28,8 @@ def responses() -> list[tuple[int, dict]]:
         "name": PREFIX + " credential", "status": "DRAFT",
         "credential_type": "Passport", "credential_payload_format": "ICAO_EMRTD",
         "issuance_protocol": "PHYSICAL_DOCUMENT", "doctype": "TD3",
-        "revocation_profile_id": DISPOSABLE_REVOCATION_PROFILE_ID,
+        "revocation_profile_id": None,
+        "compliance_profile_id": PASSPORT_COMPLIANCE_PROFILE_ID,
         "issuer_did": ISSUER,
     }
     application = {
@@ -75,7 +77,7 @@ def test_reference_setup_uses_real_activated_tenant_resources() -> None:
     assert calls[0][0:2] == ("POST", "/v1/credential-templates")
     assert calls[0][2]["supported_formats"] == ["ICAO_EMRTD"]
     assert calls[0][2]["issuer_did"] == ISSUER
-    assert calls[0][2]["revocation_profile_id"] == DISPOSABLE_REVOCATION_PROFILE_ID
+    assert "revocation_profile_id" not in calls[0][2]
     assert calls[0][2]["compliance_profile_id"] == PASSPORT_COMPLIANCE_PROFILE_ID
     assert calls[4][2]["form_fields"][0]["claim_mapping"] == "document_number"
     assert calls[6][0:2] == ("POST", f"/v1/application-templates/{APPLICATION}/validate")
@@ -87,6 +89,7 @@ def test_reference_setup_uses_real_activated_tenant_resources() -> None:
 @pytest.mark.parametrize("index,field,value", [
     (1, "issuer_did", "did:web:foreign.invalid"),
     (2, "revocation_profile_id", "foreign"),
+    (3, "compliance_profile_id", "foreign"),
     (3, "status", "DRAFT"),
     (5, "credential_template_id", "foreign"),
     (6, "valid", False),
@@ -116,6 +119,28 @@ def test_reference_setup_rejects_another_organization_before_writes() -> None:
             request, "00000000-0000-0000-0000-000000000002",
             PREFIX, ISSUER, "acceptance-123456-template",
         )
+
+
+def test_beta_reference_setup_reuses_the_frozen_physical_contract_for_pilot() -> None:
+    pilot = "00000000-0000-0000-0000-000000000019"
+    queue = responses()
+    calls = []
+
+    def request(method, path, body, headers):
+        calls.append((method, path, body, headers))
+        status, result = queue.pop(0)
+        if "organization_id" in result:
+            result["organization_id"] = pilot
+        return status, result
+
+    refs = provision_beta_physical_passport_references(
+        request, pilot, PREFIX, ISSUER, "pilot-key",
+        PASSPORT_COMPLIANCE_PROFILE_ID,
+    )
+    assert refs["credential_template_id"] == CREDENTIAL
+    assert calls[0][2]["organization_id"] == pilot
+    assert calls[0][2]["compliance_profile_id"] == PASSPORT_COMPLIANCE_PROFILE_ID
+    assert not queue
 
 
 @pytest.mark.parametrize("index,operation,expected", [

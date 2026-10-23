@@ -8,7 +8,6 @@ KMS, issuer profiles, and simulator secret files are governed and available.
 from __future__ import annotations
 
 import argparse
-import base64
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -22,7 +21,10 @@ import tempfile
 from typing import Callable
 import uuid
 
-from services.passport_disposable_identity import ORGANIZATION_ID
+if __package__:
+    from .passport_disposable_identity import ORGANIZATION_ID
+else:
+    from passport_disposable_identity import ORGANIZATION_ID
 
 if __package__:
     from .check_passport_supported_compose_ownership import (
@@ -31,14 +33,15 @@ if __package__:
     )
     from .check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        ModelPreflightError, preflight_attested_plan,
+        ModelPreflightError, preflight_attested_plan, render_model,
+        require_keyless_tls_custody,
         source_identity,
     )
     from .passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
     from .passport_supported_infra_images import ROLES
-    from .stage_passport_disposable_tls import TLS_FILES, stage_tls
+    from .passport_remote_tls import PUBLIC_TLS_FILES
 else:
     from check_passport_supported_compose_ownership import (
         _expected_image, _expected_mounts, _inspect, _labels, docker,
@@ -46,14 +49,15 @@ else:
     )
     from check_passport_supported_rust_model import (
         DISPOSABLE_NETWORKS, DISPOSABLE_SERVICES, INGRESS_NETWORK, PROJECT,
-        ModelPreflightError, preflight_attested_plan,
+        ModelPreflightError, preflight_attested_plan, render_model,
+        require_keyless_tls_custody,
         source_identity,
     )
     from passport_supported_provisioning_plan import (
         COMMIT, PLAN_WORKFLOW, RUN_ID, PlanError, _attest, release_inputs,
     )
     from passport_supported_infra_images import ROLES
-    from stage_passport_disposable_tls import TLS_FILES, stage_tls
+    from passport_remote_tls import PUBLIC_TLS_FILES
 
 
 WORKFLOW_REF = (
@@ -78,22 +82,27 @@ TEXT_SECRETS = frozenset({
     "bao_root_token", "marty_db_password", "signing_keys_internal_api_key",
     "dsc_issue_gateway_key", "csca_issue_gateway_key",
     "issuance_api_key", "callback_signer_api_key", "grpc_service_token",
+    "signing_keys_service_sign_gateway_key",
+    "signing_keys_issuer_sign_key",
+    "signing_keys_integration_secret_key",
+    "device_registration_gateway_key",
     "passport_beta_reconciliation_operator_token",
-    "bureau_database_url", "token_hmac_key", "integration_secret_master_key",
+    "bureau_database_url", "token_hmac_key",
     "flow_webhook_secret", "flow_application_event_hmac_key",
 })
-STAGED_SECRETS = TEXT_SECRETS | TLS_FILES
-BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token"})
+STAGED_SECRETS = TEXT_SECRETS
+BOOTSTRAPPED_SECRETS = frozenset({"bao_token", "callback_signer_bao_token", "notification_openbao_token"})
 EPHEMERAL_SECRETS = BOOTSTRAPPED_SECRETS | frozenset({
     "passport_acceptance_api_key", "passport_acceptance_operator_api_key",
     "passport_acceptance_tenant_probe_api_key",
 })
 DISPOSABLE_VOLUMES = frozenset({
     "postgres_data", "redis_data", "openbao_data", "openbao_file", "openbao_logs",
+    "openbao_public_ca",
 })
 PARTIAL_ONLY_SERVICES = frozenset({
     "passport-openbao-bootstrap", "passport-certificate-bootstrap",
-    "passport-bureau-poll",
+    "passport-bureau-poll", "passport-tls-bootstrap",
 })
 
 
@@ -194,6 +203,13 @@ def verify_pre_mutation(
     require(report.get("status") == "blocked"
             and report.get("model", {}).get("model_safe") is True,
             "Disposable model preflight failed")
+    if workflow_ref == WORKFLOW_REF:
+        model = render_model(
+            plan["surface"], plan["project"], env_file, disposable_root,
+            plan["services_reference"], owner_labels=plan["owner_labels"],
+            plan_expires_at=plan["expires_at"],
+        )
+        require_keyless_tls_custody(model)
     return plan
 
 
@@ -244,7 +260,6 @@ def stage_disposable_inputs(
     references = {
         "MARTY_SERVICES_IMAGE": plan.get("services_reference"),
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE": plan.get("migrations_reference"),
-        "PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE": plan.get("issuance_reference"),
         **{f"PASSPORT_ACCEPTANCE_{name.upper()}_IMAGE": image
            for name, image in images.items()},
     }
@@ -280,12 +295,15 @@ def stage_disposable_inputs(
             "dsc_issue_gateway_key": secrets.token_hex(32),
             "csca_issue_gateway_key": secrets.token_hex(32),
             "issuance_api_key": secrets.token_hex(32),
+            "signing_keys_service_sign_gateway_key": secrets.token_hex(32),
+            "signing_keys_issuer_sign_key": secrets.token_hex(32),
+            "signing_keys_integration_secret_key": secrets.token_hex(32),
             "callback_signer_api_key": secrets.token_hex(32),
             "grpc_service_token": secrets.token_hex(32),
+            "device_registration_gateway_key": secrets.token_hex(32),
             "passport_beta_reconciliation_operator_token": secrets.token_hex(32),
             "bureau_database_url": f"postgresql://marty:{database_password}@postgres:5432/marty",
             "token_hmac_key": secrets.token_hex(32),
-            "integration_secret_master_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
             "flow_webhook_secret": secrets.token_hex(32),
             "flow_application_event_hmac_key": secrets.token_hex(32),
         }
@@ -293,6 +311,9 @@ def stage_disposable_inputs(
         require(values["passport_beta_reconciliation_operator_token"]
                 not in {values["grpc_service_token"], values["issuance_api_key"]},
                 "Disposable native batch operator token is not distinct")
+        require(values["device_registration_gateway_key"]
+                not in {values["grpc_service_token"], values["issuance_api_key"]},
+                "Device registration Gateway key is not distinct")
         env = {
             **references,
             "PASSPORT_ACCEPTANCE_PROJECT": project,
@@ -313,9 +334,8 @@ def stage_disposable_inputs(
             # intended containers. OpenBao's pinned image starts as root.
             mode = 0o600 if name == "bao_root_token" else 0o644
             _write_private(secret_dir / name, value.encode("ascii"), mode=mode)
-        stage_tls(secret_dir)
         require({path.name for path in secret_dir.iterdir()} == STAGED_SECRETS,
-                "Disposable TLS and secret set is incomplete")
+                "Disposable secret set is incomplete before remote TLS bootstrap")
         require(all(not (secret_dir / name).exists() for name in BOOTSTRAPPED_SECRETS),
                 "Disposable OpenBao tokens were prepopulated")
         env_file = root / "acceptance.env"
@@ -336,18 +356,54 @@ def _remove_staged_inputs(root: Path) -> None:
     if secret_dir.exists():
         require(secret_dir.resolve() == secret_dir and not secret_dir.is_symlink(),
                 "Disposable input cleanup secret directory changed identity")
-        for name in STAGED_SECRETS | EPHEMERAL_SECRETS:
+        for name in STAGED_SECRETS | PUBLIC_TLS_FILES | EPHEMERAL_SECRETS:
             (secret_dir / name).unlink(missing_ok=True)
         for path in secret_dir.iterdir():
             require(re.fullmatch(
-                r"\.(?:bao_token|callback_signer_bao_token)\.[A-Za-z0-9]{6}",
+                r"\.(?:bao_token|callback_signer_bao_token|notification_openbao_token)\.[A-Za-z0-9]{6}",
                 path.name,
             ) is not None,
                 "Disposable secret directory has an unexpected file")
             path.unlink()
         secret_dir.rmdir()
+    tls_output = root / "tls-output"
+    if tls_output.exists():
+        require(tls_output.resolve() == tls_output and not tls_output.is_symlink(),
+                "Disposable TLS output directory changed identity")
+        for path in tls_output.iterdir():
+            require(path.name in PUBLIC_TLS_FILES and not path.is_symlink(),
+                    "Disposable TLS output contains an unexpected file")
+            path.unlink()
+        tls_output.rmdir()
     (root / "acceptance.env").unlink(missing_ok=True)
     root.rmdir()
+
+
+def _tls_bootstrap_args(plan: dict, root: Path, output_dir: Path) -> list[str]:
+    """Run the signed Rust keyless TLS issuer after disposable OpenBao is live."""
+    project = plan["project"]
+    labels = {"com.docker.compose.project": project,
+              "com.docker.compose.service": "passport-tls-bootstrap",
+              **plan["owner_labels"]}
+    user = f"{os.getuid()}:{os.getgid()}" if os.name == "posix" else "1000:1000"
+    return [
+        "docker", "run", "--rm", "--name", f"{project}-passport-tls-bootstrap-1",
+        "--network", f"{project}_private", "--user", user,
+        *(argument for key, value in sorted(labels.items())
+          for argument in ("--label", f"{key}={value}")),
+        "--mount", ("type=bind,src=" + str(root / "secrets" / "bao_root_token")
+                    + ",dst=/run/secrets/bao_root_token,readonly"),
+        "--mount", ("type=volume,src=" + project
+                    + "_openbao_public_ca,dst=/bao/public-ca,readonly"),
+        "--mount", ("type=bind,src=" + str(output_dir) + ",dst=/work/output"),
+        "--env", "BAO_ADDR=https://openbao:8200",
+        "--env", "BAO_CACERT=/bao/public-ca/ca.crt",
+        "--env", "BAO_ROOT_TOKEN_FILE=/run/secrets/bao_root_token",
+        "--env", f"PASSPORT_ACCEPTANCE_PROJECT={project}",
+        "--env", "PASSPORT_TLS_OUTPUT_DIR=/work/output",
+        "--entrypoint", "/usr/local/bin/marty-passport-tls-bootstrap",
+        plan["services_reference"],
+    ]
 
 
 def _write_private(path: Path, value: bytes, *, mode: int = 0o600) -> None:
@@ -418,7 +474,6 @@ def collect_record(
         **{key: plan[key] for key in (
             "run_id", "project", "source_commit", "services_reference",
             "migrations_reference", "infra_images",
-            "issuance_reference",
             "created_at", "expires_at", "owner_labels",
         )},
     }
@@ -729,7 +784,6 @@ def destroy_partial_disposable_project(
               "source_commit": plan["source_commit"],
               "services_reference": plan["services_reference"],
               "migrations_reference": plan["migrations_reference"],
-              "issuance_reference": plan["issuance_reference"],
               "infra_images": plan["infra_images"],
               "containers": containers, "networks": networks, "volumes": volumes}
     return _destroy_recorded_project(

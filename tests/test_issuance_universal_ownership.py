@@ -43,7 +43,7 @@ def test_exact_runtime_remainder_stays_on_python_without_hiding_migrated_routes(
     assert coverage["remaining"]["grpc"] == 0
 
 
-def test_default_compose_selects_native_and_keeps_only_the_explicit_legacy_owner() -> (
+def test_default_compose_selects_native_and_rust_passport_alias() -> (
     None
 ):
     model = yaml.safe_load(
@@ -57,9 +57,21 @@ def test_default_compose_selects_native_and_keeps_only_the_explicit_legacy_owner
         "http://issuance-native:8005"
     )
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
+    bridge = services["envoy-issuance-bridge"]
+    assert bridge["network_mode"] == "service:envoy"
+    assert bridge["environment"]["KEYLESS_BRIDGE_LISTEN"] == "127.0.0.1:19006"
+    assert bridge["environment"]["KEYLESS_BRIDGE_UPSTREAM_HOST"] == "issuance-native"
+    assert services["issuance"]["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert services["issuance"]["environment"]["DIDCOMM_DELIVERY_OWNER"] == "native"
+    assert services["issuance"]["entrypoint"] == ["/usr/local/bin/marty-issuance-service"]
+    assert CONTRACT["beta_candidate"] == {
+        "issuance_alias_runtime": "rust/services/issuance",
+        "passport_runtime_owner": "issuance-native",
+        "passport_contract": "contracts/issuance-physical-passport-native.json",
+        "acceptance_required_before_python_deletion": True,
+    }
 
 
 def test_default_conformance_kubernetes_and_envoy_select_native() -> None:
@@ -83,8 +95,8 @@ def test_default_conformance_kubernetes_and_envoy_select_native() -> None:
     native = clusters["issuance_native_grpc"]
     endpoint = native["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]
     assert endpoint["address"]["socket_address"] == {
-        "address": "issuance-native",
-        "port_value": 9005,
+        "address": "127.0.0.1",
+        "port_value": 19006,
     }
     routes = envoy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][
         0
@@ -105,7 +117,6 @@ def test_direct_first_party_clients_use_gateway_not_a_python_host_port() -> None
         "scripts/check_template_wallets.py",
         "scripts/debug_issuance_response.py",
         "scripts/test_credential_format.py",
-        "scripts/seed_canvas_real.py",
     ]:
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "localhost:8005" not in source, relative
@@ -123,7 +134,6 @@ def test_all_moved_diagnostics_use_the_shared_gateway_actor_boundary() -> None:
     for relative in [
         "scripts/test_credential_format.py",
         "scripts/debug_issuance_response.py",
-        "scripts/seed_canvas_real.py",
     ]:
         source = (ROOT / relative).read_text(encoding="utf-8")
         assert "resolve_gateway_actor" in source, relative
@@ -137,19 +147,19 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     production = yaml.safe_load((ROOT / CONTRACT["production_composition"]).read_text())
     services = production["services"]
     issuance_environment = services["issuance"]["environment"]
-    assert "DIDCOMM_DELIVERY_OWNER" not in issuance_environment
-    assert "ISSUANCE_NATIVE_SERVICE_URL" not in issuance_environment
+    assert issuance_environment["DIDCOMM_DELIVERY_OWNER"] == "native"
+    assert issuance_environment["ISSUANCE_NATIVE_SERVICE_URL"] == (
+        "http://issuance-native:8005"
+    )
 
-    # Universal native ownership is a beta/default-composition change.  Keep
-    # every production HTTP consumer on its previously selected legacy owner;
-    # checking only the issuance service itself would miss a consumer cutover.
+    # The retained Python HTTP owner still serves nine passport routes. Native
+    # consumers explicitly select the native service; other HTTP consumers
+    # retain the Python URL for routes not yet migrated.
     for service_name in ("auth", "applicant", "presentation-policy", "flow"):
         environment = services[service_name]["environment"]
         assert environment["ISSUANCE_SERVICE_URL"] == "http://issuance:8005"
         if service_name == "flow":
-            assert environment["ISSUANCE_NATIVE_SERVICE_URL"] == (
-                "${ISSUANCE_NATIVE_SERVICE_URL:-http://issuance:8005}"
-            )
+            assert environment["ISSUANCE_NATIVE_SERVICE_URL"] == "http://issuance-native:8005"
         else:
             assert "ISSUANCE_NATIVE_SERVICE_URL" not in environment
 
@@ -158,19 +168,27 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
         "${MIP_CREDENTIAL_STATUS_URL_TEMPLATE:-http://issuance:8005/v1/issuance/"
         "credentials/{credential_id}/status}"
     )
+    assert presentation_environment["ISSUANCE_API_KEY_FILE"] == (
+        "/run/secrets/issuance_api_key"
+    )
+    assert "issuance_api_key" in services["presentation-policy"]["secrets"]
     assert services["flow"]["environment"]["ISSUANCE_GRPC_TARGET"] == (
-        "issuance-native:9005"
+        "https://issuance-native:9005"
     )
     for service_name in ("auth", "applicant", "presentation-policy"):
         assert "issuance-native" not in services[service_name].get("depends_on", {})
-    assert {"issuance", "issuance-native"}.isdisjoint(
-        services["flow"].get("depends_on", {})
-    )
+    assert services["flow"]["depends_on"]["issuance"] == {
+        "condition": "service_healthy"
+    }
+    assert services["flow"]["depends_on"]["issuance-native"] == {
+        "condition": "service_healthy"
+    }
 
-    assert CONTRACT["production_unchanged"] is True
+    assert CONTRACT["production_unchanged"] is False
     assert CONTRACT["production_http_owner"] == {
         "consumers": ["auth", "applicant", "presentation-policy", "flow"],
-        "selected_environment_variable": "ISSUANCE_SERVICE_URL",
+        "native_selected_consumers": ["flow"],
+        "retained_http_consumers": ["auth", "applicant", "presentation-policy"],
         "runtime_precedence": [
             "ISSUANCE_NATIVE_SERVICE_URL",
             "ISSUANCE_SERVICE_URL",
@@ -195,7 +213,7 @@ def test_production_and_kms_boundaries_remain_explicit() -> None:
     }
     published = (
         ROOT
-        / "rust/crates/service-acceptance/tests/canvas_published_schema_contract.rs"
+        / "rust/crates/canvas-acceptance/tests/canvas_published_schema_contract.rs"
     ).read_text(encoding="utf-8")
     lifecycle = (
         ROOT

@@ -43,6 +43,8 @@ import {
   DEFAULT_KEY_MANAGEMENT_CONFIG,
   PURPOSES_REQUIRING_CERTIFICATE,
   getDefaultKeyManagementService,
+  createKeyManagementConfigUpdate,
+  createKeyManagementRemovalPayload,
   normalizeKeyManagementConfig,
 } from './keyManagementServiceCatalog';
 
@@ -487,6 +489,8 @@ export default function SigningKeysPage() {
     try {
       const result = await signingKeysApi.generateServiceCsr(service.id, {
         ...orgRequestParams,
+        key_reference: service.key_reference,
+        algorithm: service.algorithms?.[0],
         country: certData.country,
         organization: certData.organization,
         common_name: certData.common_name || service.name,
@@ -522,8 +526,7 @@ export default function SigningKeysPage() {
     try {
       await signingKeysApi.updateKeyManagementConfig({
         ...orgRequestParams,
-        services,
-        default_service_id: serviceId,
+        ...createKeyManagementConfigUpdate(keyManagementConfig, { default_service_id: serviceId }),
       });
       await reloadConfig();
       showNotification?.('Updated the default signing service.', 'success');
@@ -539,15 +542,9 @@ export default function SigningKeysPage() {
     }
 
     try {
-      const remainingServices = services.filter((service) => service.id !== serviceId);
-      const nextDefaultServiceId = keyManagementConfig.default_service_id === serviceId
-        ? remainingServices[0]?.id || null
-        : keyManagementConfig.default_service_id;
-
       await signingKeysApi.updateKeyManagementConfig({
         ...orgRequestParams,
-        services: remainingServices,
-        default_service_id: nextDefaultServiceId,
+        ...createKeyManagementRemovalPayload(keyManagementConfig, serviceId),
       });
       await reloadConfig();
       showNotification?.('Removed the key management service registration.', 'success');

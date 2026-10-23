@@ -1,0 +1,55 @@
+{
+  "kmsProvider": {
+    "role": "button",
+    "regex": "^OpenBao Transit"
+  },
+  "next": {
+    "role": "button",
+    "regex": "^next$"
+  },
+  "kmsServiceName": {
+    "regex": "^service name"
+  },
+  "kmsUrl": {
+    "regex": "^service url"
+  },
+  "kmsMount": {
+    "regex": "^transit mount"
+  },
+  "kmsToken": {
+    "regex": "^transit token"
+  },
+  "kmsNamespace": {
+    "regex": "^namespace"
+  },
+  "kmsCaFile": {
+    "regex": "^TLS CA certificate file"
+  },
+  "kmsKey": {
+    "regex": "^transit key name(?:\\s*\\*)?$"
+  },
+  "kmsIssuerPurpose": {
+    "role": "checkbox",
+    "regex": "^VC JWT \\/ SD-JWT issuer(?:\\s|$)"
+  },
+  "kmsVerifierPurpose": {
+    "role": "checkbox",
+    "regex": "^OID4VP request signing(?:\\s|$)"
+  },
+  "kmsDefault": {
+    "role": "switch",
+    "name": "Use as the default signing service",
+    "exact": true
+  },
+  "kmsRegister": {
+    "role": "button",
+    "regex": "^register service$"
+  },
+  "issuerDid": {
+    "regex": "^Issuer DID"
+  },
+  "issuerSubmit": {
+    "role": "button",
+    "regex": "^create managed identity$"
+  }
+}

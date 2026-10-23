@@ -52,7 +52,7 @@ export default function ApproveDialog({ open, application, checks, initialNote, 
       </DialogTitle>
       <DialogContent dividers>
         <Typography variant="body2" color="text.secondary" gutterBottom>
-          You are about to approve this application and trigger credential issuance.
+          Approve this application, then create a wallet invitation to issue the credential.
         </Typography>
 
         {/* Credential summary */}

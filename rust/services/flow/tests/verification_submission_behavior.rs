@@ -4,12 +4,14 @@ use async_trait::async_trait;
 use chrono::{Duration, TimeZone, Utc};
 use marty_flow::{
     decrypt_verification_response, prepare_verification_submission, FlowInstanceRecord,
-    FlowKeyEnvelope, FlowKeyEnvelopeProvider, FlowKeyEnvelopeRequest, FlowProviderError,
-    FlowProviderRegistry, FlowVerificationSubmissionError, PreparedVerificationSubmission,
-    PresentationEvaluationRequest, PresentationEvaluationResult, PresentationPolicyProvider,
-    PresentationPolicyReference, VerificationSubmissionInput, VerificationSubmissionOptions,
-    CALLBACK_MAX_ATTEMPTS, CALLBACK_RETENTION_SECONDS,
+    FlowKeyEnvelopeProvider, FlowProviderError, FlowProviderRegistry,
+    FlowVerificationSubmissionError, PreparedVerificationSubmission, PresentationEvaluationRequest,
+    PresentationEvaluationResult, PresentationPolicyProvider, PresentationPolicyReference,
+    VerificationSubmissionInput, VerificationSubmissionOptions, CALLBACK_MAX_ATTEMPTS,
+    CALLBACK_RETENTION_SECONDS,
 };
+#[path = "support/haip_remote_fixture.rs"]
+mod haip_remote_fixture;
 use marty_verification::flow::FlowInstanceStatus;
 use mmf_push::WebhookDestinationRegistry;
 use serde_json::{json, Value};
@@ -43,23 +45,22 @@ impl PresentationPolicyProvider for Policies {
     }
 }
 
-struct Envelopes(String);
+struct RemoteEnvelopes;
 
 #[async_trait]
-impl FlowKeyEnvelopeProvider for Envelopes {
-    async fn wrap(
+impl FlowKeyEnvelopeProvider for RemoteEnvelopes {
+    async fn decrypt_haip_response(
         &self,
-        _request: &FlowKeyEnvelopeRequest,
-    ) -> Result<FlowKeyEnvelope, FlowProviderError> {
-        unreachable!("submission only unwraps response keys")
-    }
-
-    async fn unwrap(&self, envelope: &FlowKeyEnvelope) -> Result<String, FlowProviderError> {
-        assert_eq!(envelope.organization_id, "org-1");
-        assert_eq!(envelope.flow_instance_id, "abcdefghijklmnop");
-        assert_eq!(envelope.purpose, "oid4vp_response_decryption");
-        assert_eq!(envelope.envelope, "vault:haip-key");
-        Ok(self.0.clone())
+        organization_id: &str,
+        flow_instance_id: &str,
+        version: &str,
+        jwe: &str,
+    ) -> Result<Vec<u8>, FlowProviderError> {
+        assert_eq!(organization_id, "org-1");
+        assert_eq!(flow_instance_id, "abcdefghijklmnop");
+        assert_eq!(version, haip_remote_fixture::VERSION);
+        assert!(jwe.contains('.'));
+        Ok(br#"{"vp_token":"remote-fixture"}"#.to_vec())
     }
 }
 
@@ -73,6 +74,7 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         "nonce": "nonce-with-at-least-32-bytes-1234567890",
         "oid4vp_expected_state": "state-1",
         "oid4vp_verifier_context": true,
+        "oid4vp_client_id": "did:web:verifier.example",
         "presentation_policy_id": "policy-1",
         "_marty_verification_principal_id": "user-1",
         "verification_audience": "did:web:verifier.example",
@@ -104,6 +106,20 @@ fn instance(callback: bool) -> FlowInstanceRecord {
         created_at: now(),
         updated_at: now(),
     }
+}
+
+fn with_emitted_query(
+    mut instance: FlowInstanceRecord,
+    field: &str,
+    query: Value,
+) -> FlowInstanceRecord {
+    let mut payload = json!({
+        "nonce": "nonce-with-at-least-32-bytes-1234567890",
+        "client_id": "did:web:verifier.example"
+    });
+    payload[field] = query;
+    instance.context["mip_messages"]["presentation_request"] = json!({"payload": payload});
+    instance
 }
 
 fn allowed() -> PresentationEvaluationResult {
@@ -168,6 +184,178 @@ fn input(token: &str) -> VerificationSubmissionInput {
         state: Some("state-1".into()),
         audience_override: None,
     }
+}
+
+#[tokio::test]
+async fn emitted_query_and_submission_structure_reach_policy_without_new_verdict() {
+    let query = json!({"id": "definition-1", "input_descriptors": [{"id": "member"}]});
+    let instance = with_emitted_query(instance(false), "presentation_definition", query.clone());
+    let mut wallet = input("header.payload.signature");
+    let submission = json!({
+        "id": "submission-1", "definition_id": "definition-1",
+        "descriptor_map": [{"id": "member", "format": "jwt_vp", "path": "$"}],
+        "legacy_extension": true
+    });
+    wallet.presentation_submission = Some(submission.clone());
+    let (providers, seen) = providers(Ok(allowed()));
+    let PreparedVerificationSubmission::Final(finalization) =
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now())
+            .await
+            .unwrap()
+    else {
+        panic!("existing allow result expected")
+    };
+    assert_eq!(
+        finalization.instance.result.as_ref().unwrap()["decision"],
+        "allow"
+    );
+    let requests = seen.lock().unwrap();
+    let transport = requests[0].oid4vp_transport.as_ref().unwrap();
+    assert_eq!(
+        transport.query_kind,
+        marty_oid4vp_contract::QueryKind::PresentationExchange
+    );
+    assert_eq!(transport.query_document, query);
+    assert_eq!(transport.presentation_submission, Some(submission));
+    assert!(transport.compatible_presentation_submission().is_err());
+    assert_eq!(transport.vp_token_raw, "header.payload.signature");
+    assert_eq!(transport.verifier_client_id, "did:web:verifier.example");
+    assert_eq!(
+        transport.request_nonce,
+        "nonce-with-at-least-32-bytes-1234567890"
+    );
+    transport.validate_transport().unwrap();
+    assert_eq!(requests[0].presentation, "header.payload.signature");
+}
+
+#[tokio::test]
+async fn dcql_query_transport_does_not_require_presentation_submission() {
+    let query = json!({"credentials": [{"id": "member"}]});
+    let instance = with_emitted_query(instance(false), "dcql_query", query.clone());
+    let raw_tokens = json!({"member": ["header.payload.signature"]}).to_string();
+    let mut wallet = input(&raw_tokens);
+    wallet.presentation_submission = None;
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now()).await,
+        Ok(PreparedVerificationSubmission::Final(_))
+    ));
+    let requests = seen.lock().unwrap();
+    let transport = requests[0].oid4vp_transport.as_ref().unwrap();
+    assert_eq!(transport.query_kind, marty_oid4vp_contract::QueryKind::Dcql);
+    assert_eq!(transport.query_document, query);
+    assert!(transport.presentation_submission.is_none());
+    assert_eq!(transport.vp_token_raw, raw_tokens);
+    assert_eq!(requests[0].presentation, "header.payload.signature");
+}
+
+#[tokio::test]
+async fn dc_api_preserves_legacy_empty_audience_while_carrying_emitted_client_id() {
+    let mut instance = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    instance
+        .context
+        .as_object_mut()
+        .unwrap()
+        .remove("verification_audience");
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            instance,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Ok(PreparedVerificationSubmission::Final(_))
+    ));
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[0].audience, "");
+    assert_eq!(
+        requests[0]
+            .oid4vp_transport
+            .as_ref()
+            .unwrap()
+            .verifier_client_id,
+        "did:web:verifier.example"
+    );
+}
+
+#[tokio::test]
+async fn oversized_legacy_submission_keeps_existing_verdict_without_transport_claim() {
+    let instance = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    let mut wallet = input("header.payload.signature");
+    wallet.presentation_submission = Some(json!({
+        "id": "submission-1", "definition_id": "definition-1", "descriptor_map": [],
+        "legacy_extension": "x".repeat(marty_oid4vp_contract::MAX_WALLET_SUBMISSION_BYTES)
+    }));
+    let (providers, seen) = providers(Ok(allowed()));
+    let PreparedVerificationSubmission::Final(finalization) =
+        prepare_verification_submission(&providers, instance, wallet, &options(None), now())
+            .await
+            .unwrap()
+    else {
+        panic!("legacy result must remain available")
+    };
+    assert_eq!(
+        finalization.instance.result.as_ref().unwrap()["decision"],
+        "allow"
+    );
+    assert!(seen.lock().unwrap()[0].oid4vp_transport.is_none());
+}
+
+#[tokio::test]
+async fn malformed_recorded_query_cannot_be_promoted_to_transport_metadata() {
+    let mut stored = with_emitted_query(instance(false), "dcql_query", json!({"credentials": []}));
+    stored.context["mip_messages"]["presentation_request"]["payload"]["client_id"] =
+        json!("attacker-client");
+    let (providers, seen) = providers(Ok(allowed()));
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            stored,
+            input("header.payload.signature"),
+            &options(None),
+            now()
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_binding"
+        ))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
+
+    // Unlike an absent historical request, a contradictory persisted request
+    // is a producer-state error and now fails before legacy evaluation.
+    let mut ambiguous = with_emitted_query(
+        instance(false),
+        "dcql_query",
+        json!({"credentials": [{"id": "member"}]}),
+    );
+    ambiguous.context["mip_messages"]["presentation_request"]["payload"]
+        ["presentation_definition"] = json!({"id": "definition-1", "input_descriptors": []});
+    assert!(matches!(
+        prepare_verification_submission(
+            &providers,
+            ambiguous,
+            input("header.payload.signature"),
+            &options(None),
+            now(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidContext(
+            "presentation_request_query"
+        ))
+    ));
+    assert!(seen.lock().unwrap().is_empty());
 }
 
 #[tokio::test]
@@ -432,7 +620,7 @@ async fn terminal_replay_accepts_only_the_same_canonical_submission_digest() {
 }
 
 #[tokio::test]
-async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_closed() {
+async fn legacy_envelope_and_malformed_jwe_fail_closed() {
     let vector: Value = serde_json::from_str(include_str!(
         "../../../../contracts/flow-haip-response-vector.json"
     ))
@@ -440,7 +628,36 @@ async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_cl
     let mut candidate = instance(false);
     candidate.context["haip_response_encryption_key_envelope"] = json!("vault:haip-key");
     let providers = FlowProviderRegistry {
-        flow_key_envelope: Some(Arc::new(Envelopes(vector["private_jwk"].to_string()))),
+        flow_key_envelope: Some(Arc::new(RemoteEnvelopes)),
+        ..Default::default()
+    };
+    assert!(matches!(
+        decrypt_verification_response(
+            &providers,
+            &candidate,
+            vector["compact_jwe"].as_str().unwrap(),
+        )
+        .await,
+        Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
+    ));
+    assert!(matches!(
+        decrypt_verification_response(&providers, &candidate, "not-a-jwe").await,
+        Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
+    ));
+}
+
+#[tokio::test]
+async fn remote_haip_response_uses_scoped_version_without_private_key_unwrap() {
+    let vector: Value = serde_json::from_str(include_str!(
+        "../../../../contracts/flow-haip-response-vector.json"
+    ))
+    .unwrap();
+    let mut candidate = instance(false);
+    let remote = haip_remote_fixture::key(&candidate.organization_id, &candidate.id);
+    candidate.context["haip_response_encryption_key_reference"] = json!(remote.key_reference);
+    candidate.context["haip_response_encryption_public_jwk"] = remote.public_jwk;
+    let providers = FlowProviderRegistry {
+        flow_key_envelope: Some(Arc::new(RemoteEnvelopes)),
         ..Default::default()
     };
     let plaintext = decrypt_verification_response(
@@ -450,9 +667,18 @@ async fn native_haip_interoperability_vector_decrypts_and_malformed_jwe_fails_cl
     )
     .await
     .unwrap();
-    assert_eq!(plaintext, json!({"vp_token": "fixture"}));
+    assert_eq!(plaintext, json!({"vp_token":"remote-fixture"}));
+    candidate.context["haip_response_encryption_key_reference"] = json!(format!(
+        "didcomm/haip/keys/other/abcdefghijklmnop/versions/{}",
+        haip_remote_fixture::VERSION
+    ));
     assert!(matches!(
-        decrypt_verification_response(&providers, &candidate, "not-a-jwe").await,
+        decrypt_verification_response(
+            &providers,
+            &candidate,
+            vector["compact_jwe"].as_str().unwrap()
+        )
+        .await,
         Err(FlowVerificationSubmissionError::InvalidEncryptedResponse)
     ));
 }

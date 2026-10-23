@@ -9,9 +9,11 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+mmf-platform.workspace = true
 async-trait.workspace = true
 axum.workspace = true
 chrono.workspace = true
+marty-key-material-policy = { path = "../../crates/key-material-policy" }
 mmf-core.workspace = true
 mmf-runtime.workspace = true
 mmf-security.workspace = true

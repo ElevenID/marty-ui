@@ -118,6 +118,37 @@ export function selectActiveCredentialTemplate(payload, { organizationId, name }
   return { id, name: templateName };
 }
 
+export async function loadActiveCredentialTemplate({ gateway, organizationId, sessionCookie, name, templateId }) {
+  const tenant = requiredText(organizationId, 'Northstar organization identifier');
+  const auth = { method: 'GET', organizationId: tenant, sessionCookie };
+  if (templateId !== undefined) {
+    const id = requiredText(templateId, 'Northstar credential template identifier');
+    const template = await expectGatewayPayload('credential template detail', gateway(
+      `/v1/credential-templates/${encodeURIComponent(id)}?organization_id=${encodeURIComponent(tenant)}`, auth,
+    ));
+    if (template?.id !== id) throw new Error('Credential template detail identifier mismatch');
+    selectActiveCredentialTemplate([template], { organizationId: tenant, name });
+    return template;
+  }
+  // The native public contract defaults to 100 rows and supports limit/offset.
+  // Exhaust the inventory to detect ambiguous names beyond the first page.
+  const templates = [], seen = new Set(), limit = 100;
+  for (let offset = 0; ; offset += limit) {
+    const page = await expectGatewayPayload('credential template listing', gateway(
+      `/v1/credential-templates?organization_id=${encodeURIComponent(tenant)}&status=active&limit=${limit}&offset=${offset}`, auth,
+    ));
+    if (!Array.isArray(page) || page.length > limit) throw new Error('Credential template page is malformed');
+    for (const template of page) {
+      const id = requiredText(template?.id, 'Credential template page identifier');
+      if (template.organization_id !== tenant || seen.has(id)) throw new Error('Credential template inventory is foreign or changing');
+      seen.add(id); templates.push(template);
+    }
+    if (page.length < limit) break;
+  }
+  const selected = selectActiveCredentialTemplate(templates, { organizationId: tenant, name });
+  return templates.find((template) => template.id === selected.id);
+}
+
 export function buildApplicationTemplateRequest(fixture, credentialTemplate, organizationId, runId) {
   const tenant = requiredText(organizationId, 'Northstar organization identifier');
   const credentialTemplateId = requiredText(
@@ -153,17 +184,13 @@ export async function prepareApplicationContext({
   adminCookie,
   fixture,
   runId,
+  credentialTemplateId,
 }) {
   if (typeof gateway !== 'function') throw new Error('Northstar gateway client is required');
   const tenant = requiredText(organizationId, 'Northstar organization identifier');
   const sessionCookie = requiredText(adminCookie, 'Northstar administrator session cookie');
-  const credentialTemplates = await expectGatewayPayload('credential template listing', gateway(
-    `/v1/credential-templates?organization_id=${encodeURIComponent(tenant)}&status=active`,
-    { method: 'GET', sessionCookie, organizationId: tenant },
-  ));
-  const credentialTemplate = selectActiveCredentialTemplate(credentialTemplates, {
-    organizationId: tenant,
-    name: fixture.credentialTemplateName,
+  const credentialTemplate = await loadActiveCredentialTemplate({
+    gateway, organizationId: tenant, sessionCookie, name: fixture.credentialTemplateName, templateId: credentialTemplateId,
   });
   const draft = await expectGatewayPayload('application template creation', gateway(
     '/v1/application-templates',
@@ -175,6 +202,9 @@ export async function prepareApplicationContext({
     },
   ));
   const draftId = requiredText(draft?.id, 'Northstar application template draft identifier');
+  if (draft.organization_id !== tenant || draft.credential_template_id !== credentialTemplate.id) {
+    throw new Error('Application template creation ownership mismatch');
+  }
   const validation = await expectGatewayPayload('application template validation', gateway(
     `/v1/application-templates/${encodeURIComponent(draftId)}/validate`,
     { method: 'POST', sessionCookie, organizationId: tenant, body: {} },
@@ -186,6 +216,10 @@ export async function prepareApplicationContext({
     `/v1/application-templates/${encodeURIComponent(draftId)}/activate`,
     { method: 'POST', sessionCookie, organizationId: tenant, body: {} },
   ));
+  if (applicationTemplate?.id !== draftId || applicationTemplate.organization_id !== tenant
+      || applicationTemplate.credential_template_id !== credentialTemplate.id) {
+    throw new Error('Application template activation ownership mismatch');
+  }
   if (String(applicationTemplate?.status || '').toUpperCase() !== 'ACTIVE') {
     throw new Error('Northstar application template did not become active');
   }

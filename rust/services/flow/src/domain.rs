@@ -428,8 +428,13 @@ pub fn public_status(status: FlowInstanceStatus) -> &'static str {
 }
 
 pub fn reject_private_context(value: &Value) -> Result<(), FlowDomainError> {
-    private_context_path(value, "")
-        .map_or(Ok(()), |path| Err(FlowDomainError::PrivateContext(path)))
+    if let Some(path) = private_context_path(value, "") {
+        return Err(FlowDomainError::PrivateContext(path));
+    }
+    if marty_key_material_policy::contains_private_key(value) {
+        return Err(FlowDomainError::PrivateContext("$".into()));
+    }
+    Ok(())
 }
 
 #[must_use]

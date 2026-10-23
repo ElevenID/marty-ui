@@ -17,6 +17,8 @@ import sys
 import tempfile
 import time
 
+from canvas_native_rest_contract import native_requests, bind_current_capture_inputs
+
 from canvas_worker_body_timeout_https_fixture import BodyTimeoutHttpsFixture
 from canvas_worker_output_capture import owned_log_streams
 from canvas_worker_owned_process import OwnedProcess
@@ -128,6 +130,7 @@ def load_inputs(root):
         "Native body frozen raw corpus differs",
     )
     reports = json.loads(raw)
+    bind_current_capture_inputs(root, reports[0]["worker_body_timeout"]["capture_source_sha256"])
     responses = {}
     matrix = None
     for name, report in zip(CASE_NAMES, reports, strict=True):
@@ -166,7 +169,7 @@ def project_transition(transition, anchor_lower, anchor_upper, request_at, outco
 def assert_requests(fixture, reference):
     require(not fixture.failures, "Owned native body HTTPS handler failed")
     require(
-        fixture.requests == reference["requests"],
+        fixture.requests == native_requests(reference["requests"]),
         "Native body request transcript differs",
     )
 
@@ -231,7 +234,7 @@ def run_case(executable, matrix, case, reference, response):
         fixture = owner.enter_context(
             owned_fixture(
                 BodyTimeoutHttpsFixture(
-                    reference["requests"][0],
+                    native_requests(reference["requests"])[0],
                     response,
                     chunk_offsets=offsets,
                     late_disconnect_from_index=len(offsets) - 1

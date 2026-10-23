@@ -1,0 +1,4 @@
+# Compiler used by make proto-gen and the Envoy descriptor parity check.
+grpcio-tools==1.80.0
+googleapis-common-protos==1.74.0
+protobuf==6.33.6

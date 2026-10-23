@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Callable
 
 
@@ -16,7 +17,6 @@ ROLES = {
     "postgres": "docker.io/library/postgres",
     "redis": "docker.io/library/redis",
     "openbao": "quay.io/openbao/openbao",
-    "edge": "docker.io/library/nginx",
 }
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -32,19 +32,34 @@ def require(ok: bool, message: str) -> None:
 
 
 def registry_index(reference: str) -> dict:
-    try:
-        result = subprocess.run(
-            ["docker", "buildx", "imagetools", "inspect", reference, "--raw"],
-            check=True, capture_output=True, text=True, encoding="utf-8",
-            timeout=60,
-        )
-        require(len(result.stdout) <= 4 * 1024 * 1024,
-                "Infrastructure registry index is oversized")
-        index = json.loads(result.stdout)
-    except (OSError, subprocess.SubprocessError, ValueError) as exc:
-        raise InfraImageError("Infrastructure registry digest is unavailable") from exc
-    require(isinstance(index, dict), "Infrastructure registry index is invalid")
-    return index
+    candidates = [reference]
+    if reference.startswith("docker.io/library/"):
+        candidates.insert(0, reference.replace("docker.io/", "mirror.gcr.io/", 1))
+    last_error: Exception | None = None
+    for candidate in candidates:
+        attempts = 3 if candidate.startswith("quay.io/openbao/openbao@sha256:") else 1
+        for attempt in range(attempts):
+            try:
+                result = subprocess.run(
+                    ["docker", "buildx", "imagetools", "inspect", candidate, "--raw"],
+                    check=True, capture_output=True, text=True, encoding="utf-8",
+                    timeout=60,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                last_error = exc
+                if attempt + 1 < attempts:
+                    time.sleep(2 ** attempt)
+                continue
+            try:
+                require(len(result.stdout) <= 4 * 1024 * 1024,
+                        "Infrastructure registry index is oversized")
+                index = json.loads(result.stdout)
+            except ValueError as exc:
+                last_error = exc
+                break
+            require(isinstance(index, dict), "Infrastructure registry index is invalid")
+            return index
+    raise InfraImageError("Infrastructure registry digest is unavailable") from last_error
 
 
 def qualified_images(

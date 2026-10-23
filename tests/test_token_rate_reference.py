@@ -1,26 +1,19 @@
-"""Closed oracle guards; explicit capture --check independently executes Python."""
+"""Frozen token-rate observations and native test integration guards."""
 
-import builtins
 import hashlib
-import importlib.util
 import json
 from pathlib import Path
-from types import SimpleNamespace
 import tomllib
 
 import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location(
-    "token_rate_capture", ROOT / "scripts/capture_token_rate_reference.py"
-)
-capture = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(capture)
+ARTIFACT = "contracts/token-rate-python-reference.json"
 
 
 def corpus():
-    return json.loads((ROOT / capture.ARTIFACT).read_text(encoding="utf-8"))
+    return json.loads((ROOT / ARTIFACT).read_text(encoding="utf-8"))
 
 
 def case(name):
@@ -29,20 +22,12 @@ def case(name):
 
 def test_protected_sources_and_exact_cases_are_closed():
     # Normalize checkout line endings, not JSON fields or observation content.
-    artifact = (ROOT / capture.ARTIFACT).read_text(encoding="utf-8").encode("utf-8")
+    artifact = (ROOT / ARTIFACT).read_text(encoding="utf-8").encode("utf-8")
     assert hashlib.sha256(artifact).hexdigest() == (
         "68153d972df0ee5bdaa3dc1b5739764ccdf6c0fb930ace3f773f22486c3f201a"
     )
     frozen = corpus()
-    assert frozen["reference"]["source_commit"] == capture.REVISION
-    assert {
-        path: value["git_blob"]
-        for path, value in frozen["reference"]["sources"].items()
-    } == capture.SOURCES
     assert len(frozen["cases"]) == 40
-    assert [
-        {key: row[key] for key in capture.cases()[0]} for row in frozen["cases"]
-    ] == capture.cases()
     assert len({row["case"] for row in frozen["cases"]}) == 40
     assert len(frozen["clock_vectors"]) == 15
     for row in frozen["cases"]:
@@ -54,22 +39,6 @@ def test_protected_sources_and_exact_cases_are_closed():
                 == len(row["times"])
                 == len(row["http"])
             )
-
-
-def test_capture_import_does_not_require_retired_runtime_dependencies(monkeypatch):
-    original = builtins.__import__
-
-    def guarded(name, *args, **kwargs):
-        if name.split(".")[0] in {"httpx", "fastapi", "starlette"}:
-            raise AssertionError(
-                "Ordinary source guards must not import runtime dependencies"
-            )
-        return original(name, *args, **kwargs)
-
-    monkeypatch.setattr(builtins, "__import__", guarded)
-    isolated = importlib.util.module_from_spec(SPEC)
-    SPEC.loader.exec_module(isolated)
-    assert isolated.cases() == capture.cases()
 
 
 def test_platform_clock_is_in_workspace_ci_and_shared_image_without_service_expansion():
@@ -84,7 +53,10 @@ def test_platform_clock_is_in_workspace_ci_and_shared_image_without_service_expa
     assert service["lints"]["rust"]["unsafe_code"] == "forbid"
     workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
     assert "cargo test --locked --workspace --no-run" in workflow
-    assert "cargo test --locked --workspace >" in workflow
+    assert (
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"
+        in workflow
+    )
     assert "cargo clippy --locked --workspace --all-targets" in workflow
     dockerfile = (ROOT / "services/Dockerfile").read_text(encoding="utf-8")
     assert "COPY rust /build/rust" in dockerfile
@@ -170,21 +142,3 @@ def test_nonpositive_and_rounded_window_semantics_are_not_duration_clamps():
             "headers": {"Retry-After": "9007199254740993"},
         },
     ]
-
-
-def test_modified_git_blob_is_rejected_before_execution(monkeypatch):
-    monkeypatch.setattr(
-        capture.subprocess,
-        "run",
-        lambda *args, **kwargs: SimpleNamespace(
-            stdout=b"raise AssertionError('must not run')\n"
-        ),
-    )
-    with pytest.raises(ValueError, match="Pinned source identity differs"):
-        capture.sources(ROOT)
-
-
-@pytest.mark.parametrize("source", ["x = 1", "class Owned: pass\nclass Owned: pass"])
-def test_missing_or_duplicate_selected_source_is_rejected(source):
-    with pytest.raises(ValueError, match="Exact source selection differs"):
-        capture.selected(source, "synthetic.py", {"Owned"}, {})

@@ -33,8 +33,8 @@ Cargo package version and the native nested configuration prefix are metadata.
 All remaining unforwarded inputs are enumerated in the gate's `UNFORWARDED` set:
 Canvas admin fallback/API token and endpoint overrides, timing/TTL/signature
 tolerance settings, display/CORS/resolver overrides, token rate/window, related
-resource settings and release metadata. None was bound by the frozen self-host
-legacy composition. "Unforwarded" does not mean unsupported: these retain native
+resource settings and release metadata. None is bound by the current self-host
+composition. "Unforwarded" does not mean unsupported: these retain native
 defaults or require an explicit deployment overlay. The custom-host test supplies
 canaries for these values and raw loader outputs to prove ambient configuration
 does not unexpectedly override the file-only bindings. This inventory does not
@@ -72,21 +72,25 @@ is absent; this profile explicitly sets production. The copied default revocatio
 profile ID has no native reader and the audited Python helper has no call site;
 its presence is not claimed as an implemented feature or a reason to delete it.
 
-The independent frozen baseline is the original self-host file at `98e78b8d0`,
-Git blob `7bff1a842865b9101516d839c10bb645a50089c3`. Its normalized SHA-256 is
-`5c643478422ecb9f71bb9bd3133af55805e91b184bd8f3c84852fafd418905f8`.
+The current independent root-relative snapshot is
+`selfhost-kms-only-model.keyless-tls.snapshot.yml`. Superseded base,
+issuance-grants and managed-passport snapshots are retired; their historical
+bytes remain in Git at `053102a80`. Only the current model is a regression gate.
 `scripts/test_selfhost_native_owner_compose.py` compares the entire rendered
-model with only the new anchor/service, original three gateway additions and
-the separately governed signing-target repair below allowed.
-Native expectations derive from the frozen owner's environment and secrets,
-not from the new source. Pure mutation tests are explicitly not a Compose emulator.
+current model with this KMS-only snapshot and checks the input inventory,
+native dispatcher, Signing Keys dependency and absence of raw integration-secret
+master-key inputs. The snapshot replaces the pre-native historical fixture,
+which contained a raw master-key mount. A change to the production model now
+requires explicit review and a corresponding snapshot update. Pure mutation
+tests are explicitly not a Compose emulator.
 
-Currently qualified: no-interpolate and default/empty/custom interpolated
-before/after rendering, all ten required inputs missing/empty in both models,
-existing complete bundle preservation, exact native dispatcher exception, frozen
-identity and model mutation guards. Interpolation uses only synthetic files and
-a sanitized subprocess environment, not operator secrets. The new preservation
-command is mandatory in image CI.
+Locally qualified: no-interpolate and default/empty/custom interpolated current
+model rendering, every current required input missing/empty, exact native
+dispatcher and snapshot identity. The current configuration-only gate checks
+58 required inputs; it does not start services or qualify an installed runtime. Interpolation uses only synthetic
+files and a sanitized subprocess environment, not operator secrets. The
+preservation command remains mandatory in image CI; hosted exact-head proof
+is still required.
 
 Still required before claiming this slice qualified: independent
 review, actual generated/extracted bundle rendering, packaged secret-loader/main

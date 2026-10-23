@@ -14,13 +14,17 @@ path = "src/main.rs"
 test = false
 
 [dependencies]
+marty-api-key-policy = { path = "../../crates/api-key-policy" }
 async-trait.workspace = true
+base64.workspace = true
 axum.workspace = true
 chrono.workspace = true
 futures-core.workspace = true
+hex.workspace = true
 http.workspace = true
 marty-oid4vci.workspace = true
 marty-passport-auth = { path = "../../crates/passport-auth" }
+marty-signing-grant = { path = "../../crates/signing-grant" }
 marty-deployment-profile = { path = "../deployment-profile" }
 mmf-platform.workspace = true
 mmf-security.workspace = true
@@ -43,19 +47,12 @@ url.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-base64.workspace = true
-const-oid.workspace = true
-der.workspace = true
 hex.workspace = true
 hmac.workspace = true
-marty-crypto.workspace = true
-marty-issuance-service = { path = "../issuance" }
-marty-signing-keys = { path = "../signing-keys" }
 redis.workspace = true
 sqlx.workspace = true
-spki.workspace = true
+tempfile.workspace = true
 tower.workspace = true
-x509-cert.workspace = true
 
 [build-dependencies]
 protoc-bin-vendored.workspace = true

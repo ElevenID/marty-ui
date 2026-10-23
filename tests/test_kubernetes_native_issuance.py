@@ -26,6 +26,7 @@ PASSPORT_NOT_KUBERNETES_BOUND = {
     "PASSPORT_TENANT_API_KEYS_FILE",
     "ICAO_DOCUMENT_SIGNER_URL",
     "ICAO_DOCUMENT_SIGNER_API_KEY",
+    "ICAO_DOCUMENT_SIGNER_API_KEY_FILE",
     "PHYSICAL_DOCUMENT_ALLOW_SELF_SIGNED",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY",
     "PHYSICAL_DOCUMENT_ARTIFACT_KEY_FILE",
@@ -49,6 +50,48 @@ def owner(value):
     return value["spec"]["template"]["spec"]["containers"][0]
 
 
+def test_issuance_grant_tokens_are_mounted_by_exact_producers_only():
+    values = resources("k8s/oracle/07-microservices.yaml")
+    issuer = deployment(values, "issuance")
+    worker = deployment(values, "canvas-sync-worker")
+    issuer_container = owner(issuer)
+    worker_container = owner(worker)
+    origins = ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+    issuer_env = {entry["name"]: entry for entry in issuer_container["env"]}
+    worker_env = {entry["name"]: entry for entry in worker_container["env"]}
+    for origin in origins:
+        key = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
+        assert issuer_env[key]["value"] == (
+            f"/var/run/secrets/marty/issuance-sign-grants/{origin.lower()}"
+        )
+        assert (key in worker_env) == (origin == "CANVAS")
+    assert worker_env["ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN_FILE"]["value"] == (
+        "/var/run/secrets/marty/issuance-canvas-sign-grant/token"
+    )
+    issuer_volume = next(
+        item for item in issuer["spec"]["template"]["spec"]["volumes"]
+        if item["name"] == "issuance-sign-grants"
+    )
+    assert issuer_volume["secret"]["secretName"] == "marty-secrets"
+    assert issuer_volume["secret"]["items"] == [
+        {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
+        for origin in origins
+    ]
+    assert {item["name"] for item in issuer_container["volumeMounts"]} >= {
+        "issuance-sign-grants"
+    }
+    worker_volume = next(
+        item for item in worker["spec"]["template"]["spec"]["volumes"]
+        if item["name"] == "issuance-canvas-sign-grant"
+    )
+    assert worker_volume["secret"]["items"] == [
+        {"key": "ISSUANCE_CANVAS_SIGN_GRANT_MINT_TOKEN", "path": "token"}
+    ]
+    assert {item["name"] for item in worker_container["volumeMounts"]} >= {
+        "issuance-canvas-sign-grant"
+    }
+
+
 def constants(name):
     source = NATIVE.read_text()
     matched = re.findall(rf"pub const {name}: &\[&str\] = &\[(.*?)\];", source, re.S)
@@ -65,14 +108,19 @@ def test_duplicate_common_organization_binding_cleanup_preserves_complete_mappin
     assert source.count(binding) == source.count(anchor) == 1
     # Keep the historical duplicate-binding fixture stable as new, independent
     # configuration keys are added to the current ConfigMap.
-    historical = source.replace('  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', '')
-    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"\n', '')
-    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', '')
-    historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', '')
-    original = historical.replace(anchor, anchor + binding)
-    assert hashlib.sha256(original.encode()).hexdigest() == (
-        "31868e16c09c815461cd42eb6b7d08ca35d251828428c7069bf05f1cd76a47d9"
+    historical = source.replace(
+        '  PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID: ""\n', ""
     )
+    historical = historical.replace(
+        '  PASSPORT_PROVIDER_INGRESS_GATEWAY_ENABLED: "false"\n', ""
+    )
+    historical = historical.replace('  PASSPORT_PROVIDER_INGRESS_SERVICE_URL: ""\n', "")
+    historical = historical.replace('  PERSONALIZATION_BUREAU_URL: ""\n', "")
+    signing_keys_url = '  SIGNING_KEYS_SERVICE_URL: "http://signing-keys:8017"\n'
+    assert source.count(signing_keys_url) == 1
+    historical = historical.replace(signing_keys_url, "")
+    original = historical.replace(anchor, anchor + binding)
+    assert original.count(binding) == 2
     # This historical parser overwrites the identical duplicate; the actual
     # Rust renderer's separate test still refuses duplicate mappings strictly.
     assert yaml.safe_load(historical) == yaml.safe_load(original)
@@ -84,7 +132,7 @@ def signing_inventory(values):
     value = deployment(values, "signing-keys")
     selected = owner(value)
     entries = selected["env"]
-    assert len(entries) == len({v["name"] for v in entries}) == 7
+    assert len(entries) == len({v["name"] for v in entries}) == 20
     actual = {v["name"]: v for v in entries}
     expected = {
         "SERVICE_NAME": {"name": "SERVICE_NAME", "value": "signing-keys"},
@@ -92,34 +140,140 @@ def signing_inventory(values):
             "name": "SIGNING_KEYS_SERVICE_PORT",
             "value": "8017",
         },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_CERT_FILE",
+            "value": "/run/secrets/integration-secret-tls/tls.crt",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_CA_CERT_FILE",
+            "value": "/run/secrets/signing-keys-tls-kms/ca.crt",
+        },
+        "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE": {
+            "name": "SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_TOKEN_FILE",
+            "value": "/run/secrets/signing-keys-tls-kms/token",
+        },
         "SIGNING_KEYS_REDIS_URL": {
             "name": "SIGNING_KEYS_REDIS_URL",
             "value": "redis://redis:6379/2",
         },
+        "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE": {
+            "name": "SIGNING_KEYS_GRANT_VERIFY_TOKEN_FILE",
+            "value": "/run/secrets/signing-grant-verify/token",
+        },
+        "BAO_CACERT": {
+            "name": "BAO_CACERT",
+            "value": "/run/secrets/signing-keys-tls-kms/ca.crt",
+        },
     }
-    for name in ("SIGNING_KEYS_INTERNAL_API_KEY", "OPENBAO_SERVICE_TOKEN"):
+    for name in (
+        "SIGNING_KEYS_INTERNAL_API_KEY", "SIGNING_KEYS_SERVICE_SIGN_GATEWAY_KEY",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY", "SIGNING_KEYS_INTEGRATION_SECRET_KEY", "OPENBAO_SERVICE_TOKEN",
+    ):
         expected[name] = {
             "name": name,
             "valueFrom": {"secretKeyRef": {"name": "marty-secrets", "key": name}},
         }
+    expected["DEVICE_REGISTRATION_SIGNING_KEYS_KEY"] = {
+        "name": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+        "valueFrom": {
+            "secretKeyRef": {
+                "name": "marty-secrets",
+                "key": "DEVICE_REGISTRATION_SIGNING_KEYS_KEY",
+            }
+        },
+    }
+    expected["OPENBAO_SERVICE_TOKEN"]["valueFrom"]["secretKeyRef"]["key"] = (
+        "SIGNING_KEYS_OPENBAO_TOKEN"
+    )
     for name in ("BAO_ADDR", "PUBLIC_DOMAIN"):
         expected[name] = {
             "name": name,
             "valueFrom": {"configMapKeyRef": {"name": "marty-config", "key": name}},
         }
+    for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION"):
+        name = f"SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_{suffix}"
+        expected[name] = {
+            "name": name,
+            "valueFrom": {
+                "configMapKeyRef": {
+                    "name": "marty-config",
+                    "key": f"SIGNING_KEYS_TLS_KMS_{suffix}",
+                }
+            },
+        }
+    expected["ISSUER_BASE_URL"] = {
+        "name": "ISSUER_BASE_URL",
+        "valueFrom": {
+            "configMapKeyRef": {"name": "marty-config", "key": "PUBLIC_API_URL"}
+        },
+    }
     assert actual == expected
     assert selected["image"] == "${MARTY_SERVICES_IMAGE}"
     assert selected["envFrom"] == []
+    assert selected["volumeMounts"] == [
+        {
+            "name": "integration-secret-tls",
+            "mountPath": "/run/secrets/integration-secret-tls",
+            "readOnly": True,
+        },
+        {
+            "name": "integration-secret-ca",
+            "mountPath": "/run/secrets/integration-secret-ca",
+            "readOnly": True,
+        },
+        {
+            "name": "signing-keys-tls-kms",
+            "mountPath": "/run/secrets/signing-keys-tls-kms",
+            "readOnly": True,
+        },
+        {
+            "name": "signing-grant-verify",
+            "mountPath": "/run/secrets/signing-grant-verify",
+            "readOnly": True,
+        },
+    ]
+    assert value["spec"]["template"]["spec"]["volumes"] == [
+        {
+            "name": "integration-secret-tls",
+            "secret": {"secretName": "signing-keys-integration-secret-server-tls"},
+        },
+        {
+            "name": "integration-secret-ca",
+            "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+        {
+            "name": "signing-keys-tls-kms",
+            "secret": {"secretName": "signing-keys-tls-kms"},
+        },
+        {
+            "name": "signing-grant-verify",
+            "secret": {
+                "secretName": "marty-secrets",
+                "items": [{"key": "SIGNING_KEYS_GRANT_VERIFY_TOKEN", "path": "token"}],
+            },
+        },
+    ]
     assert len(value["spec"]["template"]["spec"]["containers"]) == 1
     assert value["spec"]["selector"]["matchLabels"] == {"app": "signing-keys"}
     service = next(v for v in values if v["kind"] == "Service")
     assert service["spec"] == {
         "type": "ClusterIP",
         "selector": {"app": "signing-keys"},
-        "ports": [{"name": "http", "port": 8017, "targetPort": 8017}],
+        "ports": [
+            {"name": "http", "port": 8017, "targetPort": 8017},
+            {"name": "secret-tls", "port": 8018, "targetPort": 8018},
+        ],
     }
-    for name in ("livenessProbe", "readinessProbe"):
-        assert selected[name]["httpGet"] == {"path": "/health", "port": 8017}
+    assert selected["livenessProbe"]["httpGet"] == {"path": "/health", "port": 8017}
+    assert selected["readinessProbe"]["exec"]["command"] == [
+        "/bin/sh",
+        "-c",
+        "curl -fsS http://127.0.0.1:8017/health >/dev/null && "
+        "curl -fsS --cacert /run/secrets/integration-secret-ca/ca.crt "
+        "--resolve signing-keys:8018:127.0.0.1 "
+        "https://signing-keys:8018/health >/dev/null",
+    ]
+    assert selected["readinessProbe"]["timeoutSeconds"] == 8
 
 
 @pytest.mark.parametrize(
@@ -149,13 +303,23 @@ def test_signing_dependency_has_only_existing_declared_bindings(fault):
 
 
 def test_signing_existing_service_and_kubernetes_dependency_sources_are_connected():
-    for path in ("docker-compose.base.yml", "docker-compose.selfhost.prod.yml"):
+    for path, redis_url in (
+        ("docker-compose.base.yml", "redis://redis:6379/2"),
+        ("docker-compose.selfhost.prod.yml", "unix:///run/marty-redis/redis.sock?db=2"),
+    ):
         service = yaml.safe_load((ROOT / path).read_text())["services"]["signing-keys"]
         assert service["build"]["args"]["SERVICE_NAME"] == "signing-keys"
         assert service["environment"]["SIGNING_KEYS_SERVICE_PORT"] == "8017"
-        assert (
-            service["environment"]["SIGNING_KEYS_REDIS_URL"] == "redis://redis:6379/2"
-        )
+        assert service["environment"]["SIGNING_KEYS_REDIS_URL"] == redis_url
+        if path == "docker-compose.selfhost.prod.yml":
+            assert service["volumes"] == [
+                {
+                    "type": "volume",
+                    "source": "redis-socket",
+                    "target": "/run/marty-redis",
+                    "read_only": True,
+                }
+            ]
         assert (
             service["depends_on"]["db-migrate"]["condition"]
             == "service_completed_successfully"
@@ -177,7 +341,7 @@ def test_signing_existing_service_and_kubernetes_dependency_sources_are_connecte
     assert not any(v["metadata"]["name"] == "signing-keys" for v in original)
     gateway = owner(deployment(original, "gateway"))
     assert [v for v in gateway["env"] if v["name"] == "AUTH_GRPC_TARGET"] == [
-        {"name": "AUTH_GRPC_TARGET", "value": "auth:9001"}
+        {"name": "AUTH_GRPC_TARGET", "value": "https://auth:9001"}
     ]
     cli = (
         ROOT / "rust/crates/release-evidence/src/kubernetes_native_cli.rs"
@@ -185,6 +349,14 @@ def test_signing_existing_service_and_kubernetes_dependency_sources_are_connecte
     assert '"07b-signing-keys.yaml"' in cli
     script = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
     assert "OPENBAO_SERVICE_TOKEN=" in script
+    assert "check_kubernetes_services_release.py" in script
+    preflight = script.split("prepare_kubernetes_native_issuance() {", 1)[1].split("\n}", 1)[0]
+    assert preflight.index('MARTY_ISSUANCE_IMAGE="$MARTY_SERVICES_IMAGE"') < preflight.index(
+        'export K8S_ISSUANCE_NATIVE_ENABLED MARTY_SERVICES_IMAGE MARTY_ISSUANCE_IMAGE'
+    ) < preflight.index("require_kubernetes_services_release")
+    assert preflight.index("require_kubernetes_services_release") < preflight.index(
+        'K8S_NATIVE_RENDERED_MODEL="$(envsubst'
+    )
 
 
 def test_reference_replays_actual_unchanged_formatter_and_preserves_new_policy_distinction():
@@ -229,11 +401,24 @@ def native_inventory(value):
         for v in entries
         if "configMapKeyRef" in v.get("valueFrom", {})
     }
-    assert set(refs) == constants("INHERITED_SETTINGS") | {"ISSUER_BASE_URL"}
+    server_kms_refs = {
+        f"GRPC_WORKLOAD_TLS_SERVER_KMS_{suffix}": f"ISSUANCE_TLS_KMS_{suffix}"
+        for suffix in ("ADDR", "KEY_NAME", "KEY_VERSION")
+    }
+    assert set(refs) == (
+        constants("INHERITED_SETTINGS")
+        | {"ISSUER_BASE_URL", "DIDCOMM_KMS_ADDR", "BAO_ADDR"}
+        | set(server_kms_refs)
+    )
     assert refs == {
         name: {
             "name": "marty-config",
-            "key": "PUBLIC_API_URL" if name == "ISSUER_BASE_URL" else name,
+            "key": server_kms_refs.get(
+                name,
+                "PUBLIC_API_URL"
+                if name == "ISSUER_BASE_URL"
+                else "BAO_ADDR" if name == "DIDCOMM_KMS_ADDR" else name,
+            ),
         }
         for name in refs
     }
@@ -252,19 +437,120 @@ def native_inventory(value):
             "key": name,
             **(
                 {"optional": True}
-                if name in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
+                if name
+                in {"CANVAS_CREDENTIALS_API_TOKEN", "PERSONALIZATION_BUREAU_API_KEY"}
                 else {}
             ),
         }
     assert not any(
-        "BAO" in v["name"] or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
+        ("BAO" in v["name"] and v["name"] != "BAO_ADDR")
+        or v["name"] == "CANVAS_SYNC_PROCESSOR" for v in entries
     )
+    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_TOKEN_FILE") == {
+        "name": "DIDCOMM_KMS_TOKEN_FILE",
+        "value": "/run/secrets/didcomm-kms/token",
+    }
+    assert next(v for v in entries if v["name"] == "DIDCOMM_KMS_CA_CERT_FILE") == {
+        "name": "DIDCOMM_KMS_CA_CERT_FILE",
+        "value": "/run/secrets/issuance-server-kms/ca.crt",
+    }
+    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT"):
+        name = f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN_FILE"
+        assert next(v for v in entries if v["name"] == name) == {
+            "name": name,
+            "value": f"/run/secrets/issuance-sign-grants/{origin.lower()}",
+        }
+    assert selected["volumeMounts"] == [
+        {
+            "name": "issuance-server-tls",
+            "mountPath": "/run/secrets/issuance-server-tls",
+            "readOnly": True,
+        },
+        {
+            "name": "issuance-server-kms",
+            "mountPath": "/run/secrets/issuance-server-kms",
+            "readOnly": True,
+        },
+        {
+            "name": "didcomm-kms-token",
+            "mountPath": "/run/secrets/didcomm-kms",
+            "readOnly": True,
+        },
+        {
+            "name": "integration-secret-ca",
+            "mountPath": "/run/secrets/integration-secret-ca",
+            "readOnly": True,
+        },
+        {
+            "name": "issuance-sign-grants",
+            "mountPath": "/run/secrets/issuance-sign-grants",
+            "readOnly": True,
+        },
+    ]
+    assert value["spec"]["template"]["spec"].get("volumes") == [
+        {
+            "name": "issuance-server-tls",
+            "secret": {"secretName": "issuance-server-tls"},
+        },
+        {
+            "name": "issuance-server-kms",
+            "secret": {"secretName": "issuance-server-kms"},
+        },
+        {
+            "name": "didcomm-kms-token",
+            "secret": {"secretName": "marty-secrets", "items": [{"key": "DIDCOMM_ISSUANCE_OPENBAO_TOKEN", "path": "token"}]},
+        },
+        {
+            "name": "integration-secret-ca",
+            "secret": {"secretName": "signing-keys-integration-secret-ca"},
+        },
+        {
+            "name": "issuance-sign-grants",
+            "secret": {
+                "secretName": "marty-secrets",
+                "items": [
+                    {"key": f"ISSUANCE_{origin}_SIGN_GRANT_MINT_TOKEN", "path": origin.lower()}
+                    for origin in ("CREDENTIAL", "CANVAS", "READINESS", "PASSPORT")
+                ],
+            },
+        },
+    ]
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_URL")["value"] == "https://signing-keys:8018/internal"
+    assert next(v for v in entries if v["name"] == "INTEGRATION_SECRET_KMS_CA_FILE")["value"] == "/run/secrets/integration-secret-ca/ca.crt"
+    assert {
+        entry["name"]: entry["value"]
+        for entry in entries
+        if entry["name"] in {
+            "GRPC_WORKLOAD_TLS_SERVER_CERT", "GRPC_WORKLOAD_TLS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        }
+    } == {
+        "GRPC_WORKLOAD_TLS_SERVER_CERT": "/run/secrets/issuance-server-tls/tls.crt",
+        "GRPC_WORKLOAD_TLS_CA_CERT": "/run/secrets/issuance-server-tls/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT": "/run/secrets/issuance-server-kms/ca.crt",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE": "/run/secrets/issuance-server-kms/token",
+    }
+    assert "GRPC_WORKLOAD_TLS_SERVER_KEY" not in {entry["name"] for entry in entries}
     assert value["spec"]["template"]["spec"]["automountServiceAccountToken"] is False
+
+
+def test_didcomm_workload_token_is_required_and_distinct_from_signing_tokens():
+    catalog = json.loads((ROOT / "deploy-config/catalog/secrets.json").read_text())
+    token = catalog["secrets"]["didcomm_issuance_openbao_token"]
+    assert token["env"] == "DIDCOMM_ISSUANCE_OPENBAO_TOKEN"
+    assert token["required_for"] == ["selfhost-production", "kubernetes-production"]
+    assert token["placeholder_disallowed"] is True
+    deploy = (ROOT / "scripts/deploy-kubernetes.sh").read_text(encoding="utf-8")
+    assert 'require_resolved_secret DIDCOMM_ISSUANCE_OPENBAO_TOKEN "$didcomm_issuance_openbao_token"' in deploy
+    assert '--from-literal=DIDCOMM_ISSUANCE_OPENBAO_TOKEN="$didcomm_issuance_openbao_token"' in deploy
+    template = yaml.safe_load((ROOT / "k8s/oracle/02-secrets-template.yaml").read_text())
+    assert template["stringData"]["DIDCOMM_ISSUANCE_OPENBAO_TOKEN"].startswith("CHANGE_ME_")
 
 
 @pytest.mark.parametrize(
     "fault",
-    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret"],
+    [None, "broad-config", "custody", "missing-key", "duplicate-key", "wrong-secret", "missing-kms-token", "wrong-kms-token", "missing-grant-mount", "wrong-grant-token"],
 )
 def test_native_inventory_is_complete_and_custody_free(fault):
     value = deployment(
@@ -290,6 +576,16 @@ def test_native_inventory_is_complete_and_custody_free(fault):
         next(v for v in owner(value)["env"] if v["name"] == "ISSUANCE_API_KEY")[
             "valueFrom"
         ]["secretKeyRef"]["key"] = "OTHER_KEY"
+    elif fault == "missing-kms-token":
+        value["spec"]["template"]["spec"].pop("volumes")
+    elif fault == "wrong-kms-token":
+        volumes = value["spec"]["template"]["spec"]["volumes"]
+        next(v for v in volumes if v["name"] == "didcomm-kms-token")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
+    elif fault == "missing-grant-mount":
+        owner(value)["volumeMounts"].pop()
+    elif fault == "wrong-grant-token":
+        volumes = value["spec"]["template"]["spec"]["volumes"]
+        next(v for v in volumes if v["name"] == "issuance-sign-grants")["secret"]["items"][0]["key"] = "OPENBAO_SERVICE_TOKEN"
     if fault:
         with pytest.raises(AssertionError):
             native_inventory(value)
@@ -314,9 +610,7 @@ def test_all_production_native_configuration_inputs_have_a_classification():
     ):
         covered |= constants(category)
     assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(covered)
-    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint(
-        {v["name"] for v in native["env"]}
-    )
+    assert PASSPORT_NOT_KUBERNETES_BOUND.isdisjoint({v["name"] for v in native["env"]})
     assert PASSPORT_NOT_KUBERNETES_BOUND <= inputs
     covered |= PASSPORT_NOT_KUBERNETES_BOUND
     assert inputs - covered == {
@@ -329,8 +623,13 @@ def test_all_production_native_configuration_inputs_have_a_classification():
         "DIDCOMM_ENCRYPTION_POLICY_FILE",
         "DIDCOMM_TLS_CA_FILE",
         "GRPC_SERVICE_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY",
+        "INTEGRATION_SECRET_MASTER_KEY_FILE",
         "INTEGRATION_SECRET_MASTER_KEY_ENV",
         "MARTY_ISSUANCE__",
+        "SIGNING_KEYS_ISSUER_SIGN_KEY_FILE",
+        "SIGNING_KEYS_INTEGRATION_SECRET_KEY_FILE",
     }
     assert constants("OPTIONAL_SETTINGS") >= {
         "CANVAS_MIRROR_WORKER_ENABLED",
@@ -375,14 +674,15 @@ def test_existing_three_way_management_identity_and_legacy_owner_are_preserved()
             for v in owner(deployment(values, name))["env"]
             if v["name"] == "ISSUANCE_API_KEY"
         ] == [key]
-    legacy = deployment(original, "issuance")
-    assert owner(legacy)["image"] == "${MARTY_ISSUANCE_IMAGE}"
-    assert legacy["spec"]["selector"]["matchLabels"] == {"app": "issuance"}
-    assert {v["containerPort"] for v in owner(legacy)["ports"]} == {8005, 9005}
+    alias = deployment(original, "issuance")
+    assert owner(alias)["image"] == "${MARTY_ISSUANCE_IMAGE}"
+    assert owner(alias)["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert alias["spec"]["selector"]["matchLabels"] == {"app": "issuance"}
+    assert {v["containerPort"] for v in owner(alias)["ports"]} == {8005}
     flow = owner(deployment(original, "flow"))
     assert (
         next(v for v in flow["env"] if v["name"] == "ISSUANCE_GRPC_TARGET")["value"]
-        == "issuance:9005"
+        == "https://issuance-native:9005"
     )
     assert "ISSUANCE_NATIVE_SERVICE_URL" not in {
         v["name"] for v in owner(deployment(original, "gateway"))["env"]
@@ -394,7 +694,11 @@ def test_native_issuance_receives_configured_bureau_provider_profile():
     native = resources("k8s/oracle/07a-issuance-native.yaml")
     env = owner(deployment(native, "issuance-native"))["env"]
     assert config["PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == ""
-    assert [entry for entry in env if entry["name"] == "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"] == [
+    assert [
+        entry
+        for entry in env
+        if entry["name"] == "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID"
+    ] == [
         {
             "name": "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID",
             "valueFrom": {
@@ -405,7 +709,9 @@ def test_native_issuance_receives_configured_bureau_provider_profile():
             },
         }
     ]
-    assert "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" in constants("INHERITED_SETTINGS")
+    assert "PERSONALIZATION_BUREAU_PROVIDER_PROFILE_ID" in constants(
+        "INHERITED_SETTINGS"
+    )
 
 
 def test_provider_ingress_gateway_defaults_are_disabled_in_kubernetes():
@@ -468,7 +774,9 @@ def ci_prerequisites(workflow):
     assert found[0] < compile_index
     assert "cargo test --locked --workspace --no-run" in steps[compile_index]["run"]
     assert any(
-        "cargo test --locked --workspace >" in step.get("run", "") for step in steps
+        "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >"
+        in step.get("run", "")
+        for step in steps
     )
 
 
@@ -520,7 +828,8 @@ def test_ci_prerequisites_are_required_before_actual_workspace_gates(fault):
     elif fault == "disconnected":
         for candidate in steps:
             candidate["run"] = candidate.get("run", "").replace(
-                "cargo test --locked --workspace >", "echo disconnected >"
+                "cargo test --locked --workspace --exclude marty-canvas-acceptance --exclude marty-canvas-worker-acceptance --exclude marty-selfhost-acceptance --exclude marty-flow-acceptance >",
+                "echo disconnected >",
             )
     if fault:
         with pytest.raises(AssertionError):

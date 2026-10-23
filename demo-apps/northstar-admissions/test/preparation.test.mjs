@@ -6,6 +6,7 @@ import {
   buildApplicationRequest,
   normalizeApplicationFixture,
   prepareApplicationContext,
+  loadActiveCredentialTemplate,
   selectActiveCredentialTemplate,
 } from '../src/preparation.mjs';
 
@@ -13,6 +14,39 @@ const applicationTemplate = {
   name: 'Northstar Application',
   form_fields: [{ field_id: 'email', label: 'Email', field_type: 'EMAIL', required: true }],
 };
+
+test('known credential template uses exact public detail instead of a truncated name inventory', async () => {
+  const calls = [];
+  const template = { id: 'owned', organization_id: 'org', name: 'Selected', status: 'ACTIVE' };
+  const result = await loadActiveCredentialTemplate({ organizationId: 'org', sessionCookie: 'test', name: 'Selected', templateId: 'owned',
+    gateway: async (path) => { calls.push(path); return { ok: true, payload: template }; } });
+  assert.deepEqual(result, template);
+  assert.deepEqual(calls, ['/v1/credential-templates/owned?organization_id=org']);
+  for (const change of [{ id: 'foreign' }, { organization_id: 'foreign' }, { name: 'Other' }, { status: 'DEPRECATED' }]) {
+    await assert.rejects(loadActiveCredentialTemplate({ organizationId: 'org', name: 'Selected', templateId: 'owned',
+      gateway: async () => ({ ok: true, payload: { ...template, ...change } }) }));
+  }
+});
+
+test('name selection exhausts native limit/offset pages and detects ambiguity beyond first100', async () => {
+  const first = Array.from({ length: 100 }, (_, id) => ({ id: String(id), organization_id: 'org', name: 'Other', status: 'ACTIVE' }));
+  const wanted = { id: 'wanted', organization_id: 'org', name: 'Selected', status: 'ACTIVE' };
+  const paths = [];
+  const result = await loadActiveCredentialTemplate({ organizationId: 'org', name: 'Selected', gateway: async (path) => {
+    paths.push(path); return { ok: true, payload: path.endsWith('offset=0') ? first : [wanted] };
+  } });
+  assert.equal(result.id, 'wanted');
+  assert.deepEqual(paths, ['/v1/credential-templates?organization_id=org&status=active&limit=100&offset=0',
+    '/v1/credential-templates?organization_id=org&status=active&limit=100&offset=100']);
+  await assert.rejects(loadActiveCredentialTemplate({ organizationId: 'org', name: 'Selected', gateway: async (path) => ({ ok: true,
+    payload: path.endsWith('offset=0') ? [{ ...wanted, id: 'first-match' }, ...first.slice(1)] : [wanted] }) }), /exactly one/);
+});
+
+test('pagination rejects malformed, repeated or foreign pages', async () => {
+  for (const page of [{ items: [] }, [{ id: 'id', organization_id: 'foreign' }], [{ id: 'same', organization_id: 'org' }, { id: 'same', organization_id: 'org' }]]) {
+    await assert.rejects(loadActiveCredentialTemplate({ organizationId: 'org', name: 'Selected', gateway: async () => ({ ok: true, payload: page }) }));
+  }
+});
 
 test('application fixture defines only safe, identifier-free public setup inputs', () => {
   const fixture = normalizeApplicationFixture({
@@ -127,10 +161,10 @@ test('application preparation uses only the public gateway and activates before 
   });
   const calls = [];
   const responses = [
-    [{ id: 'credential-template-1', organization_id: 'org-1', name: 'Marty Verified Member Badge', status: 'ACTIVE' }],
-    { id: 'application-template-1', status: 'DRAFT' },
+    { id: 'credential-template-1', organization_id: 'org-1', name: 'Marty Verified Member Badge', status: 'ACTIVE' },
+    { id: 'application-template-1', organization_id: 'org-1', credential_template_id: 'credential-template-1', status: 'DRAFT' },
     { valid: true },
-    { id: 'application-template-1', status: 'ACTIVE' },
+    { id: 'application-template-1', organization_id: 'org-1', credential_template_id: 'credential-template-1', status: 'ACTIVE' },
   ];
   const gateway = async (path, options) => {
     calls.push({ path, options });
@@ -143,10 +177,11 @@ test('application preparation uses only the public gateway and activates before 
     adminCookie: 'session-cookie',
     fixture,
     runId: 'run-1',
+    credentialTemplateId: 'credential-template-1',
   });
 
   assert.deepEqual(calls.map(({ path }) => path), [
-    '/v1/credential-templates?organization_id=org-1&status=active',
+    '/v1/credential-templates/credential-template-1?organization_id=org-1',
     '/v1/application-templates',
     '/v1/application-templates/application-template-1/validate',
     '/v1/application-templates/application-template-1/activate',
@@ -158,6 +193,27 @@ test('application preparation uses only the public gateway and activates before 
   assert.equal(prepared.applicationTemplate.status, 'ACTIVE');
 });
 
+test('foreign created or activated application template cannot authorize further setup', async () => {
+  const fixture = normalizeApplicationFixture({ credential_template_name: 'Selected', application_template: applicationTemplate,
+    form_data: { email: 'learner@northstar.example' } });
+  for (const phase of ['created', 'activated']) {
+    const calls = [];
+    const gateway = async (path, options) => {
+      calls.push(path);
+      let payload = path.startsWith('/v1/credential-templates')
+        ? { id: 'credential', organization_id: 'org', name: 'Selected', status: 'ACTIVE' }
+        : path.endsWith('/validate') ? { valid: true }
+        : { id: 'template', organization_id: 'org', credential_template_id: 'credential', status: path.endsWith('/activate') ? 'ACTIVE' : 'DRAFT' };
+      if ((phase === 'created' && path === '/v1/application-templates') || (phase === 'activated' && path.endsWith('/activate'))) {
+        payload = { ...payload, organization_id: 'foreign' };
+      }
+      return { ok: true, payload };
+    };
+    await assert.rejects(prepareApplicationContext({ gateway, organizationId: 'org', adminCookie: 'test', fixture, runId: 'run', credentialTemplateId: 'credential' }), /ownership mismatch/);
+    if (phase === 'created') assert.equal(calls.some((path) => path.endsWith('/validate') || path.endsWith('/activate')), false);
+  }
+});
+
 test('application preparation stops before activation when public validation fails', async () => {
   const fixture = normalizeApplicationFixture({
     credential_template_name: 'Marty Verified Member Badge',
@@ -167,7 +223,7 @@ test('application preparation stops before activation when public validation fai
   const calls = [];
   const responses = [
     [{ id: 'credential-template-1', organization_id: 'org-1', name: 'Marty Verified Member Badge', status: 'ACTIVE' }],
-    { id: 'application-template-1', status: 'DRAFT' },
+    { id: 'application-template-1', organization_id: 'org-1', credential_template_id: 'credential-template-1', status: 'DRAFT' },
     { valid: false },
   ];
   const gateway = async (path) => {

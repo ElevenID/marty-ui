@@ -72,7 +72,7 @@ def _runtime_evidence(receipt: dict, plan: dict) -> None:
         or set(edge) != {"container_id", "oci_reference", "loopback_port"}
         or type(edge["loopback_port"]) is not int
         or edge["loopback_port"] != receipt["gateway_port"]
-        or edge["oci_reference"] != infra_images.get("edge")
+        or edge["oci_reference"] != reference
         or not isinstance(edge["container_id"], str)
         or CONTAINER_ID.fullmatch(edge["container_id"]) is None):
         raise HandoffError("Protected Rust runtime inventory is invalid")

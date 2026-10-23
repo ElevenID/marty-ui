@@ -111,7 +111,7 @@ def main() -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--active-kid-output", required=True, type=Path)
-    parser.add_argument("--key-name", default="lti-tool-marty-rs256")
+    parser.add_argument("--key-name", required=True)
     parser.add_argument("--verification-method-id")
     args = parser.parse_args()
 

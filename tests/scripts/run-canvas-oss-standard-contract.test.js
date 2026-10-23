@@ -3,19 +3,35 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const {
+  canvasLaunchErrorSummary,
+  canvasOwnedToolIndex,
+  assertCanvasOauthCompletion,
+  publishCanvasCourse,
   BLOCKING_READINESS_CHECK_CODES,
   CASE_IDS,
   ContractFailure,
   ObservationLedger,
+  observePipelinePrerequisites,
+  selectProductionBadgeTemplates,
+  contractFailureLocation,
+  canvasTokenExpiration,
+  selectCanvasTokenExpirationTime,
+  freshCanvasLearnerEmail,
+  martyRequestSummary,
   createHolderProof,
   didWebResolutionUrl,
   extractDeveloperKeyRecord,
   parseCredentialOfferUri,
+  receiveAndVerifyCredential,
   resolveOid4vciEndpoints,
   resolveProofNonce,
   responseJson,
+  CanvasSessionClient,
   sanitizeEvidence,
   validateAuthoritativeEvidenceHeads,
   validateReadinessSnapshot,
@@ -23,6 +39,145 @@ const {
 } = require('./run-canvas-oss-standard-contract');
 
 const NOW = '2026-07-15T06:00:00.000Z';
+
+test('Canvas token retirement uses its existing password session and decoded CSRF cookie', async () => {
+  const calls = [];
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies(origin) { assert.equal(origin, 'https://canvas-test.elevenidllc.com'); return [{ name: '_csrf_token', value: 'synthetic%2Bcsrf%3D' }]; },
+    request: { async fetch(url, options) {
+      calls.push({ url, options });
+      return { status: () => 200, json: async () => ({}), text: async () => '{}', headers: () => ({}) };
+    } },
+  });
+  const result = await client.request('DELETE', '/api/v1/users/1/tokens/2', { includeStatus: true });
+  assert.equal(result.status, 200);
+  assert.equal(calls[0].options.headers['X-CSRF-Token'], 'synthetic+csrf=');
+  assert.equal(calls[0].options.headers.Authorization, undefined);
+  assert.equal(calls[0].options.maxRedirects, 0);
+});
+
+test('Canvas session mutations without CSRF or outside the API origin never reach transport', async () => {
+  let calls = 0;
+  const client = new CanvasSessionClient('https://canvas-test.elevenidllc.com', {
+    async cookies() { return []; }, request: { async fetch() { calls++; } },
+  });
+  await assert.rejects(client.request('DELETE', '/api/v1/users/1/tokens/2'));
+  await assert.rejects(client.request('GET', 'https://foreign.example/api/v1/users/1'));
+  assert.equal(calls, 0);
+});
+
+test('unexpected driver diagnostics retain source location without secret-bearing error text', () => {
+  const error = new Error('secret-token request https://issuer.example?code=private-value');
+  error.stack = 'Error: secret-token\n at fill("private-value") (/tests/scripts/run-canvas-oss-standard-contract.js:712:19)';
+  const result = contractFailureLocation(error, 'standard_lti_13_install');
+  assert.deepEqual(result, { activeCase: 'standard_lti_13_install', errorType: 'Error',
+    sourceLocation: { file: 'run-canvas-oss-standard-contract.js', line: 712, column: 19 } });
+  assert.ok(!JSON.stringify(result).includes('secret') && !JSON.stringify(result).includes('private-value'));
+});
+
+test('Marty request failure context preserves static operation but excludes dynamic paths and queries', () => {
+  assert.equal(martyRequestSummary('PUT', '/v1/integrations/canvas/platforms/private-id/lti-installation?token=secret'),
+    'Marty PUT /v1/integrations/canvas/platforms/:resource/lti-installation failed');
+  assert.equal(martyRequestSummary('secret', '/v1/integrations/canvas/lti/config/secret-token'),
+    'Marty REQUEST /v1/integrations/canvas/:resource/:resource/:resource failed');
+});
+
+test('Canvas token expiration uses the account timezone and stays within a bounded window', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const actual = canvasTokenExpiration(now, 'America/Denver', '');
+  assert.deepEqual(actual, { timestamp: Date.parse('2026-10-21T11:00:00Z'), date: '10/21/2026', time: '5:00 AM' });
+  const nextDay = canvasTokenExpiration(Date.parse('2026-12-31T22:45:00Z'), 'UTC', '');
+  assert.equal(nextDay.date, '01/01/2027');
+  assert.ok(actual.timestamp >= now + 3 * 3600000 && actual.timestamp < now + 3.5 * 3600000);
+});
+
+test('Canvas learner fixtures have fresh bounded synthetic identities for each run', () => {
+  const first = freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001');
+  assert.equal(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0001'));
+  assert.notEqual(first, freshCanvasLearnerEmail('learner@marty.demo', 'owned-run-0002'));
+  assert.ok(freshCanvasLearnerEmail('a'.repeat(100) + '@stage.test', 'owned-run-0001').split('@')[0].length <= 64);
+  assert.throws(() => freshCanvasLearnerEmail('person@example.com', 'owned-run-0001'), /synthetic mailbox/);
+});
+
+test('learning template selection rejects employee and membership badges and foreign bindings', async () => {
+  const claims = ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context']
+    .map(name => ({ name }));
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE',
+    credential_type: 'OpenBadgeCredential', claims };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  function client(c, a) { return { get: async path => {
+    const row = path.startsWith('/v1/credential-templates') ? c : a;
+    return path.includes('?') ? [row] : row;
+  } }; }
+  const select = (c, a, selectors = {}) => selectProductionBadgeTemplates(client(c, a), 'org-1', selectors);
+  assert.equal((await select(credential, application)).credential.id, 'learning');
+  assert.equal((await select(credential, application, { applicationTemplateId: 'application', credentialTemplateId: 'learning' })).credential.id, 'learning');
+  await assert.rejects(select(credential, application, { credentialTemplateId: 'different' }), /Exactly one active Open Badge/);
+  for (const c of [
+    { ...credential, credential_type: 'EmployeeBadge' },
+    { ...credential, credential_type: 'open_badge', claims: [{ name: 'email' }] },
+    { ...credential, organization_id: 'foreign' },
+  ]) await assert.rejects(select(c, application), /Exactly one active Open Badge/);
+  await assert.rejects(select(credential,
+    { ...application, organization_id: 'foreign' }), /Exactly one active Open Badge/);
+});
+
+test('explicit learning template selection reads exact resources beyond collection first pages', async () => {
+  const calls = [];
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
+    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  const marty = { get: async path => {
+    calls.push(path);
+    if (path === '/v1/application-templates/application') return application;
+    if (path === '/v1/credential-templates/learning') return credential;
+    assert.fail('Exact selected resources must not depend on a collection first page');
+  } };
+  assert.equal((await selectProductionBadgeTemplates(marty, 'org-1', { applicationTemplateId: 'application' })).credential.id, 'learning');
+  assert.deepEqual(calls, ['/v1/application-templates/application', '/v1/credential-templates/learning']);
+});
+
+test('unconfigured learning selection pages inventories and rejects repeated pages', async () => {
+  const credential = { id: 'learning', organization_id: 'org-1', status: 'ACTIVE', credential_type: 'OpenBadgeCredential',
+    claims: ['achievement_name', 'course_name', 'quiz_name', 'score_percent', 'result', 'learning_context'].map(name => ({ name })) };
+  const application = { id: 'application', organization_id: 'org-1', status: 'ACTIVE', credential_template_id: 'learning' };
+  const old = Array.from({ length: 100 }, (_, index) => ({ id: 'old-' + index, status: 'DEPRECATED', organization_id: 'org-1' }));
+  const client = repeated => ({ get: async raw => {
+    const url = new URL(raw, 'https://unit.invalid');
+    assert.equal(url.searchParams.get('limit'), '100');
+    if (url.searchParams.get('offset') === '0' || repeated) return old;
+    assert.equal(url.searchParams.get('offset'), '100');
+    return [url.pathname.includes('credential-templates') ? credential : application];
+  } });
+  assert.equal((await selectProductionBadgeTemplates(client(false), 'org-1', {})).application.id, 'application');
+  await assert.rejects(selectProductionBadgeTemplates(client(true), 'org-1', {}), /repeated or omitted/);
+});
+
+test('pipeline prerequisites read the explicit mounted artifact directory and reject changed bootstrap evidence', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-prerequisite-root-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(directory, 'image'));
+  fs.writeFileSync(path.join(directory, 'image/canvas-oss-image-manifest.json'), JSON.stringify({
+    source_repository: 'https://github.com/instructure/canvas-lms.git', source_modified: false,
+    source_commit: 'a'.repeat(40), image_digest: 'sha256:' + 'b'.repeat(64), scope: 'UNIT_FIXTURE_ONLY',
+  }));
+  const bootstrap = { phase: 'pre_start_only', web_started_after_bootstrap: true, forbidden_operation_counts: { rails_runner: 0 } };
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  fs.writeFileSync(path.join(directory, 'runtime-context.json'), JSON.stringify({
+    origin: 'https://beta.elevenidllc.com', source_id: 'c'.repeat(40),
+  }));
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  global.fetch = async () => new Response(JSON.stringify({ marty_ui_sha: 'c'.repeat(40) }), { status: 200 });
+  const ledger = new ObservationLedger(NOW);
+  await observePipelinePrerequisites(ledger, 'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory);
+  assert.equal(ledger.entries.get('stock_lifecycle_bootstrap_only').status, 'passed');
+  bootstrap.forbidden_operation_counts.rails_runner = 1;
+  fs.writeFileSync(path.join(directory, 'bootstrap-audit.json'), JSON.stringify(bootstrap));
+  await assert.rejects(observePipelinePrerequisites(new ObservationLedger(NOW),
+    'https://beta.elevenidllc.com', 'https://canvas-test.elevenidllc.com', () => {}, directory),
+  error => error.code === 'bootstrap_audit_invalid');
+});
 
 function readinessSnapshot(overrides = {}) {
   return {
@@ -55,6 +210,93 @@ function compactEs256(privateKey, payload) {
   return `${signingInput}.${signature.toString('base64url')}`;
 }
 
+function localCredentialExchange(t, vct) {
+  const origin = 'https://beta.elevenidllc.com';
+  const issuer = `${origin}/org/org-1`;
+  const { publicKey, privateKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const offer = {
+    credential_issuer: issuer,
+    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'local-test-offer' } },
+  };
+  const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify(offer))}`;
+  const requests = [];
+  t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+    const href = String(url);
+    requests.push({ url: href, method: options.method || 'GET' });
+    let body;
+    if (href === `${origin}/.well-known/openid-credential-issuer/org/org-1`) {
+      body = {
+        credential_issuer: issuer,
+        token_endpoint: `${origin}/v1/issuance/token`,
+        credential_endpoint: `${origin}/v1/issuance/credential`,
+        nonce_endpoint: `${origin}/v1/issuance/nonce`,
+      };
+    } else if (href === `${origin}/v1/issuance/token`) {
+      body = { access_token: 'local-test-token', token_type: 'Bearer', expires_in: 1800 };
+    } else if (href === `${origin}/v1/issuance/nonce`) {
+      body = { c_nonce: 'local-test-nonce' };
+    } else if (href === `${origin}/v1/issuance/credential`) {
+      const proof = JSON.parse(options.body).proofs.jwt[0];
+      const proofHeader = JSON.parse(Buffer.from(proof.split('.')[0], 'base64url').toString('utf8'));
+      const compact = compactEs256(privateKey, {
+        iss: 'did:web:issuer.example',
+        vct,
+        cnf: { jwk: proofHeader.jwk },
+      });
+      body = { credentials: [{ format: 'dc+sd-jwt', credential: compact }] };
+    } else if (href === 'https://issuer.example/.well-known/did.json') {
+      body = {
+        id: 'did:web:issuer.example',
+        verificationMethod: [{ id: 'did:web:issuer.example#key-1', publicKeyJwk: publicKey.export({ format: 'jwk' }) }],
+        assertionMethod: ['did:web:issuer.example#key-1'],
+      };
+    } else {
+      assert.fail(`Unexpected local credential-exchange request: ${href}`);
+    }
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  });
+  return { offerUri, origin, requests };
+}
+
+test('credential receipt accepts the exact template VCT with a verified signature and holder binding', async (t) => {
+  const fixture = localCredentialExchange(t, 'urn:example:OpenBadgeCredential');
+  const result = await receiveAndVerifyCredential(fixture.offerUri, { vct: 'urn:example:OpenBadgeCredential' }, fixture.origin);
+  assert.equal(result.payload.vct, 'urn:example:OpenBadgeCredential');
+  assert.equal(fixture.requests.length, 5);
+});
+
+for (const [name, actualVct, template] of [
+  ['unrelated VCT when the template has no legacy credential_type', 'urn:example:UnrelatedCredential', { vct: 'urn:example:OpenBadgeCredential' }],
+  ['missing signed VCT', undefined, { vct: 'urn:example:OpenBadgeCredential' }],
+  ['substring matching the legacy credential_type', 'urn:example:NotOpenBadgeCredential', { vct: 'urn:example:OpenBadgeCredential', credential_type: 'OpenBadgeCredential' }],
+]) {
+  test(`credential receipt rejects ${name} even with a valid signature and holder binding`, async (t) => {
+    const fixture = localCredentialExchange(t, actualVct);
+    await assert.rejects(
+      receiveAndVerifyCredential(fixture.offerUri, template, fixture.origin),
+      (error) => error instanceof ContractFailure && error.code === 'open_badge_type_mismatch',
+    );
+    assert.equal(fixture.requests.length, 5);
+  });
+}
+
+test('credential receipt requires an exact expected template VCT before consuming the offer', async (t) => {
+  const offerUri = `openid-credential-offer://?credential_offer=${encodeURIComponent(JSON.stringify({
+    credential_issuer: 'https://beta.elevenidllc.com/org/org-1',
+    credential_configuration_ids: ['OpenBadgeCredential#sd-jwt'],
+    grants: { 'urn:ietf:params:oauth:grant-type:pre-authorized_code': { 'pre-authorized_code': 'unconsumed-test-offer' } },
+  }))}`;
+  const fetchMock = t.mock.method(globalThis, 'fetch', async () => assert.fail('Missing template VCT must fail before network activity'));
+  for (const template of [null, {}, { vct: '' }, { vct: '   ' }, { credential_type: 'OpenBadgeCredential' }]) {
+    await assert.rejects(
+      receiveAndVerifyCredential(offerUri, template),
+      (error) => error instanceof ContractFailure && error.code === 'credential_template_vct_missing',
+    );
+  }
+  assert.equal(fetchMock.mock.callCount(), 0);
+});
+
 test('observation ledger emits the fixed schema and never invents optional coverage', () => {
   const execution = {
     boundary: 'docker_compose_one_shot',
@@ -64,7 +306,7 @@ test('observation ledger emits the fixed schema and never invents optional cover
     secret_transport: 'compose_secret_files',
     image_id: `sha256:${'a'.repeat(64)}`,
     source_sha: 'b'.repeat(40),
-    base_image: `mcr.microsoft.com/playwright:v1.56.0-jammy@sha256:${'c'.repeat(64)}`,
+    base_image: `mcr.microsoft.com/playwright:v1.63.0-noble@sha256:${'c'.repeat(64)}`,
   };
   const ledger = new ObservationLedger(NOW, execution);
   ledger.pass('standard_lti_13_install', 'Installed with token=secret-value and an intentionally long suffix '.repeat(8));
@@ -348,4 +590,126 @@ test('credential verifier accepts a valid ES256 JWS and rejects payload tamperin
 test('Developer Key extraction handles the nested stock Canvas response shape', () => {
   const record = extractDeveloperKeyRecord({ developer_key: { id: 42, name: 'Marty LTI run', api_key: 'secret' } }, 'Marty LTI run');
   assert.deepEqual(record, { id: 42, name: 'Marty LTI run', api_key: 'secret' });
+});
+
+
+test('single-course publication uses its documented event and rejects silent unchanged success', async () => {
+  let request;
+  const admin = { putForm: async (...args) => {
+    request = args;
+    return { id: 42, workflow_state: args[1]['course[event]'] === 'offer' ? 'available' : 'unpublished' };
+  } };
+  await publishCanvasCourse(admin, 42);
+  assert.deepEqual(request, ['/api/v1/courses/42', { 'course[event]': 'offer' }, [200]]);
+  for (const result of [{ id: 42, workflow_state: 'unpublished' }, { id: 99, workflow_state: 'available' }]) {
+    await assert.rejects(publishCanvasCourse({ putForm: async () => result }, 42),
+      error => error.code === 'canvas_course_not_published');
+  }
+});
+
+
+test('OAuth completion requires native connected outcome and owned platform binding', () => {
+  const origin = 'https://issuer.test';
+  assert.doesNotThrow(() => assertCanvasOauthCompletion(new URL(origin + '/complete?outcome=connected&platform_id=owned'), origin, 'owned'));
+  for (const value of [
+    origin + '/complete?outcome=success&platform_id=owned',
+    origin + '/complete?outcome=error&platform_id=owned&error_code=private-value',
+    origin + '/complete?outcome=connected&platform_id=other',
+    'https://other.test/complete?outcome=connected&platform_id=owned',
+  ]) {
+    assert.throws(() => assertCanvasOauthCompletion(new URL(value), origin, 'owned'),
+      error => error.code === 'canvas_oauth_callback_not_connected' && !error.message.includes('private-value'));
+  }
+});
+
+
+test('Canvas chooser selects the acknowledged installation among identically named tools', () => {
+  assert.equal(canvasOwnedToolIndex(['1', '2', '9'], '9'), 2);
+  for (const [ids, owned] of [[['1', '2'], '9'], [['9', '9'], '9'], [['9'], 'not-an-id']]) {
+    assert.throws(() => canvasOwnedToolIndex(ids, owned), ContractFailure);
+  }
+});
+
+
+test('Canvas personal tokens cover the actual long-run deadline with a bounded buffer', () => {
+  const now = Date.parse('2026-10-21T07:51:00Z');
+  const deadline = now + 6 * 3600000;
+  const token = canvasTokenExpiration(now, 'UTC', String(deadline / 1000));
+  assert.ok(token.timestamp >= deadline + 1800000 && token.timestamp < deadline + 3600000);
+  for (const value of ['invalid', String(now / 1000), String((now + 25 * 3600000) / 1000)]) {
+    assert.throws(() => canvasTokenExpiration(now, 'UTC', value), error => error.code === 'canvas_contract_deadline_invalid');
+  }
+});
+
+
+test('resource conflict summaries read wrapped errors without retaining credential fields or URLs', () => {
+  const summary = canvasLaunchErrorSummary({ error: { code: 'canvas_conflict', message: 'Canvas AGS rejection at https://canvas.test/api?state=private-value', detail: [{ message: 'Bearer abcdefghijklmnopqrstuvwxyz' }] }, session_token: 'private-session', ignored: 'private-other' });
+  assert.ok(summary.includes('canvas_conflict'));
+  assert.ok(summary.some(value => value.includes('Canvas AGS rejection')));
+  assert.ok(!JSON.stringify(summary).includes('private') && !JSON.stringify(summary).includes('https://'));
+});
+
+
+test('resource conflict summaries preserve the production MIP error description', () => {
+  assert.deepEqual(canvasLaunchErrorSummary({ error: 'service_error', error_description: 'Canvas launch resource does not match the selected binding', message_id: 'opaque-private-message-id', details: [{ message: 'scope mismatch' }] }),
+    ['scope mismatch', 'service_error', 'Canvas launch resource does not match the selected binding']);
+});
+
+test('course recovery waits for current nonempty counts despite retained completed_at', async () => {
+  const { waitForCanvasCourseCompletion } = require('./run-canvas-oss-standard-contract');
+  const stale = { requirement_count: 2, requirement_completed_count: 1, completed_at: '2026-10-21T18:26:08Z' };
+  const recovered = { requirement_count: 2, requirement_completed_count: 2, completed_at: stale.completed_at };
+  const paths = [];
+  const canvas = { get: async path => { paths.push(path); return paths.length === 1 ? stale : recovered; } };
+  assert.equal(await waitForCanvasCourseCompletion(canvas, { course: { id: 'course-1' }, learner: { id: 'learner-1' } }), recovered);
+  assert.deepEqual(paths, ['/api/v1/courses/course-1/users/learner-1/progress', '/api/v1/courses/course-1/users/learner-1/progress']);
+});
+
+function stockTimeWidget({ value = '12:00 AM', expanded = false, committedValue } = {}) {
+  const calls = [];
+  const time = {
+    async fill(next) { calls.push(['fill', next]); if (next !== value) expanded = true; value = next; },
+    async getAttribute(name) { assert.equal(name, 'aria-expanded'); return String(expanded); },
+    async press(key) { assert.equal(key, 'ArrowDown'); calls.push(['press', key]); expanded = true; },
+    async inputValue() { return value; },
+  };
+  const page = { getByRole(role, options) {
+    assert.equal(role, 'option'); assert.equal(options.exact, true);
+    return { async click() {
+      assert.equal(expanded, true, 'stock options only exist while the combobox is open');
+      calls.push(['click', options.name]); value = committedValue ?? options.name; expanded = false;
+    } };
+  } };
+  return { page, time, calls };
+}
+
+test('Canvas token time explicitly opens a closed same-value midnight combobox', async () => {
+  const widget = stockTimeWidget();
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '12:00 AM');
+  assert.deepEqual(widget.calls, [['fill', '12:00 AM'], ['press', 'ArrowDown'], ['click', '12:00 AM']]);
+});
+
+test('Canvas token time selects the exact option without moving an already-open selection', async () => {
+  const widget = stockTimeWidget({ expanded: true });
+  await selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM');
+  assert.deepEqual(widget.calls, [['fill', '1:30 AM'], ['click', '1:30 AM']]);
+});
+
+test('Canvas token time rejects a stale committed option before token submission', async () => {
+  const widget = stockTimeWidget({ committedValue: '12:00 AM' });
+  await assert.rejects(selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM'),
+    error => error.code === 'canvas_personal_token_time_uncommitted');
+});
+
+
+test('engineering CLI permits explicit media-free mode while recorded mode requires a video path', () => {
+  const {parseArgs} = require('./run-canvas-oss-standard-contract');
+  const functional = parseArgs(['node','driver','--observations','observations.json','--functional-rerun']);
+  assert.equal(functional.functionalRerun,true);
+  assert.equal(functional.video,null);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json']), /video/);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json','--functional-rerun','--functional-rerun']), /Unsupported argument/);
+  const recorded = parseArgs(['node','driver','--observations','observations.json','--video','contract.webm']);
+  assert.equal(recorded.functionalRerun,false);
+  assert.match(recorded.video,/contract\.webm$/);
 });

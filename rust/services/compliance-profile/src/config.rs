@@ -16,8 +16,12 @@ impl RuntimeEnvironment {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkloadTlsFiles {
     pub certificate: PathBuf,
-    pub private_key: PathBuf,
     pub ca_certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ComplianceServiceConfig {
@@ -77,12 +81,20 @@ impl ComplianceServiceConfig {
             });
         }
         let insecure_allowed = boolean(&v, "GRPC_INSECURE_ALLOWED", false)?;
-        if environment == RuntimeEnvironment::Production && insecure_allowed {
+        if environment.is_deployed() && insecure_allowed {
             return Err(invalid("GRPC_INSECURE_ALLOWED"));
         }
-        let workload_tls = tls(&v, environment, insecure_allowed)?;
+        let workload_tls = tls(&v, environment)?;
         let target = value(&v, "ORG_GRPC_TARGET").unwrap_or("organization:9002");
         if target.chars().any(char::is_whitespace) {
+            return Err(invalid("ORG_GRPC_TARGET"));
+        }
+        let organization_grpc_target = if target.contains("://") {
+            target.to_owned()
+        } else {
+            format!("http://{target}")
+        };
+        if workload_tls.is_some() && !organization_grpc_target.starts_with("https://") {
             return Err(invalid("ORG_GRPC_TARGET"));
         }
         Ok(Self {
@@ -95,11 +107,7 @@ impl ComplianceServiceConfig {
                 1,
                 100,
             )? as u32,
-            organization_grpc_target: if target.contains("://") {
-                target.into()
-            } else {
-                format!("http://{target}")
-            },
+            organization_grpc_target,
             service_token,
             workload_tls,
             dependency_timeout: Duration::from_secs(number(
@@ -118,18 +126,24 @@ impl ComplianceServiceConfig {
 fn tls(
     v: &BTreeMap<String, String>,
     e: RuntimeEnvironment,
-    insecure_allowed: bool,
 ) -> Result<Option<WorkloadTlsFiles>, ComplianceConfigError> {
     let n = [
         "GRPC_WORKLOAD_TLS_CLIENT_CERT",
-        "GRPC_WORKLOAD_TLS_CLIENT_KEY",
         "GRPC_WORKLOAD_TLS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_KMS_KEY_VERSION",
     ];
+    if v.contains_key("GRPC_WORKLOAD_TLS_CLIENT_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_CLIENT_KEY"));
+    }
     let count = n.iter().filter(|x| value(v, x).is_some()).count();
-    if count == 0 && (!e.is_deployed() || insecure_allowed) {
+    if count == 0 && !e.is_deployed() {
         return Ok(None);
     }
-    if count != 3 {
+    if count != n.len() {
         return Err(if count == 0 {
             ComplianceConfigError::Missing { name: n[0] }
         } else {
@@ -138,8 +152,17 @@ fn tls(
     }
     Ok(Some(WorkloadTlsFiles {
         certificate: value(v, n[0]).unwrap_or_default().into(),
-        private_key: value(v, n[1]).unwrap_or_default().into(),
-        ca_certificate: value(v, n[2]).unwrap_or_default().into(),
+        ca_certificate: value(v, n[1]).unwrap_or_default().into(),
+        kms_endpoint: value(v, n[2]).unwrap_or_default().into(),
+        kms_ca_certificate: value(v, n[3]).unwrap_or_default().into(),
+        kms_token_file: value(v, n[4]).unwrap_or_default().into(),
+        kms_key_name: value(v, n[5]).unwrap_or_default().into(),
+        kms_key_version: value(v, n[6])
+            .unwrap_or_default()
+            .parse::<u32>()
+            .ok()
+            .filter(|version| *version > 0)
+            .ok_or_else(|| invalid(n[6]))?,
     }))
 }
 fn boolean(
@@ -220,23 +243,62 @@ mod tests {
     }
 
     #[test]
-    fn beta_can_explicitly_match_a_plaintext_organization_server_but_production_cannot() {
-        let mut beta = base("beta");
-        beta.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
-        beta.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
-        assert!(ComplianceServiceConfig::from_values(beta)
-            .unwrap()
-            .workload_tls
-            .is_none());
-
-        let mut production = base("production");
-        production.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
-        production.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+    fn workload_tls_requires_remote_key_and_rejects_private_key_file() {
+        let mut values = base("production");
+        values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_CERT".into(), "client.pem".into());
+        values.insert("GRPC_WORKLOAD_TLS_CA_CERT".into(), "server-ca.pem".into());
         assert_eq!(
-            ComplianceServiceConfig::from_values(production),
+            ComplianceServiceConfig::from_values(values.clone()),
             Err(ComplianceConfigError::Invalid {
-                name: "GRPC_INSECURE_ALLOWED"
+                name: "GRPC_WORKLOAD_TLS_CLIENT_CERT"
             })
         );
+        for (name, value) in [
+            ("GRPC_WORKLOAD_TLS_KMS_ADDR", "https://bao:8200"),
+            ("GRPC_WORKLOAD_TLS_KMS_CA_CERT", "bao-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_KMS_TOKEN_FILE", "token"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_NAME", "compliance-client"),
+            ("GRPC_WORKLOAD_TLS_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+        assert_eq!(
+            ComplianceServiceConfig::from_values(values.clone()),
+            Err(ComplianceConfigError::Invalid {
+                name: "ORG_GRPC_TARGET"
+            })
+        );
+        values.insert("ORG_GRPC_TARGET".into(), "https://organization:9002".into());
+        assert_eq!(
+            ComplianceServiceConfig::from_values(values.clone())
+                .unwrap()
+                .workload_tls
+                .unwrap()
+                .kms_key_version,
+            1
+        );
+        values.insert("GRPC_WORKLOAD_TLS_CLIENT_KEY".into(), "legacy.pem".into());
+        assert_eq!(
+            ComplianceServiceConfig::from_values(values),
+            Err(ComplianceConfigError::Invalid {
+                name: "GRPC_WORKLOAD_TLS_CLIENT_KEY"
+            })
+        );
+    }
+
+    #[test]
+    fn deployed_environments_reject_plaintext_override() {
+        for environment in ["beta", "production"] {
+            let mut values = base(environment);
+            values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+            values.insert("GRPC_INSECURE_ALLOWED".into(), "true".into());
+            assert_eq!(
+                ComplianceServiceConfig::from_values(values),
+                Err(ComplianceConfigError::Invalid {
+                    name: "GRPC_INSECURE_ALLOWED"
+                })
+            );
+        }
     }
 }

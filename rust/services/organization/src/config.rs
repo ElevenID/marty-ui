@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fs, net::SocketAddr};
+use std::{collections::BTreeMap, fs, net::SocketAddr, path::PathBuf};
 
 use mmf_messaging::OutboxDispatcherConfig;
 use thiserror::Error;
@@ -27,12 +27,14 @@ pub struct OrganizationServiceConfig {
     pub environment: OrganizationEnvironment,
     pub http_addr: SocketAddr,
     pub grpc_addr: SocketAddr,
+    pub grpc_server_tls: Option<OrganizationGrpcServerTls>,
     pub database_url: String,
     pub database_max_connections: u32,
     pub redis_url: String,
     pub redis_database: u32,
     pub service_token: Option<String>,
     pub event_stream_target: String,
+    pub event_stream_ca_certificate: Option<PathBuf>,
     pub event_stream_timeout_seconds: u64,
     pub organization_creation_enabled: bool,
     pub marty_organization_id: Uuid,
@@ -41,6 +43,16 @@ pub struct OrganizationServiceConfig {
     pub outbox: OutboxDispatcherConfig,
     pub release_version: String,
     pub build_revision: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct OrganizationGrpcServerTls {
+    pub certificate: PathBuf,
+    pub kms_endpoint: String,
+    pub kms_ca_certificate: PathBuf,
+    pub kms_token_file: PathBuf,
+    pub kms_key_name: String,
+    pub kms_key_version: u32,
 }
 
 #[derive(Clone, Debug, Eq, Error, PartialEq)]
@@ -75,6 +87,7 @@ impl OrganizationServiceConfig {
         if http_addr == grpc_addr {
             return Err(invalid("ORGANIZATION_GRPC_ADDR"));
         }
+        let grpc_server_tls = grpc_server_tls(&values)?;
         let database_url = value(&values, "DATABASE_URL")
             .ok_or(OrganizationConfigError::Missing {
                 name: "DATABASE_URL",
@@ -104,11 +117,25 @@ impl OrganizationServiceConfig {
         if service_token.as_ref().is_some_and(|token| token.len() < 32) {
             return Err(invalid("GRPC_SERVICE_TOKEN"));
         }
+        if environment.is_deployed() && grpc_server_tls.is_none() {
+            return Err(OrganizationConfigError::Missing {
+                name: "GRPC_WORKLOAD_TLS_SERVER_CERT",
+            });
+        }
         let event_stream_target = value(&values, "ES_GRPC_TARGET")
             .unwrap_or("event-stream:9015")
             .trim()
             .to_owned();
         if event_stream_target.is_empty() {
+            return Err(invalid("ES_GRPC_TARGET"));
+        }
+        let event_stream_ca_certificate = value(&values, "ES_GRPC_CA_CERT").map(PathBuf::from);
+        if environment.is_deployed() && event_stream_ca_certificate.is_none() {
+            return Err(OrganizationConfigError::Missing {
+                name: "ES_GRPC_CA_CERT",
+            });
+        }
+        if event_stream_ca_certificate.is_some() && !event_stream_target.starts_with("https://") {
             return Err(invalid("ES_GRPC_TARGET"));
         }
         let marty_organization_id = value(&values, "MARTY_ORG_ID")
@@ -130,12 +157,14 @@ impl OrganizationServiceConfig {
             environment,
             http_addr,
             grpc_addr,
+            grpc_server_tls,
             database_url,
             database_max_connections,
             redis_url,
             redis_database,
             service_token,
             event_stream_target,
+            event_stream_ca_certificate,
             event_stream_timeout_seconds: number(&values, "ES_GRPC_TIMEOUT_SECONDS", 5)?,
             organization_creation_enabled: boolean(&values, "ORGANIZATION_CREATION_ENABLED", true)?,
             marty_organization_id,
@@ -162,6 +191,58 @@ fn value<'a>(values: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str
 
 fn invalid(name: &'static str) -> OrganizationConfigError {
     OrganizationConfigError::Invalid { name }
+}
+
+fn grpc_server_tls(
+    values: &BTreeMap<String, String>,
+) -> Result<Option<OrganizationGrpcServerTls>, OrganizationConfigError> {
+    if values.contains_key("GRPC_WORKLOAD_TLS_SERVER_KEY") {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"));
+    }
+    const NAMES: [&str; 6] = [
+        "GRPC_WORKLOAD_TLS_SERVER_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+        "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION",
+    ];
+    let configured = NAMES
+        .iter()
+        .filter(|name| value(values, name).is_some())
+        .count();
+    if configured == 0 {
+        return Ok(None);
+    }
+    if configured != NAMES.len() {
+        return Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"));
+    }
+    let endpoint = value(values, NAMES[1]).ok_or_else(|| invalid(NAMES[1]))?;
+    let url = Url::parse(endpoint).map_err(|_| invalid(NAMES[1]))?;
+    if url.scheme() != "https"
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid(NAMES[1]));
+    }
+    let kms_key_version = value(values, NAMES[5])
+        .ok_or_else(|| invalid(NAMES[5]))?
+        .parse::<u32>()
+        .ok()
+        .filter(|version| *version > 0)
+        .ok_or_else(|| invalid(NAMES[5]))?;
+    Ok(Some(OrganizationGrpcServerTls {
+        certificate: value(values, NAMES[0]).unwrap_or_default().into(),
+        kms_endpoint: endpoint.into(),
+        kms_ca_certificate: value(values, NAMES[2]).unwrap_or_default().into(),
+        kms_token_file: value(values, NAMES[3]).unwrap_or_default().into(),
+        kms_key_name: value(values, NAMES[4]).unwrap_or_default().into(),
+        kms_key_version,
+    }))
 }
 
 fn environment(value: &str) -> Result<OrganizationEnvironment, OrganizationConfigError> {
@@ -237,10 +318,18 @@ fn email(
 
 fn redis_url(value: &str, database: u32) -> Result<String, OrganizationConfigError> {
     let mut url = Url::parse(value).map_err(|_| invalid("REDIS_URL"))?;
-    if !matches!(url.scheme(), "redis" | "rediss") {
+    if !matches!(url.scheme(), "redis" | "rediss" | "unix")
+        || (url.scheme() == "unix" && (url.host_str().is_some() || !url.path().starts_with('/')))
+    {
         return Err(invalid("REDIS_URL"));
     }
-    url.set_path(&format!("/{database}"));
+    if url.scheme() == "unix" {
+        url.query_pairs_mut()
+            .clear()
+            .append_pair("db", &database.to_string());
+    } else {
+        url.set_path(&format!("/{database}"));
+    }
     Ok(url.to_string())
 }
 
@@ -289,6 +378,15 @@ mod tests {
     }
 
     #[test]
+    fn local_redis_socket_preserves_its_path_and_selects_database() {
+        assert_eq!(
+            redis_url("unix:///run/marty-redis/redis.sock", 2).unwrap(),
+            "unix:///run/marty-redis/redis.sock?db=2"
+        );
+        assert!(redis_url("unix://remote/run/redis.sock", 2).is_err());
+    }
+
+    #[test]
     fn deployed_configuration_requires_a_strong_service_token() {
         let mut values = base();
         values.insert("ENVIRONMENT".into(), "beta".into());
@@ -308,6 +406,50 @@ mod tests {
     }
 
     #[test]
+    fn deployed_configuration_requires_remote_grpc_server_identity() {
+        for environment in ["beta", "production"] {
+            let mut values = base();
+            values.insert("ENVIRONMENT".into(), environment.into());
+            values.insert("GRPC_SERVICE_TOKEN".into(), "s".repeat(32));
+            assert_eq!(
+                OrganizationServiceConfig::from_values(values.clone()),
+                Err(OrganizationConfigError::Missing {
+                    name: "GRPC_WORKLOAD_TLS_SERVER_CERT"
+                })
+            );
+            for (name, value) in [
+                ("GRPC_WORKLOAD_TLS_SERVER_CERT", "server.pem"),
+                ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "https://bao:8200"),
+                ("GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT", "bao-ca.pem"),
+                ("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE", "token"),
+                (
+                    "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+                    "organization-server",
+                ),
+                ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+            ] {
+                values.insert(name.into(), value.into());
+            }
+            assert_eq!(
+                OrganizationServiceConfig::from_values(values.clone()),
+                Err(OrganizationConfigError::Missing {
+                    name: "ES_GRPC_CA_CERT"
+                })
+            );
+            values.insert("ES_GRPC_CA_CERT".into(), "public-ca.pem".into());
+            assert_eq!(
+                OrganizationServiceConfig::from_values(values.clone()),
+                Err(invalid("ES_GRPC_TARGET"))
+            );
+            values.insert("ES_GRPC_TARGET".into(), "https://event-stream:9015".into());
+            assert!(OrganizationServiceConfig::from_values(values)
+                .unwrap()
+                .grpc_server_tls
+                .is_some());
+        }
+    }
+
+    #[test]
     fn invalid_listener_cache_and_outbox_values_fail_closed() {
         for (name, value) in [
             ("ORGANIZATION_SERVICE_PORT", "not-a-port"),
@@ -318,5 +460,52 @@ mod tests {
             values.insert(name.into(), value.into());
             assert!(OrganizationServiceConfig::from_values(values).is_err());
         }
+    }
+
+    #[test]
+    fn remote_grpc_server_identity_is_complete_and_rejects_private_key_files() {
+        let mut values = base();
+        values.insert("GRPC_WORKLOAD_TLS_SERVER_CERT".into(), "server.pem".into());
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values.clone()),
+            Err(invalid("GRPC_WORKLOAD_TLS_SERVER_CERT"))
+        );
+        for (name, value) in [
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR", "https://bao:8200"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_CA_CERT", "bao-ca.pem"),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_TOKEN_FILE", "token"),
+            (
+                "GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+                "organization-server",
+            ),
+            ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_VERSION", "1"),
+        ] {
+            values.insert(name.into(), value.into());
+        }
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values.clone())
+                .unwrap()
+                .grpc_server_tls
+                .unwrap()
+                .kms_key_version,
+            1
+        );
+        values.insert(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "http://bao:8200".into(),
+        );
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values.clone()),
+            Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR"))
+        );
+        values.insert(
+            "GRPC_WORKLOAD_TLS_SERVER_KMS_ADDR".into(),
+            "https://bao:8200".into(),
+        );
+        values.insert("GRPC_WORKLOAD_TLS_SERVER_KEY".into(), "legacy.pem".into());
+        assert_eq!(
+            OrganizationServiceConfig::from_values(values),
+            Err(invalid("GRPC_WORKLOAD_TLS_SERVER_KEY"))
+        );
     }
 }

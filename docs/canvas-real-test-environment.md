@@ -49,23 +49,23 @@ Canvas LMS compose profile, and exposes Canvas at
 
 ### Seeder behavior
 
-The seeder script lives at:
+The Rust seeder is packaged in the migrations image at:
 
-- `scripts/seed_canvas_real.py`
+- `/usr/local/bin/marty-canvas-demo-seed`
 
 By default it will:
 
-1. Upsert an ElevenID Canvas platform through the gateway at `http://localhost:8000/v1/integrations/canvas/platforms`
+1. Upsert an ElevenID Canvas platform through the Compose gateway at `http://gateway:8000/v1/integrations/canvas/platforms`
 2. Sync Canvas's real LTI `client_id` and `deployment_id` back onto the platform.
 3. Refresh platform JWKS/OIDC metadata via `POST /v1/integrations/canvas/platforms/{id}/jwks-refresh`
-4. Upsert a Canvas program binding for the Marty organization when `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`
+4. Upsert a course-scoped Canvas program binding for the Marty organization when `CANVAS_PROGRAM_BINDING_SEED_ENABLED=true`. The quiz or assignment stays in the evidence requirement. A new binding is a draft: an instructor must complete a signed Deep Linking placement and resource launch, then rerun with `CANVAS_PROGRAM_BINDING_ACTIVATE=true` to validate and activate it. A repeated seed preserves an unchanged draft or active binding and rejects policy drift.
 5. Bootstrap Canvas initial data/admin login when needed
 6. Create/update the Canvas developer key + external tool through a local Rails-runner fallback inside `marty-canvas-real`
 7. Force both the developer key owner/site-admin binding and the target account binding to workflow state `on`
 8. Mint a Canvas admin API token when `CANVAS_ADMIN_ACCESS_TOKEN` is missing or stale
 9. Create/update a test course, learner, enrollment, launch module item, and launch assignment
 10. Seed the Interoperable Credentials Foundations Open Badge demo scenario by default, including a quiz, MIP policy, public badge metadata/image, remote DID issuer context metadata, and wallet + Canvas mirror delivery mode
-11. When demo evidence is enabled, claim the credential through the OID4VCI wallet endpoint and run one Canvas mirror automation cycle
+11. In an isolated disposable fixture with legacy event ingest explicitly enabled, demo evidence can drive a wallet claim and one Canvas mirror automation cycle. Beta evidence uses the authoritative LTI evidence sync and recorded Canvas assignment path; the synthetic AGS score-event seed is rejected there.
 12. Print Canvas Credentials display and employer verification URLs when the mirror publish succeeds
 
 Minimum env vars for Canvas platform/binding seeding:
@@ -86,11 +86,12 @@ Optional program binding env vars:
 
 - `CANVAS_OPEN_BADGE_SCENARIO_ENABLED` (default: `true`)
 - `CANVAS_PROGRAM_BINDING_SEED_ENABLED` (default: `true`)
+- `CANVAS_PROGRAM_BINDING_ACTIVATE` (default: `false`; set only after the signed instructor placement and resource launch)
 - `CANVAS_PROGRAM_BINDING_DISPLAY_NAME`
 - `CANVAS_PROGRAM_BINDING_EVIDENCE_TYPE` (default: `canvas.quiz_score` for the Open Badge scenario)
 - `CANVAS_PROGRAM_BINDING_DELIVERY_MODE` (default: `wallet_plus_canvas_mirror` for the Open Badge scenario)
 - `CANVAS_PROGRAM_BINDING_AUTO_APPROVE` (default: `true`)
-- `CANVAS_PROGRAM_BINDING_DIRECT_ISSUE` (default: `false`)
+- `CANVAS_PROGRAM_BINDING_DIRECT_ISSUE` (must remain `false`; the current management API permits only orchestrated issuance)
 - `CANVAS_PROGRAM_BINDING_SCORE_THRESHOLD` (default: `80`)
 - `CANVAS_DEMO_APPLICATION_SEED_ENABLED` (default: `true`)
 - `CANVAS_DEMO_EVIDENCE_EVENT_ENABLED` (default: `false`; set true only when `CANVAS_CREDENTIALS_SHARED_SECRET` is configured in the issuance service environment)
@@ -235,7 +236,7 @@ When active:
 - Internal URL: `http://canvas-real:3000`
 - Host URL: `http://localhost:${CANVAS_REAL_HOST_PORT:-8088}`
 - Tunnel URL: `https://${CANVAS_REAL_PUBLIC_HOST}` (for beta experiments: `https://canvas-test.elevenidllc.com`)
-- Sidecar bridge: `marty-issuance-canvas-localhost-bridge`
+- Sidecar bridge: `marty-issuance-canvas-localhost-bridge` (Rust image built from `docker/canvas-localhost-bridge`)
 - Canvas local overrides mounted for this profile:
 	- `config/canvas/production-local.rb` → enables static file serving and seeds `Canvas::Security.config['lti_iss']` for local LTI launches when blank
 	- `config/canvas/dynamic_settings.local.yml` → production LTI key store / JWKS
@@ -265,7 +266,8 @@ Recommended minimum local resources:
 
 - Use this profile when you need realistic Canvas behavior.
 - For quick iteration/unit tests, keep using the lightweight sandbox profile (`canvas-sandbox-*` targets).
-- In local real-Canvas mode, use `http://localhost:8088` as the Canvas platform `canvas_base_url`; the issuance-side localhost bridge synthesizes `/.well-known/openid-configuration` and proxies other requests to the host Canvas instance.
+- In local real-Canvas mode, use `http://localhost:8088` as the Canvas platform `canvas_base_url`; the issuance-side Rust localhost bridge synthesizes `/.well-known/openid-configuration` and proxies other requests to the host Canvas instance. Build the optional `issuance-canvas-localhost-bridge` service with the same Compose profile set before starting it.
+- The beta aggregate release uses public Canvas URLs and does not recreate this optional localhost bridge. Stop a running bridge before beta release; the release preflight refuses to replace issuance while the sidecar shares its network namespace.
 - Real Canvas exposes `/api/lti/security/jwks`, but its `/api/lti/security/openid-configuration` path is gated by `registration_token`; the bridge exists specifically to provide a standards-style discovery document for localhost testing.
 - Use `CANVAS_LTI_EXPERIENCE_BASE_URL` for the public ElevenID launch/redirect URLs that Canvas stores on the developer key and external tool.
 - If `CANVAS_LTI_EXPERIENCE_BASE_URL` is unset, the issuance service now falls back to `UI_BASE_URL` instead of hard-coding `http://localhost:3000`; this keeps tunnel/profile launches on the public ElevenID hostname.

@@ -15,6 +15,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 BASE = "docker-compose.selfhost.prod.yml"
 BUNDLE = "docker-compose.selfhost.bundle.override.yml"
+NO_CANVAS = "docker-compose.selfhost.no-canvas.yml"
 WORKER = "canvas-sync-worker"
 NATIVE_WORKER = "/usr/local/bin/marty-canvas-sync-worker"
 NATIVE_LOADER = ". /app/load-secrets-env.sh\nexec " + NATIVE_WORKER + "\n"
@@ -85,6 +86,8 @@ def assert_shared_rust_services(base, bundle):
         if name == "issuance-native":
             assert selector == "issuance_native"
             original = native_dispatcher_model(original)
+        elif name in {"issuance", "issuance-migrations"}:
+            assert selector == "issuance_native"
         else:
             assert not original.get("command") and not original.get("entrypoint"), (
                 f"Review explicit Rust launch override: {name}"
@@ -152,23 +155,107 @@ def render(*files, profiles=(), project=None, compose_command=None):
     return json.loads(result.stdout)
 
 
+def assert_no_canvas_overlay_activation(compose_command=None):
+    """Preserve the default worker; prove opt-in overlay activation semantics."""
+    command = ["docker", "compose"] if compose_command is None else list(compose_command)
+    environment = os.environ.copy()
+    environment.update(
+        COMPOSE_PROFILES="",
+        FLOW_CALLBACK_DESTINATIONS="https://example.invalid/callback",
+        MARTY_ISSUANCE_IMAGE=(
+            "example.invalid/marty/issuance@sha256:" + "0" * 64
+        ),
+    )
+    base = [
+        *command,
+        "--env-file",
+        ".env.selfhost.production.example",
+        "-f",
+        BASE,
+    ]
+    def check(*args, overlay=False):
+        return subprocess.run(
+            [
+                *base,
+                *(["-f", NO_CANVAS] if overlay else []),
+                *args,
+                "config",
+                "--hash",
+                WORKER,
+            ],
+            cwd=ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            stdin=subprocess.DEVNULL,
+            timeout=30,
+        )
+
+    original = check()
+    assert original.returncode == 0 and re.fullmatch(
+        rf"{WORKER} [0-9a-f]{{64}}\s*", original.stdout
+    ), "Existing default self-host composition must keep the Canvas worker"
+    inactive = check(overlay=True)
+    assert inactive.returncode != 0 and "disabled" in inactive.stderr.lower(), (
+        "Opt-in no-Canvas overlay must disable the worker"
+    )
+    active = check("--profile", "canvas", overlay=True)
+    assert active.returncode == 0 and re.fullmatch(
+        rf"{WORKER} [0-9a-f]{{64}}\s*", active.stdout
+    ), "Selected Canvas profile must activate the worker"
+
+
+def assert_no_canvas_issuance_secret(base, preview):
+    """The preview must omit the Canvas secret without changing other runtime inputs."""
+    for name in ("issuance", "issuance-native"):
+        original = deepcopy(base["services"][name])
+        expected = deepcopy(original)
+        original_env = environment_mapping(original["environment"])
+        expected_env = environment_mapping(expected["environment"])
+        assert original_env["CANVAS_CREDENTIALS_SHARED_SECRET_FILE"] == (
+            "/run/secrets/canvas_credentials_shared_secret"
+        )
+        expected_env.update(
+            CANVAS_PORTABLE_INTEGRATION_ENABLED="false",
+            CANVAS_LEGACY_EVENT_INGEST_ENABLED="false",
+            CANVAS_MIRROR_WORKER_ENABLED="false",
+            CANVAS_CREDENTIALS_SHARED_SECRET_FILE="",
+        )
+        expected["environment"] = expected_env
+        assert any(
+            secret["source"] == "canvas_credentials_shared_secret"
+            for secret in expected["secrets"]
+        )
+        expected["secrets"] = [
+            secret
+            for secret in expected["secrets"]
+            if secret["source"] != "canvas_credentials_shared_secret"
+        ]
+        actual = deepcopy(preview["services"][name])
+        actual["environment"] = environment_mapping(actual["environment"])
+        assert actual == expected, (
+            f"No-Canvas issuance must preserve every unrelated runtime field: {name}"
+        )
+
+
 def assert_inherited_service(base, bundle, service):
     assert bundle["services"][service] == base["services"][service], (
-        f"Bundle must preserve the complete unqualified Python {service} definition"
+        f"Bundle must preserve the complete unqualified Rust {service} definition"
     )
 
 
 def assert_published_issuance_preserved(base, bundle):
     original = base["services"]["issuance"]
     migration = base["services"]["issuance-migrations"]
-    assert original["image"].startswith("${MARTY_ISSUANCE_IMAGE:?"), (
-        "Unqualified issuance API must retain its immutable published image"
-    )
-    assert original["image"] == migration["image"]
+    for service in (original, migration):
+        assert service["build"]["dockerfile"] == "services/Dockerfile"
+        assert service["build"]["args"]["SERVICE_NAME"] == "issuance-native"
     assert original["entrypoint"] == ["/bin/sh", "/app/load-openbao-token-and-start.sh"]
-    assert original["command"][:4] == ["python", "-m", "uvicorn", "main:app"]
-    for service in ("issuance", "issuance-migrations"):
-        assert_inherited_service(base, bundle, service)
+    assert original["command"] == ["/usr/local/bin/marty-issuance-service"]
+    assert migration["command"][0].endswith("exec /usr/local/bin/marty-issuance-service migrate\n")
+    # The bundle replaces source builds with the shared Rust image. Its full
+    # rendered launch and environment are checked by assert_shared_rust_services.
 
 
 def assert_worker_preserved(base, bundle):
@@ -287,16 +374,25 @@ def conformance_cases():
 
 
 def catalog_cases():
-    owner = runpy.run_path(str(ROOT / "packages/marty_devops/catalog.py"))
-    catalog = owner["DeploymentCatalog"].load(ROOT)
+    stacks = {
+        payload["name"]: payload
+        for path in (ROOT / "deploy-config/stacks").glob("*.json")
+        if (payload := json.loads(path.read_text(encoding="utf-8")))
+    }
     cases = []
-    for name, stack in sorted(catalog.stacks.items()):
+    for name, stack in sorted(stacks.items()):
         if not stack.get("compose_files"):
             continue
-        required = WORKER in catalog.running_services_for_stack(name)
+        result = subprocess.run(
+            ["cargo", "+1.95.0", "run", "--quiet", "--locked", "--manifest-path", str(ROOT / "rust/Cargo.toml"),
+             "-p", "marty-deployment-catalog", "--bin", "marty-deploy", "--", "--repo-root", str(ROOT),
+             "services", name, "--running-only"],
+            check=True, capture_output=True, text=True, cwd=ROOT,
+        )
+        required = WORKER in result.stdout.splitlines()
         if not required and name != "selfhost-beta-tunnel":
             continue
-        if not required:
+        if name == "selfhost-beta-tunnel":
             assert stack["operations"]["up"] == [
                 "up",
                 "-d",
@@ -436,6 +532,7 @@ def run(suite="bundle", compose_command=None):
         else partial(render, compose_command=compose_command)
     )
     if suite == "consumers":
+        assert_no_canvas_overlay_activation(compose_command)
         consumers = assert_consumer_matrix(renderer)
         print(
             f"Canvas consumer matrix preserves complete native worker definitions in {len(consumers)} conformance/catalog/beta compositions (configuration only)"
@@ -444,7 +541,11 @@ def run(suite="bundle", compose_command=None):
     # Keep the installed/older Compose bundle qualification independent from
     # the modern parser needed for no-interpolate source bind expressions.
     base, bundle = renderer(BASE), renderer(BASE, BUNDLE)
+    assert "profiles" not in base["services"][WORKER]
     assert_worker_preserved(base, bundle)
+    preview = renderer(BASE, BUNDLE, NO_CANVAS)
+    assert preview["services"][WORKER]["profiles"] == ["canvas"]
+    assert_no_canvas_issuance_secret(bundle, preview)
     assert_published_issuance_preserved(base, bundle)
     converted = assert_shared_rust_services(base, bundle)
     print(

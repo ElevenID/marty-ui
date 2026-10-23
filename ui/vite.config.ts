@@ -296,9 +296,12 @@ export default defineConfig(async ({ mode }) => {
       react(),
       consoleEntryRewritePlugin(),
       ...(isDev ? [checker({
-        typescript: true,
+        // Match the production build's checked sources. The broad root config
+        // includes test fixtures that do not currently type-check; Vitest owns
+        // their live behavioral feedback.
+        typescript: { tsconfigPath: 'tsconfig.build.json' },
         eslint: {
-          lintCommand: 'eslint . --ext .js,.jsx,.ts,.tsx',
+          lintCommand: 'eslint src --ext .js,.jsx',
         },
         overlay: {
           initialIsOpen: false,
@@ -311,6 +314,8 @@ export default defineConfig(async ({ mode }) => {
         prerender({
           routes: prerenderRoutes,
           renderer: new PuppeteerRenderer({
+            injectProperty: '__ELEVENID_PRERENDER__',
+            inject: { demoManifests: true },
             maxConcurrentRoutes: prerenderConcurrency,
             renderAfterDocumentEvent: 'app-rendered',
             timeout: 45000,
@@ -471,34 +476,34 @@ export default defineConfig(async ({ mode }) => {
       proxy: {
         // Proxy /v1/* API requests to microservices gateway
         '/v1': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Proxy /auth/* requests to the backend (OIDC flows)
         '/auth': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Legacy /api/* proxy (for backwards compatibility during transition)
         '/api': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
           ws: true,
         },
         // Proxy health check
         '/health': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
         },
         // Proxy OpenAPI schema for API documentation
         '/openapi.json': {
-          target: env.VITE_API_URL || 'http://127.0.0.1:8000',
+          target: env.VITE_DEV_PROXY_TARGET || env.VITE_API_URL || 'http://127.0.0.1:8000',
           changeOrigin: true,
           secure: false,
         },

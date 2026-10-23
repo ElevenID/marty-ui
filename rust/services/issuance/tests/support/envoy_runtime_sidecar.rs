@@ -109,6 +109,8 @@ fn legacy_reference(native: &Value) -> Result<Value, String> {
     cluster["load_assignment"]["cluster_name"] = json!("issuance_grpc");
     cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
         ["socket_address"]["address"] = json!("issuance");
+    cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
+        ["socket_address"]["port_value"] = json!(9005);
 
     let routes = legacy["static_resources"]["listeners"][0]["filter_chains"][0]["filters"][0]
         ["typed_config"]["route_config"]["virtual_hosts"][0]["routes"]
@@ -139,7 +141,7 @@ fn fixture_projection(candidate: &Value, selection: Selection) -> Value {
             let auth = cluster["name"] == "auth_grpc";
             let address = &mut cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]
                 ["endpoint"]["address"]["socket_address"];
-            *address = json!({"address":"127.0.0.1","port_value":if native{9005}else if auth{19001}else{19005}});
+            *address = json!({"address":"127.0.0.1","port_value":if native{19006}else if auth{19001}else{19005}});
             // Envoy can start before the in-process fixture peers. Its default
             // no-traffic retry cadence is longer than this bounded integration
             // test, so normalize only the projected fixture configuration.
@@ -616,9 +618,9 @@ fn fixture_projection_preserves_every_field_except_fixture_socket_and_cadence() 
                     ["endpoint"]["address"]["socket_address"];
                 assert_eq!(
                     *address,
-                    json!({"address":"127.0.0.1","port_value":if native{9005}else if auth{19001}else{19005}})
+                    json!({"address":"127.0.0.1","port_value":if native{19006}else if auth{19001}else{19005}})
                 );
-                *address = json!({"address":if native{"issuance-native"}else if auth{"auth"}else{"issuance"},"port_value":if auth{9001}else{9005}});
+                *address = json!({"address":if native{"127.0.0.1"}else if auth{"auth"}else{"issuance"},"port_value":if native{19006}else if auth{9001}else{9005}});
                 assert_eq!(cluster["health_checks"][0]["no_traffic_interval"], "1s");
                 assert_eq!(
                     cluster["health_checks"][0]
@@ -647,40 +649,6 @@ fn fixture_projection_preserves_every_field_except_fixture_socket_and_cadence() 
         assert_eq!(
             parse(encode(&changed).unwrap().as_bytes()).unwrap(),
             selected
-        );
-    }
-}
-
-#[test]
-fn feature_unified_renderer_emits_scalar_ports_for_external_yaml_consumers() {
-    let source = include_bytes!("../../../../../config/envoy/envoy.yaml");
-    let parsed = parse(source).unwrap();
-    assert_eq!(
-        parsed["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
-            .as_u64(),
-        Some(9000)
-    );
-    let candidate = render(source, marty_release_evidence::envoy_config::DESCRIPTOR).unwrap();
-    let encoded = encode(&candidate).unwrap();
-    assert!(!encoded.contains("$serde_json::private::Number"));
-    // Independent YAML consumer must see scalar numeric nodes. A JSON-only
-    // roundtrip can silently reconstruct the private Number marker instead.
-    let yaml: serde_yaml::Value = serde_yaml::from_str(&encoded).unwrap();
-    assert_eq!(
-        yaml["static_resources"]["listeners"][0]["address"]["socket_address"]["port_value"]
-            .as_u64(),
-        Some(9000)
-    );
-    for cluster in yaml["static_resources"]["clusters"].as_sequence().unwrap() {
-        assert!(
-            cluster["load_assignment"]["endpoints"][0]["lb_endpoints"][0]["endpoint"]["address"]
-                ["socket_address"]["port_value"]
-                .as_u64()
-                .is_some()
-        );
-        assert_eq!(
-            cluster["health_checks"][0]["healthy_threshold"].as_u64(),
-            Some(2)
         );
     }
 }

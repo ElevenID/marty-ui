@@ -13,30 +13,52 @@ import pytest
 from scripts.check_passport_supported_rust_model import (
     ModelPreflightError, preflight_attested_plan, render_model, validate_model,
     validate_planned_model, validate_selfhost_ceremony_model,
+    require_keyless_tls_custody,
 )
 from scripts.passport_supported_infra_images import qualified_images
 
 
 SERVICES = "ghcr.io/elevenid/marty-ui-oss/services@sha256:" + "a" * 64
 MIGRATIONS = "ghcr.io/elevenid/marty-ui-oss/migrations@sha256:" + "b" * 64
-ISSUANCE = "ghcr.io/elevenid/marty-credentials-issuance@sha256:" + "c" * 64
+
+
+@pytest.mark.parametrize("setting", [
+    "GRPC_WORKLOAD_TLS_SERVER_KEY", "GRPC_WORKLOAD_TLS_CLIENT_KEY_FILE",
+    "PASSPORT_EDGE_TLS_PRIVATE_KEY_PATH", "AUTH_MTLS_IDENTITY_KEY_FILE",
+])
+def test_keyless_custody_rejects_private_key_setting_aliases(setting: str) -> None:
+    model = {"services": {
+        "openbao": {
+            "environment": {"PASSPORT_BAO_TLS_MODE": "required"},
+            "healthcheck": {"test": [
+                "CMD", "bao", "status", "-address=https://127.0.0.1:8200",
+                "-ca-cert=/tmp/bao-tls/vault-ca.pem",
+            ]},
+            "volumes": [{"type": "volume", "source": "openbao_public_ca",
+                         "target": "/bao/public-ca"}],
+            "tmpfs": ["/tmp/bao-tls:rw,mode=1777"],
+        },
+        "workload": {"environment": {setting: "/run/secrets/tls.key"}},
+    }}
+    with pytest.raises(ModelPreflightError, match="private-key files"):
+        require_keyless_tls_custody(model)
 
 
 def inputs(root: Path) -> Path:
     secrets = root / "secrets"
     secrets.mkdir()
     for name in (
-        "marty_db_password", "bao_root_token", "bao_token", "signing_keys_internal_api_key",
+        "marty_db_password", "bao_root_token", "bao_token", "notification_openbao_token", "signing_keys_internal_api_key",
         "issuance_api_key", "dsc_issue_gateway_key", "csca_issue_gateway_key",
         "callback_signer_api_key",
         "callback_signer_bao_token", "grpc_service_token", "bureau_database_url",
         "passport_beta_reconciliation_operator_token",
-        "passport_edge_tls_cert", "passport_edge_tls_key",
+        "passport_edge_tls_cert", "passport_edge_tls_kms_token",
         "flow_webhook_secret", "flow_application_event_hmac_key",
         "workload_identity_ca_cert", "flow_workload_client_cert",
-        "flow_workload_client_key", "flow_workload_server_cert",
-        "flow_workload_server_key", "pp_workload_server_cert",
-        "pp_workload_server_key",
+        "flow_workload_client_kms_token", "flow_workload_server_cert",
+        "flow_workload_server_kms_token", "pp_workload_server_cert",
+        "pp_workload_server_kms_token", "signing_keys_workload_server_kms_token",
     ):
         (secrets / name).write_text("synthetic-disposable-only", encoding="utf-8")
     env_file = root / "acceptance.env"
@@ -44,9 +66,7 @@ def inputs(root: Path) -> Path:
         "PASSPORT_ACCEPTANCE_POSTGRES_IMAGE=postgres@sha256:" + "d" * 64,
         "PASSPORT_ACCEPTANCE_REDIS_IMAGE=redis@sha256:" + "e" * 64,
         "PASSPORT_ACCEPTANCE_OPENBAO_IMAGE=quay.io/openbao/openbao@sha256:" + "f" * 64,
-        "PASSPORT_ACCEPTANCE_EDGE_IMAGE=docker.io/library/nginx@sha256:" + "1" * 64,
         "PASSPORT_ACCEPTANCE_MIGRATIONS_IMAGE=" + MIGRATIONS,
-        "PASSPORT_ACCEPTANCE_ISSUANCE_IMAGE=" + ISSUANCE,
         "PASSPORT_ACCEPTANCE_PLAN_RUN_ID=123456789",
         "PASSPORT_ACCEPTANCE_SOURCE_COMMIT=" + "a" * 40,
         "PASSPORT_ACCEPTANCE_ADMIN_EMAIL=disposable@acceptance.invalid",
@@ -76,10 +96,59 @@ def test_real_compose_render_is_safe_but_not_accepted(
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
+    for service, selectors in {
+        "signing-keys": ("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
+                         "signing_keys_workload_server_kms_token", "signing-keys-server"),
+        "flow": ("GRPC_WORKLOAD_TLS_CLIENT_KMS_KEY_NAME",
+                 "flow_workload_client_kms_token", "flow-client"),
+        "presentation-policy": ("GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME",
+                                "pp_workload_server_kms_token", "pp-server"),
+        "compliance-profile": ("GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
+                               "compliance_profile_workload_client_kms_token",
+                               "compliance-profile-client"),
+        "deployment-profile": ("GRPC_WORKLOAD_TLS_KMS_KEY_NAME",
+                               "deployment_profile_workload_client_kms_token",
+                               "deployment-profile-client"),
+    }.items():
+        setting, token, role = selectors
+        candidate = model["services"][service]
+        assert candidate["environment"][setting] == f"{project}-{role}"
+        assert token in {secret["source"] for secret in candidate["secrets"]}
+        assert not any("_tls_key" in secret["source"] or
+                       secret["source"].endswith("_workload_server_key") or
+                       secret["source"].endswith("_workload_client_key")
+                       for secret in candidate["secrets"])
+    flow = model["services"]["flow"]
+    assert flow["environment"]["GRPC_WORKLOAD_TLS_SERVER_KMS_KEY_NAME"] == (
+        f"{project}-flow-server")
+    assert "flow_workload_server_kms_token" in {
+        secret["source"] for secret in flow["secrets"]}
+    for service in ("trust-profile", "compliance-profile", "presentation-policy",
+                    "deployment-profile", "flow"):
+        assert model["services"][service]["environment"]["ORG_GRPC_TARGET"] == (
+            "https://organization:9002")
+    with pytest.raises(ModelPreflightError, match="Keyless TLS custody"):
+        require_keyless_tls_custody(model)
+    missing_auth = deepcopy(model)
+    gateway_env = missing_auth["services"]["gateway"]["environment"]
+    gateway_env["GRPC_INSECURE_ALLOWED"] = "false"
+    gateway_env["AUTH_GRPC_TARGET"] = "https://auth:9001"
+    gateway_env["ORG_GRPC_TARGET"] = "https://organization:9002"
+    gateway_env["ES_GRPC_TARGET"] = "https://event-stream:9015"
+    with pytest.raises(ModelPreflightError, match="real Auth service"):
+        require_keyless_tls_custody(missing_auth)
     assert "issuance" not in model["services"]
     assert model["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
         "http://gateway:8000/internal/signing-keys"
     )
+    assert model["services"]["credential-template"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] == (
+        "http://gateway:8000/internal/signing-keys"
+    )
+    direct_template_resolver = deepcopy(model)
+    direct_template_resolver["services"]["credential-template"]["environment"][
+        "SIGNING_KEYS_INTERNAL_URL"] = "http://signing-keys:8017/internal"
+    with pytest.raises(ModelPreflightError, match="credential-template runtime"):
+        validate_model(direct_template_resolver, project, SERVICES, tmp_path)
     bypass = deepcopy(model)
     bypass["services"]["issuance-native"]["environment"]["SIGNING_KEYS_INTERNAL_URL"] = (
         "http://signing-keys:8017/internal"
@@ -151,7 +220,7 @@ def test_real_compose_render_is_safe_but_not_accepted(
     assert model["services"]["gateway"]["environment"][
         "ORG_GRPC_TARGET"] == "organization:9002"
     assert model["services"]["organization"]["environment"][
-        "ES_GRPC_TARGET"] == "event-stream:9015"
+        "ES_GRPC_TARGET"] == "https://event-stream:9015"
     assert model["services"]["organization"]["environment"][
         "PASSPORT_ACCEPTANCE_PROJECT"] == project
     assert model["services"]["gateway"]["environment"][
@@ -169,42 +238,76 @@ def test_real_compose_render_is_safe_but_not_accepted(
     openbao = model["services"]["openbao"]
     assert openbao["entrypoint"] == [
         "/bin/sh", "/usr/local/bin/passport-supported-openbao-start"]
+    assert openbao["environment"]["PASSPORT_BAO_TLS_MODE"] == "required"
+    assert openbao["healthcheck"]["test"] == [
+        "CMD", "bao", "status", "-address=https://127.0.0.1:8200",
+        "-ca-cert=/tmp/bao-tls/vault-ca.pem",
+    ]
+    assert any(mount.get("source") == "openbao_public_ca"
+               and mount.get("target") == "/bao/public-ca"
+               for mount in openbao["volumes"])
+    assert openbao["tmpfs"] == ["/tmp/bao-tls:rw,mode=1777"]
+    for name in (
+        "db-migrate", "signing-keys", "issuance-native",
+        "passport-callback-signer", "gateway",
+    ):
+        consumer = model["services"][name]
+        assert consumer["environment"]["BAO_ADDR"] == "https://openbao:8200"
+        assert consumer["environment"]["BAO_CACERT"] == "/bao/public-ca/ca.crt"
+        assert len(consumer["volumes"]) == 1
+        assert all(consumer["volumes"][0].get(key) == value for key, value in {
+            "type": "volume", "source": "openbao_public_ca",
+            "target": "/bao/public-ca", "read_only": True,
+        }.items())
+    plaintext_bao = deepcopy(model)
+    plaintext_bao["services"]["openbao"]["healthcheck"]["test"][3] = (
+        "-address=http://127.0.0.1:8200"
+    )
+    with pytest.raises(ModelPreflightError, match="HTTPS OpenBao"):
+        require_keyless_tls_custody(plaintext_bao)
+    disk_backed_bao = deepcopy(model)
+    disk_backed_bao["services"]["openbao"].pop("tmpfs")
+    with pytest.raises(ModelPreflightError, match="HTTPS OpenBao"):
+        require_keyless_tls_custody(disk_backed_bao)
     assert {secret["source"] for secret in openbao["secrets"]} == {"bao_root_token"}
     assert "BAO_DEV_ROOT_TOKEN_ID" not in openbao.get("environment", {})
     migration = model["services"]["db-migrate"]
+    assert migration["environment"]["NOTIFICATION_OPENBAO_TOKEN_FILE"] == "/run/secrets/notification_openbao_token"
+    assert "notification_openbao_token" in {secret["source"] for secret in migration["secrets"]}
     issuance_migration = model["services"]["issuance-migrations"]
-    assert issuance_migration["image"] == ISSUANCE
+    assert issuance_migration["image"] == SERVICES
     assert issuance_migration["depends_on"]["db-migrate"]["condition"] == (
         "service_completed_successfully")
     assert issuance_migration["depends_on"]["organization"]["condition"] == (
         "service_healthy")
     assert model["services"]["issuance-native"]["depends_on"]["issuance-migrations"][
         "condition"] == "service_completed_successfully"
+    assert issuance_migration["entrypoint"] == ["/bin/sh", "-c"]
     assert issuance_migration["command"] == [
-        "/bin/sh", "/usr/local/bin/passport-supported-issuance-migrate"]
+        ". /app/load-secrets-env.sh\n"
+        "exec /usr/local/bin/marty-issuance-service migrate\n"]
     assert {secret["source"] for secret in issuance_migration["secrets"]} == {
         "marty_db_password"}
     assert "DATABASE_URL" not in issuance_migration.get("environment", {})
-    assert issuance_migration["configs"] == [{
-        "source": "passport_supported_issuance_migrate",
-        "target": "/usr/local/bin/passport-supported-issuance-migrate"}]
+    assert not issuance_migration.get("configs")
     assert migration["depends_on"]["revocation-profile-migrate"]["condition"] == (
         "service_completed_successfully")
     assert model["services"]["revocation-profile-migrate"]["environment"][
         "RP_MIGRATE_ONLY"] == "true"
     revocation = model["services"]["revocation-profile"]
     assert revocation["depends_on"]["organization"]["condition"] == "service_healthy"
-    assert revocation["environment"]["ORG_GRPC_TARGET"] == "organization:9002"
+    assert revocation["environment"]["ORG_GRPC_TARGET"] == "https://organization:9002"
     assert revocation["environment"]["STATUS_LIST_BASE_URL"] == (
         "https://localhost:29876")
     assert model["services"]["revocation-profile-migrate"]["environment"][
         "STATUS_LIST_BASE_URL"] == revocation["environment"]["STATUS_LIST_BASE_URL"]
     assert {secret["source"] for secret in revocation["secrets"]} == {
-        "marty_db_password", "grpc_service_token"}
+        "marty_db_password", "grpc_service_token", "workload_identity_ca_cert",
+        "rp_workload_server_cert", "rp_workload_server_kms_token"}
     assert model["services"]["gateway"]["environment"][
         "REVOCATION_PROFILE_SERVICE_URL"] == "http://revocation-profile:8013"
     assert model["services"]["issuance-native"]["environment"][
-        "RP_GRPC_TARGET"] == "revocation-profile:9013"
+        "RP_GRPC_TARGET"] == "https://revocation-profile:9013"
     assert migration["environment"]["REDIS_URL"] == signing["environment"][
         "SIGNING_KEYS_REDIS_URL"]
     assert migration["environment"]["PUBLIC_DOMAIN"] == model["services"][
@@ -266,7 +369,6 @@ def test_attested_selfhost_preflight_includes_ceremony_model(tmp_path: Path) -> 
         "source_commit": "a" * 40, "run_id": "123456789",
         "services_reference": SERVICES,
         "migrations_reference": MIGRATIONS,
-        "issuance_reference": ISSUANCE,
         "infra_images": qualified_images(verify_registry=False),
         "owner_labels": {
             "com.marty.passport.acceptance.owner": "supported-consumer",
@@ -314,20 +416,19 @@ def test_rendered_model_rejects_escape_and_mutated_rust_image(tmp_path: Path) ->
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["issuance-migrations"]["command"][-1] = "python other.py upgrade"
-    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+    with pytest.raises(ModelPreflightError, match="Rust issuance schema"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
-    bad["configs"]["passport_supported_issuance_migrate"]["file"] = (
-        tmp_path / "unreviewed-issuance-migrate.sh").as_posix()
-    with pytest.raises(ModelPreflightError, match="Credentials migration script"):
+    bad["services"]["issuance-migrations"]["entrypoint"] = ["python"]
+    with pytest.raises(ModelPreflightError, match="Rust issuance migrator entrypoint"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["issuance-native"]["depends_on"].pop("issuance-migrations")
-    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+    with pytest.raises(ModelPreflightError, match="Rust issuance schema"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["issuance-migrations"]["depends_on"].pop("organization")
-    with pytest.raises(ModelPreflightError, match="Credentials issuance schema"):
+    with pytest.raises(ModelPreflightError, match="Rust issuance schema"):
         validate_model(bad, project, SERVICES, tmp_path)
     bad = deepcopy(model)
     bad["services"]["flow"]["environment"]["ISSUANCE_SERVICE_URL"] = (

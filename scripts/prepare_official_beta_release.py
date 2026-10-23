@@ -7,8 +7,13 @@ import argparse
 import hashlib
 import json
 import re
+import runpy
 from pathlib import Path
 from typing import Any
+
+has_hardened_core_wheels = runpy.run_path(
+    str(Path(__file__).with_name("kms_core_release.py"))
+)["has_hardened_core_wheels"]
 
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}$")
@@ -22,7 +27,6 @@ REQUIRED_COMPONENTS = {
     "marty-verification-python",
     "marty-iso18013-python",
     "marty-credentials-issuance",
-    "marty-common",
     "marty-cli",
     "marty-integration-tests",
     "marty-ui",
@@ -31,6 +35,8 @@ REQUIRED_IMAGE_ROLES = {
     "ui": ("marty-ui", "ui"),
     "services": ("marty-ui", "services"),
     "migrations": ("marty-ui", "migrations"),
+    "openbao_didcomm": ("marty-ui", "openbao-didcomm"),
+    "keycloak": ("marty-ui", "keycloak"),
     "issuance": ("marty-credentials-issuance", "marty-credentials-issuance"),
 }
 
@@ -115,7 +121,9 @@ def image_reference(artifact: dict[str, Any], expected_name: str) -> dict[str, s
 _image_reference = image_reference
 
 
-def _validated_components(manifest: dict[str, Any], expected_ui_revision: str):
+def _validated_components(
+    manifest: dict[str, Any], expected_ui_revision: str, *, rust_only: bool = False,
+):
     _require(
         manifest.get("schema") == "marty.stack/v1",
         "Official stack manifest schema is unsupported",
@@ -144,10 +152,18 @@ def _validated_components(manifest: dict[str, Any], expected_ui_revision: str):
             f"Official stack component is duplicated: {name}",
         )
         _require(
+            name.lower().replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common component",
+        )
+        _require(
             isinstance(repository, str),
             f"Official stack component repository is invalid: {name}",
         )
         key = _repository_key(repository)
+        _require(
+            key.replace("_", "-") != "marty-common",
+            "Official stack contains the retired marty-common repository",
+        )
         _require(
             isinstance(commit, str) and COMMIT.fullmatch(commit) is not None,
             f"Official stack component commit is invalid: {name}",
@@ -177,13 +193,40 @@ def _validated_components(manifest: dict[str, Any], expected_ui_revision: str):
                 isinstance(artifact.get("uri"), str) and artifact["uri"],
                 f"Official stack artifact URI is invalid: {name}",
             )
+            _require(
+                "marty-common" not in artifact["uri"].lower().replace("_", "-"),
+                "Official stack contains a retired marty-common artifact",
+            )
         components_by_name[name] = component
 
-    missing = sorted(REQUIRED_COMPONENTS - set(components_by_name))
+    required = REQUIRED_COMPONENTS - ({"marty-credentials-issuance"} if rust_only else set())
+    missing = sorted(required - set(components_by_name))
     _require(
         not missing,
         f"Official stack manifest is missing components: {', '.join(missing)}",
     )
+    _require(
+        has_hardened_core_wheels(components),
+        "Official stack must pin reviewed KMS-only Core wheel artifacts",
+    )
+    if rust_only:
+        _require(
+            "marty-credentials-issuance" not in components_by_name,
+            "Rust-only stack must not contain a legacy credentials issuance component",
+        )
+        _require(
+            all(
+                _repository_key(component["repository"]) != "marty-credentials"
+                and all(
+                    not artifact["uri"].lower().startswith(
+                        "ghcr.io/elevenid/marty-credentials-issuance"
+                    )
+                    for artifact in component["artifacts"]
+                )
+                for component in components_by_name.values()
+            ),
+            "Rust-only stack must not carry a legacy credentials issuance artifact",
+        )
     ui_component = components_by_name["marty-ui"]
     _require(
         ui_component["repository"] == "ElevenID/marty-ui",
@@ -199,7 +242,9 @@ def _validated_components(manifest: dict[str, Any], expected_ui_revision: str):
     )
 
     images: dict[str, dict[str, str]] = {}
-    for role, (component_name, image_name) in REQUIRED_IMAGE_ROLES.items():
+    roles = {role: target for role, target in REQUIRED_IMAGE_ROLES.items()
+             if not rust_only or role != "issuance"}
+    for role, (component_name, image_name) in roles.items():
         candidates = [
             artifact
             for artifact in components_by_name[component_name]["artifacts"]
@@ -243,6 +288,7 @@ def validate_release_inputs(
     checksums_path: Path,
     *,
     expected_ui_revision: str,
+    rust_only: bool = False,
 ) -> dict[str, Any]:
     """Shared exact manifest/checksum/component/image binding; not signature verification."""
     manifest_path, manifest_digest = _checked_release_paths(
@@ -253,7 +299,7 @@ def validate_release_inputs(
         "Expected UI revision must be a full lowercase commit SHA",
     )
     version, _, images = _validated_components(
-        _load_json(manifest_path), expected_ui_revision
+        _load_json(manifest_path), expected_ui_revision, rust_only=rust_only
     )
     return {
         "release_version": version,
@@ -269,6 +315,7 @@ def prepare_release(
     *,
     recorder_revision: str,
     expected_ui_revision: str,
+    rust_only: bool = False,
 ) -> dict[str, Any]:
     manifest_path, manifest_digest = _checked_release_paths(
         manifest_path, checksums_path
@@ -284,7 +331,7 @@ def prepare_release(
 
     manifest = _load_json(manifest_path)
     release_version, revisions_by_repository, images = _validated_components(
-        manifest, expected_ui_revision
+        manifest, expected_ui_revision, rust_only=rust_only
     )
 
     _require(
@@ -343,6 +390,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--checksums", type=Path, required=True)
     parser.add_argument("--recorder-revision", required=True)
     parser.add_argument("--expected-ui-revision", required=True)
+    parser.add_argument("--rust-only", action="store_true")
     return parser
 
 
@@ -354,6 +402,7 @@ def main() -> int:
             args.checksums,
             recorder_revision=args.recorder_revision,
             expected_ui_revision=args.expected_ui_revision,
+            rust_only=args.rust_only,
         )
     except (OSError, OfficialReleaseError) as exc:
         print(f"Official beta release preparation failed: {exc}")

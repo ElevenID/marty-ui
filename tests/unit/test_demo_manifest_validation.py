@@ -19,6 +19,40 @@ class DemoManifestValidationTests(unittest.TestCase):
     def test_current_preview_is_valid(self):
         validate_manifest(copy.deepcopy(self.manifest))
 
+    def test_android_wallet_lane_binding_preserves_historical_wallets(self):
+        manifest = copy.deepcopy(self.manifest)
+        historical = manifest["scenarios"][0]["wallets"][0]
+        android = {
+            **historical, "implementation": "SpruceID Showcase Wallet", "vendor": "SpruceID",
+            "deployment_mode": "ANDROID_EMULATOR", "classification": "INDEPENDENT",
+            "lane_id": "spruceid-same-device-happy", "evidence_sha256": "a" * 64,
+        }
+        manifest["scenarios"][0]["wallets"] = [historical, android, {
+            **android, "lane_id": "spruceid-same-device-cancel", "result": "FAIL", "evidence_sha256": "b" * 64,
+        }]
+        validate_manifest(manifest)
+
+    def test_public_wallets_reject_full_report_telemetry_and_malformed_bindings(self):
+        cases = [
+            {"protocol_assertions": []}, {"path": "HOLDER_CANCEL"},
+            {"lane_id": "SpruceID same device"}, {"evidence_sha256": "A" * 64},
+            {"evidence_sha256": None}, {"classification": None},
+        ]
+        for changes in cases:
+            with self.subTest(changes=changes):
+                manifest = copy.deepcopy(self.manifest)
+                manifest["scenarios"][0]["wallets"][0].update(changes)
+                with self.assertRaisesRegex(ManifestValidationError, "wallet"):
+                    validate_manifest(manifest)
+
+    def test_malformed_wallet_rows_fail_before_public_consumers_render_them(self):
+        for wallets in (None, {}, [None], [{}]):
+            with self.subTest(wallets=wallets):
+                manifest = copy.deepcopy(self.manifest)
+                manifest["scenarios"][0]["wallets"] = wallets
+                with self.assertRaisesRegex(ManifestValidationError, "wallet"):
+                    validate_manifest(manifest)
+
     def test_elevenid_llc_releases_can_share_a_mip_version(self):
         second = copy.deepcopy(self.manifest)
         second["stack_version"] = "2026.07.1"

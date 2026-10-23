@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -39,6 +40,8 @@ OCI_ROLES = {
     "ghcr.io/elevenid/marty-ui-oss/ui",
     "ghcr.io/elevenid/marty-ui-oss/services",
     "ghcr.io/elevenid/marty-ui-oss/migrations",
+    "ghcr.io/elevenid/marty-ui-oss/openbao-didcomm",
+    "ghcr.io/elevenid/marty-ui-oss/keycloak",
 }
 PROTECTED_FILES = (
     ".gitattributes",
@@ -47,13 +50,20 @@ PROTECTED_FILES = (
     "scripts/prepare_passport_beta_fence_approval.py",
     "scripts/beta-deployment-lock.ps1",
     "scripts/beta-passport-fence-legacy-boundary.ps1",
+    "scripts/beta-passport-fence-recovery-intent.ps1",
     "scripts/beta-passport-migration-lease.ps1",
     "scripts/install-passport-beta-fence.ps1",
+    "scripts/check_passport_beta_fence_recovery_authority.py",
+    "scripts/check_passport_beta_fence_rebind_authority.py",
+    "scripts/rebind-passport-beta-fence.ps1",
+    "scripts/beta-passport-fence-rebind-record.ps1",
     "scripts/probe_passport_beta_fence_target.py",
     "scripts/probe_passport_beta_fence_direct_writes.py",
     "scripts/probe_passport_beta_host.py",
     "scripts/collect_passport_beta_acceptance.py",
+    "scripts/collect_passport_beta_aggregate_acceptance.py",
     "scripts/prepare_official_beta_release.py",
+    "scripts/kms_core_release.py",
     "scripts/sql/passport-beta-fence-install.sql",
     "scripts/sql/passport-beta-fence-drain.sql",
     "scripts/sql/passport-beta-fence-verify.sql",
@@ -72,12 +82,28 @@ PROTECTED_FILES = (
     "scripts/verify_passport_beta_rust_owner.py",
     "scripts/probe_passport_beta_rust_owner_write.py",
     "scripts/probe_passport_beta_rust_owner_flow.py",
+    "scripts/probe_passport_beta_aggregate_kms.py",
+    "scripts/probe_passport_beta_aggregate_ceremony.py",
+    "scripts/probe_passport_beta_reference_provision.py",
+    "scripts/passport_beta_reference_intents.py",
+    "scripts/passport_supported_flow_references.py",
+    "scripts/passport_supported_flow_start.py",
+    "scripts/probe_passport_beta_chain.py",
+    "scripts/verify_passport_beta_issuer_profiles.py",
     "scripts/probe_passport_beta_credentials_continuity.py",
     "scripts/run-passport-beta-aggregate-deploy.ps1",
+    "rust/services/issuance/src/dependency_probe.rs",
+    "rust/services/issuance/src/grpc_client_channel.rs",
+    "rust/services/issuance/src/migration_seed.rs",
+    "rust/services/issuance/migrations/0000_issuance_service_baseline.sql",
+    "rust/services/issuance/migrations/0000_issuance_service_catalog.json",
     "scripts/probe_passport_beta_cutover_snapshot.py",
     "scripts/verify_passport_beta_protected_cutover.py",
     "scripts/collect_passport_python_deletion_cutover.py",
     ".github/workflows/passport-python-deletion-cutover.yml",
+    "scripts/collect_passport_beta_rust_readiness.py",
+    "scripts/verify_passport_beta_rust_readiness.py",
+    ".github/workflows/passport-beta-rust-readiness.yml",
     "docker-compose.base.yml",
     "docker-compose.beta.yml",
     "docker-compose.profile.dev.yml",
@@ -89,6 +115,7 @@ PROTECTED_FILES = (
     "docker-compose.profile.passport-premigrated-beta.yml",
     "docker-compose.ui-release.yml",
     "services/Dockerfile.migrations",
+    "services/Dockerfile.migrations.dockerignore",
     "rust/services/issuance/migrations/0001_oid4vci_public_protocol.sql",
     "rust/services/issuance/migrations/0002_physical_document_jobs.sql",
     "rust/services/issuance/migrations/0003_passport_bureau_provider_binding.sql",
@@ -201,6 +228,7 @@ def manifest_source(
     path: Path, expected_commit: str,
     attest: Callable[[Path, dict[str, str], str], bool] = verify_attestations,
     attest_issuance: Callable[[str, str, str], bool] = verify_issuance_attestation,
+    *, rust_only: bool = False,
 ) -> dict[str, Any]:
     require(path.name == "stack-manifest.json"
             and (path.parent / "SHA256SUMS").is_file(),
@@ -216,26 +244,29 @@ def manifest_source(
     require(isinstance(release, str) and re.fullmatch(r"marty-ui@[0-9]+\.[0-9]+\.[0-9]+", release) is not None,
             "Official stack release coordinate is invalid")
     try:
-        version, _, images = _validated_components(manifest, expected_commit)
+        version, _, images = _validated_components(
+            manifest, expected_commit, rust_only=rust_only)
     except OfficialReleaseError as exc:
         raise HostProbeError("Official stack components are invalid") from exc
     require(release == f"marty-ui@{version}", "Official release version differs")
     digests = {images[role]["uri"]: images[role]["digest"]
-               for role in ("ui", "services", "migrations")}
-    require(set(digests) == OCI_ROLES and len(digests) == 3,
+               for role in ("ui", "services", "migrations", "openbao_didcomm", "keycloak")}
+    require(set(digests) == OCI_ROLES and len(digests) == len(OCI_ROLES),
             "Official UI OCI roles are incomplete")
-    credentials = next(item for item in manifest["components"]
-                       if item["name"] == "marty-credentials-issuance")
-    require(credentials["repository"] == "ElevenID/marty-credentials",
-            "Credentials issuer repository is invalid")
+    credentials = None if rust_only else next(
+        item for item in manifest["components"]
+        if item["name"] == "marty-credentials-issuance")
+    if credentials is not None:
+        require(credentials["repository"] == "ElevenID/marty-credentials",
+                "Credentials issuer repository is invalid")
     require(attest(path, digests, expected_commit) is True,
             "Official stack manifest or OCI attestation is invalid")
-    require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
-                            credentials["version"]) is True,
-            "Credentials issuance image attestation is invalid")
+    if credentials is not None:
+        require(attest_issuance(images["issuance"]["reference"], credentials["commit"],
+                                credentials["version"]) is True,
+                "Credentials issuance image attestation is invalid")
     build_only = {}
     for variable, component_name in (
-        ("MARTY_COMMON", "marty-common"),
         ("MARTY_RS", "marty-core-python"),
         ("MARTY_VERIFICATION", "marty-verification-python"),
         ("MARTY_ISO18013", "marty-iso18013-python"),
@@ -257,11 +288,11 @@ def manifest_source(
     return {
         "release": release, "source_commit": expected_commit,
         "manifest_sha256": file_sha256(path), "oci_digests": digests,
-        "issuance_image": images["issuance"]["reference"],
+        "issuance_image": images["services" if rust_only else "issuance"]["reference"],
         "ui_image": images["ui"]["reference"],
         "services_image": images["services"]["reference"],
         "build_only_artifacts": build_only,
-        "issuance_source_commit": credentials["commit"],
+        "issuance_source_commit": expected_commit if rust_only else credentials["commit"],
         "signed_manifest_verified": True,
     }
 
@@ -271,17 +302,121 @@ def protected_source(
 ) -> str:
     head = runner(["git", "-C", str(ROOT), "rev-parse", "HEAD"])
     require(SHA.fullmatch(head) is not None, "Local Marty UI commit is invalid")
-    require(runner(["git", "-C", str(ROOT), "branch", "--show-current"]) == "main",
-            "Fence operation requires protected main")
+    local_branch = runner(["git", "-C", str(ROOT), "branch", "--show-current"])
+    if local_branch != "main":
+        ref = os.environ.get("GITHUB_REF", "")
+        require(local_branch == "" and re.fullmatch(
+            r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", ref) is not None,
+            "Fence operation requires protected main or a release tag")
+        local_object = runner(["git", "-C", str(ROOT), "rev-parse", ref])
+        require(SHA.fullmatch(local_object) is not None
+                and runner(["git", "-C", str(ROOT), "cat-file", "-t", ref]) == "tag"
+                and runner(["git", "-C", str(ROOT), "rev-parse", f"{ref}^{{commit}}"])
+                    == head,
+                "Detached checkout is not the annotated release tag")
+        require(published_release_ref(ref, head, runner) == local_object,
+                "Published release tag differs from the detached checkout")
     require(not runner(["git", "-C", str(ROOT), "status", "--porcelain=v1",
                         "--untracked-files=normal"]),
             "Fence operation requires a clean protected source")
     branch = json.loads(runner(["gh", "api", "repos/ElevenID/marty-ui/branches/main"]))
     require(branch.get("protected") is True
             and isinstance(branch.get("commit"), dict)
-            and branch["commit"].get("sha") == head,
-            "Local source differs from protected remote main")
+            and SHA.fullmatch(str(branch["commit"].get("sha"))) is not None,
+            "Remote main is not protected")
+    remote_head = branch["commit"]["sha"]
+    # The release source stays immutable while unrelated commits may land on
+    # protected main. Callers additionally bind this source to the signed
+    # manifest, published annotated tag, and their stage receipts.
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/ElevenID/marty-ui/compare/{head}...{remote_head}",
+    ]))
+    require(comparison.get("status") in ("ahead", "identical")
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == head,
+            "Local release source is not an ancestor of protected main")
     return head
+
+
+def published_release_ref(
+    ref: str, source_commit: str,
+    runner: Callable[[list[str]], str] = run,
+) -> str:
+    """Bind a post-release run to the published annotated Marty UI tag."""
+    require(re.fullmatch(r"refs/tags/v[0-9]+\.[0-9]+\.[0-9]+", ref) is not None
+            and SHA.fullmatch(source_commit) is not None,
+            "Post-release tag or source is invalid")
+    remote_tags = runner([
+        "git", "ls-remote", "https://github.com/ElevenID/marty-ui.git",
+        ref, f"{ref}^{{}}",
+    ])
+    records = remote_tags.splitlines()
+    require(len(records) == 2, "Published annotated release tag is unavailable")
+    parsed = {name: object_sha for line in records if "\t" in line
+              for object_sha, name in [line.split("\t", 1)]}
+    tag_object = parsed.get(ref)
+    require(len(parsed) == 2 and SHA.fullmatch(str(tag_object)) is not None
+            and tag_object != source_commit
+            and parsed.get(f"{ref}^{{}}") == source_commit,
+            "Published annotated release tag differs from source")
+    try:
+        lock = json.loads(runner([
+            "git", "-C", str(ROOT), "show",
+            f"{source_commit}:release/stack-lock.json",
+        ]))
+    except ValueError as exc:
+        raise HostProbeError("Release source stack lock is unreadable") from exc
+    require(isinstance(lock, dict)
+            and lock.get("schema") == "marty.stack-lock/v1"
+            and lock.get("release") == f"marty-ui@{ref.removeprefix('refs/tags/v')}"
+            and lock.get("release_state") == "eligible",
+            "Published tag differs from the source stack lock")
+    tag = json.loads(runner([
+        "gh", "api", f"repos/ElevenID/marty-ui/git/tags/{tag_object}",
+    ]))
+    require(isinstance(tag, dict) and tag.get("tag") == ref.removeprefix("refs/tags/")
+            and isinstance(tag.get("object"), dict)
+            and tag["object"].get("type") == "commit"
+            and tag["object"].get("sha") == source_commit
+            and isinstance(tag.get("message"), str),
+            "Published tag object differs from release source")
+    markers: dict[str, str] = {}
+    for line in tag["message"].splitlines():
+        for key in ("Release-Transaction", "Claim-Run", "Source-SHA"):
+            if line.startswith(f"{key}: "):
+                require(key not in markers, "Duplicate release claim marker")
+                markers[key] = line.removeprefix(f"{key}: ")
+    require(SHA256.fullmatch(markers.get("Release-Transaction", "")) is not None
+            and re.fullmatch(r"[1-9][0-9]*", markers.get("Claim-Run", ""))
+                is not None
+            and markers.get("Source-SHA") == source_commit,
+            "Published tag lacks valid release claim markers")
+    claim = json.loads(runner([
+        "gh", "api", "repos/ElevenID/marty-ui/actions/runs/"
+        + markers["Claim-Run"],
+    ]))
+    require(isinstance(claim, dict)
+            and claim.get("id") == int(markers["Claim-Run"])
+            and claim.get("path") == ".github/workflows/prepare-stack-tag.yml"
+            and claim.get("event") == "workflow_dispatch"
+            and claim.get("head_branch") == "main"
+            and claim.get("head_sha") == source_commit
+            and claim.get("status") == "completed"
+            and claim.get("conclusion") == "success",
+            "Published tag release claim did not succeed")
+    release = json.loads(runner([
+        "gh", "api", "repos/ElevenID/marty-ui/releases/tags/"
+        + ref.removeprefix("refs/tags/"),
+    ]))
+    require(isinstance(release, dict)
+            and release.get("tag_name") == ref.removeprefix("refs/tags/")
+            and release.get("draft") is False
+            and release.get("prerelease") is False
+            and isinstance(release.get("published_at"), str)
+            and bool(release["published_at"]),
+            "Published release is unavailable")
+    return tag_object
 
 
 def protected_file(relative: str, runner: Callable[[list[str]], str]) -> None:
@@ -385,6 +520,72 @@ def require_deletion_lineage(
             "Credentials deletion PR no longer descends from approved head")
 
 
+def merged_deletion_pr(
+    runner: Callable[[list[str]], str] = run,
+) -> tuple[str, str]:
+    """Require the deleted source to be merged into protected Credentials main."""
+    pull = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
+    ]))
+    base = pull.get("base") if isinstance(pull, dict) else None
+    head = pull.get("head") if isinstance(pull, dict) else None
+    merge_commit = pull.get("merge_commit_sha") if isinstance(pull, dict) else None
+    require(isinstance(pull, dict) and pull.get("number") == 305
+            and pull.get("state") == "closed" and pull.get("merged") is True
+            and isinstance(pull.get("merged_at"), str)
+            and SHA.fullmatch(str(merge_commit)) is not None
+            and isinstance(base, dict) and base.get("ref") == "main"
+            and isinstance(base.get("repo"), dict)
+            and base["repo"].get("full_name") == DELETION_REPOSITORY
+            and isinstance(head, dict) and SHA.fullmatch(str(head.get("sha"))) is not None
+            and isinstance(head.get("repo"), dict)
+            and head["repo"].get("full_name") == DELETION_REPOSITORY,
+            "Credentials passport deletion is not a merged same-repository PR")
+    branch = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/branches/main",
+    ]))
+    main_commit = branch.get("commit") if isinstance(branch, dict) else None
+    require(isinstance(branch, dict) and branch.get("protected") is True
+            and isinstance(main_commit, dict)
+            and SHA.fullmatch(str(main_commit.get("sha"))) is not None,
+            "Protected Credentials main is unavailable")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{merge_commit}...{main_commit['sha']}",
+    ]))
+    require(isinstance(comparison, dict)
+            and comparison.get("status") in ("identical", "ahead")
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == merge_commit,
+            "Credentials passport deletion merge is not on protected main")
+    return head["sha"], merge_commit
+
+
+def require_predeletion_signed_image(
+    merge_commit: str, image_source_commit: str,
+    runner: Callable[[list[str]], str] = run,
+) -> None:
+    """Keep passport routes available until the beta Rust owner is live."""
+    require(SHA.fullmatch(merge_commit) is not None
+            and SHA.fullmatch(str(image_source_commit)) is not None,
+            "Signed Credentials source is invalid")
+    require(image_source_commit != merge_commit,
+            "Signed Credentials image must predate passport Python deletion")
+    comparison = json.loads(runner([
+        "gh", "api", f"repos/{DELETION_REPOSITORY}/compare/"
+        f"{image_source_commit}...{merge_commit}",
+    ]))
+    require(isinstance(comparison, dict)
+            and comparison.get("status") == "ahead"
+            and type(comparison.get("ahead_by")) is int
+            and comparison["ahead_by"] > 0
+            and comparison.get("behind_by") == 0
+            and isinstance(comparison.get("merge_base_commit"), dict)
+            and comparison["merge_base_commit"].get("sha") == image_source_commit,
+            "Signed Credentials image must be the predeletion ancestor")
+
+
 def check_authority(
     approval_path: Path, manifest_path: Path, beta_baseline_manifest_path: Path,
     runner: Callable[[list[str]], str] = run,
@@ -416,7 +617,8 @@ def check_authority(
             and SHA256.fullmatch(str(approval.get("beta_baseline_manifest_sha256")))
                 is not None,
             "Protected beta target approval fields are invalid")
-    source = manifest_source(manifest_path, head, attest, attest_issuance)
+    source = manifest_source(manifest_path, head, attest, attest_issuance,
+                             rust_only=True)
     require_release_schema_validation_capability(source["source_commit"], runner)
     require_premigrated_compose_validation(PREMIGRATED.read_text(encoding="utf-8"))
     require(file_sha256(beta_baseline_manifest_path)
@@ -439,22 +641,11 @@ def check_authority(
         f"{local_tag_object}\trefs/tags/{tag}",
         f"{head}\trefs/tags/{tag}^{{}}",
     }, "Published annotated release tag differs from protected source")
-    deletion = json.loads(runner([
-        "gh", "api", f"repos/{DELETION_REPOSITORY}/pulls/305",
-    ]))
-    base = deletion.get("base") if isinstance(deletion, dict) else None
-    deletion_head = deletion.get("head") if isinstance(deletion, dict) else None
-    require(isinstance(deletion, dict) and deletion.get("number") == 305
-            and deletion.get("state") == "open" and deletion.get("draft") is True
-            and isinstance(base, dict) and base.get("ref") == "main"
-            and isinstance(base.get("repo"), dict)
-            and base["repo"].get("full_name") == DELETION_REPOSITORY
-            and isinstance(deletion_head, dict)
-            and isinstance(deletion_head.get("repo"), dict)
-            and deletion_head["repo"].get("full_name") == DELETION_REPOSITORY,
-            "Credentials deletion PR is not the approved same-repository draft")
+    deletion_head, deletion_merge_commit = merged_deletion_pr(runner)
+    require_predeletion_signed_image(
+        deletion_merge_commit, baseline["issuance_source_commit"], runner)
     require_deletion_lineage(approval["credentials_deletion_head"],
-                             deletion_head.get("sha"), runner)
+                             deletion_head, runner)
     target = observer()
     require(target.get("authority") == "discovery_only_requires_protected_baseline"
             and target.get("observation_sha256") == approval["observation_sha256"]
