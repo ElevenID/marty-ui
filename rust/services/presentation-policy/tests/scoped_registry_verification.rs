@@ -27,13 +27,16 @@ impl IssuerKeyResolver for NoPublic {
     }
 }
 
-fn token(key: &SigningKey) -> String {
+fn token(key: &SigningKey, sd_jwt: bool) -> String {
     let now = chrono::Utc::now();
-    let header = URL_SAFE_NO_PAD.encode(json!({"alg":"EdDSA", "typ":"JWT", "kid":KID}).to_string());
+    let header = URL_SAFE_NO_PAD.encode(
+        json!({"alg":"EdDSA", "typ":if sd_jwt {"vc+sd-jwt"} else {"JWT"}, "kid":KID}).to_string(),
+    );
     let payload = URL_SAFE_NO_PAD.encode(
         json!({
             "iss":DID,"sub":"did:example:holder","jti":"urn:uuid:registry-issued-credential",
             "nbf":now.timestamp()-60,"iat":now.timestamp()-60,"exp":now.timestamp()+3600,
+            "_sd_alg":"sha-256","_sd":[],"vct":"urn:example:member",
         "vc":{"@context":["https://www.w3.org/ns/credentials/v2"],
                 "id":"urn:uuid:registry-issued-credential","type":["VerifiableCredential"],
             "issuer":DID,"validFrom":(now-chrono::Duration::seconds(60)).to_rfc3339(),
@@ -62,7 +65,7 @@ fn registry_response(key: &SigningKey) -> Value {
 async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_closed() {
     // Test-only key material; deployment qualification separately requires KMS custody.
     let key = SigningKey::from_bytes(&[42; 32]);
-    let signed = token(&key);
+    let signed = token(&key, false);
     let mut public_key =
         registry_response(&key)["did_document"]["verificationMethod"][0]["publicKeyJwk"].clone();
     public_key["kid"] = json!(KID);
@@ -76,6 +79,54 @@ async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_
         json!(true),
         "test credential must satisfy the canonical verifier: {raw}"
     );
+    exercise_registry(&key, json!(signed), DetectedCredentialFormat::W3cVc).await;
+}
+
+#[tokio::test]
+async fn sd_jwt_registry_bound_signature_and_mutations_follow_the_same_policy() {
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let signed = format!("{}~", token(&key, true));
+    exercise_registry(&key, json!(signed), DetectedCredentialFormat::SdJwt).await;
+}
+
+#[tokio::test]
+async fn data_integrity_registry_binding_and_assertion_method_pins_are_enforced() {
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let public =
+        registry_response(&key)["did_document"]["verificationMethod"][0]["publicKeyJwk"].clone();
+    let prepared = marty_verification::vcdm::prepare_vcdm_data_integrity_credential_json_async(&json!({
+        "credential":{"@context":["https://www.w3.org/ns/credentials/v2"],
+            "id":"urn:uuid:2f2e1a96-3f33-4be7-90d9-fca583d23a8b","type":["VerifiableCredential"],
+            "issuer":DID,"validFrom":(chrono::Utc::now()-chrono::Duration::seconds(60)).to_rfc3339(),
+            "credentialSubject":{"id":"did:example:holder"}},
+        "issuer_did":DID,"verification_method_id":KID,"public_jwk":public
+    }).to_string()).await.unwrap();
+    let prepared: Value = serde_json::from_str(&prepared).unwrap();
+    let input = URL_SAFE_NO_PAD
+        .decode(prepared["signing_input_b64"].as_str().unwrap())
+        .unwrap();
+    let credential = marty_verification::vcdm::complete_vcdm_data_integrity_credential_json_async(
+        &json!({
+            "prepared":prepared,"signature_b64":URL_SAFE_NO_PAD.encode(key.sign(&input).to_bytes())
+        })
+        .to_string(),
+    )
+    .await
+    .unwrap();
+    exercise_registry(
+        &key,
+        serde_json::from_str(&credential).unwrap(),
+        DetectedCredentialFormat::W3cVcdmDi,
+    )
+    .await;
+}
+
+async fn exercise_registry(key: &SigningKey, signed: Value, format: DetectedCredentialFormat) {
+    let wire_format = match format {
+        DetectedCredentialFormat::SdJwt => "SD_JWT_VC",
+        DetectedCredentialFormat::W3cVcdmDi => "JSON_LD",
+        _ => "VC_JWT",
+    };
     for case in [
         "valid",
         "wrong-tenant",
@@ -84,7 +135,7 @@ async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_
         "unauthorized-method",
         "wrong-signature",
     ] {
-        let mut response = registry_response(&key);
+        let mut response = registry_response(key);
         match case {
             "wrong-tenant" => response["issuer_profile"]["organization_id"] = json!("org-2"),
             "inactive" => response["issuer_profile"]["status"] = json!("revoked"),
@@ -92,13 +143,14 @@ async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_
             "wrong-signature" => response = registry_response(&SigningKey::from_bytes(&[43; 32])),
             _ => {}
         }
+        response["issuer_profile"]["credential_format"] = json!(wire_format);
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}", listener.local_addr().unwrap());
         let app = Router::new().route("/internal/compat/resolve-issuer-did",post(move |headers:HeaderMap,Json(request):Json<Value>|{
             let response=response.clone();
             async move {
                 assert_eq!(headers["x-api-key"],"test-internal-credential");
-                assert_eq!(request,json!({"organization_id":"org-1","issuer_did":DID,"credential_format":"VC_JWT","key_purpose":"vc_jwt_issuer","algorithm":"EdDSA"}));
+                assert_eq!(request,json!({"organization_id":"org-1","issuer_did":DID,"credential_format":wire_format,"key_purpose":"vc_jwt_issuer","algorithm":"EdDSA"}));
                 Json(response)
             }
         }));
@@ -115,8 +167,8 @@ async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_
             ResolvingCredentialKernel::new(Arc::new(NoPublic)).with_registry(Arc::new(registry));
         let context = CredentialVerificationContext {
             resolved_issuer_public_jwk: None,
-            format: DetectedCredentialFormat::W3cVc,
-            token: json!(signed),
+            format,
+            token: signed.clone(),
             nonce: None,
             audience: None,
             verifier_context: Map::new(),
@@ -140,7 +192,14 @@ async fn registry_bound_signature_verifies_and_context_or_method_mutations_fail_
         );
         if case == "valid" {
             assert_eq!(evidence.issuer_id.as_deref(), Some(DID));
-            assert_eq!(evidence.claims.get("role"), Some(&json!("member")));
+            if format == DetectedCredentialFormat::W3cVcdmDi {
+                assert_eq!(
+                    evidence.claims.get("id"),
+                    Some(&json!("did:example:holder"))
+                );
+            } else {
+                assert_eq!(evidence.claims.get("role"), Some(&json!("member")));
+            }
         } else {
             assert!(evidence.claims.is_empty(), "{case}");
             assert!(evidence.issuer_id.is_none(), "{case}");
