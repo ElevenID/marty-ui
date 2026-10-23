@@ -126,7 +126,27 @@ The command validates the generation, both live token sets, exact scoped
 policies and signer/JWE access, current certificate validity, each leaf's
 public key against its version-one non-exportable Transit signer, both live
 issuers, and the Compose model before changing the
-owned project. Both generations must contain every file-backed Compose secret,
+owned project. Certificate lifetime and chain validation run in the signed Rust
+operator; activation no longer shells out to OpenSSL. Chain verification retains
+purpose-any behavior (both server-only and client-only workload EKUs are valid),
+without adding hostname, CRL, or OCSP checks to this preflight. Runtime TLS still
+enforces its own peer identity and usage requirements. The verifier checks chain
+signatures and validity, CA constraints, signing key usage, path length, issuer
+identifiers, critical extensions, and name constraints. Public issuer bundles can
+supply intermediate certificates and multiple self-issued roots; a non-self-issued
+issuer alone does not become a trust anchor. Additional PEMs in a leaf file do not
+supply intermediates, matching the previous command. Inputs are bounded to 64 KiB
+per public certificate/bundle and at most 16 issuer certificates. The supported
+producers remain OpenBao P-256 roots issuing P-256 workload and RSA-2048 Keycloak
+end-entity certificates; this operator is not a general document-CA verifier.
+CA-marked targets and legacy issuer certificates without BasicConstraints are
+refused even though generic OpenSSL compatibility mode can accept them. The
+supported OpenBao producers emit end-entity targets and explicit CA constraints;
+differential tests record these deliberate profile boundaries.
+Transit custody, version-one key matching, exact mounted trust overlap, and
+retirement checks remain separate and mandatory. Generated differential tests use
+OpenSSL as the previous verifier's oracle on both native release architectures.
+Both generations must contain every file-backed Compose secret,
 including secrets from optional profiles, before recreation starts. It recreates
 only that project, checks all expected services
 and renewed secret mounts, and writes a private result report. On failure
