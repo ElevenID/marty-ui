@@ -12,11 +12,10 @@ from urllib.error import HTTPError
 
 sys.dont_write_bytecode = True
 from selfhost_native_operator import OperatorCleanupError, approle_operation  # noqa: E402
-from selfhost_operator_inputs import private_file, write_private, snapshot_origin, private_empty_or_source  # noqa: E402
+from selfhost_operator_inputs import private_file, snapshot_origin  # noqa: E402
 from provision_selfhost_audit_token import POLICY, policy_for  # noqa: E402
 from selfhost_approle_rotation import (  # noqa: E402
     RotationSpec, require_revoked as require_secret_revoked,
-    retire as retire_secret_id, rotate as rotate_secret_id,
 )
 from selfhost_openbao_client import Bao  # noqa: E402
 
@@ -57,15 +56,11 @@ def require_revoked(bao: Bao, role_id: str, secret_id: str) -> None:
 
 
 def rotate(bao: Bao, identity: Path, output: Path, policy: str) -> None:
-    rotate_secret_id(bao, identity, output, ROTATION,
-                     lambda client, path: checked_login(client, path, policy),
-                     private_empty_or_source, private_file, write_private)
+    approle_operation(bao, "rotate", "audit", identity, output=str(output), policy=policy)
 
 
 def retire(bao: Bao, identity: Path, retired: Path, policy: str) -> None:
-    retire_secret_id(bao, identity, retired, ROTATION,
-                     lambda client, path: checked_login(client, path, policy),
-                     private_empty_or_source, private_file)
+    approle_operation(bao, "retire", "audit", identity, retired=str(retired), policy=policy)
 
 
 def main() -> int:

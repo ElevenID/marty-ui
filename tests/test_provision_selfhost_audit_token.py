@@ -1,5 +1,6 @@
 """Disposable audit access is exact, short-lived and recoverable."""
 
+import json
 import os
 import stat
 import sys
@@ -225,7 +226,20 @@ def test_rootless_refresh_replaces_old_orphan_without_saved_root(
             raise AssertionError(path)
 
     monkeypatch.setattr(audit, "Bao", FakeBao)
-    monkeypatch.setattr(signer, "Bao", FakeBao)
+
+    def refresh(_root, *args, input):
+        assert args[:2] == ("operator", "leaf-refresh")
+        credentials = json.loads(input)
+        assert credentials == {"old_token": "old", "new_token": "new",
+                               "operator_token": "operator"}
+        assert token_file.read_text() == "old"
+        assert token_file.with_name(token_file.name + ".new").read_text() == "new"
+        revoked.append(credentials["old_token"])
+        return b""
+
+    # HTTP revocation and failure semantics are covered through actual native
+    # HTTPS in test_selfhost_native_rotation; this test owns provisioning order.
+    monkeypatch.setattr(signer, "operator_bytes", refresh)
     audit.provision("https://127.0.0.1:18200", state, output, ORG, SLUG, DID,
                     "marty-selfhost-openbao-qualification", refresh_token=True,
                     identity_root=identity)

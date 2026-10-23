@@ -277,7 +277,34 @@ fn run() -> Result<(), String> {
                 .map_err(str::to_owned)?;
                 std::io::stdout().write_all(&der).map_err(|_| REFUSAL)
             }
-            Some("approle-policy" | "approle-login" | "approle-bootstrap" | "approle-mint") => {
+            Some("leaf-refresh") if args.len() == 4 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL.to_owned())?;
+                if input.len() > 64 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let bao = marty_openbao_http::OpenBaoHttp::connect(
+                    &args[2],
+                    Some(std::path::Path::new(&args[3])),
+                    std::time::Duration::from_secs(10),
+                )
+                .map_err(|_| REFUSAL)?;
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL)?
+                    .block_on(marty_deployment_catalog::approle::refresh_leaf(
+                        &bao, &context,
+                    ))
+            }
+            Some(
+                "approle-policy" | "approle-login" | "approle-bootstrap" | "approle-mint"
+                | "approle-rotate" | "approle-retire",
+            ) => {
                 use marty_deployment_catalog::approle::{self, Role};
                 use std::{io::IsTerminal, path::Path, time::Duration};
                 let operation = &args[1];
@@ -327,6 +354,15 @@ fn run() -> Result<(), String> {
                                         .await
                                         .map(Value::String)
                                 }
+                                "approle-rotate" | "approle-retire" => approle::rotate(
+                                    &bao,
+                                    role,
+                                    Path::new(&args[5]),
+                                    &context,
+                                    operation == "approle-retire",
+                                )
+                                .await
+                                .map(|_| serde_json::json!({"ready":true})),
                                 _ => approle::bootstrap(&bao, role, Path::new(&args[5]), &context)
                                     .await
                                     .map(|_| serde_json::json!({"ready":true})),
@@ -511,6 +547,8 @@ fn main() {
         if [
             marty_deployment_catalog::approle::CLEANUP_BOOTSTRAP,
             marty_deployment_catalog::approle::CLEANUP_LEAF,
+            marty_deployment_catalog::approle::CLEANUP_ROTATION,
+            marty_deployment_catalog::approle::CLEANUP_REFRESH,
         ]
         .contains(&error.as_str())
         {

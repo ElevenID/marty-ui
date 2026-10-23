@@ -13,7 +13,9 @@ class OperatorCleanupError(RuntimeError):
     """A mutating operator could not confirm rollback; safe for CLI diagnostics."""
 
     def __init__(self, message: str):
-        if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed"}:
+        if message not in {"AppRole bootstrap cleanup is incomplete", "AppRole leaf cleanup is unconfirmed",
+                           "AppRole rotation requires operator recovery",
+                           "Scoped token refresh requires operator recovery"}:
             message = "Rust operator cleanup is unconfirmed"
         super().__init__(message)
 
@@ -69,7 +71,8 @@ def operator_command(root: Path, *args: str) -> list[str]:
 def operator_bytes(root: Path, *args: str, input: bytes | None = None) -> bytes:
     # Native requests remain individually bounded. Do not kill a mutating
     # transaction while it is revoking a leaf or rolling back remote authority.
-    timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",)) else 300
+    timeout = None if args[1:2] in (("export-snapshot",), ("approle-bootstrap",), ("approle-mint",),
+                                  ("approle-rotate",), ("approle-retire",), ("leaf-refresh",)) else 300
     if os.environ.get("MARTY_DEPLOY_BIN", "").strip() and args[1:2] in (("public-spki",), ("certificate-spki",), ("ed25519-spki",)):
         timeout = 10
     result = subprocess.run(operator_command(root, *args), input=input,

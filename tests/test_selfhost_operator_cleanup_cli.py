@@ -19,6 +19,8 @@ ENTRYPOINTS = ("audit_identity", "evidence_identity", "renewal_identity", "ca_ro
 @pytest.mark.parametrize("code,raw,expected", [
     (3, "AppRole bootstrap cleanup is incomplete", "AppRole bootstrap cleanup is incomplete"),
     (3, "AppRole leaf cleanup is unconfirmed", "AppRole leaf cleanup is unconfirmed"),
+    (3, "AppRole rotation requires operator recovery", "AppRole rotation requires operator recovery"),
+    (3, "Scoped token refresh requires operator recovery", "Scoped token refresh requires operator recovery"),
     (3, "untrusted diagnostic containing a synthetic-secret", "Rust operator cleanup is unconfirmed"),
     (2, "untrusted diagnostic containing a synthetic-secret", None),
 ])
