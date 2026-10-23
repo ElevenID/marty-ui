@@ -263,6 +263,34 @@ fn run() -> Result<(), String> {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
         let result = match args.get(1).map(String::as_str) {
+            Some("certificate-lifetime") if args.len() == 3 => {
+                let ttl: u64 = args[2].parse().map_err(|_| REFUSAL)?;
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(64 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                let valid =
+                    marty_deployment_catalog::operator_certificates::check_lifetime(&input, ttl)?;
+                serde_json::to_writer(std::io::stdout().lock(), &valid).map_err(|_| REFUSAL)
+            }
+            Some("certificate-chain") if args.len() == 2 => {
+                let mut input = Vec::new();
+                std::io::stdin()
+                    .take(256 * 1024 + 1)
+                    .read_to_end(&mut input)
+                    .map_err(|_| REFUSAL)?;
+                if input.len() > 256 * 1024 {
+                    return Err(REFUSAL.into());
+                }
+                let context: Value = serde_json::from_slice(&input).map_err(|_| REFUSAL)?;
+                let certificate = context["certificate"].as_str().ok_or(REFUSAL)?;
+                let issuer = context["issuer"].as_str().ok_or(REFUSAL)?;
+                marty_deployment_catalog::operator_certificates::check_chain(
+                    certificate.as_bytes(),
+                    issuer.as_bytes(),
+                )
+            }
             Some("public-spki" | "certificate-spki" | "ed25519-spki") if args.len() == 2 => {
                 let mut input = Vec::new();
                 std::io::stdin()
