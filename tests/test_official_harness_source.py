@@ -91,3 +91,4 @@ def test_github_failure_is_bounded_and_does_not_echo_credentials(tmp_path: Path)
     assert args[0] == ["gh", "api", "--hostname", "github.com",
                        f"repos/{GATE['REPOSITORY']}/compare/{PIN}...main?per_page=1"]
     assert options["timeout"] == 30
+    assert options["encoding"] == "utf-8"

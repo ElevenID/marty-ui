@@ -55,7 +55,7 @@ def validate(workflow: Path) -> str:
         response = subprocess.run(
             ["gh", "api", "--hostname", "github.com",
              f"repos/{REPOSITORY}/compare/{pin}...main?per_page=1"],
-            check=True, capture_output=True, text=True, timeout=30,
+            check=True, capture_output=True, encoding="utf-8", timeout=30,
         )
         comparison = json.loads(response.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
