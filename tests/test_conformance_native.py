@@ -372,6 +372,11 @@ def model(*, local=False, authcrypt=False):
         },
         "issuance": legacy,
         "issuance-native": candidate,
+        "envoy-issuance-bridge": {
+            "image": IMAGE,
+            "pull_policy": "always",
+            "entrypoint": ["/usr/local/bin/marty-keyless-grpc-bridge"],
+        },
         "gateway": {
             "image": IMAGE,
             "environment": {
@@ -442,6 +447,28 @@ def test_explicit_owner_pairs_files_and_models(local, authcrypt):
         authcrypt=authcrypt,
         local_build=local,
     )
+
+
+@pytest.mark.parametrize(
+    "fault", ["missing", "image", "pull-policy", "entrypoint", "build", "other-build"]
+)
+def test_released_bridge_rejects_unbound_or_local_runtime(fault):
+    value = model()
+    bridge = value["services"]["envoy-issuance-bridge"]
+    if fault == "missing":
+        del value["services"]["envoy-issuance-bridge"]
+    elif fault == "image":
+        bridge["image"] = "marty-envoy-bridge:latest"
+    elif fault == "pull-policy":
+        bridge["pull_policy"] = "missing"
+    elif fault == "entrypoint":
+        bridge["entrypoint"] = ["/bin/sh"]
+    elif fault == "build":
+        bridge["build"] = {"dockerfile": "services/Dockerfile"}
+    else:
+        value["services"]["new-unbound-service"] = {"build": {"context": "."}}
+    with pytest.raises(ValueError, match="bridge|source builds"):
+        native.validate_model(value, project=PROJECT, authcrypt=False, local_build=False)
 
 
 def test_native_ca_mount_accepts_compose_2382_omitted_false():
@@ -634,6 +661,7 @@ def test_probe_isolated_and_cleans_exact_id_on_failure():
                 )
                 assert (
                     "/usr/local/bin/marty-issuance-service" in command[-1]
+                    and "/usr/local/bin/marty-keyless-grpc-bridge" in command[-1]
                     and "ldd" in command[-1]
                 )
                 stdout = ID

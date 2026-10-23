@@ -36,6 +36,10 @@ services:
     # Compose 2.38 does not preserve !reset inherited through an alias.
     build: !reset null
 
+  envoy-issuance-bridge:
+    <<: *service-image
+    build: !reset null
+
   ui:
     image: ${MARTY_UI_IMAGE:?set MARTY_UI_IMAGE to an immutable UI image digest}
     pull_policy: always
