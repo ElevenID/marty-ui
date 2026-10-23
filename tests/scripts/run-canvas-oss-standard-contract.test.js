@@ -700,3 +700,16 @@ test('Canvas token time rejects a stale committed option before token submission
   await assert.rejects(selectCanvasTokenExpirationTime(widget.page, widget.time, '1:30 AM'),
     error => error.code === 'canvas_personal_token_time_uncommitted');
 });
+
+
+test('engineering CLI permits explicit media-free mode while recorded mode requires a video path', () => {
+  const {parseArgs} = require('./run-canvas-oss-standard-contract');
+  const functional = parseArgs(['node','driver','--observations','observations.json','--functional-rerun']);
+  assert.equal(functional.functionalRerun,true);
+  assert.equal(functional.video,null);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json']), /video/);
+  assert.throws(() => parseArgs(['node','driver','--observations','observations.json','--functional-rerun','--functional-rerun']), /Unsupported argument/);
+  const recorded = parseArgs(['node','driver','--observations','observations.json','--video','contract.webm']);
+  assert.equal(recorded.functionalRerun,false);
+  assert.match(recorded.video,/contract\.webm$/);
+});
