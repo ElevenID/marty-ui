@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -282,69 +282,71 @@ def project_container_ids(project: str) -> list[str]:
 def issuer_did_identity(command: list[str]) -> dict[str, Any]:
     """Resolve the conformance verifier's public DID through the org registry.
 
-    The query executes inside the gateway container, so the internal API key is
-    read from that service's environment and is never copied to the host command
-    line or output. Profile IDs and KMS routing stay inside the gateway.
+    The query executes with curl inside the exact owned running gateway. Read its
+    runtime environment in memory and pass the credential only through stdin,
+    never command arguments or output. Return only public DID material.
     """
-    script = """
-import json
-import os
-import urllib.parse
-import urllib.request
-
-organization_id = os.environ.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001")
-issuer_did = (
-    os.environ.get("OID4VP_ISSUER_DID")
-    or os.environ.get("MARTY_ISSUER_DID")
-    or ""
-).strip()
-if not issuer_did:
-    public_domain = os.environ.get("PUBLIC_DOMAIN", "").strip()
-    if not public_domain:
-        public_url = os.environ.get("PUBLIC_API_URL", "http://localhost:8000")
-        public_domain = urllib.parse.urlparse(public_url).netloc
-    did_authority = public_domain.strip().strip("/").replace(":", "%3A").replace("/", ":")
-    org_slug = os.environ.get("MARTY_ORG_SLUG", "marty").strip() or "marty"
-    issuer_did = f"did:web:{did_authority}:orgs:{org_slug}"
-api_key = os.environ["SIGNING_KEYS_INTERNAL_API_KEY"]
-query = urllib.parse.urlencode({
-    "organization_id": organization_id,
-    "issuer_did": issuer_did,
-    "key_purpose": "oid4vp_request_signing",
-    "algorithm": "ES256",
-})
-request = urllib.request.Request(
-    f"http://127.0.0.1:8000/internal/signing-keys/resolve-issuer-did?{query}",
-    headers={"X-Api-Key": api_key, "Accept": "application/json"},
-)
-with urllib.request.urlopen(request, timeout=15) as response:
-    payload = json.loads(response.read().decode("utf-8"))
-if payload.get("issuer_did") != issuer_did:
-    raise RuntimeError("issuer DID response did not match the configured public identity")
-public_identity = {
-    "issuer_did": payload.get("issuer_did"),
-    "verification_method_id": payload.get("verification_method_id"),
-    "public_jwk": payload.get("public_jwk"),
-    "did_document": payload.get("did_document"),
-    "key_purpose": payload.get("key_purpose"),
-    "algorithm": payload.get("algorithm"),
-}
-print(json.dumps(public_identity, separators=(",", ":"), sort_keys=True))
-""".strip()
+    project = validate_project(command[command.index("--project-name") + 1])
+    selected = subprocess.run(
+        [*command, "ps", "--all", "--quiet", "gateway"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=30,
+    )
+    ids = selected.stdout.split()
+    if selected.returncode or len(ids) != 1 or not re.fullmatch(r"[a-f0-9]{64}", ids[0]):
+        raise ValueError("gateway identity query requires exactly one scoped container")
+    inspected = subprocess.run(
+        ["docker", "container", "inspect", ids[0]],
+        capture_output=True, text=True, check=False, timeout=30,
+    )
+    try:
+        rows = json.loads(inspected.stdout)
+        if inspected.returncode or len(rows) != 1:
+            raise ValueError("gateway inspection failed")
+        row = rows[0]
+        labels = row["Config"]["Labels"]
+        if (labels.get("com.docker.compose.project") != project
+                or labels.get("com.docker.compose.service") != "gateway"
+                or row["State"].get("Running") is not True):
+            raise ValueError("gateway container is foreign or inactive")
+        values = dict(item.split("=", 1) for item in row["Config"]["Env"])
+        api_key = values["SIGNING_KEYS_INTERNAL_API_KEY"]
+        if not api_key or "\n" in api_key or "\r" in api_key:
+            raise ValueError("gateway credential is invalid")
+    except (KeyError, TypeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError("gateway identity query requires its owned running container") from error
+    issuer_did = (values.get("OID4VP_ISSUER_DID") or values.get("MARTY_ISSUER_DID") or "").strip()
+    if not issuer_did:
+        domain = values.get("PUBLIC_DOMAIN", "").strip()
+        if not domain:
+            domain = urlparse(values.get("PUBLIC_API_URL", "http://localhost:8000")).netloc
+        authority = domain.strip("/").replace(":", "%3A").replace("/", ":")
+        issuer_did = f"did:web:{authority}:orgs:{values.get('MARTY_ORG_SLUG', 'marty').strip() or 'marty'}"
+    query = urlencode({
+        "organization_id": values.get("MARTY_ORG_ID", "00000000-0000-0000-0000-000000000001"),
+        "issuer_did": issuer_did, "key_purpose": "oid4vp_request_signing", "algorithm": "ES256",
+    })
+    # The native image supplies curl, not a Python interpreter. Keep credentials
+    # in memory/stdin; neither the Docker/curl argv nor errors contain the key.
+    curl_config = "\n".join([
+        "url = " + json.dumps("http://127.0.0.1:8000/internal/signing-keys/resolve-issuer-did?" + query),
+        "header = " + json.dumps("X-Api-Key: " + api_key),
+        'header = "Accept: application/json"', "silent", "show-error", "fail", "max-time = 15", "",
+    ])
     completed = subprocess.run(
-        [*command, "exec", "-T", "gateway", "python", "-c", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
+        [*command, "exec", "-T", "gateway", "curl", "--config", "-"],
+        cwd=ROOT, input=curl_config, capture_output=True, text=True, check=False, timeout=30,
     )
     if completed.returncode:
-        detail = completed.stderr.strip() or "gateway identity query failed"
-        raise ValueError(f"could not resolve issuer DID identity: {detail}")
+        raise ValueError("could not resolve issuer DID identity: gateway identity query failed")
     try:
-        identity = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ValueError("issuer DID identity response was not JSON") from exc
+        payload = json.loads(completed.stdout)
+        if payload.get("issuer_did") != issuer_did:
+            raise ValueError("issuer DID response did not match the configured public identity")
+        identity = {name: payload.get(name) for name in (
+            "issuer_did", "verification_method_id", "public_jwk", "did_document", "key_purpose", "algorithm",
+        )}
+    except (AttributeError, json.JSONDecodeError) as error:
+        raise ValueError("issuer DID identity response was not JSON") from error
     public_jwk = identity.get("public_jwk") if isinstance(identity, dict) else None
     if (
         not isinstance(identity, dict)
