@@ -1,4 +1,5 @@
 pub mod custody;
+pub mod policy;
 
 use std::collections::BTreeSet;
 
@@ -53,23 +54,41 @@ impl NativeIssuerKeyResolver {
             .allow_did_web_hosts(allowed_hosts);
         Self { resolver }
     }
-}
 
-#[async_trait]
-impl IssuerKeyResolver for NativeIssuerKeyResolver {
-    async fn resolve(&self, did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+    /// Resolve public assertion material for an already authorized public-DID
+    /// lookup. Organization-registry policy must be enforced by the caller.
+    pub async fn resolve_pinned(
+        &self,
+        did: &str,
+        verification_method_ids: &[String],
+    ) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        policy::validate_source_controls(did, None, verification_method_ids)?;
         let resolution = self
             .resolver
             .resolve_with_metadata(did)
             .await
             .map_err(classify_resolution_error)?;
-        let verification_keys = assertion_verification_keys(&resolution.document)?;
+        if resolution.document.id != did {
+            return Err(IssuerKeyResolutionError::Invalid);
+        }
+        let verification_keys = policy::pin_assertion_keys(
+            did,
+            verification_method_ids,
+            &assertion_verification_keys(&resolution.document)?,
+        )?;
         Ok(IssuerKeyResolution {
             verification_keys,
             source: resolution.source,
             retrieved_at: resolution.retrieved_at,
             content_sha256: resolution.content_sha256,
         })
+    }
+}
+
+#[async_trait]
+impl IssuerKeyResolver for NativeIssuerKeyResolver {
+    async fn resolve(&self, did: &str) -> Result<IssuerKeyResolution, IssuerKeyResolutionError> {
+        self.resolve_pinned(did, &[]).await
     }
 }
 
@@ -312,6 +331,25 @@ mod tests {
             "did:web:issuer.example:orgs:acme#issuer-key"
         );
         assert_eq!(resolved.content_sha256.len(), 64);
+        let pinned = resolver
+            .resolve_pinned(
+                "did:web:issuer.example:orgs:acme",
+                &["did:web:issuer.example:orgs:acme#issuer-key".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(pinned.verification_keys, resolved.verification_keys);
+        // An authentication-only key is not authorized to assert credentials,
+        // even when the caller explicitly pins that method.
+        assert_eq!(
+            resolver
+                .resolve_pinned(
+                    "did:web:issuer.example:orgs:acme",
+                    &["did:web:issuer.example:orgs:acme#login-key".into()],
+                )
+                .await,
+            Err(IssuerKeyResolutionError::Invalid)
+        );
         server.abort();
     }
 }

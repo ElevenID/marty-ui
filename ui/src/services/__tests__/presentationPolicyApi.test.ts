@@ -36,6 +36,21 @@ describe('presentationPolicyApi', () => {
   })
 
   describe('Trust Profile sparse updates', () => {
+    it('preserves explicit DID resolution controls without custody fields', async () => {
+      const source = {
+        source_type: 'PINNED_ISSUER', issuer_did: 'did:web:issuer.example', organization_id: 'org-1',
+        verification_method_ids: ['did:web:issuer.example#key'],
+        did_resolution: { resolver_type: 'ORGANIZATION_REGISTRY', allow_public_fallback: false, cache_ttl_seconds: 0 },
+      }
+      let received: unknown
+      server.use(http.patch('*/v1/trust-profiles/profile-1', async ({ request }) => {
+        received = await request.json()
+        return HttpResponse.json({ id: 'profile-1', trust_sources: [source] })
+      }))
+      await updateTrustProfile('profile-1', { trust_sources: [{ ...source, kms_provider: 'private' }] })
+      expect(received).toEqual({ trust_sources: [source] })
+    })
+
     it.each([
       [{ name: 'Renamed' }, { name: 'Renamed' }],
       [{ description: '' }, { description: '' }],

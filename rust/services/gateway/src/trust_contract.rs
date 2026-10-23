@@ -522,11 +522,43 @@ fn canonicalize_trust_source(value: Value) -> Result<Value, TrustContractError> 
             "url",
             "certificate_pem",
             "issuer_did",
+            "organization_id",
+            "verification_method_ids",
+            "did_resolution",
             "purposes",
             "description",
             "registry_sync",
         ],
     )?;
+    if [
+        "organization_id",
+        "verification_method_ids",
+        "did_resolution",
+    ]
+    .iter()
+    .any(|field| value.contains_key(*field))
+    {
+        let did = required_string(&value, "issuer_did", 1, usize::MAX)?;
+        let organization = value
+            .get("organization_id")
+            .map(|v| v.as_str().ok_or(TrustContractError))
+            .transpose()?;
+        let pins = value
+            .get("verification_method_ids")
+            .map(|v| {
+                serde_json::from_value::<Vec<String>>(v.clone()).map_err(|_| TrustContractError)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        marty_issuer_key_resolution::policy::validate_source_controls(did, organization, &pins)
+            .map_err(|_| TrustContractError)?;
+        if let Some(policy) = value.get("did_resolution") {
+            serde_json::from_value::<marty_issuer_key_resolution::policy::DidResolutionPolicy>(
+                policy.clone(),
+            )
+            .map_err(|_| TrustContractError)?;
+        }
+    }
     let source_type = required_string(&value, "source_type", 0, usize::MAX)?.to_uppercase();
     if !["TRUST_LIST", "PINNED_ISSUER", "ROOT_CA", "PKD_URL"].contains(&source_type.as_str()) {
         return Err(TrustContractError);
@@ -1312,6 +1344,35 @@ fn uuid_shape(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn did_trust_controls_are_preserved_and_invalid_nested_fields_fail_closed() {
+        let source = serde_json::json!({
+            "source_type":"PINNED_ISSUER", "issuer_did":"did:web:issuer.example",
+            "organization_id":"org-1", "verification_method_ids":["did:web:issuer.example#key"],
+            "did_resolution":{"resolver_type":"ORGANIZATION_REGISTRY", "allow_public_fallback":false, "cache_ttl_seconds":0}
+        });
+        let normalized = super::canonicalize_trust_source(source.clone()).unwrap();
+        for field in [
+            "organization_id",
+            "verification_method_ids",
+            "did_resolution",
+        ] {
+            assert_eq!(normalized[field], source[field]);
+        }
+        for invalid in [
+            serde_json::json!({"resolver_url":"https://untrusted.example"}),
+            serde_json::json!({"cache_ttl_seconds":-1}),
+            serde_json::json!({"allow_public_fallback":"true"}),
+        ] {
+            let mut request = source.clone();
+            request["did_resolution"] = invalid;
+            assert!(super::canonicalize_trust_source(request).is_err());
+        }
+        let mut request = source;
+        request["verification_method_ids"] = serde_json::json!(["did:web:other.example#key"]);
+        assert!(super::canonicalize_trust_source(request).is_err());
+    }
+
     use super::*;
     use serde::Deserialize;
 

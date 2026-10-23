@@ -15,6 +15,7 @@ test = false
 
 [dependencies]
 marty-api-key-policy = { path = "../../crates/api-key-policy" }
+marty-issuer-key-resolution = { path = "../../crates/issuer-key-resolution" }
 async-trait.workspace = true
 base64.workspace = true
 axum.workspace = true

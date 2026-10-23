@@ -174,6 +174,16 @@ function normalizePublicTrustSource(source = {}) {
   if (source.url) normalized.url = String(source.url).trim();
   if (source.certificate_pem) normalized.certificate_pem = String(source.certificate_pem).trim();
   if (source.issuer_did) normalized.issuer_did = String(source.issuer_did).trim();
+  for (const field of ['organization_id', 'verification_method_ids']) {
+    if (source[field] !== undefined) normalized[field] = source[field];
+  }
+  if (source.did_resolution !== undefined) {
+    normalized.did_resolution = source.did_resolution === null ? null : Object.fromEntries(
+      ['resolver_type', 'allow_public_fallback', 'cache_ttl_seconds']
+        .filter((field) => source.did_resolution[field] !== undefined)
+        .map((field) => [field, source.did_resolution[field]])
+    );
+  }
   if (Array.isArray(source.purposes)) normalized.purposes = [...source.purposes];
   if (source.description) normalized.description = String(source.description).trim();
   if (source.registry_sync) {
