@@ -8666,7 +8666,7 @@ mod public_contract_tests {
                     .is_some_and(|path| path.starts_with("/v1/signing-keys"))
             })
             .collect::<Vec<_>>();
-        assert_eq!(declared.len(), 39, "review route additions explicitly");
+        assert_eq!(declared.len(), 40, "review route additions explicitly");
         let app = router_with_internal_api_key("test-only".into())
             .route_layer(middleware::from_fn(mark_matched_route));
         let unknown = app
