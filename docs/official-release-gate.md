@@ -13,6 +13,16 @@ old PR-head reusable workflow; restoring its original branch allowed run
 39874228600 to start. That ref remains required by the in-flight older source.
 The accepted merge commit has the identical Git tree to the reviewed PR head.
 
+Native conformance startup uses the shared release validator in Rust-only mode
+both before and after manifest attestation. It requires the five current KMS
+image roles and rejects retired Python issuance components. Candidate run
+39874228600 built and passed its five image/runtime gates, but all seven official
+lanes stopped before assertions because this startup check still selected the
+legacy manifest policy. The corrected preflight passes against that actual
+candidate, including real GitHub manifest attestation and its committed native
+capability floor. This read-only check is not an official protocol pass; the
+failed lane summaries remain failed and a fresh candidate execution is required.
+
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not
 require a public release or modify the ordinary reviewed release pin. Its
