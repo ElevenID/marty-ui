@@ -1,12 +1,13 @@
 """Verify resolved deployment credentials reach the scoped issuer resolver."""
 
-import json
+import os
 from pathlib import Path
 import shutil
-import subprocess
 import unittest
 
 import yaml
+
+from scripts.test_canvas_worker_compose_render import render
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -21,25 +22,13 @@ class PresentationRegistryDeployment(unittest.TestCase):
             "docker-compose.passport-supported-disposable.yml",
         ):
             with self.subTest(stack=filename):
-                # Resolve anchors/default secret mounts without interpolating or
-                # printing real operator environment credentials; no daemon calls.
-                rendered = subprocess.run(
-                    [
-                        "docker",
-                        "compose",
-                        "-f",
-                        filename,
-                        "config",
-                        "--no-interpolate",
-                        "--format",
-                        "json",
-                    ],
-                    cwd=ROOT,
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
-                services = json.loads(rendered.stdout)["services"]
+                # Use the established source-only renderer: no .env, env-file
+                # reads, path expansion, daemon, or interpolation of credentials.
+                # Unexpanded required image expressions are not runtime config.
+                renderer = os.environ.get("MARTY_COMPOSE_RENDERER")
+                services = render(
+                    filename, compose_command=[renderer] if renderer else None
+                )["services"]
                 verifier = services["presentation-policy"]
                 env = verifier["environment"]
                 owner = services["signing-keys"]["environment"]
