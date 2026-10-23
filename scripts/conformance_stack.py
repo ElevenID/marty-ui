@@ -38,6 +38,7 @@ ONE_SHOT_SERVICES = {
     "keycloak-configurator",
     "openbao-init",
 }
+KMS_BOOTSTRAP_SERVICES = {"openbao-tls-init", "openbao-init", "openbao"}
 PUBLIC_JWK_PRIVATE_PARAMETERS = {"d", "p", "q", "dp", "dq", "qi", "oth", "k"}
 
 
@@ -446,6 +447,71 @@ def emit_service_logs(command: list[str]) -> int:
     ).returncode
 
 
+def runtime_up_arguments(
+    command: list[str], config: dict[str, Any], project: str, *, resume: bool,
+    runner=None,
+) -> list[str]:
+    """Resume verified KMS custody without repeating its fresh-Raft ceremony."""
+    arguments = ["up", "--detach", "--no-build"]
+    if not resume:
+        return arguments
+    runner = runner or subprocess.run
+    try:
+        for service in sorted(KMS_BOOTSTRAP_SERVICES):
+            selected = runner(
+                ["docker", "ps", "--all", "--no-trunc", "--quiet", "--filter",
+                 f"label=com.docker.compose.project={project}", "--filter",
+                 f"label=com.docker.compose.service={service}"],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            ids = selected.stdout.split()
+            if (selected.returncode or len(ids) != 1
+                    or not re.fullmatch(r"[0-9a-f]{64}", ids[0])):
+                raise ValueError("KMS bootstrap ownership is missing or ambiguous")
+            inspected = runner(
+                ["docker", "container", "inspect", ids[0]],
+                capture_output=True, text=True, check=False, timeout=30,
+            )
+            if inspected.returncode:
+                raise ValueError("KMS bootstrap identity cannot be inspected")
+            rows = json.loads(inspected.stdout)
+            if not isinstance(rows, list) or len(rows) != 1:
+                raise ValueError("KMS bootstrap identity is ambiguous")
+            row = rows[0]
+            labels = row["Config"].get("Labels") or {}
+            state = row["State"]
+            if (row["Id"] != ids[0]
+                    or labels.get("com.docker.compose.project") != project
+                    or labels.get("com.docker.compose.service") != service
+                    or row["Config"]["Image"] != config["services"][service]["image"]
+                    or state.get("OOMKilled") is not False):
+                raise ValueError("KMS bootstrap identity differs from the exact project")
+            if service == "openbao":
+                complete = (state.get("Status") == "running"
+                            and state.get("Running") is True
+                            and state.get("Health", {}).get("Status") == "healthy")
+            else:
+                complete = (state.get("Status") == "exited"
+                            and state.get("ExitCode") == 0)
+            if not complete:
+                raise ValueError("KMS bootstrap is incomplete or unhealthy; use a fresh disposable project")
+        profiles = {command[i + 1] for i, part in enumerate(command[:-1])
+                    if part == "--profile"}
+        services = [name for name, service in config["services"].items()
+                    if name not in KMS_BOOTSTRAP_SERVICES
+                    and (not service.get("profiles")
+                         or "*" in profiles or profiles.intersection(service["profiles"]))]
+        if not services:
+            raise ValueError("KMS resume has no selected runtime services")
+        # Every runtime service remains explicitly selected, preserving its
+        # migration/health ordering. --no-deps prevents Compose from starting
+        # the completed bootstrap dependencies again, or recreating OpenBao.
+        return [*arguments, "--no-deps", *sorted(services)]
+    except (KeyError, TypeError, AttributeError, OSError,
+            subprocess.SubprocessError, json.JSONDecodeError):
+        raise ValueError("KMS bootstrap resume verification failed") from None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -487,7 +553,7 @@ def main() -> int:
     parser.add_argument(
         "--resume",
         action="store_true",
-        help="resume only the exact project after an interrupted up command",
+        help="resume the exact project after verifying successful KMS bootstrap",
     )
     parser.add_argument(
         "command",
@@ -591,7 +657,7 @@ def main() -> int:
                 # Keycloak configuration is intentionally a one-shot service.
                 # Compose's --wait treats its successful exit as an error even
                 # after every long-running service becomes healthy.
-                [*command, "up", "--detach", "--no-build"],
+                [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
                 cwd=ROOT,
                 check=False,
             )
@@ -616,7 +682,8 @@ def main() -> int:
                 return pulled.returncode
             native["probe_image"](native_image, project, plan=native_plan)
         up_result = subprocess.run(
-            [*command, "up", "--detach", "--no-build"], cwd=ROOT, check=False
+            [*command, *runtime_up_arguments(command, config, project, resume=args.resume)],
+            cwd=ROOT, check=False
         )
         if up_result.returncode:
             return up_result.returncode

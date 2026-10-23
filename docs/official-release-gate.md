@@ -46,6 +46,16 @@ Released startup rejects any remaining source build in the rendered graph,
 and the isolated executable probe checks both issuance and bridge linkage.
 These startup checks do not establish a protocol pass.
 
+Local execution then exposed a second startup defect: Compose restarted
+`openbao-init` after the disposable KMS bootstrap had completed. The production
+initializer correctly refused the already-initialized Raft state. Native resume
+now verifies the exact project, service, image and successful completion of both
+bootstrap jobs, plus the running healthy OpenBao container. It explicitly starts
+the selected runtime graph with `--no-deps`, preserving migration and health
+ordering while leaving those verified bootstrap services untouched. Missing,
+foreign, failed or unhealthy custody prevents startup. Fresh runs still execute
+the original strict ceremony; its fresh-state guard is unchanged.
+
 The reusable suite verifies product `cd.yml` provenance, exact protected-main
 source, independent manifest digest and all five KMS image roles. It does not
 require a public release or modify the ordinary reviewed release pin. Its
