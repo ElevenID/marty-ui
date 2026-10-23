@@ -330,6 +330,10 @@ pub fn router_with_all_keys_and_grants(
                 .delete(delete_public_issuer_identity),
         )
         .route(
+            "/v1/signing-keys/issuer-identities/capabilities",
+            get(public_identity_capabilities),
+        )
+        .route(
             "/v1/signing-keys/issuer-identities/resolve",
             post(resolve_public_issuer_identity),
         )
@@ -605,6 +609,12 @@ pub fn router_with_all_keys_and_grants(
 
 #[derive(Debug, Deserialize)]
 struct OrganizationScope {
+    organization_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IssuerCapabilitiesQuery {
     organization_id: String,
 }
 
@@ -1927,6 +1937,39 @@ async fn list_public_issuer_identities(
     }
 }
 
+async fn public_identity_capabilities(
+    State(state): State<AppState>,
+    Query(scope): Query<IssuerCapabilitiesQuery>,
+) -> Response {
+    if scope.organization_id.trim().is_empty() {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "organization_id is required.",
+        );
+    }
+    let Some(store) = state.registry_store.as_ref() else {
+        return public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer capabilities are unavailable.",
+        );
+    };
+    match store.load(&scope.organization_id).await {
+        Ok(registry) => (
+            [("cache-control", "no-store")],
+            Json(crate::identity_capabilities::project(
+                &scope.organization_id,
+                &registry,
+                state.public_domain.as_deref(),
+            )),
+        )
+            .into_response(),
+        Err(_) => public_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Issuer capabilities are unavailable.",
+        ),
+    }
+}
+
 fn public_issuer_jwk(candidate: &Value) -> Result<Value, PublicSigningError> {
     let mut public = public_jwk_projection(candidate).map_err(|_| {
         public_failure(
@@ -2181,6 +2224,16 @@ async fn create_public_issuer_identity(
     }
     if let Err(error) = validate_identity_operation_fields(&input, true, false) {
         return error.into_response();
+    }
+    if !crate::identity_capabilities::supports_tuple(
+        &input.key_purpose,
+        &input.credential_format,
+        &canonical_algorithm(&input.algorithm),
+    ) {
+        return public_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Issuer purpose, credential format and algorithm are incompatible.",
+        );
     }
     if !local_managed_did(state.public_domain.as_deref(), &input.issuer_did) {
         return public_error(
@@ -6722,15 +6775,8 @@ fn validate_identity_scope(
 }
 
 fn local_managed_did(public_domain: Option<&str>, issuer_did: &str) -> bool {
-    public_domain
-        .map(str::trim)
-        .filter(|domain| !domain.is_empty())
-        .is_some_and(|domain| {
-            // A did:web authority percent-encodes the colon in its port.
-            // PUBLIC_DOMAIN keeps the ordinary host:port form used by HTTP.
-            let did_authority = domain.replace(':', "%3A");
-            issuer_did.starts_with(&format!("did:web:{did_authority}:orgs:"))
-        })
+    crate::identity_capabilities::managed_did_prefix(public_domain)
+        .is_some_and(|prefix| issuer_did.starts_with(&prefix))
 }
 
 fn validate_identity_operation_fields(
@@ -8130,6 +8176,14 @@ async fn openapi() -> Json<serde_json::Value> {
             },
             "/v1/signing-keys/issuer-identities/resolve": {
                 "post": {"summary": "Resolve Public Issuer Identity", "responses": {"200": {"description": "Exact active tuple and public JWK without custody coordinates"}}}
+            },
+            "/v1/signing-keys/issuer-identities/capabilities": {
+                "get": {"summary":"Discover Organization Issuer Creation Options", "parameters":[{"name":"organization_id","in":"query","required":true,"schema":{"type":"string","minLength":1}}], "responses": {
+                    "200": {"description":"Configuration-derived public options, not a provider health or publication guarantee", "content":{"application/json":{"schema":serde_json::from_str::<Value>(include_str!("../../../../contracts/issuer-identity-capabilities-response.json")).expect("capability schema")}}},
+                    "400": {"description":"Malformed or unsupported query parameters"},
+                    "422": {"description":"Organization scope is blank"},
+                    "503": {"description":"Issuer capability discovery unavailable"}
+                }}
             },
             "/v1/signing-keys/issuer-identities/csca-certificate": {
                 "put": {"summary": "Enroll Public CSCA Certificate for Managed Issuer Identity", "responses": {"200": {"description": "Tenant-scoped public trust anchor enrolled without exposing key coordinates"}}}

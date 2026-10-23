@@ -66,3 +66,31 @@ def test_operation_schema_paths_exist_in_the_real_route_contract():
     source = (ROOT / "rust/services/gateway/src/openapi.rs").read_text()
     for path in re.findall(r'"(/v1/[^" ]+)"', source):
         assert path in routes, path
+
+
+def test_identity_capability_extension_is_strict_and_contains_no_custody_fields():
+    schema = json.loads(
+        (ROOT / "contracts/issuer-identity-capabilities-response.json").read_text()
+    )
+    validator = jsonschema.Draft202012Validator(schema)
+    value = {
+        "organization_id": "org-a",
+        "basis": "configuration",
+        "managed_issuer_did_prefix": "did:web:issuer.example:orgs:",
+        "creation_options": [
+            {
+                "key_purpose": "vc_jwt_issuer",
+                "credential_format": "SD_JWT_VC",
+                "algorithm": "ES256",
+            }
+        ],
+    }
+    validator.validate(value)
+    validator.validate(
+        {**value, "managed_issuer_did_prefix": None, "creation_options": []}
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate({**value, "service_id": "private"})
+    value["creation_options"][0]["key_reference"] = "private"
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(value)

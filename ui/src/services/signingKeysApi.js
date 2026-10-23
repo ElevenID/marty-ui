@@ -8,6 +8,10 @@
 import { get, post, put, patch, del } from './api';
 import { postWithIdempotency } from './idempotency';
 import { buildDefinedQueryString, buildTruthyQueryString, withQuery } from './queryUtils';
+import { createIssuerIdentity, listPublicIssuerIdentities } from './issuerIdentitiesApi';
+
+// Compatibility exports while console consumers migrate to the public client.
+export { createIssuerIdentity, listPublicIssuerIdentities } from './issuerIdentitiesApi';
 
 const BASE_PATH = '/v1/signing-keys';
 
@@ -336,37 +340,6 @@ export async function getOrgDidDocument(organizationId) {
 // ---------------------------------------------------------------------------
 // Provider-neutral issuer identities
 // ---------------------------------------------------------------------------
-
-/**
- * Provision or adopt a DID identity. Custody selection remains inside Marty.
- * @param {Object} body - { organization_id, issuer_did, key_purpose, credential_format, algorithm }
- * @returns {Promise<Object>} { identity, created }
- */
-export async function createIssuerIdentity(body) {
-  const organizationId = requireOrganizationId(body, 'creating issuer identities');
-  return postWithIdempotency(`${BASE_PATH}/issuer-identities`, {
-    organization_id: organizationId,
-    issuer_did: body?.issuer_did,
-    key_purpose: body?.key_purpose,
-    credential_format: body?.credential_format,
-    algorithm: body?.algorithm,
-    key_attestation_policy: body?.key_attestation_policy,
-  });
-}
-
-/**
- * List DID-first runtime identities without issuer-profile or KMS coordinates.
- * @returns {Promise<Object>} { identities: [{ issuer_did, key_purpose, algorithm, status }] }
- */
-export async function listPublicIssuerIdentities(params = {}) {
-  const organizationId = requireOrganizationId(params, 'loading issuer identities');
-  return get(withQuery(`${BASE_PATH}/issuer-identities`, buildDefinedQueryString({
-    organization_id: organizationId,
-    key_purpose: params?.key_purpose,
-    credential_format: params?.credential_format,
-    algorithm: params?.algorithm,
-  })));
-}
 
 /**
  * Rebind one DID-selected identity to Marty's compatible default signing

@@ -12,7 +12,12 @@ static BUNDLE: LazyLock<Value> = LazyLock::new(|| {
 });
 
 pub fn schemas() -> Value {
-    BUNDLE["schemas"].clone()
+    let mut schemas = BUNDLE["schemas"].clone();
+    schemas["runtime__issuer_identity_capabilities"] = serde_json::from_str(include_str!(
+        "../../../../contracts/issuer-identity-capabilities-response.json"
+    ))
+    .expect("public identity capabilities schema");
+    schemas
 }
 pub fn protocol_revision() -> &'static str {
     BUNDLE["protocol_revision"].as_str().expect("protocol pin")
@@ -29,6 +34,24 @@ fn schema(name: &str) -> Value {
 
 pub fn describe_operation(operation: &mut Value, method: HttpMethod, path: &str, status: u16) {
     use HttpMethod::{Get, Patch, Post};
+    if method == Get && path == "/v1/signing-keys/issuer-identities/capabilities" {
+        operation["summary"] = json!("Discover organization issuer identity creation options");
+        operation["parameters"] = json!([query_parameter(
+            "organization_id",
+            "Organization authorized by the gateway; no provider or key selector is accepted."
+        )]);
+        operation["responses"]["200"]["content"] = json!({"application/json":{"schema":{"$ref":"#/components/schemas/runtime__issuer_identity_capabilities"}}});
+        operation["responses"]["401"] = json!({"description":"Authentication required."});
+        operation["responses"]["400"] =
+            json!({"description":"Malformed or unsupported query parameters."});
+        operation["responses"]["403"] = json!({"description":"Organization membership and signing-key:view permission required."});
+        operation["responses"]["422"] =
+            json!({"description":"Organization scope is blank or invalid."});
+        operation["responses"]["503"] = json!({"description":"Issuer capability discovery is unavailable; do not assume a default set."});
+        operation["x-marty-request-schema-documented"] = json!(true);
+        operation["x-marty-response-schema-documented"] = json!(true);
+        return;
+    }
     if method == Post
         && matches!(
             path,

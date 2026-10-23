@@ -1896,7 +1896,7 @@ fn supports(service: &Map<String, Value>, field: &str, requested: &str) -> bool 
         })
 }
 
-fn select_identity_custody(
+pub(crate) fn select_identity_custody(
     registry_document: &Value,
     credential_format: &str,
     key_purpose: &str,
@@ -1944,6 +1944,18 @@ fn select_identity_custody(
                 .into(),
         )
     })?;
+    if service_id != "managed-openbao-transit" {
+        // Apply existing purpose-reservation rules before provisioning or
+        // advertising this tuple. The fallback key reference is not authority
+        // to repurpose a key reserved for another protocol.
+        profiles::validate_binding(&ValidateBindingRequest {
+            profile: json!({"key_purpose":key_purpose, "algorithm":algorithm, "signing_key_reference":key_reference}),
+            service: Value::Object(service),
+            registry: registry_document.clone(),
+        }).map_err(|_| CompatibilityError::Conflict(
+            "Configured signing identity is not authorized for the requested purpose.".into(),
+        ))?;
+    }
     Ok((service_id, key_reference))
 }
 

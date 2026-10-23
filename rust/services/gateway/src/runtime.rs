@@ -8091,6 +8091,66 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn issuer_capabilities_require_membership_permission_and_trusted_proxy_scope() {
+        struct NoKeyView;
+        #[async_trait]
+        impl OrganizationMembershipProvider for NoKeyView {
+            async fn get_membership(
+                &self,
+                user: &str,
+                org: &str,
+            ) -> Result<Option<OrganizationMembership>, SecurityError> {
+                let mut membership = RuntimeProvider.get_membership(user, org).await?;
+                if let Some(value) = membership.as_mut() {
+                    value.permissions.remove("signing-key:view");
+                }
+                Ok(membership)
+            }
+        }
+        let recorder = Arc::new(ActorRecordingUpstream::default());
+        for (organization, authenticated, permitted, expected) in [
+            ("org-1", false, true, StatusCode::UNAUTHORIZED),
+            ("org-other", true, true, StatusCode::FORBIDDEN),
+            ("org-1", true, false, StatusCode::FORBIDDEN),
+            ("org-1", true, true, StatusCode::OK),
+        ] {
+            let mut state = runtime_state_with_upstream(Arc::new(NoOwner), recorder.clone());
+            if !permitted {
+                Arc::get_mut(&mut state).unwrap().memberships = Arc::new(NoKeyView);
+            }
+            let mut request = Request::builder().uri(format!(
+                "/v1/signing-keys/issuer-identities/capabilities?organization_id={organization}"
+            ));
+            if authenticated {
+                request = request.header("cookie", "sessionId=valid");
+            }
+            let response = gateway_router(state)
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), expected);
+        }
+        let requests = recorder.0.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "unauthorized requests must never reach the service"
+        );
+        assert_eq!(requests[0].0, "signing-keys");
+        assert_eq!(
+            requests[0].1.path,
+            "/v1/signing-keys/issuer-identities/capabilities"
+        );
+        assert_eq!(requests[0].1.query["organization_id"], vec!["org-1"]);
+        let document = GatewayContract::load().unwrap().openapi_document("test");
+        assert_eq!(
+            document["paths"]["/v1/signing-keys/issuer-identities/capabilities"]["get"]
+                ["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
+            "#/components/schemas/runtime__issuer_identity_capabilities"
+        );
+    }
+
     #[test]
     fn public_service_signing_receives_dedicated_key_only_after_gateway_authorization() {
         let state = runtime_state();
