@@ -96,6 +96,22 @@ def test_real_compose_render_is_safe_but_not_accepted(
     }
     result = validate_model(model, project, SERVICES, tmp_path)
     assert result["model_safe"] is True
+    policy = model["services"]["presentation-policy"]
+    assert policy["environment"]["SIGNING_KEYS_SERVICE_URL"] == "http://signing-keys:8017"
+    assert policy["environment"]["SIGNING_KEYS_INTERNAL_API_KEY_FILE"] == "/run/secrets/signing_keys_internal_api_key"
+    for setting, invalid in [
+        ("SIGNING_KEYS_SERVICE_URL", "http://another-service:8017"),
+        ("SIGNING_KEYS_INTERNAL_API_KEY_FILE", "/run/secrets/another_authority"),
+    ]:
+        candidate = deepcopy(model)
+        candidate["services"]["presentation-policy"]["environment"][setting] = invalid
+        with pytest.raises(ModelPreflightError, match="presentation-policy"):
+            validate_model(candidate, project, SERVICES, tmp_path)
+    candidate = deepcopy(model)
+    candidate["services"]["presentation-policy"]["secrets"] = [secret for secret in policy["secrets"]
+        if secret["source"] != "signing_keys_internal_api_key"]
+    with pytest.raises(ModelPreflightError, match="presentation-policy runtime"):
+        validate_model(candidate, project, SERVICES, tmp_path)
     for service, selectors in {
         "signing-keys": ("SIGNING_KEYS_INTEGRATION_SECRET_TLS_KMS_KEY_NAME",
                          "signing_keys_workload_server_kms_token", "signing-keys-server"),
