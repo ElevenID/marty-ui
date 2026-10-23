@@ -70,6 +70,7 @@ reqwest = { version = "0.13", default-features = false, features = ["json", "rus
 rsa = "0.9"
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs", "tls12"] }
 rustls-platform-verifier = "0.7"
+rustls-webpki = { version = "0.103.16", default-features = false, features = ["std", "aws-lc-rs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml = "0.9.34"
