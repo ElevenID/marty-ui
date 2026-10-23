@@ -470,6 +470,94 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
             readiness_max_age: Duration::from_secs(900),
         },
     );
+    // A reviewer cannot reserve an offer from missing or currently failing
+    // authoritative evidence, even with a ready binding and valid KMS issuer.
+    assert_eq!(
+        manual_approval
+            .approve("org-1", "application-manual-1", None)
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-low", 40).await;
+    assert_eq!(
+        manual_approval
+            .approve("org-1", "application-manual-1", None)
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-high", 95).await;
+    let eligible = management_repository
+        .load_application_approval_snapshot("org-1", "application-manual-1")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut prepared = plan_canvas_approval_transaction(
+        &eligible.application,
+        &eligible.binding,
+        &CanvasAwardApprovalSeed {
+            transaction_id: "must-not-reserve".into(),
+            pre_authorized_code: "private-test-code".into(),
+        },
+        now(),
+    )
+    .unwrap();
+    prepared.issuer_profile_id = Some("issuer-profile-1".into());
+    prepared.signing_service_id = Some("kms-service-1".into());
+    manual_contract_head(&pool, "application-manual-1", "manual-check-raced", 40).await;
+    assert_eq!(
+        management_repository
+            .reserve_application_issuance(
+                &prepared,
+                &eligible,
+                "canvas-integration-management-api",
+                None,
+                now()
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    manual_contract_head(&pool, "application-manual-1", "manual-check-recovered", 95).await;
+
+    // A null binding policy falls back to the template's actual PolicySet;
+    // policy edits after evaluation must roll back reservation as well.
+    sqlx::query("INSERT INTO organization_service.policy_sets (id,organization_id,status,policy_type,cedar_policies)
+        VALUES ('manual-policy','org-1','active','CUSTOM','permit(principal, action, resource);')")
+        .execute(&pool).await.unwrap();
+    sqlx::query("UPDATE issuance_service.application_templates SET approval_policy_set_id='manual-policy' WHERE id='application-template-1'")
+        .execute(&pool).await.unwrap();
+    let policy_snapshot = management_repository
+        .load_application_approval_snapshot("org-1", "application-manual-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        policy_snapshot.policy_set.as_ref().unwrap()["id"],
+        "manual-policy"
+    );
+    sqlx::query("UPDATE organization_service.policy_sets SET cedar_policies='forbid(principal, action, resource);' WHERE id='manual-policy'")
+        .execute(&pool).await.unwrap();
+    assert_eq!(
+        management_repository
+            .reserve_application_issuance(
+                &prepared,
+                &policy_snapshot,
+                "canvas-integration-management-api",
+                None,
+                now()
+            )
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    assert_eq!(
+        manual_approval
+            .approve("org-1", "application-manual-1", None)
+            .await,
+        Err(CanvasApplicationApprovalError::NotReady)
+    );
+    assert_eq!(sqlx::query_scalar::<_, i64>("SELECT count(*) FROM issuance_service.issuance_transactions WHERE application_id='application-manual-1'")
+        .fetch_one(&pool).await.unwrap(), 0);
+    sqlx::query("UPDATE organization_service.policy_sets SET cedar_policies='permit(principal, action, resource);' WHERE id='manual-policy'")
+        .execute(&pool).await.unwrap();
     let manual_result = manual_approval
         .approve("org-1", "application-manual-1", Some(""))
         .await
@@ -478,6 +566,8 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
         manual_result.issuance_transaction_id,
         "transaction-manual-1"
     );
+    sqlx::query("UPDATE issuance_service.application_templates SET approval_policy_set_id=NULL WHERE id='application-template-1'")
+        .execute(&pool).await.unwrap();
     let manual_application = sqlx::query(
         "SELECT status, reviewer_id, review_notes, issuance_transaction_id
          FROM issuance_service.applications WHERE id = 'application-manual-1'",
@@ -560,6 +650,13 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
     .fetch_one(&pool)
     .await
     .unwrap();
+    manual_contract_head(
+        &pool,
+        "application-manual-existing",
+        "manual-check-existing",
+        95,
+    )
+    .await;
     let existing_result = manual_approval
         .approve("org-1", "application-manual-existing", Some("existing"))
         .await
@@ -635,6 +732,11 @@ async fn candidate_materialization_matches_production_json_and_revision_contract
             .as_deref(),
         Some("kms-service-1")
     );
+
+    for query in [
+        "DELETE FROM issuance_service.evidence_fact_heads WHERE application_id IN ('application-manual-1','application-manual-existing')",
+        "DELETE FROM issuance_service.evidence_facts WHERE application_id IN ('application-manual-1','application-manual-existing') AND id LIKE 'manual-check-%'",
+    ] { sqlx::query(query).execute(&pool).await.unwrap(); }
 
     // Mapped templates exercise the same SQL snapshot/locking path while
     // replacing an applicant form fallback with the template-owned value.
@@ -1738,6 +1840,23 @@ async fn exercise_legacy_ingest_postgres_contract(pool: &sqlx::PgPool) {
     );
 }
 
+async fn manual_contract_head(pool: &sqlx::PgPool, application_id: &str, id: &str, score: i64) {
+    sqlx::query("INSERT INTO issuance_service.evidence_facts
+        (id,organization_id,application_id,subject_id,provider,fact_type,scope,assertion,verification,source,
+         requirement_id,logical_key,source_revision,payload_hash,observed_at,effective_at,created_at)
+        SELECT $1,fact.organization_id,$2,app.integration_context::jsonb #>> '{canvas,lti_subject}',
+            provider,fact_type,scope,json_build_object('completed',true,'score_percent',$3::bigint),verification,source,
+            requirement_id,'manual-score', $1,$1,observed_at,effective_at,created_at
+        FROM issuance_service.evidence_facts fact JOIN issuance_service.applications app ON app.id=$2
+        WHERE fact.id='fact-1'")
+        .bind(id).bind(application_id).bind(score).execute(pool).await.unwrap();
+    sqlx::query("INSERT INTO issuance_service.evidence_fact_heads
+        (organization_id,application_id,logical_key,fact_id,updated_at)
+        VALUES ('org-1',$1,'manual-score',$2,clock_timestamp())
+        ON CONFLICT(application_id,logical_key) DO UPDATE SET fact_id=excluded.fact_id,updated_at=excluded.updated_at")
+        .bind(application_id).bind(id).execute(pool).await.unwrap();
+}
+
 async fn table_count(pool: &sqlx::PgPool, table: &str) -> i64 {
     let query = match table {
         "evidence_facts" => "SELECT count(*) FROM issuance_service.evidence_facts",
@@ -1758,6 +1877,18 @@ async fn head_id(pool: &sqlx::PgPool) -> String {
 }
 
 async fn setup_schema(pool: &sqlx::PgPool) {
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS organization_service")
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS organization_service.policy_sets (
+        id text PRIMARY KEY, organization_id text NOT NULL, status text NOT NULL,
+        policy_type text NOT NULL, cedar_policies text NOT NULL)",
+    )
+    .execute(pool)
+    .await
+    .unwrap();
     sqlx::query("DROP SCHEMA IF EXISTS issuance_service CASCADE")
         .execute(pool)
         .await
