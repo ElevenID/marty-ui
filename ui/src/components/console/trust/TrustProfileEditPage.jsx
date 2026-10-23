@@ -63,6 +63,7 @@ export function TrustProfileEditPage() {
   );
 
   const [form, setForm] = useState(null);
+  const [initialForm, setInitialForm] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
 
@@ -70,13 +71,15 @@ export function TrustProfileEditPage() {
   useEffect(() => {
     if (profile && !form) {
       const frameworkType = profile.framework || profile.profile_type || 'custom';
-      setForm({
+      const values = {
         name: profile.name || '',
         description: profile.description || '',
         framework_type: frameworkType,
         supported_formats: getSupportedFormatsForFramework(frameworkType, profile.supported_formats),
         status: profile.status || 'active',
-      });
+      };
+      setForm(values);
+      setInitialForm(values);
     }
   }, [profile, form]);
 
@@ -109,13 +112,18 @@ export function TrustProfileEditPage() {
     setSaving(true);
     setSaveError(null);
     try {
-      await updateTrustProfile(id, form);
+      const changes = Object.fromEntries(
+        Object.entries(form).filter(([key, value]) => (
+          key !== 'status' && JSON.stringify(value) !== JSON.stringify(initialForm?.[key])
+        ))
+      );
+      if (Object.keys(changes).length) await updateTrustProfile(id, changes);
       navigate(`/console/org/trust/profiles/${id}`);
     } catch (err) {
       setSaveError(err?.message || t('trust.trustProfileEdit.saveFailed', 'Failed to save trust profile.'));
       setSaving(false);
     }
-  }, [form, id, navigate, t]);
+  }, [form, initialForm, id, navigate, t]);
 
   if (loadingProfile || (!form && !loadError)) {
     return (
@@ -268,7 +276,7 @@ export function TrustProfileEditPage() {
           <InputLabel>{t('trust.trustProfileEdit.statusLabel', 'Status')}</InputLabel>
           <Select
             value={form.status}
-            onChange={(e) => setForm((prev) => ({ ...prev, status: e.target.value }))}
+            disabled
             label={t('trust.trustProfileEdit.statusLabel', 'Status')}
             inputProps={{ 'data-testid': 'edit.trustProfile.status' }}
           >
@@ -279,7 +287,7 @@ export function TrustProfileEditPage() {
             ))}
           </Select>
           <FormHelperText>
-            {t('trust.trustProfileEdit.statusHelper', 'Draft profiles are not enforced during verification.')}
+            {t('trust.trustProfileEdit.lifecycleStatusHelper', 'Status is managed through profile lifecycle actions, not this edit form.')}
           </FormHelperText>
         </FormControl>
       </Paper>
