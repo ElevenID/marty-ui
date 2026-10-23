@@ -258,7 +258,7 @@ fn run() -> Result<(), String> {
         println!("{}", env!("MARTY_DEPLOY_BUILD_IDENTITY"));
         return Ok(());
     }
-    // KMS validation commands do not read the catalog or require a source checkout.
+    // KMS operator commands do not read the catalog or require a source checkout.
     if args.first().is_some_and(|a| a == "operator") {
         use marty_deployment_catalog::operator::{self, REFUSAL};
         use std::io::{Read, Write};
@@ -272,6 +272,24 @@ fn run() -> Result<(), String> {
                 let der = operator::public_spki(&input, args[1] == "certificate-spki")
                     .map_err(str::to_owned)?;
                 std::io::stdout().write_all(&der).map_err(|_| REFUSAL)
+            }
+            Some("export-snapshot") if args.len() == 7 => {
+                use std::path::Path;
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|_| REFUSAL.to_owned())?;
+                let archive = runtime
+                    .block_on(marty_deployment_catalog::snapshot::export(
+                        Path::new(&args[2]),
+                        Path::new(&args[3]),
+                        Path::new(&args[4]),
+                        &args[5],
+                        Path::new(&args[6]),
+                    ))
+                    .map_err(str::to_owned)?;
+                println!("{}", archive.display());
+                Ok(())
             }
             Some("check-snapshot") if args.len() == 3 => {
                 let source = std::fs::File::open(&args[2]).map_err(|_| REFUSAL.to_owned())?;

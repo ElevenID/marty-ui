@@ -15,8 +15,12 @@ and source provenance, and supports Linux amd64/arm64. A source checkout can use
 Cargo 1.95 instead. Python entrypoints retain their arguments. Rust conversion
 accepts supported public SPKI/certificate keys; it does not establish certificate
 trust or replace the existing issuer, key-version, or non-exportability checks.
-The snapshot validator reads the existing v2 archive without extraction. Snapshot
-creation and actual restore qualification remain separate requirements.
+The Rust exporter logs in with the snapshot-only AppRole and streams the existing
+v2 archive into an owner-only file, then publishes it without overwriting another
+backup. It never reads root or unseal files. Downloads use a 300-second idle read
+timeout; steady progress can continue beyond five minutes. The independent Rust
+validator reads an archive without extraction. Actual restore qualification
+remains a separate requirement.
 
 This is the standalone external OpenBao setup for the workstation-local self-host production stack. It stays outside the main application compose project, keeps its state on durable host storage, and writes the scoped `openbao_service_token` into the shared self-host secret directory.
 

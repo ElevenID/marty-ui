@@ -3969,11 +3969,21 @@ dependencies = [
 name = "marty-deployment-catalog"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "flate2",
+ "libc",
  "marty-crypto",
+ "marty-openbao-http",
+ "reqwest",
+ "rustls",
  "serde_json",
  "sha2 0.10.9",
  "spki",
+ "tempfile",
+ "tokio",
+ "tokio-rustls",
+ "url",
+ "uuid",
  "x509-cert",
  "zip",
 ]
