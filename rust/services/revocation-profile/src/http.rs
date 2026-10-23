@@ -1448,6 +1448,7 @@ mod tests {
                 json!({
                     "organization_id": "org-1",
                     "name": "Canonical revocation profile",
+                    "supported_formats": ["JSON_LD"],
                     "revocation_mechanism": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "mechanism_priority": ["OCSP", "BITSTRING_STATUS_LIST"],
                     "check_mode": "OFFLINE_GRACE",
@@ -1468,6 +1469,7 @@ mod tests {
         let body = json_response(response).await;
         let profile_id = body["id"].as_str().unwrap();
         assert_eq!(body["status"], "DRAFT");
+        assert_eq!(body["supported_formats"], json!(["JSON_LD"]));
         assert_eq!(body["check_mode"], "OFFLINE_GRACE");
         assert_eq!(body["offline_grace_seconds"], 7200);
         assert_eq!(
